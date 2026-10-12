@@ -342,7 +342,7 @@ pub enum PlanValidationError {
         /// Incompatible exchange.
         exchange: crate::connector::ConnectorExchange,
         /// Incompatible roles.
-        roles: crate::connector::ConnectorRoles,
+        roles: crate::connector::ConnectorDirection,
     },
     /// A resolved built-in Connector row disagrees with its self-contained
     /// contract rule (direction, routing policy, or effective type).
@@ -369,7 +369,7 @@ pub enum PlanValidationError {
         /// The port.
         port: node::Port,
         /// The role the reference required.
-        expected: node::Direction,
+        expected: node::PortDirection,
     },
     /// An edge references a boundary port the plan does not know.
     UnknownBoundaryPort {
@@ -1203,13 +1203,13 @@ fn verify_instance_key_types(
                     .node(slot)
                     .unwrap_or(&[])
                     .iter()
-                    .filter(|port| port.direction() == node::Direction::Input)
+                    .filter(|port| port.direction() == node::PortDirection::Input)
                     .map(|port| port.ty().clone())
                     .collect(),
                 OwnerKind::Graph if index == 0 => ports
                     .boundary()
                     .iter()
-                    .filter(|port| port.direction() == node::Direction::Input)
+                    .filter(|port| port.direction() == node::PortDirection::Input)
                     .map(|port| port.ty().clone())
                     .collect(),
                 OwnerKind::Graph if plan.owners[index].loop_spec().is_some() => {
@@ -1406,7 +1406,7 @@ fn handler_signature(
         node::HandlerActivation::Lifecycle(_) => ports.node(slot).and_then(|ports| {
             ports
                 .iter()
-                .find(|port| port.direction() == node::Direction::Input)
+                .find(|port| port.direction() == node::PortDirection::Input)
                 .map(|port| port.ty().clone())
         }),
         _ => None,
@@ -1929,20 +1929,20 @@ fn validate_network_connector(
     spec: &crate::plan::ConnectorSpec,
     loop_spec: Option<&crate::plan::LoopSpec>,
 ) -> Result<bool, PlanValidationError> {
-    use crate::connector::{ConnectorExchange, ConnectorRoles};
+    use crate::connector::{ConnectorDirection, ConnectorExchange};
 
     struct ContractShape {
-        roles: ConnectorRoles,
+        roles: ConnectorDirection,
         exchange: ConnectorExchange,
         required: &'static [&'static str],
         allowed: &'static [&'static str],
-        ports: &'static [(&'static str, node::Direction)],
+        ports: &'static [(&'static str, node::PortDirection)],
     }
 
     let contract = spec.contract.as_str();
     let shape = match contract {
         crate::connector::HTTP_CLIENT_CONNECTOR_ID => ContractShape {
-            roles: ConnectorRoles::Outbound,
+            roles: ConnectorDirection::Outbound,
             exchange: ConnectorExchange::Call,
             required: &[
                 "codec", "max_body", "method", "timeout", "url", "versions", "zero_rtt",
@@ -1966,13 +1966,13 @@ fn validate_network_connector(
                 "zero_rtt",
             ],
             ports: &[
-                ("in", node::Direction::Input),
-                ("out", node::Direction::Output),
-                ("exit", node::Direction::Output),
+                ("in", node::PortDirection::Input),
+                ("out", node::PortDirection::Output),
+                ("exit", node::PortDirection::Output),
             ],
         },
         crate::connector::HTTP_SERVER_CONNECTOR_ID => ContractShape {
-            roles: ConnectorRoles::Inbound,
+            roles: ConnectorDirection::Inbound,
             exchange: ConnectorExchange::Call,
             required: &[
                 "codec", "listen", "max_body", "mode", "path", "versions", "zero_rtt",
@@ -1994,13 +1994,13 @@ fn validate_network_connector(
                 "zero_rtt",
             ],
             ports: &[
-                ("in", node::Direction::Input),
-                ("out", node::Direction::Output),
-                ("exit", node::Direction::Output),
+                ("in", node::PortDirection::Input),
+                ("out", node::PortDirection::Output),
+                ("exit", node::PortDirection::Output),
             ],
         },
         crate::connector::WEBSOCKET_CLIENT_CONNECTOR_ID => ContractShape {
-            roles: ConnectorRoles::InboundAndOutbound,
+            roles: ConnectorDirection::InboundAndOutbound,
             exchange: ConnectorExchange::Session,
             required: &[
                 "codec",
@@ -2026,13 +2026,13 @@ fn validate_network_connector(
                 "zero_rtt",
             ],
             ports: &[
-                ("in", node::Direction::Input),
-                ("out", node::Direction::Output),
-                ("exit", node::Direction::Output),
+                ("in", node::PortDirection::Input),
+                ("out", node::PortDirection::Output),
+                ("exit", node::PortDirection::Output),
             ],
         },
         crate::connector::WEBSOCKET_SERVER_CONNECTOR_ID => ContractShape {
-            roles: ConnectorRoles::InboundAndOutbound,
+            roles: ConnectorDirection::InboundAndOutbound,
             exchange: ConnectorExchange::Session,
             required: &[
                 "codec",
@@ -2061,9 +2061,9 @@ fn validate_network_connector(
                 "zero_rtt",
             ],
             ports: &[
-                ("in", node::Direction::Input),
-                ("out", node::Direction::Output),
-                ("exit", node::Direction::Output),
+                ("in", node::PortDirection::Input),
+                ("out", node::PortDirection::Output),
+                ("exit", node::PortDirection::Output),
             ],
         },
         _ => return Ok(false),
@@ -2708,7 +2708,7 @@ fn loop_specs_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
         })?;
         let state = ports
             .iter()
-            .find(|port| port.port == spec.entry && port.direction == node::Direction::Input)
+            .find(|port| port.port == spec.entry && port.direction == node::PortDirection::Input)
             .and_then(|port| port.ty.clone())
             .ok_or_else(|| PlanValidationError::InvalidGraphContract {
                 owner: owner_name.clone(),
@@ -2725,7 +2725,7 @@ fn loop_specs_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
         for terminal in &spec.terminals {
             if !ports
                 .iter()
-                .any(|port| port.port == *terminal && port.direction == node::Direction::Output)
+                .any(|port| port.port == *terminal && port.direction == node::PortDirection::Output)
             {
                 return Err(PlanValidationError::InvalidGraphContract {
                     owner: owner_name.clone(),
@@ -2753,7 +2753,7 @@ fn loop_specs_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
                     || !expired.is_assignable_to(&target.ty)
                     || !ports.iter().any(|port| {
                         port.port == target.port
-                            && port.direction == node::Direction::Output
+                            && port.direction == node::PortDirection::Output
                             && port.ty.as_ref() == Some(&target.ty)
                     })
                     || if connector {
@@ -3377,8 +3377,8 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
         }
     }
     let conventional_direction = |port: &node::Port| match port.name() {
-        "in" => Some(node::Direction::Input),
-        "out" | "err" => Some(node::Direction::Output),
+        "in" => Some(node::PortDirection::Input),
+        "out" | "err" => Some(node::PortDirection::Output),
         _ => None,
     };
     if let Some((decl, expected)) = plan.boundary.iter().find_map(|decl| {
@@ -3545,9 +3545,9 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                 let service =
                     spec.contract.as_str() == crate::connector::PROCESS_SERVICE_CONNECTOR_ID;
                 let roles = if service {
-                    crate::connector::ConnectorRoles::InboundAndOutbound
+                    crate::connector::ConnectorDirection::InboundAndOutbound
                 } else {
-                    crate::connector::ConnectorRoles::Outbound
+                    crate::connector::ConnectorDirection::Outbound
                 };
                 let exchange = if service {
                     crate::connector::ConnectorExchange::Session
@@ -3767,10 +3767,10 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                     }
                 }
                 let expected = [
-                    ("in", node::Direction::Input),
-                    ("out", node::Direction::Output),
-                    ("err", node::Direction::Output),
-                    ("exit", node::Direction::Output),
+                    ("in", node::PortDirection::Input),
+                    ("out", node::PortDirection::Output),
+                    ("err", node::PortDirection::Output),
+                    ("exit", node::PortDirection::Output),
                 ];
                 for (name, direction) in expected {
                     let Some(port) = node.ports.iter().find(|port| port.port.name() == name) else {
@@ -3809,7 +3809,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                 }
             }
             if spec.contract.as_str() == crate::connector::FILE_CONNECTOR_ID {
-                if spec.roles != crate::connector::ConnectorRoles::Outbound {
+                if spec.roles != crate::connector::ConnectorDirection::Outbound {
                     return Err(PlanValidationError::ContractRoleMismatch {
                         node: node.path.clone(),
                     });
@@ -3910,9 +3910,9 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                     }
                 }
                 let expected = [
-                    ("in", node::Direction::Input),
-                    ("out", node::Direction::Output),
-                    ("exit", node::Direction::Output),
+                    ("in", node::PortDirection::Input),
+                    ("out", node::PortDirection::Output),
+                    ("exit", node::PortDirection::Output),
                 ];
                 for (name, direction) in expected {
                     let Some(port) = node.ports.iter().find(|port| port.port.name() == name) else {
@@ -3955,7 +3955,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                 .ports
                 .iter()
                 .filter(|port| {
-                    port.port.name() == "exit" && port.direction == node::Direction::Output
+                    port.port.name() == "exit" && port.direction == node::PortDirection::Output
                 })
                 .count();
             let terminal_shape_holds = match spec.exchange {
@@ -3971,7 +3971,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             }
             let roles_hold = match spec.exchange {
                 crate::connector::ConnectorExchange::Event => {
-                    spec.roles == crate::connector::ConnectorRoles::Inbound
+                    spec.roles == crate::connector::ConnectorDirection::Inbound
                 }
                 crate::connector::ConnectorExchange::Call => true,
                 crate::connector::ConnectorExchange::Session => spec.roles.has_outbound(),
@@ -4004,7 +4004,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
 
     // References: slots, ports in their roles, handlers, vars. Every port is
     // now a row; conventional source spelling confers no hidden existence.
-    let has_port = |node: &Node, port: &node::Port, direction: node::Direction| {
+    let has_port = |node: &Node, port: &node::Port, direction: node::PortDirection| {
         node.ports
             .iter()
             .any(|decl| &decl.port == port && decl.direction == direction)
@@ -4023,7 +4023,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     // edge targeting the boundary feeds a graph OUTPUT — the same
     // rule the checker applies to the surface language.
     let endpoint_ok =
-        |endpoint: &EdgeEnd, position: node::Direction| -> Result<(), PlanValidationError> {
+        |endpoint: &EdgeEnd, position: node::PortDirection| -> Result<(), PlanValidationError> {
             match endpoint.node {
                 Some(slot) => {
                     let node = node_at(slot)?;
@@ -4049,8 +4049,8 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                 }
                 None => {
                     let expected = match position {
-                        node::Direction::Output => node::Direction::Input,
-                        node::Direction::Input => node::Direction::Output,
+                        node::PortDirection::Output => node::PortDirection::Input,
+                        node::PortDirection::Input => node::PortDirection::Output,
                     };
                     let actual = plan
                         .boundary
@@ -4074,9 +4074,9 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             }
         };
     for edge in &plan.edges {
-        endpoint_ok(&edge.from, node::Direction::Output)?;
+        endpoint_ok(&edge.from, node::PortDirection::Output)?;
         if let Some(to) = &edge.to {
-            endpoint_ok(to, node::Direction::Input)?;
+            endpoint_ok(to, node::PortDirection::Input)?;
         }
     }
     // Graph boundaries are compile-time composition seams. A cycle may cross
@@ -4196,11 +4196,11 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
         }
         match &handler.activation {
             node::HandlerActivation::Port(port) => {
-                if !has_port(node, port, node::Direction::Input) {
+                if !has_port(node, port, node::PortDirection::Input) {
                     return Err(PlanValidationError::WrongPortDirection {
                         node: Some(node.path.clone()),
                         port: port.clone(),
-                        expected: node::Direction::Input,
+                        expected: node::PortDirection::Input,
                     });
                 }
                 if !activated_inputs.insert((handler_node, port.clone())) {
@@ -4229,11 +4229,11 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                     });
                 }
                 for port in ports {
-                    if !has_port(node, port, node::Direction::Input) {
+                    if !has_port(node, port, node::PortDirection::Input) {
                         return Err(PlanValidationError::WrongPortDirection {
                             node: Some(node.path.clone()),
                             port: port.clone(),
-                            expected: node::Direction::Input,
+                            expected: node::PortDirection::Input,
                         });
                     }
                     if !activated_inputs.insert((handler_node, port.clone())) {
@@ -4251,7 +4251,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                     })?;
                     let valid_expiry = node.ports.iter().any(|port| {
                         port.port.name() == "expired"
-                            && port.direction == node::Direction::Output
+                            && port.direction == node::PortDirection::Output
                             && port.ty.as_ref() == Some(&expected)
                     });
                     if !valid_expiry {
@@ -4267,7 +4267,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                 if !node
                     .ports
                     .iter()
-                    .any(|port| port.direction == node::Direction::Input)
+                    .any(|port| port.direction == node::PortDirection::Input)
                 {
                     return Err(PlanValidationError::LifecycleWithoutInput {
                         node: node.path.clone(),
@@ -4297,11 +4297,11 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             match step {
                 DispatchStep::Emit { .. } | DispatchStep::MultiEmit { .. } => {
                     for (port, value) in step.emissions() {
-                        if !has_port(node, port, node::Direction::Output) {
+                        if !has_port(node, port, node::PortDirection::Output) {
                             return Err(PlanValidationError::WrongPortDirection {
                                 node: Some(node.path.clone()),
                                 port: port.clone(),
-                                expected: node::Direction::Output,
+                                expected: node::PortDirection::Output,
                             });
                         }
                         match value {
@@ -4602,7 +4602,7 @@ fn join_metadata_presence_holds(plan: &ExecutionPlan) -> Result<(), PlanValidati
             for port in planned
                 .ports
                 .iter()
-                .filter(|port| port.direction == node::Direction::Output)
+                .filter(|port| port.direction == node::PortDirection::Output)
             {
                 changed |= extend_presence(
                     outputs.entry((Some(slot), port.port.clone())).or_default(),
@@ -4672,7 +4672,7 @@ fn node_input_presence(
 ) -> MetaPresence {
     let mut presence = MetaPresence::new();
     for port in &plan.nodes[slot.index()].ports {
-        if port.direction == node::Direction::Input
+        if port.direction == node::PortDirection::Input
             && let Some(fields) = inputs.get(&(Some(slot), port.port.clone()))
         {
             presence.extend(fields.iter().cloned());

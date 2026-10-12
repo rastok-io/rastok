@@ -1,7 +1,7 @@
 //! Resident stdio resources. Only this module owns physical child handles;
 //! Session identity, admission, deadlines and close-once belong to the core.
 
-use super::{ProcessFailure, ProcessRequestBindings, frame_channel, process_status};
+use super::{ProcessFailure, ProcessRequestSettings, frame_channel, process_status};
 use crate::boundary::*;
 use crate::connectors::{BoundConnectorDriver, ConnectorDriverFactory, DriverFactoryError};
 use crate::envelope::{Data, Envelope, Namespace, Value};
@@ -54,7 +54,7 @@ fn failure(failure: ProcessFailure) -> PortOutput {
 }
 
 pub(super) fn prepare(
-    bindings: &ProcessRequestBindings,
+    bindings: &ProcessRequestSettings,
     connector: &node::Path,
     data: &Data,
     settings: &BTreeMap<String, Value>,
@@ -155,8 +155,8 @@ impl ConnectorDriverFactory for ProcessServiceFactory {
     fn connector_id(&self) -> &crate::connector::ContractId {
         &self.id
     }
-    fn roles(&self) -> crate::connector::ConnectorRoles {
-        crate::connector::ConnectorRoles::InboundAndOutbound
+    fn roles(&self) -> crate::connector::ConnectorDirection {
+        crate::connector::ConnectorDirection::InboundAndOutbound
     }
     fn bind<'a>(
         &self,
@@ -168,7 +168,7 @@ impl ConnectorDriverFactory for ProcessServiceFactory {
                 "resident Process requires the qualified Unix process-group Driver",
             ));
         }
-        let bindings = ProcessRequestBindings::try_bind(plan, nodes)
+        let bindings = ProcessRequestSettings::try_bind(plan, nodes)
             .map_err(|e| DriverFactoryError::new(e.to_string()))?;
         Ok(Box::new(Service {
             bindings,
@@ -182,7 +182,7 @@ impl ConnectorDriverFactory for ProcessServiceFactory {
 }
 
 struct Service {
-    bindings: ProcessRequestBindings,
+    bindings: ProcessRequestSettings,
     resources: BTreeMap<SessionId, Resource>,
     retiring: Vec<std::thread::JoinHandle<()>>,
     events: Vec<SessionObservation>,
@@ -801,7 +801,7 @@ mod tests {
             .unwrap();
         let (writes, _input) = mpsc::sync_channel(FRAME_SLOTS);
         let mut service = Service {
-            bindings: ProcessRequestBindings::try_bind(&compiled.plan, &[]).unwrap(),
+            bindings: ProcessRequestSettings::try_bind(&compiled.plan, &[]).unwrap(),
             resources: BTreeMap::from([(
                 reference,
                 Resource {
@@ -848,7 +848,7 @@ mod tests {
             finished.store(true, Ordering::Release);
         });
         let service = Service {
-            bindings: ProcessRequestBindings::try_bind(&compiled.plan, &[]).unwrap(),
+            bindings: ProcessRequestSettings::try_bind(&compiled.plan, &[]).unwrap(),
             resources: BTreeMap::new(),
             retiring: vec![worker],
             events: Vec::new(),

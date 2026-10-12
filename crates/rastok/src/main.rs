@@ -670,7 +670,7 @@ fn drive_boundary<'plan>(
     let mut progressed = false;
     for _ in 0..64 {
         match world
-            .pump_inbound(vm, journal)
+            .poll_inbound(vm, journal)
             .map_err(|error| error.to_string())?
         {
             Some(_) => progressed = true,
@@ -680,15 +680,17 @@ fn drive_boundary<'plan>(
     vm.run_ready_with_bindings(journal, world)
         .map_err(|error| error.to_string())?;
     let responses = world
-        .pump_inbound_call_responses(vm)
+        .poll_inbound_call_responses(vm)
         .map_err(|error| error.to_string())?;
     let timeouts = world
-        .pump_inbound_call_timeouts(vm)
+        .poll_inbound_call_timeouts(vm)
         .map_err(|error| error.to_string())?;
     let inbound_events = world
-        .pump_inbound_call_events(vm)
+        .poll_inbound_call_events(vm)
         .map_err(|error| error.to_string())?;
-    let outbound = vm.pump(journal, world).map_err(|error| error.to_string())?;
+    let outbound = vm
+        .poll_drivers(journal, world)
+        .map_err(|error| error.to_string())?;
     for (_, reason) in &outbound.rejected {
         eprintln!("err: a reply was refused before closure: {reason}");
     }

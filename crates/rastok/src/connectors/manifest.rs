@@ -5,19 +5,19 @@
 //! neither an artifact format nor a native ABI: only canonical Connector ids,
 //! closed role claims, and duplicate refusal belong here.
 
-use crate::connector::{ConnectorRoles, ContractId};
+use crate::connector::{ConnectorDirection, ContractId};
 
 /// One Connector capability advertised by a physical Driver artifact.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DriverManifestEntry {
     connector: ContractId,
-    roles: ConnectorRoles,
+    roles: ConnectorDirection,
 }
 
 impl DriverManifestEntry {
     /// Describes one exact contract implementation and its available roles.
     #[must_use]
-    pub fn new(connector: ContractId, roles: ConnectorRoles) -> Self {
+    pub fn new(connector: ContractId, roles: ConnectorDirection) -> Self {
         Self { connector, roles }
     }
 
@@ -29,7 +29,7 @@ impl DriverManifestEntry {
 
     /// Roles the artifact claims it can expose after loading and binding.
     #[must_use]
-    pub const fn roles(&self) -> ConnectorRoles {
+    pub const fn roles(&self) -> ConnectorDirection {
         self.roles
     }
 }
@@ -74,7 +74,7 @@ impl DriverManifest {
 
     /// Looks up one advertised role set without loading a factory.
     #[must_use]
-    pub fn roles_for(&self, connector: &ContractId) -> Option<ConnectorRoles> {
+    pub fn roles_for(&self, connector: &ContractId) -> Option<ConnectorDirection> {
         self.entries
             .binary_search_by(|entry| entry.connector.cmp(connector))
             .ok()
@@ -102,7 +102,7 @@ impl std::error::Error for DriverManifestError {}
 #[cfg(test)]
 mod tests {
     use super::{DriverManifest, DriverManifestEntry, DriverManifestError};
-    use crate::connector::{ConnectorRoles, ContractId};
+    use crate::connector::{ConnectorDirection, ContractId};
 
     fn id(spelling: &str) -> ContractId {
         ContractId::parse(spelling).expect("the test Connector id is canonical")
@@ -113,15 +113,21 @@ mod tests {
         let process = id("std/process@4");
         let file = id("std/file@3");
         let manifest = DriverManifest::try_new([
-            DriverManifestEntry::new(process.clone(), ConnectorRoles::Outbound),
-            DriverManifestEntry::new(file.clone(), ConnectorRoles::Outbound),
+            DriverManifestEntry::new(process.clone(), ConnectorDirection::Outbound),
+            DriverManifestEntry::new(file.clone(), ConnectorDirection::Outbound),
         ])
         .expect("the capability claims are distinct");
 
         assert_eq!(manifest.entries()[0].connector(), &file);
         assert_eq!(manifest.entries()[1].connector(), &process);
-        assert_eq!(manifest.roles_for(&file), Some(ConnectorRoles::Outbound));
-        assert_eq!(manifest.roles_for(&process), Some(ConnectorRoles::Outbound));
+        assert_eq!(
+            manifest.roles_for(&file),
+            Some(ConnectorDirection::Outbound)
+        );
+        assert_eq!(
+            manifest.roles_for(&process),
+            Some(ConnectorDirection::Outbound)
+        );
         assert_eq!(manifest.roles_for(&id("org.example/http@1")), None);
     }
 
@@ -130,8 +136,8 @@ mod tests {
         let process = id("std/process@4");
         assert_eq!(
             DriverManifest::try_new([
-                DriverManifestEntry::new(process.clone(), ConnectorRoles::Inbound),
-                DriverManifestEntry::new(process.clone(), ConnectorRoles::Outbound),
+                DriverManifestEntry::new(process.clone(), ConnectorDirection::Inbound),
+                DriverManifestEntry::new(process.clone(), ConnectorDirection::Outbound),
             ]),
             Err(DriverManifestError::Duplicate(process))
         );

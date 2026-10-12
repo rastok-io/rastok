@@ -251,7 +251,7 @@ fn one_business_id_cannot_change_unit_in_a_plan_or_in_a_forged_package() {
         .expect("measured boundary")
         .clone();
     extra.port = node::Port::new("z_contradiction").expect("port");
-    extra.direction = node::Direction::Input;
+    extra.direction = node::PortDirection::Input;
     forged.boundary.push(extra);
     let error = plan::ValidatedExecutionPlan::try_new(forged)
         .expect_err("independent validator checks every declared site");

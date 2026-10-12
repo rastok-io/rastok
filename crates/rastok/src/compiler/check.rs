@@ -19,11 +19,11 @@ use loop_control::*;
 use routing::*;
 
 use crate::compiler::hir::{
-    AttrValue, Attribute, ClosedArm, ClosingPolicy, Const, Direction, Dispatch, Edge, EdgeTarget,
-    EmitValue, Endpoint, EndpointOwner, FieldWrite, Graph, Handler, Hir, InstanceLifetime,
-    InstancePolicy, LoopCommand, LoopCommandKind, LoopCommandTarget, LoopDelay, LoopSpec,
-    MultiEmitValues, Node, NodeSemantics, OpenArm, RouteArm, RouteDestination, RouteRule,
-    RouteSelection, Statement, Val, Var,
+    AttrValue, Attribute, ClosedArm, ClosingPolicy, Const, Dispatch, Edge, EdgeTarget, EmitValue,
+    Endpoint, EndpointOwner, FieldWrite, Graph, Handler, Hir, InstanceLifetime, InstancePolicy,
+    LoopCommand, LoopCommandKind, LoopCommandTarget, LoopDelay, LoopSpec, MultiEmitValues, Node,
+    NodeSemantics, OpenArm, PortDirection, RouteArm, RouteDestination, RouteRule, RouteSelection,
+    Statement, Val, Var,
 };
 use crate::compiler::syntax::{
     Attribute as SynAttribute, BaseType, ConnectorDecl, Dispatch as SynDispatch, EdgeCaseSet,
@@ -1116,18 +1116,18 @@ impl Checker<'_, '_> {
                     self.wrong_direction(
                         target.span,
                         &name.text,
-                        Direction::Output,
+                        PortDirection::Output,
                         "an injection enters through a graph input",
                     );
                     return None;
                 }
                 _ => match declaration {
-                    Some(port) if port.direction == Direction::Input => port.port.clone(),
+                    Some(port) if port.direction == PortDirection::Input => port.port.clone(),
                     Some(_) => {
                         self.wrong_direction(
                             target.span,
                             &name.text,
-                            Direction::Output,
+                            PortDirection::Output,
                             "an injection enters through a graph input",
                         );
                         return None;
@@ -1207,7 +1207,7 @@ impl Checker<'_, '_> {
             );
             return None;
         };
-        if declaration.direction != Direction::Output {
+        if declaration.direction != PortDirection::Output {
             self.wrong_direction(
                 target.span,
                 &name.text,
@@ -1388,8 +1388,8 @@ impl Checker<'_, '_> {
                             // expectation on one (like a typo) would
                             // be a false green by construction.
                             let direction = match *port {
-                                "out" => Some(Direction::Output),
-                                "in" => Some(Direction::Input),
+                                "out" => Some(PortDirection::Output),
+                                "in" => Some(PortDirection::Input),
                                 _ => app
                                     .boundary
                                     .iter()
@@ -1411,16 +1411,16 @@ impl Checker<'_, '_> {
                                     );
                                     continue;
                                 }
-                                Some(Direction::Input) => {
+                                Some(PortDirection::Input) => {
                                     self.wrong_direction(
                                         expect.target.span,
                                         port,
-                                        Direction::Input,
+                                        PortDirection::Input,
                                         "an expectation watches what leaves the App",
                                     );
                                     continue;
                                 }
-                                Some(Direction::Output) => {}
+                                Some(PortDirection::Output) => {}
                             }
                             let observed_type = app
                                 .boundary
@@ -1679,16 +1679,16 @@ impl Checker<'_, '_> {
                         },
                     };
                     let direction = match port.direction {
-                        crate::compiler::syntax::PortDirection::Input => Direction::Input,
-                        crate::compiler::syntax::PortDirection::Output => Direction::Output,
+                        crate::compiler::syntax::PortDirection::Input => PortDirection::Input,
+                        crate::compiler::syntax::PortDirection::Output => PortDirection::Output,
                     };
                     // Conventional boundary spellings are pre-bound in
                     // direction. Every declaration is materialized; an
                     // annotation additionally contributes a real source type
                     // constraint, never an implicit `variant` fallback.
                     let implicit = match port.name.text.as_str() {
-                        "in" => Some(Direction::Input),
-                        "out" | "err" => Some(Direction::Output),
+                        "in" => Some(PortDirection::Input),
+                        "out" | "err" => Some(PortDirection::Output),
                         _ => None,
                     };
                     if let Some(known) = implicit {
@@ -2338,7 +2338,7 @@ impl Checker<'_, '_> {
                         owner
                             .boundary
                             .iter()
-                            .filter(|port| port.direction == Direction::Input)
+                            .filter(|port| port.direction == PortDirection::Input)
                             .cloned()
                             .collect()
                     })
@@ -2347,7 +2347,7 @@ impl Checker<'_, '_> {
                     .map(|node| {
                         node.ports
                             .iter()
-                            .filter(|port| port.direction == Direction::Input)
+                            .filter(|port| port.direction == PortDirection::Input)
                             .cloned()
                             .collect()
                     })
@@ -2500,7 +2500,7 @@ impl Checker<'_, '_> {
             let Some(input_type) = node
                 .ports
                 .iter()
-                .find(|port| port.direction == Direction::Input && port.port.name() == "in")
+                .find(|port| port.direction == PortDirection::Input && port.port.name() == "in")
                 .and_then(|port| port.ty.clone())
             else {
                 // An invalid/deferred profile already spoke. Do not add a
@@ -3900,8 +3900,8 @@ impl Checker<'_, '_> {
                         },
                     };
                     let direction = match port.direction {
-                        crate::compiler::syntax::PortDirection::Input => Direction::Input,
-                        crate::compiler::syntax::PortDirection::Output => Direction::Output,
+                        crate::compiler::syntax::PortDirection::Input => PortDirection::Input,
+                        crate::compiler::syntax::PortDirection::Output => PortDirection::Output,
                     };
                     if !self.guard_binding_name(&port.name, "a port") {
                         continue;
@@ -4117,13 +4117,13 @@ impl Checker<'_, '_> {
         &mut self,
         node: &mut Node,
         name: &crate::compiler::syntax::Name,
-        direction: Direction,
+        direction: PortDirection,
         pinned: Option<DataType>,
         origin: &str,
     ) {
         let default_direction = match name.text.as_str() {
-            "in" => Some(Direction::Input),
-            "out" | "err" => Some(Direction::Output),
+            "in" => Some(PortDirection::Input),
+            "out" | "err" => Some(PortDirection::Output),
             _ => None,
         };
         let table_entry = node
@@ -4131,7 +4131,7 @@ impl Checker<'_, '_> {
             .iter()
             .position(|decl| decl.port.name() == name.text);
         let existing = table_entry.map(|index| node.ports[index].direction);
-        let push = |node: &mut Node, actual_direction: Direction, ty: Option<DataType>| {
+        let push = |node: &mut Node, actual_direction: PortDirection, ty: Option<DataType>| {
             if let Ok(port) = node::Port::new(name.text.clone()) {
                 node.ports.push(crate::plan::PortDecl {
                     port,
@@ -4223,7 +4223,7 @@ impl Checker<'_, '_> {
                 continue;
             };
             if let crate::compiler::syntax::Trigger::Port(name) = &handler.trigger {
-                self.add_port(node, name, Direction::Input, None, "fired by a handler");
+                self.add_port(node, name, PortDirection::Input, None, "fired by a handler");
             }
             let Some(dispatch) = &handler.dispatch else {
                 continue;
@@ -4247,7 +4247,13 @@ impl Checker<'_, '_> {
                     let is_state = node.vars.iter().any(|var| var.name == name.text)
                         || node.vals.iter().any(|val| val.name == name.text);
                     if !is_state {
-                        self.add_port(node, name, Direction::Output, None, "an emission target");
+                        self.add_port(
+                            node,
+                            name,
+                            PortDirection::Output,
+                            None,
+                            "an emission target",
+                        );
                     }
                 }
             }
@@ -7452,10 +7458,16 @@ impl Checker<'_, '_> {
         None
     }
 
-    fn wrong_direction(&mut self, span: Span, port: &str, direction: Direction, required: &str) {
+    fn wrong_direction(
+        &mut self,
+        span: Span,
+        port: &str,
+        direction: PortDirection,
+        required: &str,
+    ) {
         let have = match direction {
-            Direction::Input => "an input",
-            Direction::Output => "an output",
+            PortDirection::Input => "an input",
+            PortDirection::Output => "an output",
         };
         self.bag.push(
             Diagnostic::new(
@@ -7468,8 +7480,8 @@ impl Checker<'_, '_> {
             .with_field(
                 "direction",
                 match direction {
-                    Direction::Input => "input",
-                    Direction::Output => "output",
+                    PortDirection::Input => "input",
+                    PortDirection::Output => "output",
                 },
             ),
         );
@@ -7586,10 +7598,10 @@ fn is_bare_word(text: &str) -> bool {
         && !matches!(text, "true" | "false" | "null")
 }
 
-fn direction_words(direction: Direction) -> &'static str {
+fn direction_words(direction: PortDirection) -> &'static str {
     match direction {
-        Direction::Input => "an input",
-        Direction::Output => "an output",
+        PortDirection::Input => "an input",
+        PortDirection::Output => "an output",
     }
 }
 

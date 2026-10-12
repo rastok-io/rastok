@@ -2178,7 +2178,7 @@ impl<'a> PayloadSlots<'a> {
                         .and_then(|ports| {
                             ports
                                 .iter()
-                                .find(|port| port.direction() == node::Direction::Input)
+                                .find(|port| port.direction() == node::PortDirection::Input)
                         })
                         .map_or_else(
                             || DataSlot::new(input.data()),

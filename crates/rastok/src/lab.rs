@@ -16,9 +16,9 @@ use crate::compiler::hir::{
     Cmp, EmitValue, ExpectTarget, Expectation, InjectionTarget, Lab, Mock, Quantifier, Scenario,
     ScenarioStep,
 };
-use crate::connector::{ConnectorRoles, ContractId};
+use crate::connector::{ConnectorDirection, ContractId};
 #[cfg(test)]
-use crate::connectors::ProcessRequestBindings;
+use crate::connectors::ProcessRequestSettings;
 use crate::connectors::{
     BoundConnectorDriver, ConnectorDriverFactory, DriverFactoryError, DriverRegistry,
     HttpServerLabInput, RuntimeBindings, ScriptedConnectorProtocol, ScriptedProtocolBinder,
@@ -528,7 +528,7 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
                                     self.source_input.borrow_mut().offer(submission, action)
                                 });
                             if let Err(error) = offered.and_then(|()| {
-                                pump_inbound_world(
+                                poll_inbound_world(
                                     &mut self.driver,
                                     &mut self.vm,
                                     &mut self.journal,
@@ -607,7 +607,7 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
         let progressed = if self.vm.has_ready_transaction() {
             false
         } else {
-            self.pump_driver().map_err(ScenarioStepError::Boundary)?
+            self.poll_driver().map_err(ScenarioStepError::Boundary)?
         };
         // A retained opening or write acknowledgement can make the next
         // scripted frame admissible without queuing an Executor transaction.
@@ -624,7 +624,7 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
         if self.advance.is_some() {
             return Ok(false);
         }
-        let progressed = self.pump_driver()?;
+        let progressed = self.poll_driver()?;
         self.quiescent = !progressed && !self.vm.has_ready_transaction();
         Ok(progressed)
     }
@@ -691,15 +691,15 @@ impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
         }
     }
 
-    fn pump_driver(&mut self) -> Result<bool, String> {
+    fn poll_driver(&mut self) -> Result<bool, String> {
         let report = self
             .vm
-            .pump(&mut self.journal, &mut self.driver)
+            .poll_drivers(&mut self.journal, &mut self.driver)
             .map_err(|error| format!("the boundary round faulted: {error}"))?;
         // Finish the preceding batch round before offering the next inbound
         // frame. In particular WriteSettled must not move behind that frame
         // merely because the caller selected the interactive stepping path.
-        let inbound = pump_inbound_world(&mut self.driver, &mut self.vm, &mut self.journal)?;
+        let inbound = poll_inbound_world(&mut self.driver, &mut self.vm, &mut self.journal)?;
         self.collect_driver_faults();
         for (response, reason) in &report.rejected {
             self.failures.push(format!(
@@ -833,7 +833,7 @@ fn settle<'plan>(
 ) {
     let mut rested = false;
     for _ in 0..64 {
-        let inbound = match pump_inbound_world(driver, vm, journal) {
+        let inbound = match poll_inbound_world(driver, vm, journal) {
             Ok(progressed) => progressed,
             Err(error) => {
                 failures.push(error);
@@ -844,7 +844,7 @@ fn settle<'plan>(
             failures.push(format!("a step faulted: {error}"));
             return;
         }
-        let report = match vm.pump(journal, driver) {
+        let report = match vm.poll_drivers(journal, driver) {
             Ok(report) => report,
             Err(error) => {
                 failures.push(format!("the boundary round faulted: {error}"));
@@ -877,13 +877,13 @@ fn settle<'plan>(
 
 /// Offers world facts through the same binding, admission and terminal queue
 /// as a hosted source. This performs no graph transaction and mints no ids.
-fn pump_inbound_world<'plan>(
+fn poll_inbound_world<'plan>(
     driver: &mut RuntimeBindings<'plan>,
     vm: &mut Vm<'plan>,
     journal: &mut MemJournal,
 ) -> Result<bool, String> {
     let admitted = match driver
-        .pump_inbound(vm, journal)
+        .poll_inbound(vm, journal)
         .map_err(|error| error.to_string())?
     {
         Some(IngressAdmission::Accepted(_)) => true,
@@ -895,7 +895,7 @@ fn pump_inbound_world<'plan>(
         Some(IngressAdmission::Pending) | None => false,
     };
     let report = driver
-        .pump_inbound_call_events(vm)
+        .poll_inbound_call_events(vm)
         .map_err(|error| error.to_string())?;
     if !report.uncorrelated.is_empty() || !report.discarded.is_empty() {
         return Err(String::from(
@@ -915,7 +915,9 @@ fn injection_port<'plan>(
     target: &InjectionTarget,
 ) -> Result<&'plan crate::plan::ResolvedPort, String> {
     let (ports, direction) = match target {
-        InjectionTarget::Boundary(_) => (plan.resolved_ports().boundary(), node::Direction::Input),
+        InjectionTarget::Boundary(_) => {
+            (plan.resolved_ports().boundary(), node::PortDirection::Input)
+        }
         InjectionTarget::Connector { path, port } => {
             let (index, node) = plan
                 .plan()
@@ -941,7 +943,7 @@ fn injection_port<'plan>(
                 plan.resolved_ports()
                     .node(slot)
                     .ok_or_else(|| format!("source `{path}` has no resolved ports"))?,
-                node::Direction::Output,
+                node::PortDirection::Output,
             )
         }
     };
@@ -1161,8 +1163,8 @@ impl ConnectorDriverFactory for MockConnectorFactory {
         &self.id
     }
 
-    fn roles(&self) -> ConnectorRoles {
-        ConnectorRoles::Outbound
+    fn roles(&self) -> ConnectorDirection {
+        ConnectorDirection::Outbound
     }
 
     fn bind<'plan>(
@@ -1302,7 +1304,7 @@ impl MockOutboundConnectorDriver<'_> {
             .and_then(|ports| {
                 ports
                     .iter()
-                    .find(|port| port.direction() == node::Direction::Input)
+                    .find(|port| port.direction() == node::PortDirection::Input)
             });
         let slot = ty.map_or_else(
             || runtime::DataSlot::new(request.data()),
@@ -1592,7 +1594,7 @@ mod tests {
             plan: &compilation.plan,
             mocks: share_mocks(mocks),
             protocol: Box::new(
-                ProcessRequestBindings::try_bind(&compilation.plan, &nodes)
+                ProcessRequestSettings::try_bind(&compilation.plan, &nodes)
                     .expect("the Process mock binding is valid"),
             ),
             pending: Vec::new(),

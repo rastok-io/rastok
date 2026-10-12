@@ -108,11 +108,11 @@ impl FileBinding {
 /// the Lab's scripted Driver. It validates settings and seals operation bytes,
 /// but holds no physical root and cannot observe the filesystem.
 #[derive(Debug)]
-pub(crate) struct FileRequestBindings {
+pub(crate) struct FileRequestSettings {
     bindings: BTreeMap<crate::node::Path, FileBinding>,
 }
 
-impl FileRequestBindings {
+impl FileRequestSettings {
     pub(crate) fn try_bind(
         plan: &crate::plan::ValidatedExecutionPlan,
         nodes: &[crate::node::Path],
@@ -175,7 +175,7 @@ impl FileRequestBindings {
     }
 }
 
-impl super::ScriptedConnectorProtocol for FileRequestBindings {
+impl super::ScriptedConnectorProtocol for FileRequestSettings {
     fn prepare_request(
         &self,
         connector: &crate::node::Path,
@@ -195,7 +195,7 @@ pub(super) fn bind_scripted_protocol(
     nodes: &[crate::node::Path],
     _boot: &crate::deployment::BootBindings,
 ) -> Result<Box<dyn super::ScriptedConnectorProtocol>, super::DriverFactoryError> {
-    FileRequestBindings::try_bind(plan, nodes)
+    FileRequestSettings::try_bind(plan, nodes)
         .map(|bindings| Box::new(bindings) as Box<dyn super::ScriptedConnectorProtocol>)
         .map_err(|error| super::DriverFactoryError::new(error.to_string()))
 }
@@ -298,8 +298,8 @@ impl super::ConnectorDriverFactory for FileFactory {
         &self.id
     }
 
-    fn roles(&self) -> crate::connector::ConnectorRoles {
-        crate::connector::ConnectorRoles::Outbound
+    fn roles(&self) -> crate::connector::ConnectorDirection {
+        crate::connector::ConnectorDirection::Outbound
     }
 
     fn bind<'plan>(
@@ -329,7 +329,7 @@ struct WorkerResult {
 pub struct File<'plan> {
     _plan: &'plan crate::plan::ValidatedExecutionPlan,
     root: PathBuf,
-    bindings: FileRequestBindings,
+    bindings: FileRequestSettings,
     runs: BTreeMap<crate::boundary::CallId, Arc<AtomicBool>>,
     sender: mpsc::Sender<WorkerResult>,
     receiver: mpsc::Receiver<WorkerResult>,
@@ -360,7 +360,7 @@ impl<'plan> File<'plan> {
         nodes: &[crate::node::Path],
         root: PathBuf,
     ) -> Result<Self, FileBindError> {
-        let bindings = FileRequestBindings::try_bind(plan, nodes)?;
+        let bindings = FileRequestSettings::try_bind(plan, nodes)?;
         let (sender, receiver) = mpsc::channel();
         Ok(Self {
             _plan: plan,

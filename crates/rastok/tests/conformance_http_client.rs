@@ -269,7 +269,7 @@ fn drive(vm: &mut Vm<'_>, journal: &mut MemJournal, world: &mut RuntimeBindings<
     for _ in 0..250 {
         vm.run_ready_with_bindings(journal, world)
             .expect("the authenticated graph drains");
-        vm.pump(journal, world)
+        vm.poll_drivers(journal, world)
             .expect("the authenticated Driver pumps");
         vm.run_ready_with_bindings(journal, world)
             .expect("the authenticated completion drains");

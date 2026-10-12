@@ -124,7 +124,7 @@ The world-facing traits (`InboundConnectorDriver`,
 `OutboundConnectorDriver`, `Supervisor`) and the VM's explicit logical-time
 input
 and the journal-driven machinery: `IngressSubmission`,
-`IngressEnvelopeProvenance`, `CallOpen`, `Response`, `CallId`, `Dispatcher`,
+`IngressEnvelopeProvenance`, `CallOpen`, `Response`, `CallId`, `DriverPoller`,
 `DatedPayload`, `LifecycleObservation`.
 
 Exit: dispatcher tests against a scripted Outbound Driver, asserting journaled

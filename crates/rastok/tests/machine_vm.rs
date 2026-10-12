@@ -458,7 +458,7 @@ fn run_probe() -> (MemJournal, Vec<rastok::runtime::vm::BoundaryOutput>) {
     vm.inject(&mut journal, submission("salut")).unwrap();
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
     assert!(vm.is_stable());
@@ -1468,7 +1468,7 @@ graph dynamic_binding : App {
     loop {
         vm.run_ready_with_bindings(&mut journal, &mut process)
             .unwrap();
-        vm.pump(&mut journal, &mut process).unwrap();
+        vm.poll_drivers(&mut journal, &mut process).unwrap();
         vm.run_ready_with_bindings(&mut journal, &mut process)
             .unwrap();
         if vm.is_stable() {
@@ -1893,7 +1893,7 @@ graph nested_lifetimes : App {
         "instance expiry cannot replace an open call's terminal fact"
     );
 
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     vm.run_ready(&mut journal).unwrap();
     let shell_transactions: Vec<_> = journal
         .records()
@@ -1973,7 +1973,7 @@ graph draining : App {
     assert_eq!(vm.outputs().len(), 1, "the seed creates collect first");
 
     vm.advance(&mut journal, &mut world, 1_000_000_000).unwrap();
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
 
@@ -2009,7 +2009,7 @@ fn a_confirmed_cancel_keeps_the_observed_exit_and_never_invents_unknown() {
     vm.inject(&mut journal, text_submission("salut")).unwrap();
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     assert_eq!(world.started.len(), 1);
 
     vm.advance(&mut journal, &mut world, 1_000_000_000).unwrap();
@@ -2047,7 +2047,7 @@ fn silent_cancel_becomes_one_unknown_only_after_settlement() {
     vm.inject(&mut journal, text_submission("salut")).unwrap();
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     vm.advance(&mut journal, &mut world, 2_000_000_000).unwrap();
     assert_eq!(world.cancelled.len(), 1);
     assert!(source_exit_cases(&vm).is_empty());
@@ -2091,7 +2091,7 @@ fn silent_cancel_becomes_one_unknown_only_after_settlement() {
             },
         ),
     });
-    let report = vm.pump(&mut journal, &mut world).unwrap();
+    let report = vm.poll_drivers(&mut journal, &mut world).unwrap();
     assert_eq!(
         report.discarded.len(),
         1,
@@ -2132,7 +2132,7 @@ fn bounded_closing_interleavings_are_model_checked() {
         vm.inject(&mut journal, text_submission("one")).unwrap();
         vm.run_ready_with_bindings(&mut journal, &mut world)
             .unwrap();
-        vm.pump(&mut journal, &mut world).unwrap();
+        vm.poll_drivers(&mut journal, &mut world).unwrap();
         let call = world.started[0];
         let reply = || Response {
             call_id: call,
@@ -2151,20 +2151,20 @@ fn bounded_closing_interleavings_are_model_checked() {
         vm.advance(&mut journal, &mut world, 1_000_000_000).unwrap();
         if matches!(reply_at, ReplyAt::BeforeDrain) {
             world.answers.push(reply());
-            vm.pump(&mut journal, &mut world).unwrap();
+            vm.poll_drivers(&mut journal, &mut world).unwrap();
             vm.run_ready_with_bindings(&mut journal, &mut world)
                 .unwrap();
         }
         vm.advance(&mut journal, &mut world, 2_000_000_000).unwrap();
         if matches!(reply_at, ReplyAt::DuringSettlement) {
             world.answers.push(reply());
-            vm.pump(&mut journal, &mut world).unwrap();
+            vm.poll_drivers(&mut journal, &mut world).unwrap();
             vm.run_ready(&mut journal).unwrap();
         }
         vm.advance(&mut journal, &mut world, 3_000_000_000).unwrap();
         let late = if matches!(reply_at, ReplyAt::AfterSettlement) {
             world.answers.push(reply());
-            vm.pump(&mut journal, &mut world).unwrap()
+            vm.poll_drivers(&mut journal, &mut world).unwrap()
         } else {
             Default::default()
         };
@@ -2242,7 +2242,7 @@ fn external_arrival_waits_for_the_clean_successor_generation() {
     vm.inject(&mut journal, text_submission("first")).unwrap();
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     vm.advance(&mut journal, &mut world, 1_000_000_000).unwrap();
     let second = vm
         .inject(&mut journal, text_submission("second"))
@@ -2328,7 +2328,7 @@ graph two_calls : App {
     vm.inject(&mut journal, text_submission("queued")).unwrap();
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     assert_eq!(
         world.started.len(),
         2,
@@ -2915,7 +2915,7 @@ fn stderr_and_terminal_status_leave_on_independent_ports() {
     vm.inject(&mut journal, submission("salut")).unwrap();
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
     // stderr is ordinary data on `err`; the non-zero child status is an
@@ -2981,7 +2981,7 @@ fn malformed_terminal_facts_are_refused_loudly() {
             },
         ],
     };
-    let report = vm.pump(&mut journal, &mut world).unwrap();
+    let report = vm.poll_drivers(&mut journal, &mut world).unwrap();
     // Refused BEFORE the causal fact: the reply is rejected with
     // its reason, and the call stays open — the timeout machinery
     // can still settle it honestly.
@@ -3259,7 +3259,7 @@ fn a_new_input_reopens_only_its_ended_session_without_resending_old_writes() {
             vm.inject(&mut journal, text_submission(tenant)).unwrap();
             vm.run_ready_with_bindings(&mut journal, &mut world)
                 .unwrap();
-            vm.pump(&mut journal, &mut world).unwrap();
+            vm.poll_drivers(&mut journal, &mut world).unwrap();
         }
         let [alice, bob] = world.opened.as_slice() else {
             panic!("one resource per conversation, not per message");
@@ -3279,7 +3279,7 @@ fn a_new_input_reopens_only_its_ended_session_without_resending_old_writes() {
         let original_writes = world.writes.clone();
 
         world.close(alice);
-        vm.pump(&mut journal, &mut world).unwrap();
+        vm.poll_drivers(&mut journal, &mut world).unwrap();
         vm.run_ready_with_bindings(&mut journal, &mut world)
             .unwrap();
         assert_eq!(journal.live_sessions(), vec![bob]);
@@ -3305,7 +3305,7 @@ fn a_new_input_reopens_only_its_ended_session_without_resending_old_writes() {
         let fresh_input = vm.inject(&mut journal, text_submission("alice")).unwrap();
         vm.run_ready_with_bindings(&mut journal, &mut world)
             .unwrap();
-        vm.pump(&mut journal, &mut world).unwrap();
+        vm.poll_drivers(&mut journal, &mut world).unwrap();
         assert_eq!(world.opened.len(), 3);
         let fresh_alice = world.opened[2];
         assert_ne!(fresh_alice, alice);
@@ -3326,7 +3326,7 @@ fn a_new_input_reopens_only_its_ended_session_without_resending_old_writes() {
         world.close(alice);
         world.settle_write(0);
         let retained = journal.records().to_vec();
-        let report = vm.pump(&mut journal, &mut world).unwrap();
+        let report = vm.poll_drivers(&mut journal, &mut world).unwrap();
         assert_eq!(report.uncorrelated_sessions.len(), 2);
         vm.run_ready_with_bindings(&mut journal, &mut world)
             .unwrap();
@@ -3372,7 +3372,7 @@ fn repeated_child_stop_closes_only_the_exact_session_instance() {
         vm.inject(&mut journal, text_submission(tenant)).unwrap();
         vm.run_ready_with_bindings(&mut journal, &mut world)
             .unwrap();
-        vm.pump(&mut journal, &mut world).unwrap();
+        vm.poll_drivers(&mut journal, &mut world).unwrap();
     }
     let [alice, bob] = world.opened.as_slice() else {
         panic!("one Session per keyed conversation");
@@ -3400,7 +3400,7 @@ fn repeated_child_stop_closes_only_the_exact_session_instance() {
         vec![alice],
         "no renewed drain or duplicate close"
     );
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
     vm.advance(&mut journal, &mut world, 3_000_000_000).unwrap();
@@ -3419,7 +3419,7 @@ fn repeated_child_stop_closes_only_the_exact_session_instance() {
     vm.inject(&mut journal, text_submission("bob")).unwrap();
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     assert_eq!(world.writes.last().unwrap().0, bob);
     assert_eq!(world.close_requests, vec![alice]);
     assert_eq!(world.opened, vec![alice, bob]);
@@ -3495,7 +3495,7 @@ graph app : App {
                     .unwrap();
                 vm.run_ready_with_bindings(&mut journal, &mut world)
                     .unwrap();
-                vm.pump(&mut journal, &mut world).unwrap();
+                vm.poll_drivers(&mut journal, &mut world).unwrap();
             }
             let [alice, bob] = world.opened.as_slice() else {
                 panic!("one resource per keyed instance");
@@ -3522,7 +3522,7 @@ graph app : App {
             assert_eq!(writes[0].session_id, alice);
             let quit_write = writes[0].write_ref;
             world.settle_write(0);
-            vm.pump(&mut journal, &mut world).unwrap();
+            vm.poll_drivers(&mut journal, &mut world).unwrap();
             assert!(journal.open_session_writes().is_empty());
             assert!(vm.outputs().is_empty(), "writing quit is not an exit");
             assert_eq!(journal.live_sessions().len(), 2);
@@ -3533,7 +3533,7 @@ graph app : App {
             }
             if responds_to_quit {
                 world.close(alice);
-                vm.pump(&mut journal, &mut world).unwrap();
+                vm.poll_drivers(&mut journal, &mut world).unwrap();
                 vm.run_ready_with_bindings(&mut journal, &mut world)
                     .unwrap();
                 assert_eq!(source_exit_cases(&vm), ["Closed"]);
@@ -3575,7 +3575,7 @@ graph app : App {
             assert_eq!(world.released, [alice]);
             let before_late_exit = journal.records().to_vec();
             world.close(alice);
-            let report = vm.pump(&mut journal, &mut world).unwrap();
+            let report = vm.poll_drivers(&mut journal, &mut world).unwrap();
             vm.run_ready_with_bindings(&mut journal, &mut world)
                 .unwrap();
             assert!(matches!(report.uncorrelated_sessions.as_slice(),
@@ -3630,7 +3630,7 @@ fn session_release_waits_for_the_committed_terminal_even_after_a_storage_failure
                 vm.inject(&mut journal, text_submission(tenant)).unwrap();
                 vm.run_ready_with_bindings(&mut journal, &mut world)
                     .unwrap();
-                vm.pump(&mut journal, &mut world).unwrap();
+                vm.poll_drivers(&mut journal, &mut world).unwrap();
             }
             let (alice, bob) = (world.opened[0], world.opened[1]);
             let mut close = text_submission("alice");
@@ -3770,7 +3770,7 @@ graph app : App {
     vm.inject(&mut journal, text_submission("open")).unwrap();
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     let session = world.opened[0];
     let mut close = text_submission("stop");
     close.port = node::Port::new("close").unwrap();
@@ -3836,7 +3836,7 @@ graph app : App {
             recover(&mut vm, &journal);
         }
         assert_eq!(world.opened.len(), 1);
-        vm.pump(&mut journal, &mut world).unwrap();
+        vm.poll_drivers(&mut journal, &mut world).unwrap();
         recover(&mut vm, &journal);
         for text in ["first", "second"] {
             vm.inject(&mut journal, text_submission(text)).unwrap();
@@ -3849,11 +3849,11 @@ graph app : App {
         assert_eq!(journal.open_session_writes().len(), 2);
         for write in [1, 0] {
             world.settle_write(write);
-            vm.pump(&mut journal, &mut world).unwrap();
+            vm.poll_drivers(&mut journal, &mut world).unwrap();
             recover(&mut vm, &journal);
         }
         world.close(world.opened[0]);
-        vm.pump(&mut journal, &mut world).unwrap();
+        vm.poll_drivers(&mut journal, &mut world).unwrap();
         while vm.step_with_bindings(&mut journal, &mut world).unwrap() {
             recover(&mut vm, &journal);
         }
@@ -4108,7 +4108,7 @@ graph app : App {
     assert_eq!(vm.outputs().len(), 2);
     for session in sessions.into_iter().rev() {
         world.close(session);
-        vm.pump(&mut journal, &mut world).unwrap();
+        vm.poll_drivers(&mut journal, &mut world).unwrap();
         vm.run_ready(&mut journal).unwrap();
         vm.recover_from_journal(&journal).unwrap();
     }
@@ -4150,7 +4150,7 @@ graph websocket : App {
         journal.live_sessions().is_empty(),
         "the opening is not confirmed yet"
     );
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     assert_eq!(journal.live_sessions().len(), 1);
 
     vm.inject(&mut journal, text_submission("again")).unwrap();
@@ -4158,11 +4158,11 @@ graph websocket : App {
         .unwrap();
     assert_eq!(world.writes.len(), 1);
     assert_eq!(world.writes[0].0, world.opened[0]);
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     assert!(journal.open_session_writes().is_empty());
 
     world.close(world.opened[0]);
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
     assert!(journal.live_sessions().is_empty());
@@ -4213,7 +4213,7 @@ graph websocket : App {
     vm.inject(&mut journal, text_submission("open")).unwrap();
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
 
     for _ in 0..1_024 {
         vm.inject(&mut journal, text_submission("held")).unwrap();
@@ -4233,7 +4233,7 @@ graph websocket : App {
     );
 
     world.settle_write(0);
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
     assert_eq!(world.writes.len(), 1_025);
@@ -4271,7 +4271,7 @@ graph websocket : App {
         .unwrap();
     assert_eq!(world.opened.len(), 1);
     assert_eq!(journal.open_session_writes().len(), 0);
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     assert_eq!(world.opened.len(), 2, "one pump makes one bounded retry");
 
     vm.advance(&mut journal, &mut world, 5_000_000_000).unwrap();
@@ -4352,7 +4352,7 @@ graph websocket : App {
 
     world.close(second);
     world.close(first);
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
     assert!(vm.is_stable());
@@ -4865,7 +4865,7 @@ fn graph_call_commits_and_openings_are_atomic_under_storage_refusal() {
                 }
                 assert!(vm.step_with_bindings(&mut journal, &mut world).unwrap());
             }
-            vm.pump(&mut journal, &mut world).unwrap();
+            vm.poll_drivers(&mut journal, &mut world).unwrap();
             if world.started.len() > answered {
                 world.answers.push(Response {
                     call_id: world.started[answered],
@@ -4879,7 +4879,7 @@ fn graph_call_commits_and_openings_are_atomic_under_storage_refusal() {
                     ),
                 });
                 answered += 1;
-                vm.pump(&mut journal, &mut world).unwrap();
+                vm.poll_drivers(&mut journal, &mut world).unwrap();
             }
             if vm.is_stable() {
                 break;
@@ -4903,7 +4903,7 @@ fn graph_call_recovery_refuses_missing_contexts_and_unsettled_obligations() {
     vm.inject(&mut journal, text_submission("same")).unwrap();
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     world.answers.push(Response {
         call_id: world.started[0],
         completion: Completion::process(
@@ -4915,7 +4915,7 @@ fn graph_call_recovery_refuses_missing_contexts_and_unsettled_obligations() {
             },
         ),
     });
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     while !journal.inner.records().iter().any(|record| matches!(record, Record::Transaction(record)
         if record.loop_protocol().is_some_and(|packet| packet.facts.iter().any(|fact| matches!(fact, Fact::Advance { .. }))))) {
         assert!(vm.step_with_bindings(&mut journal, &mut world).unwrap());
@@ -5123,7 +5123,7 @@ graph app : App {
                         matches!(
                             error,
                             VmFault::Journal(rastok::journal::Error::Storage(_))
-                                | VmFault::Dispatch(rastok::boundary::DispatchError::Journal(
+                                | VmFault::Dispatch(rastok::boundary::PollFault::Journal(
                                     rastok::journal::Error::Storage(_)
                                 ))
                         ),
@@ -5150,7 +5150,7 @@ graph app : App {
         advance(&mut vm, &mut journal, &mut world, 0, faulted);
         for (attempt, now) in [(1, 0), (2, 100_000_000)] {
             advance(&mut vm, &mut journal, &mut world, now, faulted);
-            vm.pump(&mut journal, &mut world).unwrap();
+            vm.poll_drivers(&mut journal, &mut world).unwrap();
             assert_eq!(world.started.len(), attempt, "faulted={faulted}, now={now}");
             world.answers.push(Response {
                 call_id: *world.started.last().unwrap(),
@@ -5172,8 +5172,8 @@ graph app : App {
                 let inspection = vm.inspection();
                 journal.refuse_closes = true;
                 assert!(matches!(
-                    vm.pump(&mut journal, &mut world),
-                    Err(VmFault::Dispatch(rastok::boundary::DispatchError::Journal(
+                    vm.poll_drivers(&mut journal, &mut world),
+                    Err(VmFault::Dispatch(rastok::boundary::PollFault::Journal(
                         rastok::journal::Error::Storage(_)
                     )))
                 ));
@@ -5182,7 +5182,7 @@ graph app : App {
                 assert_eq!(world.started.len(), attempt);
                 journal.refuse_closes = false;
             }
-            vm.pump(&mut journal, &mut world).unwrap();
+            vm.poll_drivers(&mut journal, &mut world).unwrap();
             advance(&mut vm, &mut journal, &mut world, now, faulted);
             assert_eq!(vm.outputs().len(), if attempt == 1 { 0 } else { 3 });
         }
@@ -5261,7 +5261,7 @@ graph app : App {
             .unwrap();
         vm.run_ready_with_bindings(&mut journal, &mut world)
             .unwrap();
-        vm.pump(&mut journal, &mut world).unwrap();
+        vm.poll_drivers(&mut journal, &mut world).unwrap();
         assert_eq!(world.started.len(), 2);
         for call_id in &world.started {
             world.answers.push(Response {
@@ -5293,8 +5293,8 @@ graph app : App {
         );
         journal.refuse_call = Some(world.started[refused]);
         assert!(matches!(
-            vm.pump(&mut journal, &mut world),
-            Err(VmFault::Dispatch(rastok::boundary::DispatchError::Journal(
+            vm.poll_drivers(&mut journal, &mut world),
+            Err(VmFault::Dispatch(rastok::boundary::PollFault::Journal(
                 rastok::journal::Error::Storage(_)
             )))
         ));
@@ -5305,14 +5305,14 @@ graph app : App {
             "the Driver already handed off both responses"
         );
         world.answers.push(late);
-        assert!(vm.pump(&mut journal, &mut world).is_err());
+        assert!(vm.poll_drivers(&mut journal, &mut world).is_err());
         assert_eq!(
             world.answers.len(),
             1,
             "store pressure cannot pull another Driver batch"
         );
         journal.refuse_call = None;
-        let report = vm.pump(&mut journal, &mut world).unwrap();
+        let report = vm.poll_drivers(&mut journal, &mut world).unwrap();
         assert_eq!(
             report.settled, 2,
             "both winners must reach the VM exactly once"
@@ -5330,7 +5330,7 @@ graph app : App {
         assert!(vm.is_stable());
         assert_eq!(world.started.len(), 2);
         let records = journal.inner.records().to_vec();
-        let late = vm.pump(&mut journal, &mut world).unwrap();
+        let late = vm.poll_drivers(&mut journal, &mut world).unwrap();
         assert_eq!(late.settled, 0);
         assert_eq!(late.discarded.len(), 1);
         assert_eq!(journal.inner.records(), records);
@@ -5366,7 +5366,7 @@ graph app : App {
     vm.inject(&mut journal, text_submission("request")).unwrap();
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     assert_eq!(world.started.len(), 1);
     let opening = journal.inner.records().to_vec();
     world.answers.push(Response {
@@ -5380,7 +5380,7 @@ graph app : App {
             },
         ),
     });
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     vm.step_with_bindings(&mut journal, &mut world).unwrap();
     let completed = journal.inner.records().to_vec();
     for prefix in [&opening, &completed] {
@@ -5734,7 +5734,7 @@ fn a_scheduler_projection_refusal_precedes_the_timeout_close() {
     bindings.refuse_scheduler_completion = true;
     assert!(matches!(
         vm.advance(&mut journal, &mut bindings, 5_000_000_000),
-        Err(VmFault::Dispatch(rastok::boundary::DispatchError::Driver(
+        Err(VmFault::Dispatch(rastok::boundary::PollFault::Driver(
             DriverRouteError::UnavailableOutbound(_)
         )))
     ));
@@ -5767,7 +5767,7 @@ fn a_cancel_refusal_cannot_strand_an_expiring_call() {
 
     assert!(matches!(
         vm.advance(&mut journal, &mut bindings, 5_000_000_000),
-        Err(VmFault::Dispatch(rastok::boundary::DispatchError::Driver(
+        Err(VmFault::Dispatch(rastok::boundary::PollFault::Driver(
             DriverRouteError::UnavailableOutbound(_)
         )))
     ));
@@ -5944,7 +5944,7 @@ fn an_answer_and_an_expiry_race_to_a_single_closure() {
         .unwrap();
     // The driver answers first; the expiry then loses the race —
     // one closure fact, one completion transaction, no duplicate.
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
     vm.advance(&mut journal, &mut world, 5_000_000_000).unwrap();
@@ -6000,7 +6000,7 @@ fn a_late_answer_is_a_reported_observation_not_a_silence() {
             ),
         }],
     };
-    let report = vm.pump(&mut journal, &mut late).unwrap();
+    let report = vm.poll_drivers(&mut journal, &mut late).unwrap();
     assert_eq!(report.settled, 0);
     assert_eq!(report.discarded.len(), 1, "the late answer is visible");
     assert!(report.uncorrelated.is_empty());
@@ -6152,11 +6152,11 @@ fn a_suspended_call_keeps_its_mailbox_claimed() {
     assert_eq!(journal.open_calls().len(), 1);
     assert!(vm.has_open_obligations());
     // Settle, then the claim lifts and the second call opens.
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
     assert_eq!(journal.open_calls().len(), 1, "the second call is now open");
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     vm.run_ready(&mut journal).unwrap();
     assert!(vm.is_stable());
     assert_eq!(vm.outputs().len(), 2);

@@ -9,7 +9,7 @@ use crate::boundary::{
     OutboundConnectorDriver, PreparedRequest, RequestPreparation, SessionConnectorDriver,
     SessionId, SessionObservation, SessionOpen, SessionStart, SessionWrite,
 };
-use crate::connector::{ConnectorRoles, ContractId};
+use crate::connector::{ConnectorDirection, ContractId};
 use crate::envelope::{Data, Envelope};
 use crate::plan::{AttrSetting, NodeExecution, ValidatedExecutionPlan};
 use crate::value::Value;
@@ -628,8 +628,8 @@ impl super::ConnectorDriverFactory for WebSocketLabFactory {
         &self.id
     }
 
-    fn roles(&self) -> ConnectorRoles {
-        ConnectorRoles::InboundAndOutbound
+    fn roles(&self) -> ConnectorDirection {
+        ConnectorDirection::InboundAndOutbound
     }
 
     fn bind<'plan>(

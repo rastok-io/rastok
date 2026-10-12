@@ -69,7 +69,7 @@ not reimplemented in the mock and not hidden behind a networking feature.
 Port types alone do not describe an exchange's lifecycle or cardinality.
 
 The HttpServer ack Lab model owns one bounded decoded-request proposal and one
-acknowledgement slot. It uses `RuntimeBindings::pump_inbound` and the generic
+acknowledgement slot. It uses `RuntimeBindings::poll_inbound` and the generic
 inbound Call terminal queue; the core still mints the root, Call reference,
 routes and journal records. The scenario selects `listener.out`, not an extra
 test-only App input. Pending admission cannot acknowledge or overwrite the

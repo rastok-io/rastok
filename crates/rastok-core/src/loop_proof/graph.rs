@@ -67,7 +67,7 @@ pub fn derive_graph(
         for port in node
             .ports
             .iter()
-            .filter(|port| port.direction == node::Direction::Output)
+            .filter(|port| port.direction == node::PortDirection::Output)
         {
             let source = Endpoint {
                 owner: EndpointOwner::Node(node.path.clone()),

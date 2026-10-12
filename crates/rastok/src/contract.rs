@@ -94,7 +94,7 @@ pub struct PortContract {
     /// Port name.
     pub name: &'static str,
     /// Input or output direction.
-    pub direction: crate::node::Direction,
+    pub direction: crate::node::PortDirection,
     /// Rule producing the effective logical type for this instantiation.
     pub ty: PortTypeRule,
 }
@@ -235,7 +235,7 @@ pub struct ConnectorContract {
     /// The NodeType name (`Process`).
     pub name: &'static str,
     /// External-world roles required from a runtime Driver registration.
-    pub roles: crate::connector::ConnectorRoles,
+    pub roles: crate::connector::ConnectorDirection,
     /// Cardinality and terminal lifecycle of one interaction.
     pub exchange: crate::connector::ConnectorExchange,
     /// Ports, their directions and effective type rules.
@@ -409,7 +409,7 @@ pub struct ProfileProtocol {
     /// Exact versioned contract, not an alias for the default protocol.
     pub id: &'static str,
     /// Required Driver views.
-    pub roles: crate::connector::ConnectorRoles,
+    pub roles: crate::connector::ConnectorDirection,
     /// Interaction cardinality.
     pub exchange: crate::connector::ConnectorExchange,
 }
@@ -675,7 +675,7 @@ pub enum SheetDefect {
         /// Exchange declared by the sheet.
         exchange: crate::connector::ConnectorExchange,
         /// Incompatible Driver roles declared by the sheet.
-        roles: crate::connector::ConnectorRoles,
+        roles: crate::connector::ConnectorDirection,
     },
     /// A same-as rule names no port on the sheet.
     UnknownPortDependency {
@@ -974,8 +974,8 @@ pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), SheetDefect> {
             return Err(SheetDefect::ConflictingPort(name));
         }
         let implicit = match name {
-            "in" => Some(crate::node::Direction::Input),
-            "out" | "err" | "exit" => Some(crate::node::Direction::Output),
+            "in" => Some(crate::node::PortDirection::Input),
+            "out" | "err" | "exit" => Some(crate::node::PortDirection::Output),
             _ => None,
         };
         if let Some(expected) = implicit
@@ -1019,7 +1019,9 @@ pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), SheetDefect> {
                 let exits = contract
                     .ports
                     .iter()
-                    .filter(|p| p.name == "exit" && p.direction == crate::node::Direction::Output)
+                    .filter(|p| {
+                        p.name == "exit" && p.direction == crate::node::PortDirection::Output
+                    })
                     .count();
                 if (protocol.exchange == crate::connector::ConnectorExchange::Event && exits != 0)
                     || (protocol.exchange != crate::connector::ConnectorExchange::Event
@@ -1031,7 +1033,7 @@ pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), SheetDefect> {
                     });
                 }
                 if (protocol.exchange == crate::connector::ConnectorExchange::Event
-                    && protocol.roles != crate::connector::ConnectorRoles::Inbound)
+                    && protocol.roles != crate::connector::ConnectorDirection::Inbound)
                     || (protocol.exchange == crate::connector::ConnectorExchange::Session
                         && !protocol.roles.has_outbound())
                 {
@@ -1143,7 +1145,7 @@ pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), SheetDefect> {
             PortTypeRule::AttributeSelected { attribute, choices }
             | PortTypeRule::JsonOutput { attribute, choices } => {
                 if matches!(port.ty, PortTypeRule::JsonOutput { .. })
-                    && (port.direction != crate::node::Direction::Output
+                    && (port.direction != crate::node::PortDirection::Output
                         || !choices.iter().any(|choice| {
                             choice.word == "json" && choice.ty == PortDataType::Variant
                         }))
@@ -1205,7 +1207,7 @@ pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), SheetDefect> {
     let exits = contract
         .ports
         .iter()
-        .filter(|port| port.name == "exit" && port.direction == crate::node::Direction::Output)
+        .filter(|port| port.name == "exit" && port.direction == crate::node::PortDirection::Output)
         .count();
     let terminal_shape_holds = match contract.exchange {
         crate::connector::ConnectorExchange::Event => exits == 0,
@@ -1220,7 +1222,7 @@ pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), SheetDefect> {
     }
     let roles_hold = match contract.exchange {
         crate::connector::ConnectorExchange::Event => {
-            contract.roles == crate::connector::ConnectorRoles::Inbound
+            contract.roles == crate::connector::ConnectorDirection::Inbound
         }
         crate::connector::ConnectorExchange::Call => true,
         crate::connector::ConnectorExchange::Session => contract.roles.has_outbound(),

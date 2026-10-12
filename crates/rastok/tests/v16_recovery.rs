@@ -24,7 +24,7 @@ fn an_overdue_queued_call_cannot_start_an_effect_after_recovery() {
     recovered
         .run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
-    recovered.pump(&mut journal, &mut world).unwrap();
+    recovered.poll_drivers(&mut journal, &mut world).unwrap();
     assert_eq!(
         world.starts, 0,
         "queue time still counts while the Worker was absent"
@@ -62,7 +62,7 @@ graph app : App {
         }
         vm.run_ready_with_bindings(&mut journal, &mut world)
             .unwrap();
-        vm.pump(&mut journal, &mut world).unwrap();
+        vm.poll_drivers(&mut journal, &mut world).unwrap();
         assert_eq!(world.starts, 1);
         for at in [8_000_000_000, 9_000_000_000, 10_000_000_000, 11_000_000_000] {
             vm.advance(&mut journal, &mut world, at).unwrap();
@@ -224,11 +224,11 @@ graph app : App + Loop {
         inject(&mut vm, &mut journal, "in", 1);
         vm.run_ready_with_bindings(&mut journal, &mut world)
             .unwrap();
-        vm.pump(&mut journal, &mut world).unwrap();
+        vm.poll_drivers(&mut journal, &mut world).unwrap();
         assert_eq!(world.starts, 1);
         for at in [0, 3_000_000_000, 4_000_000_000] {
             vm.advance(&mut journal, &mut world, at).unwrap();
-            vm.pump(&mut journal, &mut world).unwrap();
+            vm.poll_drivers(&mut journal, &mut world).unwrap();
             let mut restored = Vm::boot_at(&plan, GraphVersion(1), at);
             restored
                 .recover_with_bindings(&journal, &mut world)
@@ -236,7 +236,7 @@ graph app : App + Loop {
             assert_eq!(restored.inspection(), vm.inspection());
             vm = restored;
         }
-        vm.pump(&mut journal, &mut world).unwrap();
+        vm.poll_drivers(&mut journal, &mut world).unwrap();
         assert_eq!(world.starts, 2);
         if exhausted {
             vm.advance(&mut journal, &mut world, 7_000_000_000).unwrap();
@@ -250,7 +250,7 @@ graph app : App + Loop {
                     },
                 ),
             });
-            vm.pump(&mut journal, &mut world).unwrap();
+            vm.poll_drivers(&mut journal, &mut world).unwrap();
         }
         for _ in 0..100 {
             let mut restored = Vm::boot_at(&plan, GraphVersion(1), vm.now());
@@ -351,7 +351,7 @@ fn graph_commands_wait_for_calls_and_recovery_never_restarts_them() {
     inject(&mut vm, &mut journal, "in", 1);
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     assert_eq!(world.starts, 1);
     let fold = Fold::from_records(journal.records()).unwrap();
     let (_, state) = fold.runs().next().unwrap();
@@ -375,7 +375,7 @@ fn graph_commands_wait_for_calls_and_recovery_never_restarts_them() {
         .recover_with_bindings(&journal, &mut world)
         .unwrap();
     assert_eq!(restored.inspection(), vm.inspection());
-    restored.pump(&mut journal, &mut world).unwrap();
+    restored.poll_drivers(&mut journal, &mut world).unwrap();
     assert_eq!(world.starts, 1, "recovery does not recall the open Call");
     assert_eq!(journal.records(), retained);
 
@@ -392,7 +392,7 @@ fn graph_commands_wait_for_calls_and_recovery_never_restarts_them() {
                 },
             ),
         });
-        restored.pump(&mut journal, &mut world).unwrap();
+        restored.poll_drivers(&mut journal, &mut world).unwrap();
         // The retained closure is not yet the consuming transaction. From
         // here, restore before every commit, including the frame's audit.
         while !journal.open_calls().is_empty() || restored.has_ready_transaction() {
@@ -410,7 +410,7 @@ fn graph_commands_wait_for_calls_and_recovery_never_restarts_them() {
                 break;
             }
         }
-        restored.pump(&mut journal, &mut world).unwrap();
+        restored.poll_drivers(&mut journal, &mut world).unwrap();
         assert_eq!(
             world.starts, 2,
             "only a new application can start another Call"
@@ -432,7 +432,7 @@ fn graph_call_deadlines_survive_recovery_without_extending_the_application() {
     inject(&mut vm, &mut journal, "in", 1);
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     for (at, iteration, phase) in [
         (9_999_999_999, 0, Phase::Active),
         (10_000_000_000, 1, Phase::Active),
@@ -481,7 +481,7 @@ fn a_graph_call_from_another_instance_does_not_delay_run_quiescence() {
     inject(&mut vm, &mut journal, "in", 0);
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     assert_eq!(world.starts, 2);
     let fold = Fold::from_records(journal.records()).unwrap();
     let (finished_run, state) = fold
@@ -505,7 +505,7 @@ fn a_graph_call_from_another_instance_does_not_delay_run_quiescence() {
             },
         ),
     });
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
     let fold = Fold::from_records(journal.records()).unwrap();
@@ -522,7 +522,7 @@ fn a_graph_call_from_another_instance_does_not_delay_run_quiescence() {
     restored
         .recover_with_bindings(&journal, &mut world)
         .unwrap();
-    restored.pump(&mut journal, &mut world).unwrap();
+    restored.poll_drivers(&mut journal, &mut world).unwrap();
     assert_eq!(world.starts, 2);
     assert_eq!(restored.inspection(), vm.inspection());
     assert_eq!(journal.records(), retained);
@@ -541,7 +541,7 @@ fn closing_a_graph_call_run_cancels_recurrence_and_recovers_settlement() {
     inject(&mut vm, &mut journal, "in", 1);
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     for at in [2_000_000_000, 3_000_000_000, 4_000_000_000, 20_000_000_000] {
         vm.advance(&mut journal, &mut world, at).unwrap();
         let mut restored = Vm::boot_at(&plan, GraphVersion(1), at);
@@ -578,13 +578,13 @@ fn call_recovery_restores_the_held_delivery_without_restarting_the_driver() {
     inject(&mut vm, &mut journal, "in", 4);
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     assert_eq!(world.starts, 1);
     let before = journal.records().to_vec();
     let mut restored = Vm::boot_at(&plan, GraphVersion(1), 750_000_000);
     restored.recover_from_journal(&journal).unwrap();
     assert_eq!(restored.inspection().calls, vm.inspection().calls);
-    restored.pump(&mut journal, &mut world).unwrap();
+    restored.poll_drivers(&mut journal, &mut world).unwrap();
     assert_eq!(
         world.starts, 1,
         "recovery must never blindly repeat an effect"
@@ -600,7 +600,7 @@ fn call_recovery_restores_the_held_delivery_without_restarting_the_driver() {
             rastok::boundary::ProcessExit::TimeoutExpired,
         ),
     });
-    restored.pump(&mut journal, &mut world).unwrap();
+    restored.poll_drivers(&mut journal, &mut world).unwrap();
     let retained = journal.records().to_vec();
     let mut after_response = Vm::boot_at(&plan, GraphVersion(1), 750_000_000);
     after_response.recover_from_journal(&journal).unwrap();
@@ -623,7 +623,9 @@ fn call_recovery_restores_the_held_delivery_without_restarting_the_driver() {
     after_command
         .advance(&mut journal, &mut world, 1_750_000_000)
         .unwrap();
-    after_command.pump(&mut journal, &mut world).unwrap();
+    after_command
+        .poll_drivers(&mut journal, &mut world)
+        .unwrap();
     assert_eq!(
         world.starts, 2,
         "only the new recurrence may start a new effect"

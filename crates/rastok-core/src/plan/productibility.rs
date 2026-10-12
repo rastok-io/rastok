@@ -15,7 +15,8 @@ pub(super) fn validate(
         }
         let slot = Slot::new(u32::try_from(index).unwrap_or(u32::MAX));
         for decl in ports.node(slot).into_iter().flatten() {
-            if decl.direction() != node::Direction::Output || !may_produce(plan, slot, decl.port())
+            if decl.direction() != node::PortDirection::Output
+                || !may_produce(plan, slot, decl.port())
             {
                 continue;
             }

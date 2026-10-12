@@ -5,7 +5,7 @@ use crate::boundary::{
     IngressProposalHandle, SessionConnectorDriver, SessionId, SessionObservation, SessionOpen,
     SessionStart, SessionWrite,
 };
-use crate::connectors::ProcessRequestBindings;
+use crate::connectors::ProcessRequestSettings;
 use std::collections::VecDeque;
 
 pub(super) struct Factory {
@@ -27,17 +27,17 @@ impl ConnectorDriverFactory for Factory {
     fn connector_id(&self) -> &ContractId {
         &self.id
     }
-    fn roles(&self) -> ConnectorRoles {
-        ConnectorRoles::InboundAndOutbound
+    fn roles(&self) -> ConnectorDirection {
+        ConnectorDirection::InboundAndOutbound
     }
     fn bind<'a>(
         &self,
         plan: &'a ValidatedExecutionPlan,
         nodes: &[node::Path],
     ) -> Result<Box<dyn BoundConnectorDriver + 'a>, DriverFactoryError> {
-        let bindings = ProcessRequestBindings::try_bind(plan, nodes)
+        let bindings = ProcessRequestSettings::try_bind(plan, nodes)
             .map_err(|e| DriverFactoryError::new(e.to_string()))?;
-        let protocol = ProcessRequestBindings::try_bind(plan, nodes)
+        let protocol = ProcessRequestSettings::try_bind(plan, nodes)
             .map_err(|e| DriverFactoryError::new(e.to_string()))?;
         Ok(Box::new(World {
             bindings,
@@ -57,7 +57,7 @@ impl ConnectorDriverFactory for Factory {
     }
 }
 struct World<'plan> {
-    bindings: ProcessRequestBindings,
+    bindings: ProcessRequestSettings,
     evaluator: MockOutboundConnectorDriver<'plan>,
     resources: BTreeMap<SessionId, node::Path>,
     terminating: std::collections::BTreeSet<SessionId>,

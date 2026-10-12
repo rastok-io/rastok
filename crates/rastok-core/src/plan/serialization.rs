@@ -300,8 +300,8 @@ fn resolved_table_tree(table: &super::ResolvedPortTable) -> Cbor {
                     let mut fields = vec![
                         Cbor::Text(port.port().name().to_string()),
                         Cbor::Uint(match port.direction() {
-                            node::Direction::Input => 1,
-                            node::Direction::Output => 2,
+                            node::PortDirection::Input => 1,
+                            node::PortDirection::Output => 2,
                         }),
                         type_tree(port.ty()),
                         Cbor::Uint(match port.origin() {
@@ -637,8 +637,8 @@ fn port_decl_tree(decl: &PortDecl) -> Cbor {
     let mut parts = vec![
         Cbor::Text(decl.port.name().to_string()),
         Cbor::Uint(match decl.direction {
-            node::Direction::Input => 1,
-            node::Direction::Output => 2,
+            node::PortDirection::Input => 1,
+            node::PortDirection::Output => 2,
         }),
     ];
     // An absent type denotes inference; the optional annotation table uses
@@ -2057,7 +2057,7 @@ fn spec_from(tree: &Cbor) -> Result<ConnectorSpec, DecodeError> {
         return Err(err("connector roles"));
     };
     let role_tag = u8::try_from(*role_tag).map_err(|_| err("connector roles"))?;
-    let roles = crate::connector::ConnectorRoles::from_tag(role_tag)
+    let roles = crate::connector::ConnectorDirection::from_tag(role_tag)
         .ok_or_else(|| err("connector roles"))?;
     let Cbor::Uint(exchange_tag) = get(pairs, 5, "connector exchange")? else {
         return Err(err("connector exchange"));
@@ -2110,8 +2110,8 @@ fn port_decl_from(tree: &Cbor) -> Result<PortDecl, DecodeError> {
         _ => return Err(err("port declaration")),
     };
     let direction = match direction {
-        1 => node::Direction::Input,
-        2 => node::Direction::Output,
+        1 => node::PortDirection::Input,
+        2 => node::PortDirection::Output,
         _ => return Err(err("port direction")),
     };
     Ok(PortDecl {
@@ -2699,7 +2699,7 @@ mod tests {
             nodes: vec![],
             boundary: vec![PortDecl {
                 port: port("in"),
-                direction: node::Direction::Input,
+                direction: node::PortDirection::Input,
 
                 ty: Some(ty),
                 annotations,
@@ -3204,7 +3204,7 @@ mod tests {
         nested.parent = Some(node::OwnerSlot::new(0));
         nested.ports = vec![PortDecl {
             port: port("in"),
-            direction: node::Direction::Input,
+            direction: node::PortDirection::Input,
 
             ty: Some(DataType::Text),
             annotations: AnnotationTable::new(vec![(
@@ -3629,10 +3629,10 @@ mod tests {
                     path: node::Path::new(["relay"]).unwrap(),
                     execution: NodeExecution::Operator,
                     ports: vec![
-                        PortDecl::untyped(port("extra"), node::Direction::Output),
+                        PortDecl::untyped(port("extra"), node::PortDirection::Output),
                         PortDecl {
                             port: port("typed"),
-                            direction: node::Direction::Input,
+                            direction: node::PortDirection::Input,
 
                             ty: Some(DataType::text_map(DataType::array(DataType::Text))),
                             annotations: AnnotationTable::empty(),
@@ -3653,7 +3653,7 @@ mod tests {
                             crate::connector::PROCESS_CONNECTOR_ID,
                         )
                         .unwrap(),
-                        roles: crate::connector::ConnectorRoles::Outbound,
+                        roles: crate::connector::ConnectorDirection::Outbound,
                         exchange: crate::connector::ConnectorExchange::Call,
                         idempotent: Some(PlanConstant {
                             expr: expr::compile("true", &expr::Signature::new()).unwrap(),
@@ -3673,12 +3673,12 @@ mod tests {
             boundary: vec![
                 PortDecl {
                     port: port("entry"),
-                    direction: node::Direction::Input,
+                    direction: node::PortDirection::Input,
 
                     ty: Some(DataType::array(DataType::INT)),
                     annotations: AnnotationTable::empty(),
                 },
-                PortDecl::untyped(port("feed"), node::Direction::Output),
+                PortDecl::untyped(port("feed"), node::PortDirection::Output),
             ],
             edges: vec![
                 Edge {
@@ -4357,7 +4357,7 @@ mod tests {
         spec.attributes.sort_by(|left, right| left.0.cmp(&right.0));
         categorical.boundary.push(PortDecl {
             port: port("deep"),
-            direction: node::Direction::Input,
+            direction: node::PortDirection::Input,
 
             ty: Some(nested_type.clone()),
             annotations: policy.clone(),
@@ -4465,7 +4465,7 @@ mod tests {
             nodes: vec![],
             boundary: vec![PortDecl {
                 port: port("deep"),
-                direction: node::Direction::Input,
+                direction: node::PortDirection::Input,
 
                 ty: Some(nested_type),
                 annotations: policy,

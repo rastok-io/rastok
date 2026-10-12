@@ -5,7 +5,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use rastok::boundary::{
-    AcceptAnyCompletion, Dispatcher, Draft, IngressEnvelopeProvenance, IngressSubmission,
+    AcceptAnyCompletion, Draft, DriverPoller, IngressEnvelopeProvenance, IngressSubmission,
     SubmissionSequence,
 };
 use rastok::compiler::compile;
@@ -110,7 +110,8 @@ fn drive(vm: &mut Vm<'_>, journal: &mut MemJournal, bindings: &mut RuntimeBindin
     for _ in 0..2_000 {
         vm.run_ready_with_bindings(journal, bindings)
             .expect("ready File work commits");
-        vm.pump(journal, bindings).expect("the File boundary pumps");
+        vm.poll_drivers(journal, bindings)
+            .expect("the File boundary pumps");
         if vm.is_stable() {
             return;
         }
@@ -344,11 +345,11 @@ fn replay_of_an_open_replace_never_reexecutes_the_file_effect() {
     assert_eq!(journal.open_calls().len(), 1);
     std::fs::write(&target, b"changed-after-open").expect("the external change writes");
 
-    let mut resumed = Dispatcher::resume(&journal);
+    let mut resumed = DriverPoller::resume(&journal);
     let mut bindings = RuntimeBindings::try_new(&plan, &registry).expect("File rebinds");
     for _ in 0..3 {
         let batch = resumed
-            .pump(&mut journal, &mut bindings, &AcceptAnyCompletion, 0)
+            .poll_drivers(&mut journal, &mut bindings, &AcceptAnyCompletion, 0)
             .expect("resume is a pure journal fold");
         assert!(batch.events.is_empty());
         std::thread::sleep(Duration::from_millis(5));

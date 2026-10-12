@@ -576,7 +576,7 @@ fn a_resolved_contract_port_table_enters_the_validated_plan_complete() {
         AttributeSpec, ConnectorContract, EvaluationSite, PortContract, PortDataType, PortTypeRule,
         Presence, ValueDomain,
     };
-    use rastok::node::Direction;
+    use rastok::node::PortDirection;
 
     // B5 closes the old hole: a contract name and direction are not enough
     // to make a usable port. The resolved sheet ships every row with its
@@ -585,42 +585,42 @@ fn a_resolved_contract_port_table_enters_the_validated_plan_complete() {
     const PROBE_SHEET: ConnectorContract = ConnectorContract {
         id: "org.rastok.test/probe@1",
         name: "Probe",
-        roles: rastok::connector::ConnectorRoles::Outbound,
+        roles: rastok::connector::ConnectorDirection::Outbound,
         exchange: rastok::connector::ConnectorExchange::Call,
         ports: &[
             PortContract {
                 name: "in",
-                direction: Direction::Input,
+                direction: PortDirection::Input,
 
                 ty: PortTypeRule::Fixed(PortDataType::Variant),
             },
             PortContract {
                 name: "request",
-                direction: Direction::Input,
+                direction: PortDirection::Input,
 
                 ty: PortTypeRule::Fixed(PortDataType::Variant),
             },
             PortContract {
                 name: "out",
-                direction: Direction::Output,
+                direction: PortDirection::Output,
 
                 ty: PortTypeRule::Fixed(PortDataType::Variant),
             },
             PortContract {
                 name: "err",
-                direction: Direction::Output,
+                direction: PortDirection::Output,
 
                 ty: PortTypeRule::Fixed(PortDataType::Variant),
             },
             PortContract {
                 name: "response",
-                direction: Direction::Input,
+                direction: PortDirection::Input,
 
                 ty: PortTypeRule::Fixed(PortDataType::Variant),
             },
             PortContract {
                 name: "exit",
-                direction: Direction::Output,
+                direction: PortDirection::Output,
 
                 ty: PortTypeRule::Fixed(PortDataType::Variant),
             },
@@ -655,46 +655,46 @@ fn a_named_connector_edge_defers_by_name() {
         AttributeSpec, ConnectorContract, EvaluationSite, PortContract, PortDataType, PortTypeRule,
         Presence, ValueDomain,
     };
-    use rastok::node::Direction;
+    use rastok::node::PortDirection;
     const PROBE_SHEET: ConnectorContract = ConnectorContract {
         id: "org.rastok.test/probe@1",
         name: "Probe",
-        roles: rastok::connector::ConnectorRoles::Outbound,
+        roles: rastok::connector::ConnectorDirection::Outbound,
         exchange: rastok::connector::ConnectorExchange::Call,
         ports: &[
             PortContract {
                 name: "in",
-                direction: Direction::Input,
+                direction: PortDirection::Input,
 
                 ty: PortTypeRule::Fixed(PortDataType::Variant),
             },
             PortContract {
                 name: "request",
-                direction: Direction::Input,
+                direction: PortDirection::Input,
 
                 ty: PortTypeRule::Fixed(PortDataType::Variant),
             },
             PortContract {
                 name: "out",
-                direction: Direction::Output,
+                direction: PortDirection::Output,
 
                 ty: PortTypeRule::Fixed(PortDataType::Variant),
             },
             PortContract {
                 name: "err",
-                direction: Direction::Output,
+                direction: PortDirection::Output,
 
                 ty: PortTypeRule::Fixed(PortDataType::Variant),
             },
             PortContract {
                 name: "response",
-                direction: Direction::Output,
+                direction: PortDirection::Output,
 
                 ty: PortTypeRule::Fixed(PortDataType::Variant),
             },
             PortContract {
                 name: "exit",
-                direction: Direction::Output,
+                direction: PortDirection::Output,
 
                 ty: PortTypeRule::Fixed(PortDataType::Variant),
             },
@@ -1270,15 +1270,15 @@ fn a_defective_sheet_is_held_at_the_door() {
     use rastok::contract::{
         ConnectorContract, PortContract, PortDataType, PortTypeRule, SheetDefect,
     };
-    use rastok::node::Direction;
+    use rastok::node::PortDirection;
     const MISDIRECTED: ConnectorContract = ConnectorContract {
         id: "org.rastok.test/bad@1",
         name: "Bad",
-        roles: rastok::connector::ConnectorRoles::Outbound,
+        roles: rastok::connector::ConnectorDirection::Outbound,
         exchange: rastok::connector::ConnectorExchange::Call,
         ports: &[PortContract {
             name: "out",
-            direction: Direction::Input,
+            direction: PortDirection::Input,
 
             ty: PortTypeRule::Fixed(PortDataType::Variant),
         }],
@@ -1288,18 +1288,18 @@ fn a_defective_sheet_is_held_at_the_door() {
     const CONFLICTING: ConnectorContract = ConnectorContract {
         id: "org.rastok.test/bad@1",
         name: "Bad",
-        roles: rastok::connector::ConnectorRoles::Outbound,
+        roles: rastok::connector::ConnectorDirection::Outbound,
         exchange: rastok::connector::ConnectorExchange::Call,
         ports: &[
             PortContract {
                 name: "request",
-                direction: Direction::Input,
+                direction: PortDirection::Input,
 
                 ty: PortTypeRule::Fixed(PortDataType::Variant),
             },
             PortContract {
                 name: "request",
-                direction: Direction::Output,
+                direction: PortDirection::Output,
 
                 ty: PortTypeRule::Fixed(PortDataType::Variant),
             },
@@ -2010,7 +2010,7 @@ fn the_validator_reads_the_table_and_gates_the_capability() {
     // Process cannot grow a port beyond its resolved contract, while a
     // referenced row absent from the table refuses by ignorance.
     use rastok::datatype::DataType;
-    use rastok::node::Direction;
+    use rastok::node::PortDirection;
     use rastok::plan::{Edge, EdgeEnd, PortDecl, Slot, ValidatedExecutionPlan};
     let source = "graph g : App {\n  input in: text\n  output out: text\n  connector probe : Process {\n    mode = job ; command = \"cat\"\n    codec = lines\n    idempotent = true; behavior = deterministic\n  }\n  in -> probe -> out\n  probe.err -> nothing\n  probe.exit -> nothing\n}\n";
     let mut plan = compile(
@@ -2028,7 +2028,7 @@ fn the_validator_reads_the_table_and_gates_the_capability() {
     let probe = &mut plan.nodes[probe_slot];
     probe.ports.push(PortDecl {
         port: rastok::node::Port::new("request").unwrap(),
-        direction: Direction::Input,
+        direction: PortDirection::Input,
 
         ty: Some(DataType::Text),
         annotations: Default::default(),

@@ -882,15 +882,15 @@ fn record_traffic(traffic: &mut BTreeMap<String, Traffic>, edge: &str, record_in
 
 fn port_json(
     port: &crate::node::Port,
-    direction: crate::node::Direction,
+    direction: crate::node::PortDirection,
     ty: Option<&crate::datatype::DataType>,
 ) -> JsonValue {
     json!({
         "name": port.name(),
         "type": ty.map(ToString::to_string),
         "direction": match direction {
-            crate::node::Direction::Input => "input",
-            crate::node::Direction::Output => "output",
+            crate::node::PortDirection::Input => "input",
+            crate::node::PortDirection::Output => "output",
         },
     })
 }

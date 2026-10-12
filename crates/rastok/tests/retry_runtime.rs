@@ -130,12 +130,12 @@ fn only_the_final_batch_is_routed_and_preparation_runs_once() {
     inject(&mut vm, &mut journal);
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     assert_eq!(world.preparations, 1);
     for ordinal in 1..=3 {
         assert_eq!(world.starts.len(), ordinal);
         reply(&mut world, true);
-        vm.pump(&mut journal, &mut world).unwrap();
+        vm.poll_drivers(&mut journal, &mut world).unwrap();
         vm.run_ready_with_bindings(&mut journal, &mut world)
             .unwrap();
         if ordinal < 3 {
@@ -143,10 +143,10 @@ fn only_the_final_batch_is_routed_and_preparation_runs_once() {
             assert!(!vm.is_stable());
             let due = ordinal as i64 * 100_000_000;
             vm.advance(&mut journal, &mut world, due - 1).unwrap();
-            vm.pump(&mut journal, &mut world).unwrap();
+            vm.poll_drivers(&mut journal, &mut world).unwrap();
             assert_eq!(world.starts.len(), ordinal);
             vm.advance(&mut journal, &mut world, due).unwrap();
-            vm.pump(&mut journal, &mut world).unwrap();
+            vm.poll_drivers(&mut journal, &mut world).unwrap();
         }
     }
     assert_eq!(
@@ -230,14 +230,14 @@ fn success_publishes_once_without_waiting_for_the_retry_bound() {
     inject(&mut vm, &mut journal);
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     reply(&mut world, false);
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
     vm.advance(&mut journal, &mut world, 10_000_000_000)
         .unwrap();
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     assert_eq!(world.starts.len(), 1);
     assert_eq!(vm.outputs().len(), 3);
     assert!(vm.is_stable());
@@ -253,7 +253,7 @@ fn real_timeout_retains_its_original_backoff_and_queue_time() {
     inject(&mut vm, &mut journal);
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     assert_eq!(
         world.starts.len(),
         1,
@@ -280,10 +280,10 @@ fn real_timeout_retains_its_original_backoff_and_queue_time() {
             .all(|call| call.deadlines.as_ref().unwrap().items()[0].due_at == 1_100_000_000)
     );
     vm.advance(&mut journal, &mut world, 1_099_999_999).unwrap();
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     assert_eq!(world.starts.len(), 1);
     vm.advance(&mut journal, &mut world, 1_100_000_000).unwrap();
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     assert_eq!(world.starts.len(), 2);
     assert_eq!(
         world.preparations, 2,
@@ -303,13 +303,13 @@ fn closing_in_backoff_does_not_publish_a_held_failure() {
         inject(&mut vm, &mut journal);
         vm.run_ready_with_bindings(&mut journal, &mut world)
             .unwrap();
-        vm.pump(&mut journal, &mut world).unwrap();
+        vm.poll_drivers(&mut journal, &mut world).unwrap();
         reply(&mut world, true);
-        vm.pump(&mut journal, &mut world).unwrap();
+        vm.poll_drivers(&mut journal, &mut world).unwrap();
         vm.run_ready_with_bindings(&mut journal, &mut world)
             .unwrap();
         vm.advance(&mut journal, &mut world, 1_000_000_000).unwrap();
-        vm.pump(&mut journal, &mut world).unwrap();
+        vm.poll_drivers(&mut journal, &mut world).unwrap();
         assert_eq!(world.starts.len(), 1);
         assert!(vm.outputs().is_empty());
         assert!(journal.records().iter().any(|r| matches!(r,
@@ -378,18 +378,18 @@ graph app : App {{
         }
         vm.run_ready_with_bindings(&mut journal, &mut world)
             .unwrap();
-        vm.pump(&mut journal, &mut world).unwrap();
+        vm.poll_drivers(&mut journal, &mut world).unwrap();
         assert_eq!(
             world.starts.len(),
             1,
             "{lifetime}: admitted work must drain"
         );
         reply(&mut world, true);
-        vm.pump(&mut journal, &mut world).unwrap();
+        vm.poll_drivers(&mut journal, &mut world).unwrap();
         vm.run_ready_with_bindings(&mut journal, &mut world)
             .unwrap();
         vm.advance(&mut journal, &mut world, 3_000_000_000).unwrap();
-        vm.pump(&mut journal, &mut world).unwrap();
+        vm.poll_drivers(&mut journal, &mut world).unwrap();
         assert_eq!(
             world.starts.len(),
             1,
@@ -450,15 +450,15 @@ fn single_pass_drain_never_transfers_an_operation_into_the_successor_generation(
     for count in 1..=2 {
         vm.run_ready_with_bindings(&mut journal, &mut world)
             .unwrap();
-        vm.pump(&mut journal, &mut world).unwrap();
+        vm.poll_drivers(&mut journal, &mut world).unwrap();
         assert_eq!(world.starts.len(), count, "one Call per exact generation");
         reply(&mut world, true);
-        vm.pump(&mut journal, &mut world).unwrap();
+        vm.poll_drivers(&mut journal, &mut world).unwrap();
     }
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
     vm.advance(&mut journal, &mut world, 3_000_000_000).unwrap();
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     assert_eq!(world.starts.len(), 2);
     assert_eq!(vm.outputs().len(), 6);
     assert!(vm.is_stable());
@@ -541,13 +541,13 @@ fn every_retained_prefix_recovers_without_preparing_or_starting_an_effect() {
     inject(&mut vm, &mut journal);
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     reply(&mut world, true);
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     vm.advance(&mut journal, &mut world, 100_000_000).unwrap();
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     reply(&mut world, false);
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
     for cut in 0..=journal.records().len() {
@@ -580,9 +580,9 @@ fn recovery_after_held_consumes_once_and_does_not_renew_the_backoff() {
     inject(&mut vm, &mut journal);
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     reply(&mut world, true);
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     vm.step_with_bindings(&mut journal, &mut world).unwrap();
     assert!(
         matches!(journal.records().last(), Some(Record::Transaction(r))
@@ -596,7 +596,9 @@ fn recovery_after_held_consumes_once_and_does_not_renew_the_backoff() {
     restored
         .run_ready_with_bindings(&mut journal, &mut world_after)
         .unwrap();
-    restored.pump(&mut journal, &mut world_after).unwrap();
+    restored
+        .poll_drivers(&mut journal, &mut world_after)
+        .unwrap();
     assert_eq!(
         world_after.starts.len(),
         1,
@@ -606,7 +608,9 @@ fn recovery_after_held_consumes_once_and_does_not_renew_the_backoff() {
     assert_eq!(world_after.starts[0].prepared, world.starts[0].prepared);
     assert_ne!(world_after.starts[0].call_id, world.starts[0].call_id);
     reply(&mut world_after, false);
-    restored.pump(&mut journal, &mut world_after).unwrap();
+    restored
+        .poll_drivers(&mut journal, &mut world_after)
+        .unwrap();
     restored
         .run_ready_with_bindings(&mut journal, &mut world_after)
         .unwrap();
@@ -690,17 +694,17 @@ graph app : App + Loop {
     inject(&mut vm, &mut journal);
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     reply(&mut world, true);
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
     assert!(!vm.is_stable());
     assert!(vm.outputs().is_empty());
     vm.advance(&mut journal, &mut world, 100_000_000).unwrap();
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     reply(&mut world, false);
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
     assert_eq!(vm.outputs().len(), 1);
@@ -746,9 +750,9 @@ graph app : App {
     inject(&mut vm, &mut journal);
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     reply(&mut world, false);
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
     let mut records = journal.records().to_vec();
@@ -801,13 +805,13 @@ fn a_retry_recording_restores_held_batches_at_every_selected_prefix() {
     inject(&mut vm, &mut journal);
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     reply(&mut world, true);
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     vm.advance(&mut journal, &mut world, 100_000_000).unwrap();
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     reply(&mut world, false);
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
     let compilation = compiler::Compilation {
@@ -884,7 +888,7 @@ graph app : App {
     inject(&mut vm, &mut journal);
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     let mut openings: Vec<_> = journal
         .records()
         .iter()
@@ -904,7 +908,7 @@ graph app : App {
             completion: Completion::process(vec![], vec![], ProcessExit::TimeoutExpired),
         })
         .collect();
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
     vm.advance(&mut journal, &mut world, 1_000_000).unwrap();
@@ -1004,9 +1008,9 @@ graph app : App {
             vm.run_ready_with_bindings(&mut journal, &mut world)
                 .unwrap();
             if port == "retry" {
-                vm.pump(&mut journal, &mut world).unwrap();
+                vm.poll_drivers(&mut journal, &mut world).unwrap();
                 reply(&mut world, true);
-                vm.pump(&mut journal, &mut world).unwrap();
+                vm.poll_drivers(&mut journal, &mut world).unwrap();
                 vm.run_ready_with_bindings(&mut journal, &mut world)
                     .unwrap();
             }
@@ -1162,9 +1166,9 @@ graph app : App {
                 vm.run_ready_with_bindings(&mut journal, &mut world)
                     .unwrap();
                 if port == "retry" {
-                    vm.pump(&mut journal, &mut world).unwrap();
+                    vm.poll_drivers(&mut journal, &mut world).unwrap();
                     reply(&mut world, true);
-                    vm.pump(&mut journal, &mut world).unwrap();
+                    vm.poll_drivers(&mut journal, &mut world).unwrap();
                     vm.run_ready_with_bindings(&mut journal, &mut world)
                         .unwrap();
                 }
@@ -1271,10 +1275,10 @@ graph app : App {{
                 .unwrap();
                 vm.run_ready_with_bindings(&mut journal, &mut world)
                     .unwrap();
-                vm.pump(&mut journal, &mut world).unwrap();
+                vm.poll_drivers(&mut journal, &mut world).unwrap();
                 if port == "retry" {
                     reply(&mut world, true);
-                    vm.pump(&mut journal, &mut world).unwrap();
+                    vm.poll_drivers(&mut journal, &mut world).unwrap();
                 } else {
                     vm.inject(
                         &mut journal,
@@ -1373,11 +1377,11 @@ graph app : App {
         inject(&mut vm, &mut journal);
         vm.run_ready_with_bindings(&mut journal, &mut world)
             .unwrap();
-        vm.pump(&mut journal, &mut world).unwrap();
+        vm.poll_drivers(&mut journal, &mut world).unwrap();
         reply(&mut world, true);
-        vm.pump(&mut journal, &mut world).unwrap();
+        vm.poll_drivers(&mut journal, &mut world).unwrap();
         vm.advance(&mut journal, &mut world, 100_000_000).unwrap();
-        vm.pump(&mut journal, &mut world).unwrap();
+        vm.poll_drivers(&mut journal, &mut world).unwrap();
         assert_eq!(world.starts.len(), 2);
         world.responses.push(Response {
             call_id: world.starts[1].call_id,
@@ -1392,7 +1396,7 @@ graph app : App {
                 },
             ),
         });
-        vm.pump(&mut journal, &mut world).unwrap();
+        vm.poll_drivers(&mut journal, &mut world).unwrap();
         let before = journal.records().to_vec();
         let inspection = vm.inspection();
         let observations = vm.observations().to_vec();
@@ -1513,7 +1517,7 @@ graph app : App {
     for now in [0, 100_000_000] {
         vm.advance(&mut journal, &mut world, now).unwrap();
         for round in 0..8 {
-            vm.pump(&mut journal, &mut world).unwrap();
+            vm.poll_drivers(&mut journal, &mut world).unwrap();
             if answered == world.starts.len() {
                 break;
             }
@@ -1544,7 +1548,7 @@ graph app : App {
                 });
             }
             answered = world.starts.len();
-            vm.pump(&mut journal, &mut world).unwrap();
+            vm.poll_drivers(&mut journal, &mut world).unwrap();
             vm.run_ready_with_bindings(&mut journal, &mut world)
                 .unwrap();
         }
@@ -1626,7 +1630,7 @@ graph app : App {
             },
         ),
     });
-    let late = vm.pump(&mut journal, &mut world).unwrap();
+    let late = vm.poll_drivers(&mut journal, &mut world).unwrap();
     assert_eq!(late.discarded.len(), 1);
     assert_eq!(
         journal.records(),
@@ -1664,9 +1668,9 @@ graph app : App {
         inject(&mut vm, &mut journal);
         vm.run_ready_with_bindings(&mut journal, &mut world)
             .unwrap();
-        vm.pump(&mut journal, &mut world).unwrap();
+        vm.poll_drivers(&mut journal, &mut world).unwrap();
         reply(&mut world, true);
-        vm.pump(&mut journal, &mut world).unwrap();
+        vm.poll_drivers(&mut journal, &mut world).unwrap();
         for _ in 0..steps_after_closure {
             assert!(vm.step_with_bindings(&mut journal, &mut world).unwrap());
         }

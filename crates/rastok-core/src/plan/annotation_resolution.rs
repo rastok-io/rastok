@@ -39,7 +39,7 @@ enum PortKey {
 #[derive(Debug, Clone)]
 struct PortState {
     key: PortKey,
-    direction: node::Direction,
+    direction: node::PortDirection,
     ty: DataType,
     declared: AnnotationTable,
     current: AnnotationTable,
@@ -612,14 +612,14 @@ impl<'a> Solver<'a> {
                 .ports
                 .values()
                 .filter(|state| {
-                    state.direction == node::Direction::Input
+                    state.direction == node::PortDirection::Input
                         && matches!(state.key, PortKey::Node(candidate, _) if candidate == slot)
                 })
                 .collect(),
             OwnerKind::Graph => self
                 .graph_port_states(owner)
                 .into_iter()
-                .filter(|state| state.direction == node::Direction::Input)
+                .filter(|state| state.direction == node::PortDirection::Input)
                 .collect(),
         }
     }
@@ -729,7 +729,7 @@ impl<'a> Solver<'a> {
                     .filter(|state| {
                         matches!(state.key, PortKey::Node(candidate, _)
                             if candidate == slot)
-                            && state.direction == node::Direction::Input
+                            && state.direction == node::PortDirection::Input
                     })
                     .collect();
                 if let Some(first) = inputs.first() {

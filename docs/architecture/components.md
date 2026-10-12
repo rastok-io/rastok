@@ -335,19 +335,19 @@ a declared host seam rather than an object the M1 VM consumes directly.
 | **Logical-time input** | `Vm::boot_at` fixes an origin and `Vm::advance(journal, driver, target)` advances one deterministic timeline. A hosted runner uses one wall-clock sample plus monotonic elapsed time; a microcontroller with no RTC may use zero or a supplied origin. `now()` observes the firing's fixed instant and seals it only when used. | hosted time source | scenario origin + `advance` | [execution-model.md §5, §8](../spec/execution-model.md); D-2026-08-28-5 | target-driven VM; handler observation current |
 | **`Supervisor`** | process lifecycle: boot, crash, restart; recovery must never require a clean shutdown | host lifecycle | not built; fault steps remain guarded | [delivery-semantics.md §4.4](../spec/delivery-semantics.md); [simulation-semantics.md §5.4](../spec/simulation-semantics.md) | declared seam; current wiring boots only |
 
-The **`Dispatcher`** (owned here) is the loop between the journal and
+The **`DriverPoller`** (owned here) is the loop between the journal and
 Outbound Connector Drivers: it takes EGRESS records the VM opened, drives
 the selected binding, and settles answers through
 `journal::close_egress(call_id, …) → Won | AlreadyClosed`. Before
 any closure, the **`CompletionCheck`** judges every output against the resolved
 port contract — a refused reply never becomes
-a causal fact: it returns in `PumpBatch::rejected` with its reason,
+a causal fact: it returns in `PollBatch::rejected` with its reason,
 and the call stays open, honestly settleable by the timeout. Only a
 `Won` closure becomes an input event for the VM; `AlreadyClosed`
 degrades the late arrival into a discarded observation — the
 anti-ghost rule
 ([execution-model.md §6.3](../spec/execution-model.md)) as a typed
-race, not a convention. `PumpBatch` returns every non-causal
+race, not a convention. `PollBatch` returns every non-causal
 observation — discarded, uncorrelated, rejected — nothing silent.
 
 Ownership rules that the types must make unrepresentable:
@@ -476,7 +476,7 @@ main (bin)
                                                          │                     ▼
         connectors ── implement ─────────────────────────┘                 journal
         future guest engines ── implement GuestRunner ▶ runtime               ▲
-        boundary::Dispatcher ── drives open EGRESS facts, closes ───────────────┘
+        boundary::DriverPoller ── drives open EGRESS facts, closes ───────────────┘
 
 compiler ──▶ plan (the execution plan) ◀── interprets ──────────────────── runtime
     │    └─▶ stdlib (contract sheets)
@@ -554,7 +554,7 @@ The slice stages of [`m0-slice.md`](m0-slice.md), in module terms:
 | Check | `compiler` (assemble, desugar, check vs `stdlib` contracts), `expr` (compile) |
 | Plan | `compiler` (canonicalize, lower), `plan::Manifest` |
 | Step | `runtime` (Scheduler, Mailboxes, TransactionPreparer, EmissionBuffer, error routing) |
-| Handle | `boundary::Dispatcher` + `boundary::OutboundConnectorDriver` behind `CompletionCheck`; `connectors::Process` (App) or the Lab mock (Lab) |
+| Handle | `boundary::DriverPoller` + `boundary::OutboundConnectorDriver` behind `CompletionCheck`; `connectors::Process` (App) or the Lab mock (Lab) |
 | Record | `journal` (semantic operations, id derivation) |
 | Compare | `golden` projection, seal, and diff; `lab`-returned records; `main --golden/--bless` |
 

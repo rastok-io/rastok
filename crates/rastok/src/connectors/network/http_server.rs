@@ -136,8 +136,8 @@ impl crate::connectors::ConnectorDriverFactory for HttpServerFactory {
         &self.id
     }
 
-    fn roles(&self) -> crate::connector::ConnectorRoles {
-        crate::connector::ConnectorRoles::Inbound
+    fn roles(&self) -> crate::connector::ConnectorDirection {
+        crate::connector::ConnectorDirection::Inbound
     }
 
     fn bind<'plan>(

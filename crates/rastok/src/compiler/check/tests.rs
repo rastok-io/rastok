@@ -1073,7 +1073,7 @@ on in { err = Broken { message = "no" } }
         .iter()
         .find(|port| port.port.name() == "err")
         .expect("err is materialized like every other emitted port");
-    assert_eq!(err.direction, Direction::Output);
+    assert_eq!(err.direction, PortDirection::Output);
     assert!(matches!(
         &handler_body(&hir.app.nodes[0].handlers[0])[0],
         Statement::Emit { port, value: EmitValue::Data(expr::Tree { root: expr::Expr::Tagged { .. }, .. }) }
@@ -2795,12 +2795,12 @@ fn handler_and_emission_ports_are_inferred() {
     assert!(
         ports
             .iter()
-            .any(|decl| decl.port.name() == "event" && decl.direction == Direction::Input)
+            .any(|decl| decl.port.name() == "event" && decl.direction == PortDirection::Input)
     );
     assert!(
         ports
             .iter()
-            .any(|decl| decl.port.name() == "result" && decl.direction == Direction::Output)
+            .any(|decl| decl.port.name() == "result" && decl.direction == PortDirection::Output)
     );
 }
 

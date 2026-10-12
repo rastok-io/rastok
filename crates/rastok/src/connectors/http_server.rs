@@ -15,7 +15,7 @@ use crate::boundary::{
     InboundConnectorDriver, InboundExchangeId, IngressDecision, IngressProposal,
     IngressProposalHandle, IngressSubmission,
 };
-use crate::connector::{ConnectorRoles, ContractId};
+use crate::connector::{ConnectorDirection, ContractId};
 use crate::plan::ValidatedExecutionPlan;
 #[cfg(feature = "hosted-http12")]
 use crate::plan::{AttrSetting, NodeExecution};
@@ -366,8 +366,8 @@ impl super::ConnectorDriverFactory for HttpServerLabFactory {
         &self.id
     }
 
-    fn roles(&self) -> ConnectorRoles {
-        ConnectorRoles::Inbound
+    fn roles(&self) -> ConnectorDirection {
+        ConnectorDirection::Inbound
     }
 
     fn bind<'plan>(
@@ -465,17 +465,17 @@ mod lab_tests {
             .offer(submission(Value::Int(17)), 0)
             .unwrap();
         assert_eq!(
-            bindings.pump_inbound_call_events(&mut vm).unwrap().queued,
+            bindings.poll_inbound_call_events(&mut vm).unwrap().queued,
             0
         );
         assert_eq!(
-            bindings.pump_inbound(&mut vm, &mut journal).unwrap(),
+            bindings.poll_inbound(&mut vm, &mut journal).unwrap(),
             Some(IngressAdmission::Rejected(IngressRejection::InvalidPayload))
         );
         assert!(journal.records().is_empty());
         assert!(!input.borrow().is_pending());
         assert_eq!(
-            bindings.pump_inbound_call_events(&mut vm).unwrap().queued,
+            bindings.poll_inbound_call_events(&mut vm).unwrap().queued,
             0
         );
 
@@ -490,11 +490,11 @@ mod lab_tests {
         );
         assert!(journal.records().is_empty());
         assert_eq!(
-            bindings.pump_inbound_call_events(&mut vm).unwrap().queued,
+            bindings.poll_inbound_call_events(&mut vm).unwrap().queued,
             0
         );
         let Some(IngressAdmission::Accepted(accepted)) =
-            bindings.pump_inbound(&mut vm, &mut journal).unwrap()
+            bindings.poll_inbound(&mut vm, &mut journal).unwrap()
         else {
             panic!("accepted source")
         };
@@ -507,11 +507,11 @@ mod lab_tests {
                 .is_err()
         );
         assert_eq!(
-            bindings.pump_inbound_call_events(&mut vm).unwrap().queued,
+            bindings.poll_inbound_call_events(&mut vm).unwrap().queued,
             1
         );
         assert_eq!(
-            bindings.pump_inbound_call_events(&mut vm).unwrap().queued,
+            bindings.poll_inbound_call_events(&mut vm).unwrap().queued,
             0,
             "one ACK only"
         );
@@ -538,11 +538,11 @@ mod lab_tests {
                 .offer(submission(Value::Text("queued".into())), action as u64)
                 .unwrap();
             assert!(matches!(
-                bindings.pump_inbound(&mut vm, &mut journal).unwrap(),
+                bindings.poll_inbound(&mut vm, &mut journal).unwrap(),
                 Some(IngressAdmission::Accepted(_))
             ));
             assert_eq!(
-                bindings.pump_inbound_call_events(&mut vm).unwrap().queued,
+                bindings.poll_inbound_call_events(&mut vm).unwrap().queued,
                 1
             );
         }
@@ -554,7 +554,7 @@ mod lab_tests {
         let retained = bindings.next_inbound().unwrap().unwrap();
         for _ in 0..2 {
             assert_eq!(
-                bindings.pump_inbound(&mut vm, &mut journal).unwrap(),
+                bindings.poll_inbound(&mut vm, &mut journal).unwrap(),
                 Some(IngressAdmission::Pending)
             );
             assert_eq!(journal.records().len(), records_before);
@@ -563,7 +563,7 @@ mod lab_tests {
                 retained.proposal()
             );
             assert_eq!(
-                bindings.pump_inbound_call_events(&mut vm).unwrap().queued,
+                bindings.poll_inbound_call_events(&mut vm).unwrap().queued,
                 0
             );
         }
@@ -576,11 +576,11 @@ mod lab_tests {
         vm.run_ready_with_bindings(&mut journal, &mut bindings)
             .unwrap();
         assert!(matches!(
-            bindings.pump_inbound(&mut vm, &mut journal).unwrap(),
+            bindings.poll_inbound(&mut vm, &mut journal).unwrap(),
             Some(IngressAdmission::Accepted(_))
         ));
         assert_eq!(
-            bindings.pump_inbound_call_events(&mut vm).unwrap().queued,
+            bindings.poll_inbound_call_events(&mut vm).unwrap().queued,
             1
         );
         assert!(!input.borrow().is_pending());

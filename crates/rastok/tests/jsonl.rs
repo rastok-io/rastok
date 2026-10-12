@@ -53,7 +53,7 @@ fn drive(
         if vm.is_stable() && !vm.has_open_obligations() {
             break;
         }
-        vm.pump(&mut journal, &mut world)
+        vm.poll_drivers(&mut journal, &mut world)
             .expect("the world answers");
         vm.run_ready_with_bindings(&mut journal, &mut world)
             .expect("the reply routes");
@@ -578,14 +578,14 @@ fn another_contracts_codec_vocabulary_is_untouched() {
             node.ports = vec![
                 rastok::plan::PortDecl {
                     port: rastok::node::Port::new("in").expect("a conventional port"),
-                    direction: rastok::node::Direction::Input,
+                    direction: rastok::node::PortDirection::Input,
 
                     ty: Some(rastok::datatype::DataType::Variant),
                     annotations: Default::default(),
                 },
                 rastok::plan::PortDecl {
                     port: rastok::node::Port::new("out").expect("a conventional port"),
-                    direction: rastok::node::Direction::Output,
+                    direction: rastok::node::PortDirection::Output,
 
                     ty: Some(rastok::datatype::DataType::array(
                         rastok::datatype::DataType::Variant,
@@ -594,7 +594,7 @@ fn another_contracts_codec_vocabulary_is_untouched() {
                 },
                 rastok::plan::PortDecl {
                     port: rastok::node::Port::conventional_exit(),
-                    direction: rastok::node::Direction::Output,
+                    direction: rastok::node::PortDirection::Output,
 
                     ty: Some(
                         rastok::boundary::process_exit_type()

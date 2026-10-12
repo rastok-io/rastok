@@ -170,7 +170,7 @@ impl core::error::Error for ConnectorIdError {}
 
 /// The cardinality and terminal lifecycle of one Connector interaction.
 ///
-/// This is orthogonal to [`ConnectorRoles`]: roles say which side may move a
+/// This is orthogonal to [`ConnectorDirection`]: roles say which side may move a
 /// fact across the world boundary, while this value says whether those facts
 /// are independent events, one bounded call, or members of one long-lived
 /// session.
@@ -222,7 +222,7 @@ impl fmt::Display for ConnectorExchange {
 /// There is deliberately no empty value: a Connector without either world
 /// role is an Operator or Graph, not a Connector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum ConnectorRoles {
+pub enum ConnectorDirection {
     /// Proposes external arrivals to Rastok.
     Inbound,
     /// Executes already-journaled calls into the external world.
@@ -231,7 +231,7 @@ pub enum ConnectorRoles {
     InboundAndOutbound,
 }
 
-impl ConnectorRoles {
+impl ConnectorDirection {
     /// Stable categorical tag used by semantic identity and plan transport.
     #[must_use]
     pub const fn tag(self) -> u8 {
@@ -277,7 +277,7 @@ impl ConnectorRoles {
     }
 }
 
-impl fmt::Display for ConnectorRoles {
+impl fmt::Display for ConnectorDirection {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::Inbound => "inbound",
@@ -298,10 +298,10 @@ pub(crate) enum SessionOpening {
 /// Unknown Contracts acquire no opening authority by resemblance.
 pub(crate) fn session_opening(
     contract: &ContractId,
-    roles: ConnectorRoles,
+    roles: ConnectorDirection,
     exchange: ConnectorExchange,
 ) -> Option<SessionOpening> {
-    if roles != ConnectorRoles::InboundAndOutbound || exchange != ConnectorExchange::Session {
+    if roles != ConnectorDirection::InboundAndOutbound || exchange != ConnectorExchange::Session {
         return None;
     }
     match contract.as_str() {
@@ -330,16 +330,16 @@ mod tests {
         ] {
             let contract = ContractId::parse(id).unwrap();
             for roles in [
-                ConnectorRoles::Inbound,
-                ConnectorRoles::Outbound,
-                ConnectorRoles::InboundAndOutbound,
+                ConnectorDirection::Inbound,
+                ConnectorDirection::Outbound,
+                ConnectorDirection::InboundAndOutbound,
             ] {
                 for exchange in [
                     ConnectorExchange::Event,
                     ConnectorExchange::Call,
                     ConnectorExchange::Session,
                 ] {
-                    let expected = if roles == ConnectorRoles::InboundAndOutbound
+                    let expected = if roles == ConnectorDirection::InboundAndOutbound
                         && exchange == ConnectorExchange::Session
                     {
                         opening
@@ -386,22 +386,24 @@ mod tests {
 
     #[test]
     fn role_inclusion_has_no_empty_or_partial_duplex_state() {
-        assert!(ConnectorRoles::Inbound.includes(ConnectorRoles::Inbound));
-        assert!(!ConnectorRoles::Inbound.includes(ConnectorRoles::Outbound));
-        assert!(!ConnectorRoles::Inbound.includes(ConnectorRoles::InboundAndOutbound));
-        assert!(ConnectorRoles::Outbound.includes(ConnectorRoles::Outbound));
-        assert!(ConnectorRoles::InboundAndOutbound.includes(ConnectorRoles::Inbound));
-        assert!(ConnectorRoles::InboundAndOutbound.includes(ConnectorRoles::Outbound));
-        assert!(ConnectorRoles::InboundAndOutbound.includes(ConnectorRoles::InboundAndOutbound));
+        assert!(ConnectorDirection::Inbound.includes(ConnectorDirection::Inbound));
+        assert!(!ConnectorDirection::Inbound.includes(ConnectorDirection::Outbound));
+        assert!(!ConnectorDirection::Inbound.includes(ConnectorDirection::InboundAndOutbound));
+        assert!(ConnectorDirection::Outbound.includes(ConnectorDirection::Outbound));
+        assert!(ConnectorDirection::InboundAndOutbound.includes(ConnectorDirection::Inbound));
+        assert!(ConnectorDirection::InboundAndOutbound.includes(ConnectorDirection::Outbound));
+        assert!(
+            ConnectorDirection::InboundAndOutbound.includes(ConnectorDirection::InboundAndOutbound)
+        );
         for role in [
-            ConnectorRoles::Inbound,
-            ConnectorRoles::Outbound,
-            ConnectorRoles::InboundAndOutbound,
+            ConnectorDirection::Inbound,
+            ConnectorDirection::Outbound,
+            ConnectorDirection::InboundAndOutbound,
         ] {
-            assert_eq!(ConnectorRoles::from_tag(role.tag()), Some(role));
+            assert_eq!(ConnectorDirection::from_tag(role.tag()), Some(role));
         }
-        assert_eq!(ConnectorRoles::from_tag(0), None);
-        assert_eq!(ConnectorRoles::from_tag(4), None);
+        assert_eq!(ConnectorDirection::from_tag(0), None);
+        assert_eq!(ConnectorDirection::from_tag(4), None);
     }
 
     #[test]

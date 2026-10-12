@@ -11,11 +11,11 @@ use crate::boundary::{
     RequestPreparation, Response, SchedulerCompletion, SessionConnectorBindings,
     SessionConnectorDriver, SessionId, SessionObservation, SessionOpen, SessionWrite,
 };
-use crate::connector::{ConnectorExchange, ConnectorRoles, ContractId};
+use crate::connector::{ConnectorDirection, ConnectorExchange, ContractId};
 use crate::envelope::{Data, Envelope};
 use crate::node;
 use crate::plan::ValidatedExecutionPlan;
-use crate::runtime::vm::{InboundCallPumpReport, Vm, VmFault};
+use crate::runtime::vm::{InboundCallPollReport, Vm, VmFault};
 use crate::{boundary::IngressAdmission, journal::Journal};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -40,7 +40,7 @@ pub trait ConnectorDriverFactory {
     fn connector_id(&self) -> &ContractId;
 
     /// Roles the implementation exposes.
-    fn roles(&self) -> ConnectorRoles;
+    fn roles(&self) -> ConnectorDirection;
 
     /// Binds all selected plan Nodes of this contract into one implementation
     /// object. C2's global binder is the sole caller. Binding may reserve
@@ -186,7 +186,7 @@ impl DriverRegistry {
     pub fn require(
         &self,
         id: &ContractId,
-        required: ConnectorRoles,
+        required: ConnectorDirection,
     ) -> Result<&dyn ConnectorDriverFactory, DriverBindingError> {
         let Some(factory) = self.factories.get(id) else {
             return Err(DriverBindingError::Missing { id: id.clone() });
@@ -205,8 +205,8 @@ impl DriverRegistry {
 
 #[derive(Debug)]
 struct FamilyRequirement {
-    nodes: Vec<(node::Path, ConnectorRoles, ConnectorExchange)>,
-    required: ConnectorRoles,
+    nodes: Vec<(node::Path, ConnectorDirection, ConnectorExchange)>,
+    required: ConnectorDirection,
 }
 
 struct BoundFamily<'plan> {
@@ -228,7 +228,7 @@ pub struct RoutedInboundProposal {
 
 /// Failure of one inbound Driver/VM boundary round.
 #[derive(Debug, Clone, PartialEq)]
-pub enum InboundPumpError {
+pub enum InboundPollError {
     /// The bound Driver registry contradicted its retained routing state.
     Driver(DriverRouteError),
     /// The VM or journal raised a fail-stop integrity fault.
@@ -238,7 +238,7 @@ pub enum InboundPumpError {
 /// One bounded pass offering already-journaled graph responses to inbound
 /// Call Drivers.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct InboundCallResponsePumpReport {
+pub struct InboundCallResponsePollReport {
     /// Responses whose protocol write is now Driver-owned.
     pub started: usize,
     /// Responses retained by the VM because the Driver's finite capacity is
@@ -249,14 +249,14 @@ pub struct InboundCallResponsePumpReport {
 /// One bounded pass transferring scheduler-owned inbound request expiries to
 /// their exact Driver family.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct InboundCallTimeoutPumpReport {
+pub struct InboundCallTimeoutPollReport {
     /// Timeout attempts whose protocol action is now Driver-owned.
     pub started: usize,
     /// Timeout attempts retained by the VM under finite Driver pressure.
     pub pending: usize,
 }
 
-impl core::fmt::Display for InboundPumpError {
+impl core::fmt::Display for InboundPollError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Driver(error) => error.fmt(formatter),
@@ -265,7 +265,7 @@ impl core::fmt::Display for InboundPumpError {
     }
 }
 
-impl std::error::Error for InboundPumpError {}
+impl std::error::Error for InboundPollError {}
 
 impl RoutedInboundProposal {
     /// Stable family that must receive the eventual decision callback.
@@ -616,24 +616,24 @@ impl<'plan> RuntimeBindings<'plan> {
     ///
     /// Driver routing contradictions and fail-stop VM/journal faults remain
     /// distinct.
-    pub fn pump_inbound(
+    pub fn poll_inbound(
         &mut self,
         vm: &mut Vm<'plan>,
         journal: &mut dyn Journal,
-    ) -> Result<Option<IngressAdmission>, InboundPumpError> {
-        let Some(routed) = self.next_inbound().map_err(InboundPumpError::Driver)? else {
+    ) -> Result<Option<IngressAdmission>, InboundPollError> {
+        let Some(routed) = self.next_inbound().map_err(InboundPollError::Driver)? else {
             return Ok(None);
         };
         let admission = vm
             .admit_ingress(journal, routed.proposal())
-            .map_err(InboundPumpError::Machine)?;
+            .map_err(InboundPollError::Machine)?;
         match admission {
             IngressAdmission::Accepted(accepted) => self
                 .decide_inbound(&routed, IngressDecision::Accepted(accepted))
-                .map_err(InboundPumpError::Driver)?,
+                .map_err(InboundPollError::Driver)?,
             IngressAdmission::Rejected(reason) => self
                 .decide_inbound(&routed, IngressDecision::Rejected(reason))
-                .map_err(InboundPumpError::Driver)?,
+                .map_err(InboundPollError::Driver)?,
             IngressAdmission::Pending => {}
         }
         Ok(Some(admission))
@@ -647,11 +647,11 @@ impl<'plan> RuntimeBindings<'plan> {
     ///
     /// A missing/crossed family or a Call view that disappeared after
     /// binding is an integrity fault.
-    pub fn pump_inbound_call_responses(
+    pub fn poll_inbound_call_responses(
         &mut self,
         vm: &mut Vm<'plan>,
-    ) -> Result<InboundCallResponsePumpReport, DriverRouteError> {
-        let mut report = InboundCallResponsePumpReport::default();
+    ) -> Result<InboundCallResponsePollReport, DriverRouteError> {
+        let mut report = InboundCallResponsePollReport::default();
         for response in vm.ready_inbound_call_responses() {
             let Some(id) = self.inbound_calls.get(&response.call_id).cloned() else {
                 return Err(DriverRouteError::UncorrelatedInboundCall(response.call_id));
@@ -693,11 +693,11 @@ impl<'plan> RuntimeBindings<'plan> {
     /// # Errors
     ///
     /// Missing or crossed family ownership is a binding-integrity fault.
-    pub fn pump_inbound_call_timeouts(
+    pub fn poll_inbound_call_timeouts(
         &mut self,
         vm: &mut Vm<'plan>,
-    ) -> Result<InboundCallTimeoutPumpReport, DriverRouteError> {
-        let mut report = InboundCallTimeoutPumpReport::default();
+    ) -> Result<InboundCallTimeoutPollReport, DriverRouteError> {
+        let mut report = InboundCallTimeoutPollReport::default();
         for timeout in vm.ready_inbound_call_timeouts() {
             let Some(id) = self.inbound_calls.get(&timeout.call_id).cloned() else {
                 return Err(DriverRouteError::UncorrelatedInboundCall(timeout.call_id));
@@ -740,10 +740,10 @@ impl<'plan> RuntimeBindings<'plan> {
     ///
     /// A bound Call view disappeared or a family reported another family's
     /// Call reference.
-    pub fn pump_inbound_call_events(
+    pub fn poll_inbound_call_events(
         &mut self,
         vm: &mut Vm<'plan>,
-    ) -> Result<InboundCallPumpReport, DriverRouteError> {
+    ) -> Result<InboundCallPollReport, DriverRouteError> {
         let ids: Vec<_> = self
             .families
             .iter()
@@ -752,7 +752,7 @@ impl<'plan> RuntimeBindings<'plan> {
                     .then_some(id.clone())
             })
             .collect();
-        let mut report = InboundCallPumpReport::default();
+        let mut report = InboundCallPollReport::default();
         for id in ids {
             let events = {
                 let Some(family) = self.families.get_mut(&id) else {
@@ -1163,19 +1163,19 @@ impl SessionConnectorBindings for RuntimeBindings<'_> {
     }
 }
 
-fn union_roles(left: ConnectorRoles, right: ConnectorRoles) -> ConnectorRoles {
+fn union_roles(left: ConnectorDirection, right: ConnectorDirection) -> ConnectorDirection {
     if left == right {
         left
     } else {
-        ConnectorRoles::InboundAndOutbound
+        ConnectorDirection::InboundAndOutbound
     }
 }
 
-fn roles_of(driver: &mut dyn BoundConnectorDriver) -> Option<ConnectorRoles> {
+fn roles_of(driver: &mut dyn BoundConnectorDriver) -> Option<ConnectorDirection> {
     match (driver.inbound().is_some(), driver.outbound().is_some()) {
-        (true, true) => Some(ConnectorRoles::InboundAndOutbound),
-        (true, false) => Some(ConnectorRoles::Inbound),
-        (false, true) => Some(ConnectorRoles::Outbound),
+        (true, true) => Some(ConnectorDirection::InboundAndOutbound),
+        (true, false) => Some(ConnectorDirection::Inbound),
+        (false, true) => Some(ConnectorDirection::Outbound),
         (false, false) => None,
     }
 }
@@ -1222,9 +1222,9 @@ pub enum DriverBindingError {
         /// Required contract.
         id: ContractId,
         /// Roles transported by the plan.
-        required: ConnectorRoles,
+        required: ConnectorDirection,
         /// Roles advertised by the factory.
-        available: ConnectorRoles,
+        available: ConnectorDirection,
     },
     /// The factory refused its selected plan Nodes before execution began.
     Factory {
@@ -1238,9 +1238,9 @@ pub enum DriverBindingError {
         /// Stable contract id.
         id: ContractId,
         /// Factory claim used for deterministic selection.
-        advertised: ConnectorRoles,
+        advertised: ConnectorDirection,
         /// Role views actually exposed; `None` means neither.
-        actual: Option<ConnectorRoles>,
+        actual: Option<ConnectorDirection>,
     },
     /// One stable contract id was assigned contradictory exchange facts by a
     /// forged plan.
@@ -1329,7 +1329,7 @@ mod tests {
         SessionOpen, SessionWrite, SubmissionSequence,
     };
     use crate::compiler::compile;
-    use crate::connector::{ConnectorExchange, ConnectorRoles, ContractId};
+    use crate::connector::{ConnectorDirection, ConnectorExchange, ContractId};
     use crate::contract::ContractCatalog;
     use crate::envelope::{Data, Envelope, Namespace, Value};
     use crate::journal::{Journal, MemJournal, ids};
@@ -1341,7 +1341,7 @@ mod tests {
 
     struct FakeFactory {
         id: ContractId,
-        roles: ConnectorRoles,
+        roles: ConnectorDirection,
     }
 
     impl ConnectorDriverFactory for FakeFactory {
@@ -1349,7 +1349,7 @@ mod tests {
             &self.id
         }
 
-        fn roles(&self) -> ConnectorRoles {
+        fn roles(&self) -> ConnectorDirection {
             self.roles
         }
 
@@ -1362,7 +1362,7 @@ mod tests {
         }
     }
 
-    fn fake(id: &str, roles: ConnectorRoles) -> Box<dyn ConnectorDriverFactory> {
+    fn fake(id: &str, roles: ConnectorDirection) -> Box<dyn ConnectorDriverFactory> {
         Box::new(FakeFactory {
             id: ContractId::parse(id).unwrap(),
             roles,
@@ -1373,29 +1373,29 @@ mod tests {
     fn registration_is_exact_role_aware_and_never_first_wins() {
         let id = ContractId::parse("org.rastok.test/duplex@1").unwrap();
         let registry = DriverRegistry::default()
-            .try_with(fake(id.as_str(), ConnectorRoles::Inbound))
+            .try_with(fake(id.as_str(), ConnectorDirection::Inbound))
             .unwrap();
 
         assert_eq!(
             registry
-                .require(&id, ConnectorRoles::Inbound)
+                .require(&id, ConnectorDirection::Inbound)
                 .unwrap()
                 .connector_id(),
             &id
         );
         assert_eq!(
-            registry.require(&id, ConnectorRoles::Outbound).err(),
+            registry.require(&id, ConnectorDirection::Outbound).err(),
             Some(DriverBindingError::MissingRoles {
                 id: id.clone(),
-                required: ConnectorRoles::Outbound,
-                available: ConnectorRoles::Inbound,
+                required: ConnectorDirection::Outbound,
+                available: ConnectorDirection::Inbound,
             })
         );
         assert_eq!(
             registry
                 .require(
                     &ContractId::parse("org.rastok.test/missing@1").unwrap(),
-                    ConnectorRoles::Outbound,
+                    ConnectorDirection::Outbound,
                 )
                 .err(),
             Some(DriverBindingError::Missing {
@@ -1404,7 +1404,7 @@ mod tests {
         );
         assert_eq!(
             registry
-                .try_with(fake(id.as_str(), ConnectorRoles::InboundAndOutbound))
+                .try_with(fake(id.as_str(), ConnectorDirection::InboundAndOutbound))
                 .unwrap_err(),
             DriverRegistrationError::Duplicate(id),
         );
@@ -1490,8 +1490,8 @@ mod tests {
 
     struct RoutingFactory {
         id: ContractId,
-        advertised: ConnectorRoles,
-        actual: Option<ConnectorRoles>,
+        advertised: ConnectorDirection,
+        actual: Option<ConnectorDirection>,
         starts: Arc<Mutex<Vec<String>>>,
     }
 
@@ -1500,7 +1500,7 @@ mod tests {
             &self.id
         }
 
-        fn roles(&self) -> ConnectorRoles {
+        fn roles(&self) -> ConnectorDirection {
             self.advertised
         }
 
@@ -1527,8 +1527,8 @@ mod tests {
 
     fn routing_factory(
         id: &str,
-        advertised: ConnectorRoles,
-        actual: Option<ConnectorRoles>,
+        advertised: ConnectorDirection,
+        actual: Option<ConnectorDirection>,
         starts: &Arc<Mutex<Vec<String>>>,
     ) -> Box<dyn ConnectorDriverFactory> {
         Box::new(RoutingFactory {
@@ -1539,7 +1539,7 @@ mod tests {
         })
     }
 
-    fn two_family_plan_with_first_roles(first_roles: ConnectorRoles) -> ValidatedExecutionPlan {
+    fn two_family_plan_with_first_roles(first_roles: ConnectorDirection) -> ValidatedExecutionPlan {
         let source = r#"
 graph mixed : App {
   input in: text
@@ -1586,11 +1586,11 @@ graph mixed : App {
     }
 
     fn two_family_plan() -> ValidatedExecutionPlan {
-        two_family_plan_with_first_roles(ConnectorRoles::Outbound)
+        two_family_plan_with_first_roles(ConnectorDirection::Outbound)
     }
 
     fn session_family_plan() -> ValidatedExecutionPlan {
-        let base = two_family_plan_with_first_roles(ConnectorRoles::InboundAndOutbound);
+        let base = two_family_plan_with_first_roles(ConnectorDirection::InboundAndOutbound);
         let mut raw = base.plan().clone();
         let first = raw
             .nodes
@@ -1636,7 +1636,7 @@ graph inbound : App {
         spec.contract = ContractId::parse("org.rastok.test/event-source@1").unwrap();
         spec.idempotent = None;
         spec.attributes.retain(|(name, _)| name != "idempotent");
-        spec.roles = ConnectorRoles::Inbound;
+        spec.roles = ConnectorDirection::Inbound;
         spec.exchange = ConnectorExchange::Event;
         source.ports.retain(|port| port.port.name() != "exit");
         raw.edges.retain(|edge| edge.from.port.name() != "exit");
@@ -1725,8 +1725,8 @@ graph inbound : App {
             &self.id
         }
 
-        fn roles(&self) -> ConnectorRoles {
-            ConnectorRoles::InboundAndOutbound
+        fn roles(&self) -> ConnectorDirection {
+            ConnectorDirection::InboundAndOutbound
         }
 
         fn bind<'plan>(
@@ -1742,7 +1742,7 @@ graph inbound : App {
 
     #[test]
     fn a_both_role_family_exposes_one_shared_bound_object() {
-        let plan = two_family_plan_with_first_roles(ConnectorRoles::InboundAndOutbound);
+        let plan = two_family_plan_with_first_roles(ConnectorDirection::InboundAndOutbound);
         let observations = Arc::new(Mutex::new(Vec::new()));
         let starts = Arc::new(Mutex::new(Vec::new()));
         let registry = DriverRegistry::default()
@@ -1753,8 +1753,8 @@ graph inbound : App {
             .unwrap()
             .try_with(routing_factory(
                 "org.rastok.test/beta@1",
-                ConnectorRoles::Outbound,
-                Some(ConnectorRoles::Outbound),
+                ConnectorDirection::Outbound,
+                Some(ConnectorDirection::Outbound),
                 &starts,
             ))
             .unwrap();
@@ -1926,8 +1926,8 @@ graph inbound : App {
             &self.id
         }
 
-        fn roles(&self) -> ConnectorRoles {
-            ConnectorRoles::InboundAndOutbound
+        fn roles(&self) -> ConnectorDirection {
+            ConnectorDirection::InboundAndOutbound
         }
 
         fn bind<'plan>(
@@ -1956,8 +1956,8 @@ graph inbound : App {
             .unwrap()
             .try_with(routing_factory(
                 "org.rastok.test/beta@1",
-                ConnectorRoles::Outbound,
-                Some(ConnectorRoles::Outbound),
+                ConnectorDirection::Outbound,
+                Some(ConnectorDirection::Outbound),
                 &starts,
             ))
             .unwrap();
@@ -2093,15 +2093,15 @@ graph inbound : App {
             .unwrap()
             .try_with(routing_factory(
                 "org.rastok.test/beta@1",
-                ConnectorRoles::Outbound,
-                Some(ConnectorRoles::Outbound),
+                ConnectorDirection::Outbound,
+                Some(ConnectorDirection::Outbound),
                 &starts,
             ))
             .unwrap();
         let contract = Box::leak(Box::new(crate::contract::ConnectorContract {
             id: "org.rastok.test/alpha@1",
             name: "SessionProbe",
-            roles: ConnectorRoles::InboundAndOutbound,
+            roles: ConnectorDirection::InboundAndOutbound,
             exchange: ConnectorExchange::Session,
             ..crate::stdlib::PROCESS.clone()
         }));
@@ -2276,8 +2276,8 @@ graph inbound : App {
             &self.id
         }
 
-        fn roles(&self) -> ConnectorRoles {
-            ConnectorRoles::Inbound
+        fn roles(&self) -> ConnectorDirection {
+            ConnectorDirection::Inbound
         }
 
         fn bind<'plan>(
@@ -2296,8 +2296,8 @@ graph inbound : App {
             &self.id
         }
 
-        fn roles(&self) -> ConnectorRoles {
-            ConnectorRoles::Inbound
+        fn roles(&self) -> ConnectorDirection {
+            ConnectorDirection::Inbound
         }
 
         fn bind<'plan>(
@@ -2451,7 +2451,7 @@ graph api : App {
         let mut journal = MemJournal::new(GraphVersion(1));
 
         let Some(crate::boundary::IngressAdmission::Accepted(accepted)) = bindings
-            .pump_inbound(&mut vm, &mut journal)
+            .poll_inbound(&mut vm, &mut journal)
             .expect("the proposal reaches atomic admission")
         else {
             panic!("the request must be accepted")
@@ -2463,7 +2463,7 @@ graph api : App {
         assert!(journal.find_envelope(accepted.envelope).is_some());
         assert_eq!(state.lock().unwrap().decisions.len(), 1);
 
-        let report = bindings.pump_inbound_call_events(&mut vm).unwrap();
+        let report = bindings.poll_inbound_call_events(&mut vm).unwrap();
         assert_eq!(report.queued, 1);
         assert!(report.rejected.is_empty());
         vm.run_ready_with_bindings(&mut journal, &mut bindings)
@@ -2535,7 +2535,7 @@ graph api : App {
             call_id,
             completion: Completion::http_server_exit(HttpServerExit::Completed { status: 202 }),
         });
-        let duplicate = bindings.pump_inbound_call_events(&mut vm).unwrap();
+        let duplicate = bindings.poll_inbound_call_events(&mut vm).unwrap();
         assert_eq!(duplicate.uncorrelated.len(), 1);
         assert_eq!(
             journal
@@ -2586,7 +2586,7 @@ graph api : App {
         let mut journal = MemJournal::new(GraphVersion(1));
 
         let Some(crate::boundary::IngressAdmission::Accepted(accepted)) = bindings
-            .pump_inbound(&mut vm, &mut journal)
+            .poll_inbound(&mut vm, &mut journal)
             .expect("the request reaches atomic admission")
         else {
             panic!("the request must be accepted")
@@ -2637,14 +2637,14 @@ graph api : App {
             call_id,
             completion: Completion::http_server_exit(HttpServerExit::Completed { status: 200 }),
         });
-        let premature = bindings.pump_inbound_call_events(&mut vm).unwrap();
+        let premature = bindings.poll_inbound_call_events(&mut vm).unwrap();
         assert_eq!(premature.queued, 0);
         assert_eq!(premature.rejected.len(), 1);
 
-        let first = bindings.pump_inbound_call_responses(&mut vm).unwrap();
+        let first = bindings.poll_inbound_call_responses(&mut vm).unwrap();
         assert_eq!((first.started, first.pending), (0, 1));
         assert!(state.lock().unwrap().responses.is_empty());
-        let second = bindings.pump_inbound_call_responses(&mut vm).unwrap();
+        let second = bindings.poll_inbound_call_responses(&mut vm).unwrap();
         assert_eq!((second.started, second.pending), (1, 0));
         {
             let state = state.lock().unwrap();
@@ -2655,7 +2655,7 @@ graph api : App {
                 &Data::materialized(Value::Text(String::from("response")))
             );
         }
-        let report = bindings.pump_inbound_call_events(&mut vm).unwrap();
+        let report = bindings.poll_inbound_call_events(&mut vm).unwrap();
         assert_eq!(report.queued, 1);
         assert!(report.rejected.is_empty());
         vm.run_ready_with_bindings(&mut journal, &mut bindings)
@@ -2723,7 +2723,7 @@ graph api : App {
         let mut journal = MemJournal::new(GraphVersion(1));
 
         let Some(crate::boundary::IngressAdmission::Accepted(accepted)) = bindings
-            .pump_inbound(&mut vm, &mut journal)
+            .poll_inbound(&mut vm, &mut journal)
             .expect("the request reaches atomic admission")
         else {
             panic!("the request must be accepted")
@@ -2732,13 +2732,13 @@ graph api : App {
             panic!("the accepted request opens one inbound Call")
         };
         assert_eq!(
-            bindings.pump_inbound_call_events(&mut vm).unwrap().queued,
+            bindings.poll_inbound_call_events(&mut vm).unwrap().queued,
             1
         );
         vm.run_ready_with_bindings(&mut journal, &mut bindings)
             .expect("the accepted terminal and late graph response settle deterministically");
 
-        let response_report = bindings.pump_inbound_call_responses(&mut vm).unwrap();
+        let response_report = bindings.poll_inbound_call_responses(&mut vm).unwrap();
         assert_eq!((response_report.started, response_report.pending), (0, 0));
         assert!(state.lock().unwrap().responses.is_empty());
         let terminals = journal
@@ -2792,7 +2792,7 @@ graph api : App {
 
         for expected in 0..1024 {
             let Some(crate::boundary::IngressAdmission::Accepted(accepted)) = bindings
-                .pump_inbound(&mut vm, &mut journal)
+                .poll_inbound(&mut vm, &mut journal)
                 .expect("the bounded intake stays healthy")
             else {
                 panic!("proposal {expected} should fit")
@@ -2823,7 +2823,7 @@ graph api : App {
 
         let records_before = journal.records().len();
         assert_eq!(
-            bindings.pump_inbound(&mut vm, &mut journal).unwrap(),
+            bindings.poll_inbound(&mut vm, &mut journal).unwrap(),
             Some(crate::boundary::IngressAdmission::Pending)
         );
         assert_eq!(journal.records().len(), records_before);
@@ -2831,7 +2831,7 @@ graph api : App {
         let retained = bindings.next_inbound().unwrap().unwrap();
         assert_eq!(retained.proposal().reference.get(), 1024);
         assert_eq!(
-            bindings.pump_inbound(&mut vm, &mut journal).unwrap(),
+            bindings.poll_inbound(&mut vm, &mut journal).unwrap(),
             Some(crate::boundary::IngressAdmission::Pending),
             "re-polling cannot replace or acknowledge the retained proposal"
         );
@@ -2856,7 +2856,7 @@ graph api : App {
         let mut vm = Vm::boot(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
         assert_eq!(
-            bindings.pump_inbound(&mut vm, &mut journal).unwrap(),
+            bindings.poll_inbound(&mut vm, &mut journal).unwrap(),
             Some(crate::boundary::IngressAdmission::Rejected(
                 crate::boundary::IngressRejection::UnknownPort
             ))
@@ -2947,7 +2947,7 @@ graph api : App {
         let contract = Box::leak(Box::new(crate::contract::ConnectorContract {
             id: "org.rastok.test/event-source@1",
             name: "EventSource",
-            roles: ConnectorRoles::Inbound,
+            roles: ConnectorDirection::Inbound,
             exchange: ConnectorExchange::Event,
             ports: Box::leak(ports),
             common: crate::stdlib::PROCESS.common,
@@ -2971,15 +2971,15 @@ graph api : App {
         let registry = DriverRegistry::default()
             .try_with(routing_factory(
                 "org.rastok.test/alpha@1",
-                ConnectorRoles::Outbound,
-                Some(ConnectorRoles::Outbound),
+                ConnectorDirection::Outbound,
+                Some(ConnectorDirection::Outbound),
                 &starts,
             ))
             .unwrap()
             .try_with(routing_factory(
                 "org.rastok.test/beta@1",
-                ConnectorRoles::Outbound,
-                Some(ConnectorRoles::Outbound),
+                ConnectorDirection::Outbound,
+                Some(ConnectorDirection::Outbound),
                 &starts,
             ))
             .unwrap();
@@ -3002,7 +3002,7 @@ graph api : App {
         for _ in 0..2 {
             vm.run_ready_with_bindings(&mut journal, &mut bindings)
                 .unwrap();
-            vm.pump(&mut journal, &mut bindings).unwrap();
+            vm.poll_drivers(&mut journal, &mut bindings).unwrap();
         }
         vm.run_ready_with_bindings(&mut journal, &mut bindings)
             .unwrap();
@@ -3036,8 +3036,8 @@ graph api : App {
         let wrong = DriverRegistry::default()
             .try_with(routing_factory(
                 "org.rastok.test/alpha@1",
-                ConnectorRoles::Inbound,
-                Some(ConnectorRoles::Inbound),
+                ConnectorDirection::Inbound,
+                Some(ConnectorDirection::Inbound),
                 &starts,
             ))
             .unwrap();
@@ -3049,15 +3049,15 @@ graph api : App {
         let extra = DriverRegistry::default()
             .try_with(routing_factory(
                 "org.rastok.test/alpha@1",
-                ConnectorRoles::Outbound,
-                Some(ConnectorRoles::InboundAndOutbound),
+                ConnectorDirection::Outbound,
+                Some(ConnectorDirection::InboundAndOutbound),
                 &starts,
             ))
             .unwrap()
             .try_with(routing_factory(
                 "org.rastok.test/beta@1",
-                ConnectorRoles::Outbound,
-                Some(ConnectorRoles::Outbound),
+                ConnectorDirection::Outbound,
+                Some(ConnectorDirection::Outbound),
                 &starts,
             ))
             .unwrap();

@@ -119,11 +119,11 @@ impl ProcessBinding {
 /// and the Lab's scripted Driver. It owns framing and setting validation, but
 /// can neither spawn nor observe a child process.
 #[derive(Debug)]
-pub(crate) struct ProcessRequestBindings {
+pub(crate) struct ProcessRequestSettings {
     bindings: std::collections::BTreeMap<crate::node::Path, ProcessBinding>,
 }
 
-impl ProcessRequestBindings {
+impl ProcessRequestSettings {
     pub(crate) fn prepare_service(
         &self,
         connector: &crate::node::Path,
@@ -187,7 +187,7 @@ impl ProcessRequestBindings {
     }
 }
 
-impl super::ScriptedConnectorProtocol for ProcessRequestBindings {
+impl super::ScriptedConnectorProtocol for ProcessRequestSettings {
     fn prepare_request(
         &self,
         connector: &crate::node::Path,
@@ -207,7 +207,7 @@ pub(super) fn bind_scripted_protocol(
     nodes: &[crate::node::Path],
     _boot: &crate::deployment::BootBindings,
 ) -> Result<Box<dyn super::ScriptedConnectorProtocol>, super::DriverFactoryError> {
-    ProcessRequestBindings::try_bind(plan, nodes)
+    ProcessRequestSettings::try_bind(plan, nodes)
         .map(|bindings| Box::new(bindings) as Box<dyn super::ScriptedConnectorProtocol>)
         .map_err(|error| super::DriverFactoryError::new(error.to_string()))
 }
@@ -496,7 +496,7 @@ pub struct Process<'plan> {
     /// Every Process connector's binding. Plan rows resolve before the
     /// journal exists; instance rows arrive as already-evaluated values on the
     /// intent and are converted once per logical instance.
-    bindings: ProcessRequestBindings,
+    bindings: ProcessRequestSettings,
     runs: Vec<Run>,
     answers: Vec<Response>,
 }
@@ -694,8 +694,8 @@ impl super::ConnectorDriverFactory for ProcessFactory {
         &self.id
     }
 
-    fn roles(&self) -> crate::connector::ConnectorRoles {
-        crate::connector::ConnectorRoles::Outbound
+    fn roles(&self) -> crate::connector::ConnectorDirection {
+        crate::connector::ConnectorDirection::Outbound
     }
 
     fn bind<'plan>(
@@ -751,7 +751,7 @@ impl<'plan> Process<'plan> {
         plan: &'plan crate::plan::ValidatedExecutionPlan,
         nodes: &[crate::node::Path],
     ) -> Result<Self, ProcessBindError> {
-        let bindings = ProcessRequestBindings::try_bind(plan, nodes)?;
+        let bindings = ProcessRequestSettings::try_bind(plan, nodes)?;
         Ok(Self {
             _plan: plan,
             bindings,
@@ -828,7 +828,7 @@ impl<'plan> Process<'plan> {
         match child.stdout.take() {
             Some(pipe) => {
                 let sender = sender.clone();
-                std::thread::spawn(move || pump_pipe(pipe, &sender, Chunk::Out, Chunk::OutEof));
+                std::thread::spawn(move || poll_pipe(pipe, &sender, Chunk::Out, Chunk::OutEof));
             }
             None => {
                 let _ = sender.send(Chunk::OutEof);
@@ -836,7 +836,7 @@ impl<'plan> Process<'plan> {
         }
         match child.stderr.take() {
             Some(pipe) => {
-                std::thread::spawn(move || pump_pipe(pipe, &sender, Chunk::Err, Chunk::ErrEof));
+                std::thread::spawn(move || poll_pipe(pipe, &sender, Chunk::Err, Chunk::ErrEof));
             }
             None => {
                 let _ = sender.send(Chunk::ErrEof);
@@ -876,7 +876,7 @@ fn kill_group(child: &mut std::process::Child) {
 /// Reads one pipe to its end in bounded chunks, sending each through
 /// the channel and closing with the EOF marker; a closed receiver
 /// ends the pump.
-fn pump_pipe<P: Read>(
+fn poll_pipe<P: Read>(
     mut pipe: P,
     sender: &std::sync::mpsc::SyncSender<Chunk>,
     wrap: fn(Vec<u8>) -> Chunk,
@@ -1232,7 +1232,7 @@ graph real : App {
         loop {
             vm.run_ready_with_bindings(&mut journal, &mut world)
                 .unwrap();
-            let report = vm.pump(&mut journal, &mut world).unwrap();
+            let report = vm.poll_drivers(&mut journal, &mut world).unwrap();
             vm.run_ready_with_bindings(&mut journal, &mut world)
                 .unwrap();
             if vm.is_stable() {
@@ -1824,7 +1824,7 @@ graph unframeable : App {
     fn the_pump_retries_interrupted_and_reports_read_failures() {
         // Interrupted, then bytes, then EOF: the bytes survive.
         let (sender, receiver) = std::sync::mpsc::sync_channel(8);
-        pump_pipe(
+        poll_pipe(
             ScriptedRead(
                 vec![Err(std::io::ErrorKind::Interrupted), Ok(b"ok".to_vec())].into_iter(),
             ),
@@ -1838,7 +1838,7 @@ graph unframeable : App {
         // A definitive error: ReadFailed travels as its own fact,
         // THEN the stream closes.
         let (sender, receiver) = std::sync::mpsc::sync_channel(8);
-        pump_pipe(
+        poll_pipe(
             ScriptedRead(
                 vec![Ok(b"partial".to_vec()), Err(std::io::ErrorKind::BrokenPipe)].into_iter(),
             ),

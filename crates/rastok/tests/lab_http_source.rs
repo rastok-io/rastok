@@ -29,7 +29,7 @@ fn decoded_requests_use_the_source_contract_without_a_physical_driver_or_app_inp
             .resolved_ports()
             .boundary()
             .iter()
-            .all(|port| { port.direction() == rastok::node::Direction::Output }),
+            .all(|port| { port.direction() == rastok::node::PortDirection::Output }),
         "no artificial App input"
     );
 

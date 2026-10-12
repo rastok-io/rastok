@@ -40,7 +40,7 @@ pub struct Hir {
     pub named_schemas: Vec<(String, AnnotatedSchema)>,
 }
 
-pub use crate::node::Direction;
+pub use crate::node::PortDirection;
 
 /// One checked graph.
 #[derive(Debug, Clone, PartialEq)]
@@ -147,7 +147,7 @@ pub enum NodeSemantics {
         /// Exact versioned Contract owned by this Connector.
         contract: crate::connector::ContractId,
         /// Runtime roles declared by that contract.
-        roles: crate::connector::ConnectorRoles,
+        roles: crate::connector::ConnectorDirection,
         /// Interaction lifecycle declared by that contract.
         exchange: crate::connector::ConnectorExchange,
         /// Checked attributes, in declaration order.

@@ -232,7 +232,7 @@ graph priced_call : App {
         if vm.is_stable() && !vm.has_open_obligations() {
             break;
         }
-        vm.pump(&mut journal, &mut world)
+        vm.poll_drivers(&mut journal, &mut world)
             .expect("the Driver progresses");
         vm.run_ready_with_bindings(&mut journal, &mut world)
             .expect("the reply routes");

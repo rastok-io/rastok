@@ -41,7 +41,7 @@ impl Checker<'_, '_> {
                             );
                             return None;
                         };
-                        if direction != Direction::Input {
+                        if direction != PortDirection::Input {
                             self.wrong_direction(
                                 name.span,
                                 &name.text,
@@ -94,7 +94,7 @@ impl Checker<'_, '_> {
                                 );
                                 return None;
                             };
-                            if direction != Direction::Input {
+                            if direction != PortDirection::Input {
                                 self.wrong_direction(
                                     name.span,
                                     &name.text,
@@ -144,7 +144,7 @@ impl Checker<'_, '_> {
                 let mut inputs = node
                     .ports
                     .iter()
-                    .filter(|port| port.direction == Direction::Input);
+                    .filter(|port| port.direction == PortDirection::Input);
                 let Some(first) = inputs.next() else {
                     self.instance_refusal(
                         decl.span,
@@ -308,7 +308,7 @@ impl Checker<'_, '_> {
             let expected = node::join_expired_type().ok();
             let declared = node.ports.iter().find(|port| port.port == expiry);
             if !declared.is_some_and(|port| {
-                port.direction == Direction::Output && port.ty.as_ref() == expected.as_ref()
+                port.direction == PortDirection::Output && port.ty.as_ref() == expected.as_ref()
             }) {
                 self.instance_refusal(
                     decl.span,
@@ -619,7 +619,7 @@ impl Checker<'_, '_> {
                         );
                         continue;
                     };
-                    if direction != Direction::Output {
+                    if direction != PortDirection::Output {
                         self.wrong_direction(
                             name.span,
                             &name.text,
@@ -1161,7 +1161,7 @@ impl Checker<'_, '_> {
                 );
                 return None;
             };
-            if direction != Direction::Output {
+            if direction != PortDirection::Output {
                 self.wrong_direction(
                     name.span,
                     &name.text,

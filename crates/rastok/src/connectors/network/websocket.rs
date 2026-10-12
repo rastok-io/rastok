@@ -160,8 +160,8 @@ impl crate::connectors::ConnectorDriverFactory for WebSocketClientFactory {
         &self.id
     }
 
-    fn roles(&self) -> crate::connector::ConnectorRoles {
-        crate::connector::ConnectorRoles::InboundAndOutbound
+    fn roles(&self) -> crate::connector::ConnectorDirection {
+        crate::connector::ConnectorDirection::InboundAndOutbound
     }
 
     fn bind<'plan>(
@@ -185,8 +185,8 @@ impl crate::connectors::ConnectorDriverFactory for WebSocketServerFactory {
         &self.id
     }
 
-    fn roles(&self) -> crate::connector::ConnectorRoles {
-        crate::connector::ConnectorRoles::InboundAndOutbound
+    fn roles(&self) -> crate::connector::ConnectorDirection {
+        crate::connector::ConnectorDirection::InboundAndOutbound
     }
 
     fn bind<'plan>(

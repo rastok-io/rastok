@@ -13,7 +13,7 @@ use rastok::contract::ContractCatalog;
 use rastok::datatype::{DataType, StructType, TaggedCase, TaggedUnionType};
 use rastok::expr;
 use rastok::instance;
-use rastok::node::{self, Direction, Port};
+use rastok::node::{self, Port, PortDirection};
 use rastok::plan::{
     self, DispatchStep, Edge, EdgeEnd, ExecutionPlan, PlanValidationError, Slot,
     ValidatedExecutionPlan,
@@ -566,9 +566,10 @@ fn an_unconstrained_raw_port_never_becomes_variant() {
         .iter_mut()
         .find(|node| node.path.to_string() == "relay")
         .expect("the relay operator");
-    relay
-        .ports
-        .push(plan::PortDecl::untyped(port("unused"), Direction::Output));
+    relay.ports.push(plan::PortDecl::untyped(
+        port("unused"),
+        PortDirection::Output,
+    ));
 
     assert_eq!(
         ValidatedExecutionPlan::try_new(raw).unwrap_err(),
@@ -770,7 +771,7 @@ fn closing_budgets_and_stop_recursion_are_registry_free_invariants() {
     let mut recursive = bare_operator_plan();
     recursive.nodes[0].ports.push(plan::PortDecl {
         port: port("in"),
-        direction: Direction::Input,
+        direction: PortDirection::Input,
 
         ty: Some(DataType::INT),
         annotations: Default::default(),
@@ -1277,8 +1278,10 @@ fn a_boundary_input_cannot_be_an_edge_target() {
     // INPUT: the boundary convention inverts the node one, and the
     // checker refuses this shape — the type must too.
     let mut plan = raw_probe();
-    plan.boundary
-        .push(plan::PortDecl::untyped(port("request"), Direction::Input));
+    plan.boundary.push(plan::PortDecl::untyped(
+        port("request"),
+        PortDirection::Input,
+    ));
     plan.boundary
         .sort_by(|left, right| left.key().cmp(&right.key()));
     plan.edges.push(Edge {
@@ -1301,7 +1304,7 @@ fn a_boundary_input_cannot_be_an_edge_target() {
         PlanValidationError::WrongPortDirection {
             node: None,
             port: port("request"),
-            expected: Direction::Output,
+            expected: PortDirection::Output,
         }
     );
 }
@@ -1311,8 +1314,10 @@ fn a_boundary_output_cannot_be_an_edge_source() {
     // `.response -> operator.in` with `response` declared as a graph
     // OUTPUT.
     let mut plan = raw_probe();
-    plan.boundary
-        .push(plan::PortDecl::untyped(port("response"), Direction::Output));
+    plan.boundary.push(plan::PortDecl::untyped(
+        port("response"),
+        PortDirection::Output,
+    ));
     plan.boundary
         .sort_by(|left, right| left.key().cmp(&right.key()));
     plan.edges.push(Edge {
@@ -1335,7 +1340,7 @@ fn a_boundary_output_cannot_be_an_edge_source() {
         PlanValidationError::WrongPortDirection {
             node: None,
             port: port("response"),
-            expected: Direction::Input,
+            expected: PortDirection::Input,
         }
     );
 }
@@ -1365,7 +1370,7 @@ fn conventional_ports_hold_their_directions() {
         PlanValidationError::WrongPortDirection {
             node: None,
             port: port("in"),
-            expected: Direction::Output,
+            expected: PortDirection::Output,
         }
     );
 
@@ -1391,7 +1396,7 @@ fn conventional_ports_hold_their_directions() {
         PlanValidationError::WrongPortDirection {
             node: None,
             port: port("out"),
-            expected: Direction::Input,
+            expected: PortDirection::Input,
         }
     );
 }
@@ -1427,8 +1432,8 @@ graph probe : App {
 fn an_unsorted_boundary_is_not_canonical() {
     let mut plan = raw_probe();
     plan.boundary = vec![
-        plan::PortDecl::untyped(port("zeta"), Direction::Input),
-        plan::PortDecl::untyped(port("alpha"), Direction::Input),
+        plan::PortDecl::untyped(port("zeta"), PortDirection::Input),
+        plan::PortDecl::untyped(port("alpha"), PortDirection::Input),
     ];
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
@@ -1442,8 +1447,8 @@ fn an_unsorted_boundary_is_not_canonical() {
 fn a_duplicated_boundary_port_refuses() {
     let mut plan = raw_probe();
     plan.boundary = vec![
-        plan::PortDecl::untyped(port("request"), Direction::Input),
-        plan::PortDecl::untyped(port("request"), Direction::Input),
+        plan::PortDecl::untyped(port("request"), PortDirection::Input),
+        plan::PortDecl::untyped(port("request"), PortDirection::Input),
     ];
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
@@ -1557,8 +1562,8 @@ fn a_duplicated_node_port_refuses() {
         .find(|node| node.path.to_string() == "relay")
         .expect("the operator");
     relay.ports = vec![
-        plan::PortDecl::untyped(port("extra"), Direction::Output),
-        plan::PortDecl::untyped(port("extra"), Direction::Output),
+        plan::PortDecl::untyped(port("extra"), PortDirection::Output),
+        plan::PortDecl::untyped(port("extra"), PortDirection::Output),
     ];
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
@@ -1623,7 +1628,7 @@ fn an_edge_to_an_unknown_port_refuses() {
         PlanValidationError::WrongPortDirection {
             node: Some(rastok::node::Path::new(["relay"]).unwrap()),
             port: port("ghost"),
-            expected: Direction::Output,
+            expected: PortDirection::Output,
         }
     );
 
@@ -1654,9 +1659,9 @@ fn a_non_adjacent_duplicate_wins_over_the_broken_order() {
     // the defect — never NonCanonicalOrder standing in front of it.
     let mut plan = raw_probe();
     plan.boundary = vec![
-        plan::PortDecl::untyped(port("zeta"), Direction::Input),
-        plan::PortDecl::untyped(port("alpha"), Direction::Input),
-        plan::PortDecl::untyped(port("zeta"), Direction::Input),
+        plan::PortDecl::untyped(port("zeta"), PortDirection::Input),
+        plan::PortDecl::untyped(port("alpha"), PortDirection::Input),
+        plan::PortDecl::untyped(port("zeta"), PortDirection::Input),
     ];
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
@@ -2047,7 +2052,7 @@ fn an_extra_process_port_refuses_without_a_registry() {
         .expect("the connector");
     shell.ports.push(plan::PortDecl {
         port: port("ghost"),
-        direction: Direction::Output,
+        direction: PortDirection::Output,
 
         ty: Some(DataType::Variant),
         annotations: Default::default(),

@@ -217,7 +217,7 @@ fn v16_retains_one_operator_loop_without_a_graph_handler_or_command_port() {
     );
     assert!(compiled.nodes[0].ports.iter().any(|port| {
         port.port.name() == "err"
-            && port.direction == rastok::node::Direction::Output
+            && port.direction == rastok::node::PortDirection::Output
             && port.ty.as_ref()
                 == Some(&rastok::node::loop_expired_type(rastok::datatype::DataType::Text).unwrap())
     }));
@@ -267,7 +267,7 @@ fn v16_retains_one_operator_loop_without_a_graph_handler_or_command_port() {
     let registry = rastok::connectors::DriverRegistry::default();
     let mut bindings = rastok::connectors::RuntimeBindings::try_new(&decoded, &registry)
         .expect("a connector-free Loop needs no Driver");
-    vm.pump(&mut journal, &mut bindings)
+    vm.poll_drivers(&mut journal, &mut bindings)
         .expect("a connector-free boundary pump remains inert");
 }
 

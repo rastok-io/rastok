@@ -120,7 +120,7 @@ fn run(source: &str) -> Vec<Record> {
     .unwrap();
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
-    vm.pump(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut world).unwrap();
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
     assert!(vm.is_stable());

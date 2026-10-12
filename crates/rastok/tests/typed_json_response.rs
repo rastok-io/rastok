@@ -319,7 +319,7 @@ fn malformed_native_or_unhydrated_data_cannot_enter_the_outbound_journal() {
             .expect("Call opened");
         let retained = journal.records().to_vec();
         let report = vm
-            .pump(&mut journal, &mut driver)
+            .poll_drivers(&mut journal, &mut driver)
             .expect("the Driver fault is a rejected observation");
         assert_eq!(report.settled, 0);
         assert_eq!(report.rejected.len(), 1);

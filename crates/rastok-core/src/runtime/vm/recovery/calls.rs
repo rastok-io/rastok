@@ -148,7 +148,7 @@ impl Vm<'_> {
                 };
                 let completion = bindings
                     .scheduler_completion(&intent.connector_path, terminal)
-                    .map_err(crate::boundary::DispatchError::Driver)
+                    .map_err(crate::boundary::PollFault::Driver)
                     .map_err(VmFault::Dispatch)?;
                 (
                     completion,

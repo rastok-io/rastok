@@ -11,7 +11,7 @@ use alloc::vec::Vec;
 fn contract(id: &str, mode: Option<&str>) -> CallSemantics {
     outbound_call_semantics(
         &ContractId::parse(id).unwrap(),
-        ConnectorRoles::Outbound,
+        ConnectorDirection::Outbound,
         ConnectorExchange::Call,
         mode,
     )
@@ -70,7 +70,7 @@ fn retry_never_trusts_unknown_or_noncanonical_case_sets() {
     assert!(
         outbound_call_semantics(
             &ContractId::parse("std/http-client@2").unwrap(),
-            ConnectorRoles::Outbound,
+            ConnectorDirection::Outbound,
             ConnectorExchange::Call,
             None
         )
@@ -93,9 +93,9 @@ fn call_profiles_require_exact_identity_roles_exchange_and_mode() {
     ] {
         let id = ContractId::parse(id).unwrap();
         for roles in [
-            ConnectorRoles::Inbound,
-            ConnectorRoles::Outbound,
-            ConnectorRoles::InboundAndOutbound,
+            ConnectorDirection::Inbound,
+            ConnectorDirection::Outbound,
+            ConnectorDirection::InboundAndOutbound,
         ] {
             for exchange in [
                 ConnectorExchange::Event,
@@ -104,7 +104,7 @@ fn call_profiles_require_exact_identity_roles_exchange_and_mode() {
             ] {
                 assert_eq!(
                     outbound_call_semantics(&id, roles, exchange, mode).is_some(),
-                    roles == ConnectorRoles::Outbound && exchange == ConnectorExchange::Call
+                    roles == ConnectorDirection::Outbound && exchange == ConnectorExchange::Call
                 );
             }
         }
@@ -124,7 +124,7 @@ fn call_profiles_require_exact_identity_roles_exchange_and_mode() {
         assert!(
             outbound_call_semantics(
                 &ContractId::parse(id).unwrap(),
-                ConnectorRoles::Outbound,
+                ConnectorDirection::Outbound,
                 ConnectorExchange::Call,
                 mode
             )

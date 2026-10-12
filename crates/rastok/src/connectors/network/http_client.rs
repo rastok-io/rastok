@@ -3,7 +3,7 @@ use crate::boundary::{
     OutboundConnectorDriver, RequestPreparation, Response, SchedulerCompletion,
 };
 use crate::connectors::http_client::{
-    HttpBearer, HttpClientPlanBinding, HttpClientRequestBindings, HttpRequest, decode_request,
+    HttpBearer, HttpClientPlanBinding, HttpClientRequestSettings, HttpRequest, decode_request,
 };
 use crate::connectors::http_shared::{HttpVersion, decode_body};
 use crate::connectors::network::pump::{
@@ -136,8 +136,8 @@ impl crate::connectors::ConnectorDriverFactory for HttpClientFactory {
         &self.id
     }
 
-    fn roles(&self) -> crate::connector::ConnectorRoles {
-        crate::connector::ConnectorRoles::Outbound
+    fn roles(&self) -> crate::connector::ConnectorDirection {
+        crate::connector::ConnectorDirection::Outbound
     }
 
     fn bind<'plan>(
@@ -271,7 +271,7 @@ type H2Pool = std::sync::Arc<tokio::sync::Mutex<BTreeMap<String, H2Sender>>>;
 #[derive(Debug)]
 struct HttpClient<'plan> {
     _plan: &'plan crate::plan::ValidatedExecutionPlan,
-    bindings: HttpClientRequestBindings,
+    bindings: HttpClientRequestSettings,
     boot_secrets: BTreeMap<crate::deployment::SecretName, crate::deployment::SecretMaterial>,
     plans: BTreeMap<crate::node::Path, HttpClientPlanBinding>,
     config: HttpClientConfig,
@@ -310,7 +310,7 @@ impl<'plan> HttpClient<'plan> {
         config: HttpClientConfig,
         boot: &crate::deployment::BootBindings,
     ) -> Result<Self, String> {
-        let bindings = HttpClientRequestBindings::try_bind_with_boot(plan, nodes, boot)
+        let bindings = HttpClientRequestSettings::try_bind_with_boot(plan, nodes, boot)
             .map_err(|error| error.to_string())?;
         let mut boot_secrets = BTreeMap::new();
         for reference in bindings.secret_references() {
@@ -2033,19 +2033,19 @@ graph app : App {
         .unwrap();
         let path = crate::node::Path::new(["model"]).unwrap();
         let boot = crate::deployment::BootBindings::empty();
-        let typed = HttpClientRequestBindings::try_bind_with_boot(
+        let typed = HttpClientRequestSettings::try_bind_with_boot(
             &typed.plan,
             std::slice::from_ref(&path),
             &boot,
         )
         .unwrap();
-        let plain = HttpClientRequestBindings::try_bind_with_boot(
+        let plain = HttpClientRequestSettings::try_bind_with_boot(
             &plain.plan,
             std::slice::from_ref(&path),
             &boot,
         )
         .unwrap();
-        let projected = HttpClientRequestBindings::try_bind_with_boot(
+        let projected = HttpClientRequestSettings::try_bind_with_boot(
             &projected.plan,
             std::slice::from_ref(&path),
             &boot,
@@ -2094,7 +2094,7 @@ graph app : App {
         let catalogue = crate::contract::ContractCatalog::try_m0().unwrap();
         let compilation = crate::compiler::compile(&[source], &catalogue).unwrap();
         let path = crate::node::Path::new(["model"]).unwrap();
-        let bindings = HttpClientRequestBindings::try_bind_with_boot(
+        let bindings = HttpClientRequestSettings::try_bind_with_boot(
             &compilation.plan,
             std::slice::from_ref(&path),
             &crate::deployment::BootBindings::empty(),

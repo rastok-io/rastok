@@ -14,7 +14,7 @@ use super::{
     RouteDestination, RouteErrorKind, RouteRule, RouteSelection, RouteValidationError, Slot,
 };
 use crate::datatype::DataType;
-use crate::node::Direction;
+use crate::node::PortDirection;
 
 /// A composition refusal retains the exact source and selected case; source
 /// diagnostics do not have to recover semantic fields from formatted text.
@@ -89,8 +89,8 @@ pub(super) fn validate(
         if concrete(&rule.source)
             && direction
                 != match rule.source.owner {
-                    EndpointOwner::Node(_) => Direction::Output,
-                    EndpointOwner::Graph(_) => Direction::Input,
+                    EndpointOwner::Node(_) => PortDirection::Output,
+                    EndpointOwner::Graph(_) => PortDirection::Input,
                 }
         {
             return Err(failure(&path, RouteErrorKind::UnknownEndpoint).into());
@@ -98,7 +98,7 @@ pub(super) fn validate(
         for destination in destinations(&rule.selection) {
             if let RouteDestination::InstanceStop(target) = destination {
                 let lexical = match &rule.source.owner {
-                    EndpointOwner::Graph(path) if direction == Direction::Input => {
+                    EndpointOwner::Graph(path) if direction == PortDirection::Input => {
                         Some(path.clone())
                     }
                     EndpointOwner::Graph(path) => path.parent(),
@@ -152,8 +152,8 @@ pub(super) fn validate(
             if concrete(endpoint)
                 && direction
                     != match endpoint.owner {
-                        EndpointOwner::Node(_) => Direction::Input,
-                        EndpointOwner::Graph(_) => Direction::Output,
+                        EndpointOwner::Node(_) => PortDirection::Input,
+                        EndpointOwner::Graph(_) => PortDirection::Output,
                     }
             {
                 return Err(failure(&path, RouteErrorKind::UnknownEndpoint).into());
@@ -261,7 +261,7 @@ fn port<'a>(
     plan: &'a ExecutionPlan,
     ports: &'a ResolvedPortTable,
     endpoint: &Endpoint,
-) -> Option<(Direction, Option<&'a DataType>)> {
+) -> Option<(PortDirection, Option<&'a DataType>)> {
     match &endpoint.owner {
         EndpointOwner::Node(path) => {
             let index = plan.nodes.iter().position(|node| node.path == *path)?;
@@ -335,7 +335,7 @@ fn check_crossings(
         if !has_disposition
             && matches!(&source.owner, EndpointOwner::Graph(path) if !path.is_root())
             && port(plan, ports, source)
-                .is_some_and(|(direction, _)| direction == Direction::Output)
+                .is_some_and(|(direction, _)| direction == PortDirection::Output)
         {
             return Err(failure(
                 &format!(

@@ -1,7 +1,7 @@
 use super::*;
 use crate::boundary::CallOpen;
 use crate::connector::{
-    ConnectorExchange, ConnectorRoles, PROCESS_CONNECTOR_ID, outbound_call_semantics,
+    ConnectorDirection, ConnectorExchange, PROCESS_CONNECTOR_ID, outbound_call_semantics,
 };
 use crate::envelope::{Data, Meta, MetaSys};
 use crate::instance;
@@ -59,7 +59,7 @@ impl Fixture {
         let contract = ContractId::parse(PROCESS_CONNECTOR_ID).unwrap();
         let call = outbound_call_semantics(
             &contract,
-            ConnectorRoles::Outbound,
+            ConnectorDirection::Outbound,
             ConnectorExchange::Call,
             Some("job"),
         )
@@ -916,7 +916,7 @@ fn opening_is_bound_to_original_plan_contract_input_and_exact_identity() {
     assert_eq!(fold, Fold::default());
     let other_call = outbound_call_semantics(
         &ContractId::parse(crate::connector::FILE_CONNECTOR_ID).unwrap(),
-        ConnectorRoles::Outbound,
+        ConnectorDirection::Outbound,
         ConnectorExchange::Call,
         Some("read"),
     )

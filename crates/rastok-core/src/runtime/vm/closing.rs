@@ -86,7 +86,7 @@ impl Vm<'_> {
                         pending.extend(
                             node.ports
                                 .iter()
-                                .filter(|port| port.direction == node::Direction::Output)
+                                .filter(|port| port.direction == node::PortDirection::Output)
                                 .map(|port| (slot, port.port.clone())),
                         );
                     }

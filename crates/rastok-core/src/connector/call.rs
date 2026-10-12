@@ -3,7 +3,7 @@
 use alloc::string::String;
 use core::fmt;
 
-use super::{ConnectorExchange, ConnectorRoles, ContractId};
+use super::{ConnectorDirection, ConnectorExchange, ContractId};
 
 #[cfg(test)]
 mod tests;
@@ -271,14 +271,14 @@ impl core::error::Error for RetryCaseError {}
 #[must_use]
 pub fn outbound_call_semantics(
     contract: &ContractId,
-    roles: ConnectorRoles,
+    roles: ConnectorDirection,
     exchange: ConnectorExchange,
     mode: Option<&str>,
 ) -> Option<CallSemantics> {
     use FrameProduction::{ExactlyOneOn, Never, ZeroOrMore};
     use TerminalVisibility::{AfterEffect, BeforeEffect, OutcomeUnknown};
 
-    if roles != ConnectorRoles::Outbound || exchange != ConnectorExchange::Call {
+    if roles != ConnectorDirection::Outbound || exchange != ConnectorExchange::Call {
         return None;
     }
     let (frames, cases): (&'static [_], &'static [_]) = match (contract.as_str(), mode) {

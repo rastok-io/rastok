@@ -14,7 +14,7 @@ use rastok::boundary::{
 use rastok::conformance::{
     InterleaveExpectation, InterleaveProbe, Profile, Provocation, assert_conformant, verify,
 };
-use rastok::connector::{ConnectorRoles, ContractId, PROCESS_CONNECTOR_ID};
+use rastok::connector::{ConnectorDirection, ContractId, PROCESS_CONNECTOR_ID};
 use rastok::connectors::{
     BoundConnectorDriver, ConnectorDriverFactory, DriverFactoryError, DriverRegistry,
     ProcessFactory,
@@ -332,8 +332,8 @@ impl ConnectorDriverFactory for LiarFactory {
         &self.0
     }
 
-    fn roles(&self) -> ConnectorRoles {
-        ConnectorRoles::Outbound
+    fn roles(&self) -> ConnectorDirection {
+        ConnectorDirection::Outbound
     }
 
     fn bind<'plan>(
@@ -450,8 +450,8 @@ impl ConnectorDriverFactory for SwapperFactory {
         &self.0
     }
 
-    fn roles(&self) -> ConnectorRoles {
-        ConnectorRoles::Outbound
+    fn roles(&self) -> ConnectorDirection {
+        ConnectorDirection::Outbound
     }
 
     fn bind<'plan>(

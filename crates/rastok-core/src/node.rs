@@ -255,7 +255,7 @@ impl fmt::Display for Port {
 
 /// Semantic direction of a port.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum Direction {
+pub enum PortDirection {
     /// The port receives envelopes.
     Input,
     /// The port emits envelopes.

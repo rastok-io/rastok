@@ -25,7 +25,7 @@ use super::http_shared::HttpVersion;
 /// The exact request descriptor recovered from [`PreparedRequest`] bytes.
 ///
 /// This is a private semantic type, not a second framing. Decoding is the
-/// inverse of [`HttpClientRequestBindings::prepare`], so the physical engine
+/// inverse of [`HttpClientRequestSettings::prepare`], so the physical engine
 /// executes the already-journaled descriptor instead of rebuilding it from
 /// an envelope or settings. A secret-bearing authorization field retains only
 /// its logical reference until the authorized Driver applies the attested
@@ -69,7 +69,7 @@ pub(crate) struct HttpClientPlanBinding {
 }
 
 #[derive(Debug)]
-pub(crate) struct HttpClientRequestBindings {
+pub(crate) struct HttpClientRequestSettings {
     pub(crate) specs: BTreeMap<crate::node::Path, crate::plan::ConnectorSpec>,
     boot_environment: BTreeMap<(crate::node::Path, String), Value>,
     boot_secrets: BTreeMap<(crate::node::Path, String), crate::deployment::SecretName>,
@@ -92,7 +92,7 @@ impl HttpRequestRejection {
     }
 }
 
-impl HttpClientRequestBindings {
+impl HttpClientRequestSettings {
     pub(crate) fn try_bind_with_boot(
         plan: &ValidatedExecutionPlan,
         nodes: &[crate::node::Path],
@@ -412,7 +412,7 @@ pub(crate) fn decode_request(prepared: &PreparedRequest) -> Option<HttpRequest> 
     })
 }
 
-impl super::ScriptedConnectorProtocol for HttpClientRequestBindings {
+impl super::ScriptedConnectorProtocol for HttpClientRequestSettings {
     fn prepare_request(
         &self,
         connector: &crate::node::Path,
@@ -438,6 +438,6 @@ pub(crate) fn bind_scripted_protocol(
     nodes: &[crate::node::Path],
     boot: &crate::deployment::BootBindings,
 ) -> Result<Box<dyn super::ScriptedConnectorProtocol>, super::DriverFactoryError> {
-    HttpClientRequestBindings::try_bind_with_boot(plan, nodes, boot)
+    HttpClientRequestSettings::try_bind_with_boot(plan, nodes, boot)
         .map(|bindings| Box::new(bindings) as Box<dyn super::ScriptedConnectorProtocol>)
 }

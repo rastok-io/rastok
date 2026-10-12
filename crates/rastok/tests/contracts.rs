@@ -12,7 +12,7 @@ use rastok::contract::{
     FrontendContract, FrontendFraming, FrontendReader, PortContract, PortDataType, PortTypeChoice,
     PortTypeRule, Presence, Profile, ProfileSelector, ProfileSupport, SheetDefect, ValueDomain,
 };
-use rastok::node::Direction;
+use rastok::node::PortDirection;
 
 fn compile_one(source: &str) -> Result<rastok::compiler::Compilation, rastok::diagnostics::Bag> {
     compile(
@@ -383,25 +383,25 @@ fn sheet(common: &'static [AttributeSpec], selector: Option<ProfileSelector>) ->
     const PORTS: &[PortContract] = &[
         PortContract {
             name: "in",
-            direction: Direction::Input,
+            direction: PortDirection::Input,
 
             ty: PortTypeRule::Fixed(PortDataType::Variant),
         },
         PortContract {
             name: "out",
-            direction: Direction::Output,
+            direction: PortDirection::Output,
 
             ty: PortTypeRule::Fixed(PortDataType::Variant),
         },
         PortContract {
             name: "err",
-            direction: Direction::Output,
+            direction: PortDirection::Output,
 
             ty: PortTypeRule::Fixed(PortDataType::Variant),
         },
         PortContract {
             name: "exit",
-            direction: Direction::Output,
+            direction: PortDirection::Output,
 
             ty: PortTypeRule::Fixed(PortDataType::Variant),
         },
@@ -409,7 +409,7 @@ fn sheet(common: &'static [AttributeSpec], selector: Option<ProfileSelector>) ->
     ConnectorContract {
         id: "org.rastok.test/probe@1",
         name: "Probe",
-        roles: rastok::connector::ConnectorRoles::Outbound,
+        roles: rastok::connector::ConnectorDirection::Outbound,
         exchange: rastok::connector::ConnectorExchange::Call,
         ports: PORTS,
         common,
@@ -445,7 +445,7 @@ fn a_duplicate_attribute_is_a_sheet_defect() {
 #[test]
 fn the_exchange_shape_owns_the_terminal_row_cardinality() {
     let event_with_exit = ConnectorContract {
-        roles: rastok::connector::ConnectorRoles::Inbound,
+        roles: rastok::connector::ConnectorDirection::Inbound,
         exchange: rastok::connector::ConnectorExchange::Event,
         ..sheet(&[], None)
     };
@@ -461,14 +461,14 @@ fn the_exchange_shape_owns_the_terminal_row_cardinality() {
 
     const EVENT_PORTS: &[PortContract] = &[PortContract {
         name: "out",
-        direction: Direction::Output,
+        direction: PortDirection::Output,
 
         ty: PortTypeRule::Fixed(PortDataType::Variant),
     }];
     let event = ConnectorContract {
         id: "org.rastok.test/event@1",
         name: "EventProbe",
-        roles: rastok::connector::ConnectorRoles::Inbound,
+        roles: rastok::connector::ConnectorDirection::Inbound,
         exchange: rastok::connector::ConnectorExchange::Event,
         ports: EVENT_PORTS,
         common: &[],
@@ -483,7 +483,7 @@ fn the_exchange_shape_owns_the_terminal_row_cardinality() {
             .try_with(ConnectorContract {
                 id: "org.rastok.test/call@1",
                 name: "CallProbe",
-                roles: rastok::connector::ConnectorRoles::Outbound,
+                roles: rastok::connector::ConnectorDirection::Outbound,
                 exchange: rastok::connector::ConnectorExchange::Call,
                 ..event
             })
@@ -498,7 +498,7 @@ fn the_exchange_shape_owns_the_terminal_row_cardinality() {
         .try_with(ConnectorContract {
             id: "org.rastok.test/session@1",
             name: "SessionProbe",
-            roles: rastok::connector::ConnectorRoles::InboundAndOutbound,
+            roles: rastok::connector::ConnectorDirection::InboundAndOutbound,
             exchange: rastok::connector::ConnectorExchange::Session,
             ..sheet(&[], None)
         })
@@ -509,7 +509,7 @@ fn the_exchange_shape_owns_the_terminal_row_cardinality() {
 fn an_event_is_the_one_way_inbound_exchange() {
     const EVENT_PORTS: &[PortContract] = &[PortContract {
         name: "out",
-        direction: Direction::Output,
+        direction: PortDirection::Output,
 
         ty: PortTypeRule::Fixed(PortDataType::Variant),
     }];
@@ -517,7 +517,7 @@ fn an_event_is_the_one_way_inbound_exchange() {
         .try_with(ConnectorContract {
             id: "org.rastok.test/outbound-event@1",
             name: "OutboundEvent",
-            roles: rastok::connector::ConnectorRoles::Outbound,
+            roles: rastok::connector::ConnectorDirection::Outbound,
             exchange: rastok::connector::ConnectorExchange::Event,
             ports: EVENT_PORTS,
             common: &[],
@@ -528,7 +528,7 @@ fn an_event_is_the_one_way_inbound_exchange() {
         error,
         SheetDefect::ExchangeRoleMismatch {
             exchange: rastok::connector::ConnectorExchange::Event,
-            roles: rastok::connector::ConnectorRoles::Outbound,
+            roles: rastok::connector::ConnectorDirection::Outbound,
         }
     );
 
@@ -536,7 +536,7 @@ fn an_event_is_the_one_way_inbound_exchange() {
         .try_with(ConnectorContract {
             id: "org.rastok.test/inbound-session@1",
             name: "InboundSession",
-            roles: rastok::connector::ConnectorRoles::Inbound,
+            roles: rastok::connector::ConnectorDirection::Inbound,
             exchange: rastok::connector::ConnectorExchange::Session,
             ..sheet(&[], None)
         })
@@ -545,7 +545,7 @@ fn an_event_is_the_one_way_inbound_exchange() {
         error,
         SheetDefect::ExchangeRoleMismatch {
             exchange: rastok::connector::ConnectorExchange::Session,
-            roles: rastok::connector::ConnectorRoles::Inbound,
+            roles: rastok::connector::ConnectorDirection::Inbound,
         },
         "a Session needs the exchange-specific outbound observation view"
     );
@@ -559,7 +559,10 @@ fn the_catalogue_keys_source_symbols_by_stable_contract_identity() {
         .connector_by_id(&id)
         .expect("Process is keyed by its stable id");
     assert_eq!(process.name, "Process");
-    assert_eq!(process.roles, rastok::connector::ConnectorRoles::Outbound);
+    assert_eq!(
+        process.roles,
+        rastok::connector::ConnectorDirection::Outbound
+    );
 
     let invalid = ConnectorContract {
         id: "Process",
@@ -613,24 +616,24 @@ fn port_type_cycles_are_rejected_even_when_reached_through_a_tail() {
     const CYCLIC: ConnectorContract = ConnectorContract {
         id: "org.rastok.test/cyclic@1",
         name: "Cyclic",
-        roles: rastok::connector::ConnectorRoles::Outbound,
+        roles: rastok::connector::ConnectorDirection::Outbound,
         exchange: rastok::connector::ConnectorExchange::Call,
         ports: &[
             PortContract {
                 name: "first",
-                direction: Direction::Output,
+                direction: PortDirection::Output,
 
                 ty: PortTypeRule::SameAs("second"),
             },
             PortContract {
                 name: "second",
-                direction: Direction::Output,
+                direction: PortDirection::Output,
 
                 ty: PortTypeRule::SameAs("third"),
             },
             PortContract {
                 name: "third",
-                direction: Direction::Output,
+                direction: PortDirection::Output,
 
                 ty: PortTypeRule::SameAs("second"),
             },
@@ -665,12 +668,12 @@ fn same_as_and_profile_selected_ports_resolve_without_a_second_type_authority() 
     const SHEET: ConnectorContract = ConnectorContract {
         id: "org.rastok.test/parametric@1",
         name: "Parametric",
-        roles: rastok::connector::ConnectorRoles::Outbound,
+        roles: rastok::connector::ConnectorDirection::Outbound,
         exchange: rastok::connector::ConnectorExchange::Call,
         ports: &[
             PortContract {
                 name: "in",
-                direction: Direction::Input,
+                direction: PortDirection::Input,
 
                 ty: PortTypeRule::AttributeSelected {
                     attribute: "mode",
@@ -688,13 +691,13 @@ fn same_as_and_profile_selected_ports_resolve_without_a_second_type_authority() 
             },
             PortContract {
                 name: "out",
-                direction: Direction::Output,
+                direction: PortDirection::Output,
 
                 ty: PortTypeRule::SameAs("in"),
             },
             PortContract {
                 name: "exit",
-                direction: Direction::Output,
+                direction: PortDirection::Output,
 
                 ty: PortTypeRule::SameAs("in"),
             },
@@ -744,11 +747,11 @@ fn a_profile_local_attribute_cannot_ambiguously_select_a_port_type() {
     const AMBIGUOUS: ConnectorContract = ConnectorContract {
         id: "org.rastok.test/ambiguous@1",
         name: "Ambiguous",
-        roles: rastok::connector::ConnectorRoles::Outbound,
+        roles: rastok::connector::ConnectorDirection::Outbound,
         exchange: rastok::connector::ConnectorExchange::Call,
         ports: &[PortContract {
             name: "out",
-            direction: Direction::Output,
+            direction: PortDirection::Output,
 
             ty: PortTypeRule::AttributeSelected {
                 attribute: "shape",
@@ -801,11 +804,11 @@ fn a_port_type_selector_is_structurally_plan_bound() {
     const LATE: ConnectorContract = ConnectorContract {
         id: "org.rastok.test/late@1",
         name: "Late",
-        roles: rastok::connector::ConnectorRoles::Outbound,
+        roles: rastok::connector::ConnectorDirection::Outbound,
         exchange: rastok::connector::ConnectorExchange::Call,
         ports: &[PortContract {
             name: "out",
-            direction: Direction::Output,
+            direction: PortDirection::Output,
 
             ty: PortTypeRule::AttributeSelected {
                 attribute: "shape",
@@ -835,11 +838,11 @@ fn a_call_contract_requires_its_explicit_terminal() {
     const INVALID: ConnectorContract = ConnectorContract {
         id: "org.rastok.test/invalid-sink@1",
         name: "InvalidSink",
-        roles: rastok::connector::ConnectorRoles::Outbound,
+        roles: rastok::connector::ConnectorDirection::Outbound,
         exchange: rastok::connector::ConnectorExchange::Call,
         ports: &[PortContract {
             name: "in",
-            direction: Direction::Input,
+            direction: PortDirection::Input,
 
             ty: PortTypeRule::Fixed(PortDataType::Variant),
         }],
@@ -1568,28 +1571,28 @@ fn the_global_binder_requires_callable_connectors_but_skips_pure_outbound_source
             node.ports = vec![
                 rastok::plan::PortDecl {
                     port: rastok::node::Port::new("in").expect("a conventional port"),
-                    direction: rastok::node::Direction::Input,
+                    direction: rastok::node::PortDirection::Input,
 
                     ty: Some(rastok::datatype::DataType::Text),
                     annotations: Default::default(),
                 },
                 rastok::plan::PortDecl {
                     port: rastok::node::Port::new("out").expect("a conventional port"),
-                    direction: rastok::node::Direction::Output,
+                    direction: rastok::node::PortDirection::Output,
 
                     ty: Some(rastok::datatype::DataType::Text),
                     annotations: Default::default(),
                 },
                 rastok::plan::PortDecl {
                     port: rastok::node::Port::new("err").expect("a conventional port"),
-                    direction: rastok::node::Direction::Output,
+                    direction: rastok::node::PortDirection::Output,
 
                     ty: Some(rastok::datatype::DataType::Variant),
                     annotations: Default::default(),
                 },
                 rastok::plan::PortDecl {
                     port: rastok::node::Port::new("exit").expect("a conventional port"),
-                    direction: rastok::node::Direction::Output,
+                    direction: rastok::node::PortDirection::Output,
 
                     ty: Some(rastok::datatype::DataType::Variant),
                     annotations: Default::default(),
@@ -1681,7 +1684,7 @@ fn a_delivery_target_requires_outbound_or_an_inbound_call_response_role() {
         if let rastok::plan::NodeExecution::Connector(spec) = &mut node.execution {
             spec.contract = rastok::connector::ContractId::parse("org.rastok.test/inbound-only@1")
                 .expect("the test id is canonical");
-            spec.roles = rastok::connector::ConnectorRoles::Inbound;
+            spec.roles = rastok::connector::ConnectorDirection::Inbound;
             spec.exchange = rastok::connector::ConnectorExchange::Event;
         }
     }
@@ -1708,7 +1711,7 @@ fn a_forged_event_cannot_claim_an_outbound_effect_role() {
         rastok::plan::ValidatedExecutionPlan::try_from(plan),
         Err(rastok::plan::PlanValidationError::ExchangeRoleMismatch {
             exchange: rastok::connector::ConnectorExchange::Event,
-            roles: rastok::connector::ConnectorRoles::Outbound,
+            roles: rastok::connector::ConnectorDirection::Outbound,
             ..
         })
     ));
@@ -2058,11 +2061,11 @@ fn an_inexpressible_sheet_name_is_a_sheet_defect() {
     let bad_port = ConnectorContract {
         id: "org.rastok.test/probe@1",
         name: "Probe",
-        roles: rastok::connector::ConnectorRoles::Outbound,
+        roles: rastok::connector::ConnectorDirection::Outbound,
         exchange: rastok::connector::ConnectorExchange::Call,
         ports: &[PortContract {
             name: "bad port",
-            direction: Direction::Input,
+            direction: PortDirection::Input,
 
             ty: PortTypeRule::Fixed(PortDataType::Variant),
         }],

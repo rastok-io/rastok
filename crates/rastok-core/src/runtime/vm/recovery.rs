@@ -129,7 +129,7 @@ impl Vm<'_> {
             );
         }
         candidate.retain_recovered_responses()?;
-        candidate.dispatcher = Dispatcher::resume(journal);
+        candidate.dispatcher = DriverPoller::resume(journal);
         candidate.now = resume_at;
         *self = candidate;
         Ok(())

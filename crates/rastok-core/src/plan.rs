@@ -342,7 +342,7 @@ pub struct PortDecl {
     /// The port name.
     pub port: node::Port,
     /// The declared direction.
-    pub direction: node::Direction,
+    pub direction: node::PortDirection,
     /// The pinned type, when annotated.
     pub ty: Option<DataType>,
     /// Sparse data-policy metadata beside the effective logical type.
@@ -352,7 +352,7 @@ pub struct PortDecl {
 impl PortDecl {
     /// An untyped entry — the whole M0 subset.
     #[must_use]
-    pub fn untyped(port: node::Port, direction: node::Direction) -> Self {
+    pub fn untyped(port: node::Port, direction: node::PortDirection) -> Self {
         Self {
             port,
             direction,
@@ -363,7 +363,7 @@ impl PortDecl {
 
     /// The canonical order key.
     #[must_use]
-    pub fn key(&self) -> (&node::Port, node::Direction) {
+    pub fn key(&self) -> (&node::Port, node::PortDirection) {
         (&self.port, self.direction)
     }
 }
@@ -855,7 +855,7 @@ pub struct ConnectorSpec {
     /// Stable semantic contract identity (`std/process@4`).
     pub contract: crate::connector::ContractId,
     /// Inbound/outbound runtime roles required by the contract.
-    pub roles: crate::connector::ConnectorRoles,
+    pub roles: crate::connector::ConnectorDirection,
     /// Cardinality and terminal lifecycle required by the contract.
     pub exchange: crate::connector::ConnectorExchange,
     /// Original plan-owned Call guarantee. Non-Call profiles have none.

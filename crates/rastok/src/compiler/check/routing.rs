@@ -141,7 +141,7 @@ impl Checker<'_, '_> {
             let mut outputs: Vec<_> = node
                 .ports
                 .iter()
-                .filter(|decl| decl.direction == Direction::Output)
+                .filter(|decl| decl.direction == PortDirection::Output)
                 .map(|decl| decl.port.clone())
                 .collect();
             for handler in &node.handlers {
@@ -176,7 +176,7 @@ impl Checker<'_, '_> {
             for decl in child
                 .boundary
                 .iter()
-                .filter(|decl| decl.direction == Direction::Output)
+                .filter(|decl| decl.direction == PortDirection::Output)
             {
                 let endpoint = Endpoint {
                     owner: EndpointOwner::Graph(child.path.clone()),
@@ -220,12 +220,12 @@ impl Checker<'_, '_> {
         let mut used = Vec::new();
         for edge in &graph.edges {
             if matches!(&edge.from.owner, EndpointOwner::Graph(path) if path == &graph.path) {
-                used.push((edge.from.port.clone(), Direction::Input));
+                used.push((edge.from.port.clone(), PortDirection::Input));
             }
             if let EdgeTarget::Port(target) = &edge.to
                 && matches!(&target.owner, EndpointOwner::Graph(path) if path == &graph.path)
             {
-                used.push((target.port.clone(), Direction::Output));
+                used.push((target.port.clone(), PortDirection::Output));
             }
         }
         for (port, direction) in used {
@@ -250,12 +250,12 @@ impl Checker<'_, '_> {
         let mut used = Vec::new();
         for edge in &graph.edges {
             if let EndpointOwner::Node(path) = &edge.from.owner {
-                used.push((path.clone(), edge.from.port.clone(), Direction::Output));
+                used.push((path.clone(), edge.from.port.clone(), PortDirection::Output));
             }
             if let EdgeTarget::Port(target) = &edge.to
                 && let EndpointOwner::Node(path) = &target.owner
             {
-                used.push((path.clone(), target.port.clone(), Direction::Input));
+                used.push((path.clone(), target.port.clone(), PortDirection::Input));
             }
         }
         for (path, port, direction) in used {
@@ -906,7 +906,11 @@ impl Checker<'_, '_> {
     }
 
     /// The direction carried by a node's materialized port table.
-    pub(super) fn node_port_direction(&self, target: &Node, port_name: &str) -> Option<Direction> {
+    pub(super) fn node_port_direction(
+        &self,
+        target: &Node,
+        port_name: &str,
+    ) -> Option<PortDirection> {
         target
             .ports
             .iter()
@@ -972,8 +976,8 @@ impl Checker<'_, '_> {
                     .find(|port| port.port.name() == node_name.text)
                     .map(|port| port.direction)
                     .or(match node_name.text.as_str() {
-                        "in" => Some(Direction::Input),
-                        "out" => Some(Direction::Output),
+                        "in" => Some(PortDirection::Input),
+                        "out" => Some(PortDirection::Output),
                         _ => None,
                     })
             })
@@ -995,9 +999,9 @@ impl Checker<'_, '_> {
         }
         if let Some(direction) = own_boundary {
             let expected = if is_source {
-                Direction::Input
+                PortDirection::Input
             } else {
-                Direction::Output
+                PortDirection::Output
             };
             if direction != expected {
                 let required = if is_source {
@@ -1059,8 +1063,8 @@ impl Checker<'_, '_> {
                     return None;
                 }
                 match port_name {
-                    "in" => Some(Direction::Input),
-                    "out" | "err" => Some(Direction::Output),
+                    "in" => Some(PortDirection::Input),
+                    "out" | "err" => Some(PortDirection::Output),
                     _ => None,
                 }
             })
@@ -1072,8 +1076,8 @@ impl Checker<'_, '_> {
                     .find(|decl| decl.port.name() == port_name)
                     .map(|decl| decl.direction)
                     .or(match port_name {
-                        "in" => Some(Direction::Input),
-                        "out" | "err" => Some(Direction::Output),
+                        "in" => Some(PortDirection::Input),
+                        "out" | "err" => Some(PortDirection::Output),
                         _ => None,
                     })
             })
@@ -1091,9 +1095,9 @@ impl Checker<'_, '_> {
             return None;
         };
         let expected = if is_source {
-            Direction::Output
+            PortDirection::Output
         } else {
-            Direction::Input
+            PortDirection::Input
         };
         if direction != expected {
             let required = if is_source {

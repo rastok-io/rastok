@@ -224,7 +224,7 @@ itself; it never re-reads the plan settings. Cooperative cancellation before a
 complete read or atomic-rename commit emits nothing from the Driver, leaving
 the scheduler's won closure authoritative. A completion observed after another
 closure won is handled by the same discarded-response rule as every outbound
-protocol. `Dispatcher::resume` starts no existing open call: filesystem recall
+protocol. `DriverPoller::resume` starts no existing open call: filesystem recall
 is a future recovery-fold decision, not replay behavior.
 
 For `std/http-client@3`, the descriptor additionally seals method,
@@ -322,7 +322,7 @@ At restart, `open` EGRESS records without closure = the set of unknowns :
 
 **15 September contact correction.** The previous table proposed blind recall
 for idempotence or a present key. That was not the implemented
-`Dispatcher::resume` contract and conflicts with D-2026-09-15-1. It is superseded
+`DriverPoller::resume` contract and conflicts with D-2026-09-15-1. It is superseded
 here, not admitted as a new recovery capability. Under the current Retry policy,
 only a selected *closed* terminal can authorize a distinct later attempt;
 that attempt is not a second start of the original Call. Durable storage and

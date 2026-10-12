@@ -32,7 +32,7 @@ pub enum TypeOrigin {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedPort {
     port: node::Port,
-    direction: node::Direction,
+    direction: node::PortDirection,
     ty: DataType,
     annotations: AnnotationTable,
     origin: TypeOrigin,
@@ -47,7 +47,7 @@ impl ResolvedPort {
 
     /// Node-side direction.
     #[must_use]
-    pub const fn direction(&self) -> node::Direction {
+    pub const fn direction(&self) -> node::PortDirection {
         self.direction
     }
 
@@ -140,7 +140,7 @@ struct PortKey {
 
 struct PortState {
     key: PortKey,
-    direction: node::Direction,
+    direction: node::PortDirection,
     declared: Option<DataType>,
     annotations: AnnotationTable,
     produced: Option<DataType>,
@@ -199,7 +199,7 @@ impl<'plan> Solver<'plan> {
         &mut self,
         node: Option<usize>,
         port: &node::Port,
-        direction: node::Direction,
+        direction: node::PortDirection,
     ) -> usize {
         let key = PortKey {
             node,
@@ -221,7 +221,7 @@ impl<'plan> Solver<'plan> {
         index
     }
 
-    fn endpoint(&mut self, endpoint: &EdgeEnd, direction: node::Direction) -> usize {
+    fn endpoint(&mut self, endpoint: &EdgeEnd, direction: node::PortDirection) -> usize {
         self.ensure(endpoint.node.map(Slot::index), &endpoint.port, direction)
     }
 
@@ -257,9 +257,9 @@ impl<'plan> Solver<'plan> {
             // creates a hidden producer or type here.
         }
         for edge in &self.plan.edges {
-            let source = self.endpoint(&edge.from, node::Direction::Output);
+            let source = self.endpoint(&edge.from, node::PortDirection::Output);
             if let Some(target) = &edge.to {
-                let target = self.endpoint(target, node::Direction::Input);
+                let target = self.endpoint(target, node::PortDirection::Input);
                 self.flows.push(Flow {
                     source,
                     target,
@@ -276,12 +276,12 @@ impl<'plan> Solver<'plan> {
                 node::HandlerActivation::Lifecycle(_) => self.plan.nodes[node_index]
                     .ports
                     .iter()
-                    .filter(|port| port.direction == node::Direction::Input)
+                    .filter(|port| port.direction == node::PortDirection::Input)
                     .map(|port| port.port.clone())
                     .collect(),
             };
             for input_port in input_ports {
-                let input = self.ensure(Some(node_index), &input_port, node::Direction::Input);
+                let input = self.ensure(Some(node_index), &input_port, node::PortDirection::Input);
                 if let Some(guard) = &handler.guard {
                     self.expressions.push(ExpressionRule {
                         input,
@@ -339,7 +339,7 @@ impl<'plan> Solver<'plan> {
                                     let output = self.ensure(
                                         Some(node_index),
                                         port,
-                                        node::Direction::Output,
+                                        node::PortDirection::Output,
                                     );
                                     if emission_preserves_payload(value) {
                                         self.flows.push(Flow {

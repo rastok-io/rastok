@@ -191,7 +191,7 @@ fn the_service_profile_cannot_alias_a_job_or_another_catalogue_entry() {
             attributes: &[],
             protocol: Some(ProfileProtocol {
                 id: PROCESS_CONNECTOR_ID,
-                roles: ConnectorRoles::InboundAndOutbound,
+                roles: ConnectorDirection::InboundAndOutbound,
                 exchange: ConnectorExchange::Session,
             }),
         }],
@@ -212,7 +212,7 @@ fn independent_core_validation_rejects_forged_service_profiles() {
             panic!("connector");
         };
         match sabotage {
-            0 => spec.roles = ConnectorRoles::Outbound,
+            0 => spec.roles = ConnectorDirection::Outbound,
             1 => spec.exchange = ConnectorExchange::Call,
             2 => spec.contract = ContractId::parse(PROCESS_CONNECTOR_ID).unwrap(),
             _ => spec.attributes.retain(|(name, _)| name != "max_frame"),
@@ -259,8 +259,8 @@ mod real {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
         loop {
             vm.run_ready_with_bindings(journal, world).unwrap();
-            world.pump_inbound(vm, journal).unwrap();
-            vm.pump(journal, world).unwrap();
+            world.poll_inbound(vm, journal).unwrap();
+            vm.poll_drivers(journal, world).unwrap();
             vm.run_ready_with_bindings(journal, world).unwrap();
             if predicate(vm, journal) {
                 return;

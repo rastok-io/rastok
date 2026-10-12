@@ -3,7 +3,7 @@
 //! Governing rule: [`delivery-semantics.md`]. In run, the world plays
 //! itself; in simulation, the lab plays the world — both through the
 //! same traits, and the journal keeps its world-half either way. The
-//! [`Dispatcher`] is the loop between the journal and the outbound drivers:
+//! [`DriverPoller`] is the loop between the journal and the outbound drivers:
 //! it drives open outbound calls and settles their closures; only a
 //! won closure ever becomes a VM input.
 //!
@@ -2561,7 +2561,7 @@ pub trait Supervisor {
 /// One settled pump round: what may enter the VM, and what may not —
 /// visibly, never silently.
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct PumpBatch {
+pub struct PollBatch {
     /// The won closures, routable to the VM.
     pub events: Vec<BoundaryObservation>,
     /// Answers that lost the close race — non-causal observations,
@@ -2578,7 +2578,7 @@ pub struct PumpBatch {
 
 /// A dispatcher fault — loud, never a skipped iteration.
 #[derive(Debug, Clone, PartialEq)]
-pub enum DispatchError {
+pub enum PollFault {
     /// A journaled intent whose request envelope cannot be found:
     /// an integrity fault in the causal history.
     MissingRequest(CallId),
@@ -2588,7 +2588,7 @@ pub enum DispatchError {
     Journal(crate::journal::Error),
 }
 
-impl fmt::Display for DispatchError {
+impl fmt::Display for PollFault {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MissingRequest(call_id) => {
@@ -2600,23 +2600,29 @@ impl fmt::Display for DispatchError {
     }
 }
 
-impl core::error::Error for DispatchError {}
+impl core::error::Error for PollFault {}
 
-/// The loop between the journal and the outbound drivers. It lets a Driver
-/// take ownership of every journaled open call exactly once — journal-before-
-/// effect: the record always exists before the driver hears — and settles
-/// closures through the journal's close-once race into routable
-/// [`BoundaryObservation`]s. The VM owns everything after: the connector's
-/// transaction builds the output envelopes; the dispatcher never
-/// mints one. Mocks replace the driver, never this bookkeeping.
+/// Connects journaled Call openings to outbound Drivers and their observations.
+///
+/// A fresh round has two halves:
+///
+/// 1. Offer newly journaled Calls to their Drivers. Journal-before-effect:
+///    the opening record exists before a Driver is asked to execute it.
+/// 2. Collect completions, check them against the Contract, and settle them
+///    through the journal's close-once rule into [`BoundaryObservation`]s.
+///
+/// A refused settlement keeps its batch for a later round; another batch is
+/// not polled until that one is complete. The VM builds the output envelopes
+/// and commits the Connector transaction. The poller never creates an envelope.
+/// Mocks replace Drivers, never this bookkeeping.
 ///
 /// Restart discipline: an old Call is never executed again by recovery.
 /// A later Retry admission is a new, independently authorized Call.
-/// A dispatcher over an existing journal is therefore built with
-/// [`Dispatcher::resume`], which treats every already-open call as
+/// A poller over an existing journal is therefore built with
+/// [`DriverPoller::resume`], which treats every already-open call as
 /// started and re-calls nothing.
 #[derive(Debug, Default)]
-pub struct Dispatcher {
+pub struct DriverPoller {
     started: BTreeSet<CallId>,
     pending_settlement: Option<Box<PendingSettlement>>,
 }
@@ -2626,19 +2632,19 @@ pub struct Dispatcher {
 #[derive(Debug)]
 struct PendingSettlement {
     responses: VecDeque<Response>,
-    batch: PumpBatch,
+    batch: PollBatch,
 }
 
-impl Dispatcher {
-    /// A dispatcher for a fresh run: nothing started yet.
+impl DriverPoller {
+    /// A poller for a fresh run: nothing started yet.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// A dispatcher over an existing journal: every currently open
+    /// A poller over an existing journal: every currently open
     /// call counts as started, so nothing is blindly re-called; the
-    /// recovery fold — not the dispatcher — decides re-calls.
+    /// recovery fold — not the poller — decides re-calls.
     #[must_use]
     pub fn resume(journal: &dyn Journal) -> Self {
         Self {
@@ -2656,21 +2662,21 @@ impl Dispatcher {
     ///
     /// # Errors
     ///
-    /// [`DispatchError::MissingRequest`] when the causal history lacks
+    /// [`PollFault::MissingRequest`] when the causal history lacks
     /// a journaled request — an integrity fault; journal refusals are
     /// propagated, never absorbed. A refused settlement retains that Driver
     /// batch, including earlier winning closures, until a later pump succeeds.
-    pub fn pump<B: OutboundConnectorBindings + ?Sized>(
+    pub fn poll_drivers<B: OutboundConnectorBindings + ?Sized>(
         &mut self,
         journal: &mut dyn Journal,
         bindings: &mut B,
         gate: &dyn CompletionCheck,
         now: i64,
-    ) -> Result<PumpBatch, DispatchError> {
-        self.pump_with_timing(journal, bindings, gate, now, &mut |_, _| Ok(None))
+    ) -> Result<PollBatch, PollFault> {
+        self.poll_drivers_with_timing(journal, bindings, gate, now, &mut |_, _| Ok(None))
     }
 
-    pub(crate) fn pump_with_timing<B: OutboundConnectorBindings + ?Sized>(
+    pub(crate) fn poll_drivers_with_timing<B: OutboundConnectorBindings + ?Sized>(
         &mut self,
         journal: &mut dyn Journal,
         bindings: &mut B,
@@ -2681,9 +2687,9 @@ impl Dispatcher {
             &Completion,
         ) -> Result<
             Option<alloc::boxed::Box<crate::journal::deadline::Deadlines>>,
-            DispatchError,
+            PollFault,
         >,
-    ) -> Result<PumpBatch, DispatchError> {
+    ) -> Result<PollBatch, PollFault> {
         // A timeout or abandonment can close a call outside this response
         // loop. Keep the local start cache equal to the journal's open fold,
         // rather than retaining every historical call for the run's life.
@@ -2699,10 +2705,10 @@ impl Dispatcher {
                 }
                 let request = journal
                     .find_envelope(intent.emitting_id)
-                    .ok_or(DispatchError::MissingRequest(intent.call_id))?;
+                    .ok_or(PollFault::MissingRequest(intent.call_id))?;
                 let start = bindings
                     .start(intent, &request)
-                    .map_err(DispatchError::Driver)?;
+                    .map_err(PollFault::Driver)?;
                 if start == CallStart::Started {
                     self.started.insert(intent.call_id);
                 }
@@ -2713,8 +2719,8 @@ impl Dispatcher {
         let mut settlement = match self.pending_settlement.take() {
             Some(pending) => *pending,
             None => PendingSettlement {
-                responses: bindings.events().map_err(DispatchError::Driver)?.into(),
-                batch: PumpBatch::default(),
+                responses: bindings.events().map_err(PollFault::Driver)?.into(),
+                batch: PollBatch::default(),
             },
         };
         while let Some(response) = settlement.responses.pop_front() {
@@ -2740,7 +2746,7 @@ impl Dispatcher {
             let verdict = timing(intent, &response.completion).and_then(|schedule| {
                 journal
                     .close_egress(&response.call_id, closure, now, schedule)
-                    .map_err(DispatchError::Journal)
+                    .map_err(PollFault::Journal)
             });
             let verdict = match verdict {
                 Ok(verdict) => verdict,
@@ -3005,15 +3011,15 @@ mod tests {
     fn the_record_exists_before_the_driver_hears() {
         let (mut journal, intent) = seeded_journal();
         let mut driver = Scripted::default();
-        let mut dispatcher = Dispatcher::new();
+        let mut dispatcher = DriverPoller::new();
         dispatcher
-            .pump(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
+            .poll_drivers(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
             .unwrap();
         assert_eq!(driver.started.len(), 1);
         assert_eq!(driver.started[0].0.call_id, intent.call_id);
         // A second pump never re-starts an already-started call.
         dispatcher
-            .pump(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
+            .poll_drivers(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
             .unwrap();
         assert_eq!(driver.started.len(), 1);
     }
@@ -3026,16 +3032,16 @@ mod tests {
             pending: false,
             attempts: 0,
         };
-        let mut dispatcher = Dispatcher::new();
+        let mut dispatcher = DriverPoller::new();
 
         assert!(matches!(
-            dispatcher.pump(&mut journal, &mut bindings, &AcceptAnyCompletion, 0),
-            Err(DispatchError::Driver(DriverRouteError::UnboundOutbound(_)))
+            dispatcher.poll_drivers(&mut journal, &mut bindings, &AcceptAnyCompletion, 0),
+            Err(PollFault::Driver(DriverRouteError::UnboundOutbound(_)))
         ));
         assert_eq!(bindings.attempts, 1);
         bindings.refuse = false;
         dispatcher
-            .pump(&mut journal, &mut bindings, &AcceptAnyCompletion, 0)
+            .poll_drivers(&mut journal, &mut bindings, &AcceptAnyCompletion, 0)
             .unwrap();
         assert_eq!(bindings.attempts, 2, "the open call was retried");
     }
@@ -3048,21 +3054,21 @@ mod tests {
             pending: true,
             attempts: 0,
         };
-        let mut dispatcher = Dispatcher::new();
+        let mut dispatcher = DriverPoller::new();
 
         dispatcher
-            .pump(&mut journal, &mut bindings, &AcceptAnyCompletion, 0)
+            .poll_drivers(&mut journal, &mut bindings, &AcceptAnyCompletion, 0)
             .unwrap();
         assert_eq!(bindings.attempts, 1);
         assert_eq!(journal.open_calls().len(), 1);
 
         bindings.pending = false;
         dispatcher
-            .pump(&mut journal, &mut bindings, &AcceptAnyCompletion, 0)
+            .poll_drivers(&mut journal, &mut bindings, &AcceptAnyCompletion, 0)
             .unwrap();
         assert_eq!(bindings.attempts, 2, "capacity recovery retries the call");
         dispatcher
-            .pump(&mut journal, &mut bindings, &AcceptAnyCompletion, 0)
+            .poll_drivers(&mut journal, &mut bindings, &AcceptAnyCompletion, 0)
             .unwrap();
         assert_eq!(bindings.attempts, 2, "a started call is never duplicated");
     }
@@ -3073,9 +3079,9 @@ mod tests {
         let mut driver = Scripted::default();
         // Restart over an existing journal: the open call counts as
         // started; re-calls are the recovery fold's decision.
-        let mut dispatcher = Dispatcher::resume(&journal);
+        let mut dispatcher = DriverPoller::resume(&journal);
         dispatcher
-            .pump(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
+            .poll_drivers(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
             .unwrap();
         assert!(driver.started.is_empty());
     }
@@ -3084,9 +3090,9 @@ mod tests {
     fn scheduler_closures_are_pruned_from_the_start_cache() {
         let (mut journal, intent) = seeded_journal();
         let mut driver = Scripted::default();
-        let mut dispatcher = Dispatcher::new();
+        let mut dispatcher = DriverPoller::new();
         dispatcher
-            .pump(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
+            .poll_drivers(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
             .unwrap();
         assert!(dispatcher.started.contains(&intent.call_id));
         journal
@@ -3094,7 +3100,7 @@ mod tests {
             .unwrap();
 
         dispatcher
-            .pump(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
+            .poll_drivers(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
             .unwrap();
         assert!(dispatcher.started.is_empty());
     }
@@ -3103,9 +3109,9 @@ mod tests {
     fn won_closures_become_routable_events() {
         let (mut journal, intent) = seeded_journal();
         let mut driver = Scripted::default();
-        let mut dispatcher = Dispatcher::new();
+        let mut dispatcher = DriverPoller::new();
         dispatcher
-            .pump(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
+            .poll_drivers(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
             .unwrap();
         driver.replies = vec![
             Response {
@@ -3133,7 +3139,7 @@ mod tests {
             },
         ];
         let batch = dispatcher
-            .pump(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
+            .poll_drivers(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
             .unwrap();
         assert_eq!(batch.events.len(), 1, "only the won closure feeds the VM");
         assert_eq!(batch.discarded.len(), 1, "the loser stays visible");
@@ -3160,9 +3166,9 @@ mod tests {
     fn a_completion_keeps_stderr_separate_from_its_exit() {
         let (mut journal, intent) = seeded_journal();
         let mut driver = Scripted::default();
-        let mut dispatcher = Dispatcher::new();
+        let mut dispatcher = DriverPoller::new();
         dispatcher
-            .pump(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
+            .poll_drivers(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
             .unwrap();
         driver.replies = vec![Response {
             call_id: intent.call_id,
@@ -3176,7 +3182,7 @@ mod tests {
             ),
         }];
         let batch = dispatcher
-            .pump(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
+            .poll_drivers(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
             .unwrap();
         assert_eq!(batch.events.len(), 1);
         let outputs = batch.events[0].completion.outputs();
@@ -3189,7 +3195,7 @@ mod tests {
     fn an_uncorrelated_answer_is_a_visible_fault() {
         let (mut journal, _) = seeded_journal();
         let mut driver = Scripted::default();
-        let mut dispatcher = Dispatcher::new();
+        let mut dispatcher = DriverPoller::new();
         driver.replies = vec![Response {
             call_id: ids::call_id(
                 ids::delivery_id("x.out>ghost.in", envelope::Id::from_bytes([9; 16])),
@@ -3201,7 +3207,7 @@ mod tests {
             }),
         }];
         let batch = dispatcher
-            .pump(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
+            .poll_drivers(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
             .unwrap();
         assert!(batch.events.is_empty());
         assert_eq!(batch.uncorrelated.len(), 1, "correlation faults surface");

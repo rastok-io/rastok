@@ -11,7 +11,7 @@
 //! [`stdlib.md`]: https://github.com/rastok-io/rastok/blob/main/docs/spec/stdlib.md
 
 use crate::connector::{
-    ConnectorExchange, ConnectorRoles, FILE_CONNECTOR_ID, HTTP_CLIENT_CONNECTOR_ID,
+    ConnectorDirection, ConnectorExchange, FILE_CONNECTOR_ID, HTTP_CLIENT_CONNECTOR_ID,
     HTTP_SERVER_CONNECTOR_ID, PROCESS_CONNECTOR_ID, WEBSOCKET_CLIENT_CONNECTOR_ID,
     WEBSOCKET_SERVER_CONNECTOR_ID,
 };
@@ -20,7 +20,7 @@ use crate::contract::{
     FrontendContract, FrontendFraming, FrontendReader, PortContract, PortDataType, PortTypeChoice,
     PortTypeRule, Presence, Profile, ProfileSelector, ProfileSupport, ValueDomain,
 };
-use crate::node::Direction;
+use crate::node::PortDirection;
 
 /// Hosted declarations; runtime interpretation is retained in the resolved plan.
 pub(crate) const ANNOTATION_DEFINITIONS: &str = include_str!("stdlib/annotations.rkg");
@@ -108,12 +108,12 @@ pub const MEDIA_TYPE_CATALOG: &[MediaTypeCatalogEntry] = &[
 pub const PROCESS: ConnectorContract = ConnectorContract {
     id: PROCESS_CONNECTOR_ID,
     name: "Process",
-    roles: ConnectorRoles::Outbound,
+    roles: ConnectorDirection::Outbound,
     exchange: ConnectorExchange::Call,
     ports: &[
         PortContract {
             name: "in",
-            direction: Direction::Input,
+            direction: PortDirection::Input,
 
             ty: PortTypeRule::AttributeSelected {
                 attribute: "codec",
@@ -135,7 +135,7 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
         },
         PortContract {
             name: "out",
-            direction: Direction::Output,
+            direction: PortDirection::Output,
 
             ty: PortTypeRule::AttributeSelected {
                 attribute: "codec",
@@ -157,7 +157,7 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
         },
         PortContract {
             name: "err",
-            direction: Direction::Output,
+            direction: PortDirection::Output,
 
             ty: PortTypeRule::AttributeSelected {
                 attribute: "err_codec",
@@ -175,7 +175,7 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
         },
         PortContract {
             name: "exit",
-            direction: Direction::Output,
+            direction: PortDirection::Output,
 
             // One exact union is shared by the contract, v7 port table,
             // completion gate and Process Driver.
@@ -276,7 +276,7 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
             Profile {
                 protocol: Some(crate::contract::ProfileProtocol {
                     id: crate::connector::PROCESS_SERVICE_CONNECTOR_ID,
-                    roles: ConnectorRoles::InboundAndOutbound,
+                    roles: ConnectorDirection::InboundAndOutbound,
                     exchange: ConnectorExchange::Session,
                 }),
                 word: "service",
@@ -298,12 +298,12 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
 pub const FILE: ConnectorContract = ConnectorContract {
     id: FILE_CONNECTOR_ID,
     name: "File",
-    roles: ConnectorRoles::Outbound,
+    roles: ConnectorDirection::Outbound,
     exchange: ConnectorExchange::Call,
     ports: &[
         PortContract {
             name: "in",
-            direction: Direction::Input,
+            direction: PortDirection::Input,
 
             ty: PortTypeRule::AttributeSelected {
                 attribute: "mode",
@@ -328,13 +328,13 @@ pub const FILE: ConnectorContract = ConnectorContract {
         },
         PortContract {
             name: "out",
-            direction: Direction::Output,
+            direction: PortDirection::Output,
 
             ty: PortTypeRule::Fixed(PortDataType::Bytes),
         },
         PortContract {
             name: "exit",
-            direction: Direction::Output,
+            direction: PortDirection::Output,
 
             ty: PortTypeRule::Fixed(PortDataType::FileExit),
         },
@@ -421,12 +421,12 @@ const ALL_NETWORK_VERSIONS: &str = r#"["http/3", "http/2", "http/1.1"]"#;
 pub const HTTP_CLIENT: ConnectorContract = ConnectorContract {
     id: HTTP_CLIENT_CONNECTOR_ID,
     name: "HttpClient",
-    roles: ConnectorRoles::Outbound,
+    roles: ConnectorDirection::Outbound,
     exchange: ConnectorExchange::Call,
     ports: &[
         PortContract {
             name: "in",
-            direction: Direction::Input,
+            direction: PortDirection::Input,
 
             ty: PortTypeRule::AttributeSelected {
                 attribute: "codec",
@@ -435,7 +435,7 @@ pub const HTTP_CLIENT: ConnectorContract = ConnectorContract {
         },
         PortContract {
             name: "out",
-            direction: Direction::Output,
+            direction: PortDirection::Output,
 
             ty: PortTypeRule::JsonOutput {
                 attribute: "codec",
@@ -444,7 +444,7 @@ pub const HTTP_CLIENT: ConnectorContract = ConnectorContract {
         },
         PortContract {
             name: "exit",
-            direction: Direction::Output,
+            direction: PortDirection::Output,
 
             ty: PortTypeRule::Fixed(PortDataType::HttpClientExit),
         },
@@ -562,12 +562,12 @@ pub const HTTP_CLIENT: ConnectorContract = ConnectorContract {
 pub const HTTP_SERVER: ConnectorContract = ConnectorContract {
     id: HTTP_SERVER_CONNECTOR_ID,
     name: "HttpServer",
-    roles: ConnectorRoles::Inbound,
+    roles: ConnectorDirection::Inbound,
     exchange: ConnectorExchange::Call,
     ports: &[
         PortContract {
             name: "in",
-            direction: Direction::Input,
+            direction: PortDirection::Input,
 
             ty: PortTypeRule::AttributeSelected {
                 attribute: "codec",
@@ -576,13 +576,13 @@ pub const HTTP_SERVER: ConnectorContract = ConnectorContract {
         },
         PortContract {
             name: "out",
-            direction: Direction::Output,
+            direction: PortDirection::Output,
 
             ty: PortTypeRule::SameAs("in"),
         },
         PortContract {
             name: "exit",
-            direction: Direction::Output,
+            direction: PortDirection::Output,
 
             ty: PortTypeRule::Fixed(PortDataType::HttpServerExit),
         },
@@ -699,12 +699,12 @@ pub const HTTP_SERVER: ConnectorContract = ConnectorContract {
 pub const WEBSOCKET_CLIENT: ConnectorContract = ConnectorContract {
     id: WEBSOCKET_CLIENT_CONNECTOR_ID,
     name: "WebSocketClient",
-    roles: ConnectorRoles::InboundAndOutbound,
+    roles: ConnectorDirection::InboundAndOutbound,
     exchange: ConnectorExchange::Session,
     ports: &[
         PortContract {
             name: "in",
-            direction: Direction::Input,
+            direction: PortDirection::Input,
 
             ty: PortTypeRule::AttributeSelected {
                 attribute: "codec",
@@ -713,13 +713,13 @@ pub const WEBSOCKET_CLIENT: ConnectorContract = ConnectorContract {
         },
         PortContract {
             name: "out",
-            direction: Direction::Output,
+            direction: PortDirection::Output,
 
             ty: PortTypeRule::SameAs("in"),
         },
         PortContract {
             name: "exit",
-            direction: Direction::Output,
+            direction: PortDirection::Output,
 
             ty: PortTypeRule::Fixed(PortDataType::WebSocketExit),
         },
@@ -819,12 +819,12 @@ pub const WEBSOCKET_CLIENT: ConnectorContract = ConnectorContract {
 pub const WEBSOCKET_SERVER: ConnectorContract = ConnectorContract {
     id: WEBSOCKET_SERVER_CONNECTOR_ID,
     name: "WebSocketServer",
-    roles: ConnectorRoles::InboundAndOutbound,
+    roles: ConnectorDirection::InboundAndOutbound,
     exchange: ConnectorExchange::Session,
     ports: &[
         PortContract {
             name: "in",
-            direction: Direction::Input,
+            direction: PortDirection::Input,
 
             ty: PortTypeRule::AttributeSelected {
                 attribute: "codec",
@@ -833,13 +833,13 @@ pub const WEBSOCKET_SERVER: ConnectorContract = ConnectorContract {
         },
         PortContract {
             name: "out",
-            direction: Direction::Output,
+            direction: PortDirection::Output,
 
             ty: PortTypeRule::SameAs("in"),
         },
         PortContract {
             name: "exit",
-            direction: Direction::Output,
+            direction: PortDirection::Output,
 
             ty: PortTypeRule::Fixed(PortDataType::WebSocketExit),
         },

@@ -19,7 +19,7 @@
 
 use crate::boundary::{
     BoundaryObservation, CallId, CallOpen, ClosingDeadline, Completion, CompletionCheck,
-    DatedPayload, Dispatcher, InboundCallId, InboundCallObservation, InboundCallResponse,
+    DatedPayload, DriverPoller, InboundCallId, InboundCallObservation, InboundCallResponse,
     InboundCallTimeout, InboundSession, IngressAcceptance, IngressAdmission, IngressProposal,
     IngressRejection, IngressSubmission, InstanceDeadline, OutboundConnectorBindings,
     RequestPreparation, Response, SchedulerCompletion, SessionId, SessionObservation, SessionOpen,
@@ -123,7 +123,7 @@ pub enum VmFault {
     /// Instance command capacity is checked with the other producer products.
     InstanceCommandQueueFull,
     /// The dispatcher raised an integrity fault.
-    Dispatch(crate::boundary::DispatchError),
+    Dispatch(crate::boundary::PollFault),
     /// A target mailbox has no room for a transaction's deliveries —
     /// backpressure surfaced before the commit.
     MailboxFull {
@@ -342,7 +342,7 @@ impl core::error::Error for VmFault {}
 /// closures that did not become transactions. Nothing here is silent —
 /// the caller decides what to surface.
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct PumpReport {
+pub struct PollReport {
     /// Closures that settled into pending completion transactions.
     pub settled: usize,
     /// Late answers to already-closed calls — observations, not
@@ -363,7 +363,7 @@ pub struct PumpReport {
 
 /// Non-causal observations from one inbound-Call Driver drain.
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct InboundCallPumpReport {
+pub struct InboundCallPollReport {
     /// Valid terminal events retained for a Connector transaction.
     pub queued: usize,
     /// Duplicate terminal events observed after one was already retained.
@@ -375,7 +375,7 @@ pub struct InboundCallPumpReport {
     pub rejected: Vec<(InboundCallObservation, String)>,
 }
 
-impl PumpReport {
+impl PollReport {
     fn append(&mut self, mut other: Self) {
         self.settled = self.settled.saturating_add(other.settled);
         self.discarded.append(&mut other.discarded);
@@ -675,7 +675,7 @@ impl crate::boundary::CompletionCheck for PlanCompletionCheck<'_> {
                         output.port.name()
                     )
                 })?;
-            if resolved.direction() != node::Direction::Output {
+            if resolved.direction() != node::PortDirection::Output {
                 return Err(format!(
                     "`{connector}.{}` is not an output port",
                     output.port.name()
@@ -997,7 +997,7 @@ pub struct Vm<'plan> {
     graph_version: GraphVersion,
     scheduler: Scheduler,
     state: State,
-    dispatcher: Dispatcher,
+    dispatcher: DriverPoller,
     /// Requests delivered to a connector, held until their call
     /// settles: the completion transaction consumes this cursor, and the
     /// connector's mailbox stays claimed the whole time.
@@ -1034,7 +1034,7 @@ pub struct Vm<'plan> {
     settled: VecDeque<SettledEntry>,
     /// Non-causal observations collected by internal boundary polls between
     /// drain and settlement deadlines. The next public pump returns them.
-    buffered_pump: PumpReport,
+    buffered_pump: PollReport,
     /// The machine's virtual date, in nanoseconds; only
     /// [`Self::advance`] moves it, discretely.
     now: i64,
@@ -1132,7 +1132,7 @@ fn personal_data_requirements(
             for port in ports {
                 inspect(port.annotations());
                 if planned.connector().is_some()
-                    && port.direction() == node::Direction::Input
+                    && port.direction() == node::PortDirection::Input
                     && crate::data_policy::contains_personal(port.annotations())
                 {
                     requirements.external_disclosure = true;
@@ -1402,7 +1402,7 @@ impl<'plan> Vm<'plan> {
             graph_version,
             scheduler: Scheduler::new(WORKER_MAILBOX_CAPACITY),
             state: State::new(),
-            dispatcher: Dispatcher::new(),
+            dispatcher: DriverPoller::new(),
             pending: BTreeMap::new(),
             inbound_calls: BTreeMap::new(),
             settled_inbound_calls: VecDeque::new(),
@@ -1415,7 +1415,7 @@ impl<'plan> Vm<'plan> {
             lifecycle: VecDeque::new(),
             loop_manager: None,
             settled: VecDeque::new(),
-            buffered_pump: PumpReport::default(),
+            buffered_pump: PollReport::default(),
             now: logical_time,
             outputs: Vec::new(),
             observed: Vec::new(),
@@ -1493,9 +1493,9 @@ impl<'plan> Vm<'plan> {
     pub fn queue_inbound_call_events(
         &mut self,
         events: impl IntoIterator<Item = InboundCallObservation>,
-    ) -> InboundCallPumpReport {
+    ) -> InboundCallPollReport {
         let gate = PlanCompletionCheck { plan: self.plan };
-        let mut report = InboundCallPumpReport::default();
+        let mut report = InboundCallPollReport::default();
         for event in events {
             let Some(pending) = self.inbound_calls.get(&event.call_id) else {
                 report.uncorrelated.push(event);
@@ -1693,7 +1693,8 @@ impl<'plan> Vm<'plan> {
                 .and_then(|(index, planned)| {
                     let spec = planned.connector()?;
                     let output = planned.ports.iter().any(|decl| {
-                        decl.port == submission.port && decl.direction == node::Direction::Output
+                        decl.port == submission.port
+                            && decl.direction == node::PortDirection::Output
                     });
                     (spec.roles.has_inbound() && output).then_some((index, spec.exchange))
                 });
@@ -1717,7 +1718,7 @@ impl<'plan> Vm<'plan> {
             }
         } else {
             let ingress_ok = self.plan.boundary.iter().any(|decl| {
-                decl.port == submission.port && decl.direction == node::Direction::Input
+                decl.port == submission.port && decl.direction == node::PortDirection::Input
             });
             if !ingress_ok {
                 return Err(VmFault::UnknownIngress(submission.port.clone()));
@@ -2351,12 +2352,12 @@ impl<'plan> Vm<'plan> {
     ///
     /// # Errors
     ///
-    /// Dispatcher integrity faults propagate.
-    pub fn pump(
+    /// Driver-polling integrity faults propagate.
+    pub fn poll_drivers(
         &mut self,
         journal: &mut dyn Journal,
         bindings: &mut dyn OutboundConnectorBindings,
-    ) -> Result<PumpReport, VmFault> {
+    ) -> Result<PollReport, VmFault> {
         self.preflight(journal)?;
         let mut report = core::mem::take(&mut self.buffered_pump);
         report.append(self.poll_outbound_driver(journal, bindings)?);
@@ -2367,15 +2368,15 @@ impl<'plan> Vm<'plan> {
         &mut self,
         journal: &mut dyn Journal,
         bindings: &mut dyn OutboundConnectorBindings,
-    ) -> Result<PumpReport, VmFault> {
+    ) -> Result<PollReport, VmFault> {
         let gate = PlanCompletionCheck { plan: self.plan };
         let retry = self.retry_manager.as_deref();
         let now = self.now;
         let batch = self
             .dispatcher
-            .pump_with_timing(journal, bindings, &gate, now, &mut |intent, completion| {
+            .poll_drivers_with_timing(journal, bindings, &gate, now, &mut |intent, completion| {
                 retry_manager::closure_schedule(retry, intent, completion, now).map_err(|error| {
-                    crate::boundary::DispatchError::Journal(
+                    crate::boundary::PollFault::Journal(
                         crate::journal::Error::InvalidRetryProtocol(error),
                     )
                 })
@@ -2392,7 +2393,7 @@ impl<'plan> Vm<'plan> {
                 event,
                 trigger: node::Trigger::Port(in_port.clone()),
             }));
-        let mut report = PumpReport {
+        let mut report = PollReport {
             settled,
             discarded: batch.discarded,
             uncorrelated: batch.uncorrelated,
@@ -2403,7 +2404,7 @@ impl<'plan> Vm<'plan> {
         };
         let session_events = bindings
             .session_events()
-            .map_err(crate::boundary::DispatchError::Driver)
+            .map_err(crate::boundary::PollFault::Driver)
             .map_err(VmFault::Dispatch)?;
         for event in session_events {
             match event.clone() {
@@ -2602,7 +2603,7 @@ impl<'plan> Vm<'plan> {
                 })?;
             if bindings
                 .open_session(intent, &session.opening)
-                .map_err(crate::boundary::DispatchError::Driver)
+                .map_err(crate::boundary::PollFault::Driver)
                 .map_err(VmFault::Dispatch)?
                 == SessionStart::Started
                 && let Some(session) = self.sessions.get_mut(&reference)
@@ -2641,7 +2642,7 @@ impl<'plan> Vm<'plan> {
                 })?;
             if bindings
                 .write_session(&write.intent, &write.delivery.envelope)
-                .map_err(crate::boundary::DispatchError::Driver)
+                .map_err(crate::boundary::PollFault::Driver)
                 .map_err(VmFault::Dispatch)?
                 == SessionStart::Started
                 && let Some(write) = self.session_writes.get_mut(&reference)
@@ -2689,7 +2690,7 @@ impl<'plan> Vm<'plan> {
             let connector = self.plan.nodes[session.slot.index()].path.clone();
             if bindings
                 .close_session(&connector, reference)
-                .map_err(crate::boundary::DispatchError::Driver)
+                .map_err(crate::boundary::PollFault::Driver)
                 .map_err(VmFault::Dispatch)?
                 == SessionStart::Started
                 && let Some(session) = self.sessions.get_mut(&reference)
@@ -2857,14 +2858,14 @@ impl<'plan> Vm<'plan> {
             // integrity refusal cannot strand a journaled obligation.
             let completion = bindings
                 .scheduler_completion(&connector, SchedulerCompletion::TimeoutExpired)
-                .map_err(crate::boundary::DispatchError::Driver)
+                .map_err(crate::boundary::PollFault::Driver)
                 .map_err(VmFault::Dispatch)?;
             // Cancellation is a fallible Driver boundary. Prove it before
             // close-once so a refusal leaves both the call and its deadline
             // replayable; no terminal fact can strand a claimed mailbox.
             bindings
                 .cancel(&connector, &call_id)
-                .map_err(crate::boundary::DispatchError::Driver)
+                .map_err(crate::boundary::PollFault::Driver)
                 .map_err(VmFault::Dispatch)?;
             let intent = journal
                 .find_call(&call_id)
@@ -2940,7 +2941,7 @@ impl<'plan> Vm<'plan> {
                 )?;
                 match bindings
                     .prepare_request(&planned.path, queued.envelope.data(), &resolved_settings)
-                    .map_err(crate::boundary::DispatchError::Driver)
+                    .map_err(crate::boundary::PollFault::Driver)
                     .map_err(VmFault::Dispatch)?
                 {
                     RequestPreparation::Rejected(completion) => Err(completion),
@@ -3018,7 +3019,7 @@ impl<'plan> Vm<'plan> {
                 // before the open/close facts or mailbox state can move.
                 let completion = bindings
                     .scheduler_completion(&connector, SchedulerCompletion::TimeoutExpired)
-                    .map_err(crate::boundary::DispatchError::Driver)
+                    .map_err(crate::boundary::PollFault::Driver)
                     .map_err(VmFault::Dispatch)?;
                 self.admit_expiring_call_loop(journal, slot, &instance, &edge, delivery)?;
                 let queued = self
@@ -3140,12 +3141,12 @@ impl<'plan> Vm<'plan> {
             }
             let completion = bindings
                 .scheduler_session_completion(&connector, SchedulerCompletion::TimeoutExpired)
-                .map_err(crate::boundary::DispatchError::Driver)
+                .map_err(crate::boundary::PollFault::Driver)
                 .map_err(VmFault::Dispatch)?;
             if session.opening_started {
                 let _ = bindings
                     .close_session(&connector, session_id)
-                    .map_err(crate::boundary::DispatchError::Driver)
+                    .map_err(crate::boundary::PollFault::Driver)
                     .map_err(VmFault::Dispatch)?;
             } else if !session.opening_claimed {
                 let retained = self
@@ -3198,7 +3199,7 @@ impl<'plan> Vm<'plan> {
             self.resolve_invocation_settings(&instance, spec, &connector, &queued.envelope)?;
         let preparation = bindings
             .prepare_session_open(&connector, queued.envelope.data(), &settings)
-            .map_err(crate::boundary::DispatchError::Driver)
+            .map_err(crate::boundary::PollFault::Driver)
             .map_err(VmFault::Dispatch)?;
         let prepared = match preparation {
             RequestPreparation::Rejected(completion) => {
@@ -3250,7 +3251,7 @@ impl<'plan> Vm<'plan> {
         );
         let completion = bindings
             .scheduler_session_completion(&connector, SchedulerCompletion::TimeoutExpired)
-            .map_err(crate::boundary::DispatchError::Driver)
+            .map_err(crate::boundary::PollFault::Driver)
             .map_err(VmFault::Dispatch)?;
         self.settled_sessions.push_back(SettledSession {
             session: session_id,
@@ -4016,7 +4017,7 @@ impl<'plan> Vm<'plan> {
                     let connector = &self.plan.nodes[pending.slot.index()].path;
                     bindings
                         .cancel(connector, &call_id)
-                        .map_err(crate::boundary::DispatchError::Driver)
+                        .map_err(crate::boundary::PollFault::Driver)
                         .map_err(VmFault::Dispatch)?;
                 }
                 // Session closure is requested in canonical logical-reference
@@ -4039,7 +4040,7 @@ impl<'plan> Vm<'plan> {
                     let connector = self.plan.nodes[session.slot.index()].path.clone();
                     if bindings
                         .close_session(&connector, session_id)
-                        .map_err(crate::boundary::DispatchError::Driver)
+                        .map_err(crate::boundary::PollFault::Driver)
                         .map_err(VmFault::Dispatch)?
                         == SessionStart::Started
                         && let Some(session) = self.sessions.get_mut(&session_id)
@@ -4064,7 +4065,7 @@ impl<'plan> Vm<'plan> {
                     let connector = self.plan.nodes[pending.slot.index()].path.clone();
                     let completion = bindings
                         .scheduler_completion(&connector, SchedulerCompletion::OutcomeUnknown)
-                        .map_err(crate::boundary::DispatchError::Driver)
+                        .map_err(crate::boundary::PollFault::Driver)
                         .map_err(VmFault::Dispatch)?;
                     match journal
                         .abandon_egress(&call_id, self.now)
@@ -4129,14 +4130,14 @@ impl<'plan> Vm<'plan> {
                             &connector,
                             SchedulerCompletion::OutcomeUnknown,
                         )
-                        .map_err(crate::boundary::DispatchError::Driver)
+                        .map_err(crate::boundary::PollFault::Driver)
                         .map_err(VmFault::Dispatch)?;
                     // The committed Closing request sealed this deadline.
                     // Forced cleanup must not wait for exit-route capacity or
                     // terminal storage; it proves no successful outcome.
                     bindings
                         .abort_session(&connector, session_id)
-                        .map_err(crate::boundary::DispatchError::Driver)
+                        .map_err(crate::boundary::PollFault::Driver)
                         .map_err(VmFault::Dispatch)?;
                     self.settled_sessions.push_back(SettledSession {
                         session: session_id,
@@ -4561,7 +4562,7 @@ impl<'plan> Vm<'plan> {
         // cannot leave this committed transaction's deliveries unapplied.
         bindings
             .forget_session(settled.session)
-            .map_err(crate::boundary::DispatchError::Driver)
+            .map_err(crate::boundary::PollFault::Driver)
             .map_err(VmFault::Dispatch)?;
         Ok(())
     }
@@ -5256,7 +5257,7 @@ impl<'plan> Vm<'plan> {
         let planned = &self.plan.nodes[slot.index()];
         let preparation = bindings
             .prepare_session_open(&planned.path, delivery.envelope.data(), settings)
-            .map_err(crate::boundary::DispatchError::Driver)
+            .map_err(crate::boundary::PollFault::Driver)
             .map_err(VmFault::Dispatch)?;
         let prepared = match preparation {
             RequestPreparation::Prepared(prepared) => prepared,
@@ -5309,7 +5310,7 @@ impl<'plan> Vm<'plan> {
         }
         match bindings
             .open_session(&intent, &delivery.envelope)
-            .map_err(crate::boundary::DispatchError::Driver)
+            .map_err(crate::boundary::PollFault::Driver)
             .map_err(VmFault::Dispatch)?
         {
             SessionStart::Pending => Ok(()),
@@ -5348,7 +5349,7 @@ impl<'plan> Vm<'plan> {
                 delivery.envelope.data(),
                 settings,
             )
-            .map_err(crate::boundary::DispatchError::Driver)
+            .map_err(crate::boundary::PollFault::Driver)
             .map_err(VmFault::Dispatch)?;
         let prepared = match preparation {
             RequestPreparation::Prepared(prepared) => prepared,
@@ -5418,7 +5419,7 @@ impl<'plan> Vm<'plan> {
         }
         match bindings
             .write_session(&intent, &delivery.envelope)
-            .map_err(crate::boundary::DispatchError::Driver)
+            .map_err(crate::boundary::PollFault::Driver)
             .map_err(VmFault::Dispatch)?
         {
             SessionStart::Pending => Ok(()),
@@ -5516,7 +5517,7 @@ impl<'plan> Vm<'plan> {
             self.resolve_invocation_settings(instance, spec, &planned.path, &delivery.envelope)?;
         let prepared = match bindings
             .prepare_request(&planned.path, delivery.envelope.data(), &resolved_settings)
-            .map_err(crate::boundary::DispatchError::Driver)
+            .map_err(crate::boundary::PollFault::Driver)
             .map_err(VmFault::Dispatch)?
         {
             RequestPreparation::Prepared(prepared) => prepared,
@@ -5906,7 +5907,7 @@ impl<'plan> Vm<'plan> {
             ty: self.plan.resolved_ports().node(slot).and_then(|ports| {
                 ports
                     .iter()
-                    .find(|port| port.direction() == node::Direction::Input)
+                    .find(|port| port.direction() == node::PortDirection::Input)
                     .map(|port| port.ty())
             }),
             ..DataSlot::new(envelope.data())
@@ -6542,7 +6543,7 @@ impl<'plan> Vm<'plan> {
             .and_then(|ports| {
                 ports
                     .iter()
-                    .find(|port| port.direction() == node::Direction::Input)
+                    .find(|port| port.direction() == node::PortDirection::Input)
             })
             .map(|port| port.ty());
         let data = DataSlot {

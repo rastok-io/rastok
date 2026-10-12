@@ -172,7 +172,7 @@ impl Checker<'_, '_> {
         let input_ports: Vec<_> = graph
             .boundary
             .iter()
-            .filter(|port| port.direction == Direction::Input)
+            .filter(|port| port.direction == PortDirection::Input)
             .collect();
         let entry = if let Some(attribute) = selected.get("entry") {
             self.loop_port_selection(attribute, &input_ports, false)?
@@ -198,7 +198,7 @@ impl Checker<'_, '_> {
         let output_ports: Vec<_> = graph
             .boundary
             .iter()
-            .filter(|port| port.direction == Direction::Output)
+            .filter(|port| port.direction == PortDirection::Output)
             .collect();
         let mut terminals = if let Some(attribute) = selected.get("terminal") {
             self.loop_port_selection(attribute, &output_ports, true)?
@@ -221,7 +221,7 @@ impl Checker<'_, '_> {
                 let state_type = graph
                     .boundary
                     .iter()
-                    .find(|port| port.port == entry && port.direction == Direction::Input)
+                    .find(|port| port.port == entry && port.direction == PortDirection::Input)
                     .and_then(|port| port.ty.clone());
                 let Some(state_type) = state_type else {
                     self.loop_refusal(
@@ -444,7 +444,7 @@ impl Checker<'_, '_> {
         let input_ports: Vec<_> = node
             .ports
             .iter()
-            .filter(|port| port.direction == Direction::Input)
+            .filter(|port| port.direction == PortDirection::Input)
             .collect();
         let entry = if let Some(attribute) = selected.get("entry") {
             self.loop_port_selection(attribute, &input_ports, false)?
@@ -470,7 +470,7 @@ impl Checker<'_, '_> {
         let output_ports: Vec<_> = node
             .ports
             .iter()
-            .filter(|port| port.direction == Direction::Output)
+            .filter(|port| port.direction == PortDirection::Output)
             .collect();
         if let Some(profile) = call_semantics
             && (input_ports.len() != 1 || entry.name() != profile.request())
@@ -638,7 +638,7 @@ impl Checker<'_, '_> {
         }
         let outputs: Vec<_> = ports
             .iter()
-            .filter(|port| port.direction == Direction::Output)
+            .filter(|port| port.direction == PortDirection::Output)
             .collect();
         let target = if let Some(attribute) = selection {
             let Some(selected) = self.loop_port_selection(attribute, &outputs, false) else {
@@ -649,7 +649,7 @@ impl Checker<'_, '_> {
             ports
                 .iter()
                 .find(|port| {
-                    port.direction == Direction::Output
+                    port.direction == PortDirection::Output
                         && port.port.name() == call_terminal.unwrap_or("err")
                 })
                 .map(|port| port.port.clone())
@@ -1189,7 +1189,7 @@ pub(super) fn graph_loop_entry_type(graph: &Graph) -> Option<DataType> {
     graph
         .boundary
         .iter()
-        .find(|port| &port.port == entry && port.direction == Direction::Input)?
+        .find(|port| &port.port == entry && port.direction == PortDirection::Input)?
         .ty
         .clone()
 }
@@ -1232,7 +1232,7 @@ pub(super) fn resolved_loop_entry_type(node: &Node) -> Option<DataType> {
     let entry = &node.loop_spec.as_ref()?.entry;
     node.ports
         .iter()
-        .find(|port| &port.port == entry && port.direction == Direction::Input)?
+        .find(|port| &port.port == entry && port.direction == PortDirection::Input)?
         .ty
         .clone()
 }

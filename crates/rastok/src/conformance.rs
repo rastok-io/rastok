@@ -325,7 +325,7 @@ pub fn verify_event(profile: &EventProfile<'_>, drivers: &DriverRegistry) -> Rep
     };
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Vm::boot(profile.plan, GraphVersion(1));
-    let admission = match bindings.pump_inbound(&mut vm, &mut journal) {
+    let admission = match bindings.poll_inbound(&mut vm, &mut journal) {
         Ok(Some(admission)) => admission,
         Ok(None) => {
             report
@@ -794,7 +794,7 @@ fn sheet_completeness(contract: &ConnectorContract, report: &mut Report) {
     let exits = contract
         .ports
         .iter()
-        .filter(|port| port.name == "exit" && port.direction == crate::node::Direction::Output)
+        .filter(|port| port.name == "exit" && port.direction == crate::node::PortDirection::Output)
         .count();
     let terminal_shape_holds = match contract.exchange {
         crate::connector::ConnectorExchange::Event => exits == 0,
@@ -809,7 +809,7 @@ fn sheet_completeness(contract: &ConnectorContract, report: &mut Report) {
     }
     let roles_hold = match contract.exchange {
         crate::connector::ConnectorExchange::Event => {
-            contract.roles == crate::connector::ConnectorRoles::Inbound
+            contract.roles == crate::connector::ConnectorDirection::Inbound
         }
         crate::connector::ConnectorExchange::Call => true,
         crate::connector::ConnectorExchange::Session => contract.roles.has_outbound(),
@@ -935,7 +935,7 @@ fn drive(
         vm.run_ready_with_bindings(journal, driver)
             .map_err(|error| format!("a step faulted: {error}"))?;
         let report = vm
-            .pump(journal, driver)
+            .poll_drivers(journal, driver)
             .map_err(|error| format!("the boundary round faulted: {error}"))?;
         if let Some((_, reason)) = report.rejected.first() {
             return Err(format!(
@@ -1084,7 +1084,7 @@ fn mute_battery(
     for _ in 0..3 {
         std::thread::sleep(std::time::Duration::from_millis(20));
         let report = vm
-            .pump(&mut journal, &mut bindings)
+            .poll_drivers(&mut journal, &mut bindings)
             .map_err(|error| format!("a post-cancel round faulted: {error}"))?;
         if report.settled != 0 {
             return Err("a cancelled call settled again — a late causal fact".into());
@@ -1172,7 +1172,7 @@ fn interleave_battery(
         vm.run_ready_with_bindings(&mut journal, &mut bindings)
             .map_err(|error| format!("a step faulted: {error}"))?;
         let report = vm
-            .pump(&mut journal, &mut bindings)
+            .poll_drivers(&mut journal, &mut bindings)
             .map_err(|error| format!("the boundary round faulted: {error}"))?;
         vm.run_ready_with_bindings(&mut journal, &mut bindings)
             .map_err(|error| format!("a step faulted: {error}"))?;

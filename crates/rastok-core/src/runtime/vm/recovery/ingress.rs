@@ -31,7 +31,7 @@ impl Vm<'_> {
                             && spec.roles.has_inbound()
                             && node.ports.iter().any(|port| {
                                 port.port == inbound.port
-                                    && port.direction == node::Direction::Output
+                                    && port.direction == node::PortDirection::Output
                             }))
                         .then_some((Slot::new(index as u32), spec.exchange))
                     })
@@ -44,11 +44,9 @@ impl Vm<'_> {
             })
             .transpose()?;
         if source.is_none()
-            && !self
-                .plan
-                .boundary
-                .iter()
-                .any(|port| port.port == inbound.port && port.direction == node::Direction::Input)
+            && !self.plan.boundary.iter().any(|port| {
+                port.port == inbound.port && port.direction == node::PortDirection::Input
+            })
         {
             return Err(invalid(index, "the retained ingress names no App input"));
         }

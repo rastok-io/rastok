@@ -15,9 +15,9 @@ use super::routing;
 use crate::instance;
 
 use crate::compiler::hir::{
-    AttrValue, Direction, Dispatch as HirDispatch, EdgeTarget, EmitValue, Endpoint, EndpointOwner,
+    AttrValue, Dispatch as HirDispatch, EdgeTarget, EmitValue, Endpoint, EndpointOwner,
     Graph as HirGraph, Hir, InstanceLifetime, InstancePolicy, LoopSpec, Node as HirNode,
-    NodeSemantics, RouteDestination, RouteSelection, Statement as HirStatement,
+    NodeSemantics, PortDirection, RouteDestination, RouteSelection, Statement as HirStatement,
 };
 use crate::datatype::{
     BinaryType, DataType, DateUnit, FloatType, IntegerType, IntegerWidth, IntervalUnit,
@@ -1348,10 +1348,10 @@ impl Writer<'_> {
         self.hasher.update(&value.to_le_bytes());
     }
 
-    fn direction(&mut self, direction: Direction) {
+    fn direction(&mut self, direction: PortDirection) {
         self.tag(match direction {
-            Direction::Input => 1,
-            Direction::Output => 2,
+            PortDirection::Input => 1,
+            PortDirection::Output => 2,
         });
     }
 
@@ -1681,8 +1681,8 @@ impl Writer<'_> {
         for decl in ports {
             self.str(decl.port.name());
             self.tag(match decl.direction {
-                Direction::Input => 1,
-                Direction::Output => 2,
+                PortDirection::Input => 1,
+                PortDirection::Output => 2,
             });
             // The pinned type, present-or-absent — same idiom as the
             // boundary and the var initializers.
@@ -2272,7 +2272,7 @@ graph m0_probe : App {
             spec.contract.as_str(),
             crate::connector::PROCESS_CONNECTOR_ID
         );
-        assert_eq!(spec.roles, crate::connector::ConnectorRoles::Outbound);
+        assert_eq!(spec.roles, crate::connector::ConnectorDirection::Outbound);
         assert_eq!(
             spec.attribute("command"),
             Some(&AttrSetting::Value(crate::value::Value::Text(
