@@ -376,7 +376,9 @@ impl MeasureSample {
     }
 }
 
-/// Causal provenance of one retained measurement, without grouping.
+/// Provenance of measurement samples: their source port, origin, instance
+/// and exchange when known, plus deployment-supplied provider/model labels.
+/// These fields describe attribution; they do not define aggregation groups.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MeasurementScope {
     origin_id: Option<Id>,
@@ -446,7 +448,10 @@ impl MeasurementScope {
     }
 }
 
-/// Accounting facts observed at one exact envelope/port point.
+/// Original samples extracted from annotated fields of one typed envelope
+/// at a port. Each sample keeps its exact signed quantity and declared unit;
+/// the record and scope identify its source. This type performs no aggregation
+/// or price calculation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Measurement {
     record: RecordObservation,

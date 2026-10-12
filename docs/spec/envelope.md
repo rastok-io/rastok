@@ -7,7 +7,7 @@
 > rather than restating the field list.
 > Format 20 has one current representation, without compatibility
 > readers. The [cutover inventory](../architecture/human-review-v20-identity.md)
-> records the reviewed pre-public change and its single blessing.
+> records the reviewed pre-public change and its single approval.
 
 An **envelope** is the unit that flows along edges and through transactions. It is
 **immutable** : a transaction never mutates an envelope, it *emits* new ones (Mealy
@@ -534,7 +534,7 @@ connection handles, HPACK/QPACK indexes and library objects are physical
 protocol state and never become envelope data.
 
 These leaves are observations or response-routing material. A peer-provided
-spelling cannot override a runtime-minted `session_id`, and a graph write does
+spelling cannot override a runtime-assigned `session_id`, and a graph write does
 not retroactively change which HTTP version or socket carried a committed
 exchange. The complete map participates in ordinary `meta.ext` typing,
 identity, merge and explicit-attribution rules once present.

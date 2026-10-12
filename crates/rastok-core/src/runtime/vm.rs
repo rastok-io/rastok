@@ -60,9 +60,11 @@ mod retry_manager;
 mod timing;
 use core::fmt;
 
-/// A machine fault; the step that raised it committed nothing, and
-/// the work that triggered it stays reserved — a retry sees it again.
-/// A machine-integrity refusal — never a business error.
+/// Failure of a VM operation: invalid admission, transaction preparation,
+/// journal access, Driver binding, recovery or an internal invariant.
+/// This is returned to the host, never emitted as a business payload.
+/// It does not by itself imply that the operation committed no record;
+/// the journal remains authoritative when determining what completed.
 #[derive(Debug, Clone, PartialEq)]
 pub enum VmFault {
     /// Recovery cannot reconstruct this profile from the retained facts.
@@ -122,7 +124,7 @@ pub enum VmFault {
     },
     /// Instance command capacity is checked with the other producer products.
     InstanceCommandQueueFull,
-    /// The dispatcher raised an integrity fault.
+    /// The Driver poller raised an integrity fault.
     Dispatch(crate::boundary::PollFault),
     /// A target mailbox has no room for a transaction's deliveries —
     /// backpressure surfaced before the commit.
@@ -338,9 +340,9 @@ impl fmt::Display for VmFault {
 
 impl core::error::Error for VmFault {}
 
-/// What one boundary round observed besides causal progress: the
-/// closures that did not become transactions. Nothing here is silent —
-/// the caller decides what to surface.
+/// Result of polling outbound Drivers: the number of settled Call completions
+/// queued for a Connector transaction, plus discarded, uncorrelated and rejected
+/// Call or Session observations for the host to report.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct PollReport {
     /// Closures that settled into pending completion transactions.
@@ -361,7 +363,8 @@ pub struct PollReport {
     pub rejected_sessions: Vec<(SessionObservation, String)>,
 }
 
-/// Non-causal observations from one inbound-Call Driver drain.
+/// Result of polling inbound-Call Drivers: terminal observations queued for
+/// a Connector transaction, plus observations which were not accepted.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct InboundCallPollReport {
     /// Valid terminal events retained for a Connector transaction.
@@ -584,10 +587,8 @@ fn consider_operator_work(
     }
 }
 
-/// The plan-backed check for one atomic boundary completion.
-///
-/// The plan carries every Connector's exact resolved output types. This
-/// check judges that table, so no malformed Driver observation can become causal.
+/// Validates a Call completion against the Connector's resolved ports and
+/// output types in the validated plan, before its closure is committed.
 struct PlanCompletionCheck<'plan> {
     plan: &'plan ValidatedExecutionPlan,
 }
@@ -996,7 +997,7 @@ pub struct Vm<'plan> {
     graph_version: GraphVersion,
     scheduler: Scheduler,
     state: State,
-    dispatcher: DriverPoller,
+    poller: DriverPoller,
     /// Requests delivered to a connector, held until their call
     /// settles: the completion transaction consumes this cursor, and the
     /// connector's mailbox stays claimed the whole time.
@@ -1032,8 +1033,8 @@ pub struct Vm<'plan> {
     /// an entry leaves this queue only when its transaction commits.
     settled: VecDeque<SettledEntry>,
     /// Non-causal observations collected by internal boundary polls between
-    /// drain and settlement deadlines. The next public pump returns them.
-    buffered_pump: PollReport,
+    /// drain and settlement deadlines. The next public poll returns them.
+    buffered_poll: PollReport,
     /// The machine's virtual date, in nanoseconds; only
     /// [`Self::advance`] moves it, discretely.
     now: i64,
@@ -1401,7 +1402,7 @@ impl<'plan> Vm<'plan> {
             graph_version,
             scheduler: Scheduler::new(WORKER_MAILBOX_CAPACITY),
             state: State::new(),
-            dispatcher: DriverPoller::new(),
+            poller: DriverPoller::new(),
             pending: BTreeMap::new(),
             inbound_calls: BTreeMap::new(),
             settled_inbound_calls: VecDeque::new(),
@@ -1414,7 +1415,7 @@ impl<'plan> Vm<'plan> {
             lifecycle: VecDeque::new(),
             loop_manager: None,
             settled: VecDeque::new(),
-            buffered_pump: PollReport::default(),
+            buffered_poll: PollReport::default(),
             now: logical_time,
             outputs: Vec::new(),
             observed: Vec::new(),
@@ -1576,7 +1577,7 @@ impl<'plan> Vm<'plan> {
     }
 
     /// Returns scheduler-owned inbound request expiries not yet accepted by
-    /// their Driver. Stable Call-reference order makes repeated bounded pump
+    /// their Driver. Stable Call-id order makes repeated bounded polling
     /// rounds deterministic.
     #[must_use]
     pub fn ready_inbound_call_timeouts(&self) -> Vec<InboundCallTimeout> {
@@ -1772,7 +1773,7 @@ impl<'plan> Vm<'plan> {
                 }
             })?;
         }
-        // The journal mints the REAL root identity without consuming the
+        // The journal derives the final root identity without consuming the
         // sequence. Key expressions may read every immutable sys field, so a
         // zero-id provisional envelope would be a semantic lie. Destination
         // admission and the accepting record commit only after this complete
@@ -2175,7 +2176,7 @@ impl<'plan> Vm<'plan> {
             self.settle_next(journal, index)?;
             return Ok(true);
         }
-        // Preserve the direct FIFO dispatcher for the overwhelmingly common
+        // Preserve the direct FIFO delivery path for the common
         // plan with no joins. R6's wider scan exists solely because a partial
         // join head may let later independent work run; paying for it on
         // every ordinary relay was a measured Cortex-M33 regression.
@@ -2338,7 +2339,7 @@ impl<'plan> Vm<'plan> {
         Ok(())
     }
 
-    /// One boundary round: the dispatcher starts journaled calls and
+    /// One boundary round: the Driver poller starts journaled Calls and
     /// settles answers. Won closures queue as pending outcome
     /// transactions — [`Self::step`] commits them — and every
     /// non-causal observation is returned, never dropped.
@@ -2352,7 +2353,7 @@ impl<'plan> Vm<'plan> {
         bindings: &mut dyn OutboundConnectorBindings,
     ) -> Result<PollReport, VmFault> {
         self.preflight(journal)?;
-        let mut report = core::mem::take(&mut self.buffered_pump);
+        let mut report = core::mem::take(&mut self.buffered_poll);
         report.append(self.poll_outbound_driver(journal, bindings)?);
         Ok(report)
     }
@@ -2366,7 +2367,7 @@ impl<'plan> Vm<'plan> {
         let retry = self.retry_manager.as_deref();
         let now = self.now;
         let batch = self
-            .dispatcher
+            .poller
             .poll_drivers_with_timing(journal, bindings, &gate, now, &mut |intent, completion| {
                 retry_manager::closure_schedule(retry, intent, completion, now).map_err(|error| {
                     crate::boundary::PollFault::Journal(
@@ -2544,7 +2545,7 @@ impl<'plan> Vm<'plan> {
         Ok(report)
     }
 
-    /// Re-offers bounded Session actions only from the boundary pump. A
+    /// Re-offers bounded Session actions only when polling Drivers. A
     /// `Pending` result therefore cannot leave the same mailbox head runnable
     /// and spin the deterministic transaction drain.
     fn retry_session_actions(
@@ -2697,7 +2698,7 @@ impl<'plan> Vm<'plan> {
     /// Advances the virtual date to `target`, firing each scheduled
     /// budget in expiry order — the discrete advance: time moves in
     /// jumps, and the machine drains between them. Only the machine
-    /// mints a timeout — a driver answers or stays silent, never
+    /// constructs a timeout — a Driver answers or stays silent, never
     /// times itself out. A budget runs from the DELIVERY, so an
     /// expiry resolves wherever the obligation lives: a call still
     /// open closes with a Timeout fact (and the driver is told to
@@ -4015,7 +4016,7 @@ impl<'plan> Vm<'plan> {
                 }
                 // Session closure is requested in canonical logical-reference
                 // order. A bounded Driver may defer the handoff; the next
-                // boundary pump retries the same already-live session.
+                // Driver poll retries the same already-live Session.
                 let sessions: Vec<SessionId> = self
                     .sessions
                     .iter()
@@ -4369,9 +4370,9 @@ impl<'plan> Vm<'plan> {
             return Err(VmFault::MissingPending(event.call_id));
         };
         let executor = TransactionPreparer::at(self.plan, self.graph_version, self.now);
-        // The dispatcher gate checked every materialized draft before the
-        // closure became causal. This is the typed belt for machine-minted
-        // completions (timeouts) and for any future in-memory caller.
+        // The completion check validated every materialized draft before the
+        // closure committed. This also checks runtime-constructed
+        // completions (timeouts) and completions supplied by in-memory callers.
         for output in event.completion.outputs() {
             let Data::Materialized(value) = &output.data else {
                 continue;

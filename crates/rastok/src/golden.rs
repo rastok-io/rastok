@@ -110,8 +110,8 @@ impl Trace {
 }
 
 impl Trace {
-    /// Rebuilds a trace from stored canonical record bytes — how a
-    /// blessed golden re-enters the diff. Returns `None` on bytes
+    /// Rebuilds a trace from stored canonical record bytes — how an
+    /// approved golden re-enters the diff. Returns `None` on bytes
     /// outside the tables' subset; a golden this build cannot read
     /// is itself a divergence worth failing on.
     #[must_use]
@@ -926,7 +926,7 @@ fn record_tree(record: &Record) -> Cbor {
 }
 
 /// A completion is raw world material — no envelope identity exists yet.
-/// The VM later mints every output in one TRANSACTION; this canonical form
+/// The VM later constructs every output in one TRANSACTION; this canonical form
 /// seals only the ordered `(port, data)` drafts that won the close race.
 fn completion_form(completion: &crate::boundary::Completion) -> Cbor {
     Cbor::Array(

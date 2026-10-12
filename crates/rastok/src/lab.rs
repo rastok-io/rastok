@@ -103,7 +103,7 @@ pub enum ScenarioStepError {
 }
 
 /// World-authored input which has not been admitted yet. The debugger presents
-/// it read-only; admission alone mints the immutable envelope.
+/// it read-only; admission alone constructs the immutable envelope.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScenarioInjectionDraft {
     /// Source Connector, absent for a public App input.
@@ -138,10 +138,9 @@ impl core::fmt::Display for ScenarioStepError {
     }
 }
 
-/// One explicit, resettable scenario world for interactive execution.
-///
-/// The batch Lab runner below is implemented in terms of this session, so the
-/// UI cannot acquire a second simulation semantics.
+/// Executes one Lab scenario using its VM, journal, scripted Drivers and
+/// current action position. Both the batch runner and the debugger use this
+/// implementation, so stepping and uninterrupted execution follow the same rules.
 #[derive(Debug)]
 pub struct Simulator<'plan, 'scenario> {
     plan: &'plan ValidatedExecutionPlan,
@@ -876,7 +875,7 @@ fn settle<'plan>(
 }
 
 /// Offers world facts through the same binding, admission and terminal queue
-/// as a hosted source. This performs no graph transaction and mints no ids.
+/// as a hosted source. This performs no graph transaction and assigns no ids.
 fn poll_inbound_world<'plan>(
     driver: &mut RuntimeBindings<'plan>,
     vm: &mut Vm<'plan>,
@@ -1511,7 +1510,7 @@ impl MockOutboundConnectorDriver<'_> {
                             runtime::apply_struct_write(&mut data, path, evaluated);
                         }
                         // A reply carries data only: its envelope is
-                        // minted by the connector's own transaction.
+                        // constructed by the Connector's own transaction.
                         _ => {
                             return Err(String::from(
                                 "the mock faulted: a reply can write data only",
@@ -1737,7 +1736,7 @@ mod tests {
     #[test]
     fn a_mock_evaluates_the_whole_atomic_completion() {
         // An emission no longer returns from a mock branch: all drafts are
-        // built before one atomic completion is handed to the dispatcher.
+        // built before one atomic completion is handed to the Driver poller.
         let (outcome, faults) = opaque_answer(
             "      on in {\n        out = .\n        val forced = size(data)\n        exit = Exited { exit_code = 0, signal = null }\n      }",
         );

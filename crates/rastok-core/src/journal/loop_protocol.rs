@@ -176,7 +176,7 @@ pub enum Fact {
         /// Exact initial or recurrent admission identity.
         admission: Id,
         /// Entry envelope. Recurrence retains DATA and user metadata but
-        /// mints a new causal identity; initial admission retains its root.
+        /// assigns a new causal identity; initial admission retains its root.
         envelope: Envelope,
     },
     /// No more applications of this run will execute.

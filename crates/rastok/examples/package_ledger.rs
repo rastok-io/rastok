@@ -1,4 +1,4 @@
-//! Audit candidate packages before blessing fixtures. This does not modify a
+//! Audit candidate packages before approving fixtures. This does not modify a
 //! golden: optional output goes only to an explicitly supplied directory.
 #![allow(clippy::disallowed_methods, clippy::disallowed_types)]
 

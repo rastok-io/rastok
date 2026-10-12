@@ -7,7 +7,7 @@
 > including those in held Retry attempts, remain journaled with their causal
 > provenance. M1 implements no report, valuation, aggregation or subset policy.
 > The [v20 inventory](../architecture/human-review-v20-identity.md) tracks
-> the namespace/tag compaction before blessing. Security/privacy meanings
+> the namespace/tag compaction before approval. Security/privacy meanings
 > and the two-field signature are unchanged.
 
 This document owns annotation declarations and their interpretation boundary.

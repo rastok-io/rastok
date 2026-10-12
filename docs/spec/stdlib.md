@@ -208,7 +208,7 @@ There is no parallel `mime_type` spelling.
 
 Malformed framing, failed bearer authentication and body refusal can occur
 before a request has a typed `out` value. H5 returns an HTTP refusal without
-minting a root or fake Call. Such pre-admission refusals are deliberately
+constructing a root or fake Call. Such pre-admission refusals are deliberately
 absent from `HttpServerExit`; an `l:reply` is legal only for an admitted
 request.
 
@@ -758,7 +758,7 @@ guest exists only by signing these six clauses:
    ABI and executor identities are canonical-HIR fields and therefore part of
    the semantic hash resolved by the `graph_version` manifest
    (trace-stability condition 4); a change to any of them = a version bump =
-   an explicit re-bless.
+   explicit renewed approval.
 3. **Typed boundary** — pin-or-variant at both block edges; inside, the
    guest language's own law applies (jq's *missing ≡ null* survives only there).
 4. **Bounded cost** — the guest declares its bound mechanism (jq fuel, SQL

@@ -15,7 +15,7 @@ fn echo_retention_bytes_are_pinned_independently_of_the_codec_location() {
             .map(|run| codec::list(run.records.iter().map(codec::encode)))
     })));
     // The recording-4 tuple includes inline unsealed deadlines. Its digest
-    // moves independently of causal seals; the single blessing is inventoried
+    // moves independently of causal seals; the single approval is inventoried
     // in docs/architecture/human-review-v20-identity.md.
     assert_eq!(
         blake3::hash(&bytes).to_hex().as_str(),

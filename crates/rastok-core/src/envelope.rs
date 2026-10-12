@@ -345,7 +345,7 @@ pub struct MetaSys {
 }
 
 impl MetaSys {
-    /// Mints the four `sys` fields of a root envelope: no parent,
+    /// Constructs the four `sys` fields of a root envelope: no parent,
     /// and the envelope is its own origin (`origin_id == id`).
     #[must_use]
     pub fn root(id: Id, graph_version: u64) -> Self {
@@ -357,7 +357,7 @@ impl MetaSys {
         }
     }
 
-    /// Mints the four `sys` fields of an emitted envelope: the parent
+    /// Constructs the four `sys` fields of an emitted envelope: the parent
     /// is the cause, and the origin is inherited from it unchanged.
     #[must_use]
     pub fn emission(id: Id, parent: &MetaSys, graph_version: u64) -> Self {
@@ -452,7 +452,7 @@ pub struct Meta {
 }
 
 impl Meta {
-    /// Starts metadata around the four minted `sys` fields, with empty writable
+    /// Starts metadata around the four runtime-assigned `sys` fields, with empty writable
     /// namespaces.
     #[must_use]
     pub fn new(sys: MetaSys) -> Self {

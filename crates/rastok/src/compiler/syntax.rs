@@ -504,7 +504,8 @@ pub enum Trigger {
     Port(Name),
 }
 
-/// Recovery-only capture of a removed Extension-qualified lifecycle event.
+/// A removed Extension-qualified lifecycle hook preserved during parser error
+/// recovery so the checker can report its migration diagnostic. Not executable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemovedLifecycleHook {
     /// `.start`

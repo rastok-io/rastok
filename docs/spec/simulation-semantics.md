@@ -102,7 +102,7 @@ plan, proves its required roles through `RuntimeBindings`, and reuses that
 Contract's pure plan-bound request framing and scheduler-terminal projection.
 Only the external interaction is replaced. Consequently a
 mock cannot change contract identity, skip binding, choose a different request
-digest, weaken a port type, mint an envelope, or write a journal record. One
+digest, weaken a port type, construct an envelope, or write a journal record. One
 simulation may mock several Connectors with different Contracts; this does not create a second
 machine or a second plan.
 

@@ -1069,7 +1069,7 @@ impl Checker<'_, '_> {
                         continue;
                     }
                     // A reply carries data only: its envelope is
-                    // minted by the connector's own transaction —
+                    // constructed by the Connector's own transaction —
                     // the verdict lands here, not mid-simulation.
                     let writes_meta = dispatch_statements.iter().any(|statement| {
                         let Statement::Emit { value, .. } = statement else {

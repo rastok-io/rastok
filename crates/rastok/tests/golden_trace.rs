@@ -2,11 +2,11 @@
 // guard the core modules, not the evidence.
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
 //! The golden seal of the M0 probe: the canonical projection of a
-//! full run, pinned byte for byte. `RASTOK_BLESS=1 cargo test` blesses
+//! full run, pinned byte for byte. `RASTOK_BLESS=1 cargo test` writes
 //! a new golden after an intentional behavior change — the diff in
-//! the failure message names what moved, so blessing is a reviewed
+//! the failure message names what moved, so approval is a reviewed
 //! decision, never a reflex.
-//! The compact format-20 movement is enumerated before blessing in
+//! The compact format-20 movement is enumerated before approval in
 //! docs/architecture/human-review-v20-identity.md.
 
 use rastok::boundary::{
@@ -261,7 +261,7 @@ fn render(records: &[Record]) -> String {
     out
 }
 
-/// Parses a blessed golden file back into a trace: one hex line per
+/// Parses an approved golden file back into a trace: one hex line per
 /// record, the trailing `seal` line ignored (it is derived).
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 fn stored_trace(rendered: &str) -> Trace {
@@ -354,7 +354,7 @@ fn the_lab_scenario_matches_its_stored_golden() {
 }
 
 /// A deliberately stale golden is named by the diff — the workflow
-/// the blessing decision rests on, exercised end to end against a
+/// the approval decision rests on, exercised end to end against a
 /// STORED trace, not a second live run.
 #[test]
 fn a_stale_stored_golden_is_named_by_the_diff() {

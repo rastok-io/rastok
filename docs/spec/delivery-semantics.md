@@ -246,7 +246,7 @@ One arriving later is a discarded observation.
 
 A response closure seals the ordered `(port, data)` drafts that won the race;
 they have no envelope identities yet. The following Connector transaction
-mints and commits every output envelope together. The final draft is the
+constructs and commits every output envelope together. The final draft is the
 call's unique typed `exit` barrier.
 
 The request **digest** is the boundary's integrity seal. Retry reuses the
@@ -442,7 +442,7 @@ acknowledgement. The runtime then:
 
 1. commits the causal fact and tells the Driver **accepted**;
 2. leaves it **pending** when bounded admission is full; or
-3. returns a contract **rejection** without minting an envelope.
+3. returns a contract **rejection** without constructing an envelope.
 
 Only the first or third result may advance a peer-visible application
 acknowledgement. For HTTP this governs 202/response timing; for WebSocket it
@@ -536,7 +536,7 @@ traces and replay — an index, not history) :
         ordering rule : COMMIT-THEN-ACK (the record is durable before the
         runtime returns accepted and any application/protocol acknowledgement
         defined by that Connector leaves).
-        Backpressure leaves the Driver proposal pending; rejection mints no
+        Backpressure leaves the Driver proposal pending; rejection constructs no
         envelope. A crash between commit and acknowledgement → the
         sender may resend → transport-level redelivery yields DISTINCT
         roots unless the Connector's protocol correlates resends —

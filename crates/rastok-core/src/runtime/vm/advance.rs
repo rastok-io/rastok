@@ -99,7 +99,7 @@ impl TimeAdvance {
                         {
                             let report = vm.poll_outbound_driver(journal, bindings)?;
                             let progressed = report.settled > 0;
-                            vm.buffered_pump.append(report);
+                            vm.buffered_poll.append(report);
                             self.polled_at_settlement = true;
                             self.phase = Phase::Settlement { key, payload };
                             if progressed {
@@ -113,7 +113,7 @@ impl TimeAdvance {
                         if self.saw_drain {
                             let report = vm.poll_outbound_driver(journal, bindings)?;
                             let progressed = report.settled > 0;
-                            vm.buffered_pump.append(report);
+                            vm.buffered_poll.append(report);
                             if progressed {
                                 return Ok(true);
                             }

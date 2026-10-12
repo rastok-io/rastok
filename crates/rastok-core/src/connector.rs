@@ -217,10 +217,9 @@ impl fmt::Display for ConnectorExchange {
     }
 }
 
-/// The runtime roles one Connector contract requires.
-///
-/// There is deliberately no empty value: a Connector without either world
-/// role is an Operator or Graph, not a Connector.
+/// Directions in which a Connector exchanges data with external systems,
+/// relative to the graph. Every Connector requires at least one direction;
+/// a bidirectional Driver exposes both through the same implementation state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ConnectorDirection {
     /// Proposes external arrivals to Rastok.

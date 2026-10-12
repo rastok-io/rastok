@@ -550,7 +550,7 @@ graph g : App {
 #[test]
 fn the_example_package_matches_its_golden() {
     // Package and trace movements are separately inventoried before the
-    // single blessing in docs/architecture/human-review-v20-identity.md.
+    // single approval in docs/architecture/human-review-v20-identity.md.
     let (_, _, bytes) = packaged_example();
     let rendered: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/echo.rkp");

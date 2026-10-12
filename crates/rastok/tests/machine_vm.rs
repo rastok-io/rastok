@@ -157,7 +157,7 @@ impl OutboundConnectorBindings for ProjectionRefusal {
 
 /// A boundary seam that records deterministic cancellation order. It can
 /// either confirm each cancellation with an observed normal exit or remain
-/// silent so bounded settlement has to mint `OutcomeUnknown`.
+/// silent so bounded settlement has to produce `OutcomeUnknown`.
 #[derive(Default)]
 struct ClosingWorld {
     started: Vec<rastok::boundary::CallId>,

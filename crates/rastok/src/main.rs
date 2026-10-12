@@ -556,7 +556,7 @@ fn run(
             break;
         }
         if !progressed {
-            // The next pump translates monotonic elapsed time at the one
+            // The next polling round translates monotonic elapsed time at the one
             // hosted boundary. Deadlines remain deterministic logical dates and
             // Drivers never manufacture timeout outcomes themselves.
             std::thread::sleep(std::time::Duration::from_millis(10));

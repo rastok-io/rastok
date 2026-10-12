@@ -7,8 +7,8 @@
 //! Pinned here: the exact semantic hash, the package bytes, and the
 //! full golden trace whose EGRESS record seals the jsonl
 //! `request_digest` (key 30) — the writer's bytes ARE identity, so
-//! a change to the canonical form must re-bless this file with its
-//! reason.
+//! a change to the canonical form requires renewed approval of this fixture
+//! with its reason.
 
 use rastok::compiler::compile;
 use rastok::contract::ContractCatalog;

@@ -1,13 +1,10 @@
-//! Deterministic execution machinery — the M0 single-worker core.
+//! Deterministic transaction preparation and execution state.
 //!
-//! Governing rule: [`execution-model.md`] — as-if-run-to-completion,
-//! one node transaction at a time. This stage owns the transaction
-//! machinery: keyed state cells, bounded per-key mailboxes, per-port
-//! emission indices in text order, and the atomic executor — a
-//! handler runs against scratch state, and either everything lands
-//! (consumed input, state delta, emissions, the commit packet) or
-//! nothing does. The scheduler and the VM assemble these parts at the
-//! next stage.
+//! Under [`execution-model.md`], each instance executes one transaction at a
+//! time. This module provides bounded mailboxes and evaluates handlers against
+//! a private working copy of their state. Preparation returns a record containing
+//! consumed positions, state changes and emissions in authored order. The VM
+//! commits that record before applying its state changes or delivering outputs.
 //!
 //! [`execution-model.md`]: https://github.com/rastok-io/rastok/blob/main/docs/spec/execution-model.md
 
@@ -37,8 +34,9 @@ pub use crate::value::ValueKind;
 mod dispatch;
 pub use dispatch::{DispatchSelection, select_dispatch};
 
-/// Pure, deterministic, budgeted guest execution — the contract the
-/// jq and SQL engines will implement; no engine ships in M0.
+/// Executes a guest program as a pure, deterministic value transformation
+/// within an explicit execution budget. Implementations must not perform I/O
+/// or read ambient time, randomness or host state.
 pub trait GuestRunner {
     /// Runs an opaque guest program over a value within a budget.
     ///
@@ -575,8 +573,10 @@ pub(crate) struct JoinCandidate<'a> {
     pub(crate) inputs: &'a [envelope::Delivery],
 }
 
-/// Prepares a handler transaction in scratch isolation. State and emissions
-/// become visible together only when its caller commits the returned record.
+/// Prepares Operator handler and Connector completion transactions without
+/// changing live state or the journal.
+/// The returned record describes consumption, state changes and ordered
+/// emissions; the caller commits it before making those changes visible.
 #[derive(Debug)]
 pub struct TransactionPreparer<'plan> {
     plan: &'plan ValidatedExecutionPlan,
@@ -613,9 +613,9 @@ impl<'plan> TransactionPreparer<'plan> {
         }
     }
 
-    /// Fires the handler of `slot` for a port arrival, atomically.
-    /// A false guard still consumes the input — the cursor advance is
-    /// a causal fact — but emits nothing and changes nothing.
+    /// Prepares the handler of `slot` for one input delivery.
+    /// A false single-port filter produces a record that consumes the input
+    /// without changing state or emitting outputs. This method does not commit it.
     ///
     /// # Errors
     ///
@@ -1372,8 +1372,8 @@ impl<'plan> TransactionPreparer<'plan> {
 
     /// The connector's completion transaction for a settled call: every
     /// ordered draft, including the terminal `exit`, becomes an ordinary
-    /// emission in one atomic record. The dispatcher correlates; only this
-    /// VM boundary mints envelopes and identities.
+    /// emission in one atomic record. The poller correlates responses; this
+    /// preparation constructs the envelopes and assigns their identities.
     ///
     /// # Errors
     ///
@@ -1620,9 +1620,9 @@ impl<'plan> TransactionPreparer<'plan> {
     }
 }
 
-/// What one emission carries out of its builder. A carried payload keeps its
-/// original representation (encoded bytes included) and content-type hint,
-/// per the "no structural read, no transcode" rule.
+/// Evaluated payload and writable metadata for one emission, before its
+/// identity is assigned. Reusing an input payload preserves its encoded
+/// representation and content-type metadata without forcing deserialization.
 #[derive(Clone)]
 pub(crate) struct BuiltEmission {
     /// The built payload.
@@ -1634,10 +1634,10 @@ pub(crate) struct BuiltEmission {
     pub(crate) ext: envelope::Namespace,
 }
 
-/// A builder's payload verdict.
+/// The payload produced by evaluating an emission expression.
 #[derive(Clone)]
 pub(crate) enum BuiltPayload {
-    /// One input's physical representation ships as-is.
+    /// An input payload reused without changing its representation.
     Carried(Data),
     /// The payload was (re)built as one materialized core value.
     Value(Value),
@@ -1704,8 +1704,8 @@ fn evaluate_emissions(
 
 /// Folds the input envelope's zones onto a fresh emission meta —
 /// the uniform-propagation rule (D-2026-08-10-2) for envelopes the
-/// MACHINE mints (connector completions and operator faults): `app` carries
-/// whole, `ext` carries minus `content_type` (the minted payload is
+/// runtime constructs (Connector completions and Operator faults): `app` carries
+/// whole, `ext` carries minus `content_type` (the constructed payload is
 /// always fresh). Builder emissions spell the same rule through
 /// [`BuiltEmission`].
 fn inherit_zones(meta: Meta, input: &Meta) -> Meta {

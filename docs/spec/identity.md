@@ -1,7 +1,7 @@
 # Identity and canonical form
 
 > **Format 20, diagnostic recording 4.** The [identity inventory](../architecture/human-review-v20-identity.md)
-> records the reviewed allocation changes and the single witness blessing.
+> records the reviewed allocation changes and the single witness approval.
 > Only this format is readable. The registry is now extend-only: no
 > renumbering or reuse of an allocated key, tag or domain.
 > Changing the public version label to 1 remains a pre-publication TODO.
@@ -78,7 +78,7 @@ Physical Drivers, their libraries and negotiated transport state do not salt
 the graph hash.
 
 **One publisher namespace rule.** Every qualified `namespace/name@version`
-identity minted by the standard library uses `std/`, including Contracts,
+identity defined by the standard library uses `std/`, including Contracts,
 decoders, protected annotation definitions and the environment secret provider
 `std/env@1`. Every other publisher uses a dotted namespace, including test
 fixtures (`test.local/test@1`) and deployment profiles
@@ -230,7 +230,7 @@ program-visible inputs, not performance measurements.
 |---|---|---|---|
 | 8 | envelope | map | the canonical form (keys 1–6) of the entering envelope |
 | 9 | connector_path | text | the ingress node's root-relative path (root recipe input, envelope.md §2) |
-| 10 | inbound_seq | uint | the atomic sequence for `(connector_path, replica)` — minted by the owning shard's leader ; root recipe input |
+| 10 | inbound_seq | uint | the atomic sequence for `(connector_path, replica)` — assigned by the owning shard's leader ; root recipe input |
 | 11 | replica | uint | the logical inbound Connector replica in `IngressProvenance`; sealed so the record autonomously reconstructs `(connector_path, replica, inbound_seq)`. It may be allocated by the leader responsible for that inbound Connector, but is never the target-routing shard and never changes when a destination moves Workers. |
 | 12 | ingress_port | text | the source port the envelope entered through: an App input when key 15 is absent, otherwise the named Connector output; **omitted for the conventional `in`** (absent = omitted), the absence denotes that exact conventional port |
 | 13 | routes | array | target admissions made before the inbound commit, each `[edge (text), target_instance_generation]`, sorted by canonical `(edge, target_instance_generation)`; omitted only when this ingress produces no routed delivery. The destination reservation returns the generation, so delayed transport cannot enter a successor. The entering envelope is implicit in the INGRESS record. `@loop.in` is the reserved internal edge spelling for root admission into a Loop manager; it records selection but is never a spatial plan edge. |
@@ -387,7 +387,7 @@ record. Neither exchange adds a fourth record kind.
 
 Key 31's `status` is the internal state of an EGRESS record, not an
 `exit` port or payload union. A completion contains its ordered output drafts;
-the following Connector transaction mints their envelope identities.
+the following Connector transaction assigns their envelope identities.
 
 **Normative sub-form encodings.** Every
 compound value in the tables above has a fixed shape and, where it is
@@ -509,7 +509,7 @@ cannot diverge on bytes for the same journal :
   - `status = 2 closed`, `closure = response` → `[1, outputs]` (a
     2-element array). `outputs` is an ordered array of
     `[port_text, data_form]` drafts. It contains exactly one `exit`, last;
-    no draft has an envelope id yet because the VM mints every envelope in
+    no draft has an envelope id yet because the VM constructs every envelope in
     the following atomic connector TRANSACTION.
   - `status = 2 closed`, `closure = timeout` → `[2]` (a **1-element**
     array — no second element, never `[2, null]` ; `l:timeout` emits
@@ -517,7 +517,7 @@ cannot diverge on bytes for the same journal :
   - `status = 3 abandoned` → `[]` (the **empty** array — present but
     zero-length ; recovery triage or bounded Closing resolved
     `OutcomeUnknown`, whose envelope is an `l:recover` TRANSACTION emission).
-    These are the two supervision paths that may mint that declared case.
+    These are the two supervision paths that may produce that declared case.
   - `discarded` (a LATE response arriving AFTER closure —
     delivery-semantics §4 / execution-model §6.3, **graph-invisible**) is
     **NOT a sealed EGRESS status** : it is a separate

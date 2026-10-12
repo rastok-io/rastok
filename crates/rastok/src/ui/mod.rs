@@ -240,7 +240,7 @@ pub struct UiServer {
 }
 
 impl UiServer {
-    /// Binds loopback, mints a capability and starts the embedded server.
+    /// Binds loopback, creates an access token and starts the embedded server.
     ///
     /// `port = None` asks the OS for a free port. The initial snapshot exists
     /// before the first browser can connect.

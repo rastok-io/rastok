@@ -177,7 +177,7 @@ impl JournalLogProjector {
     ///
     /// The projector is bound to one append-only journal run. Keeping the
     /// offset here avoids rescanning and reformatting its whole causal history
-    /// on every hosted pump. Its cursor advances even on a drop: exporter
+    /// on every hosted polling round. Its cursor advances even on a drop: exporter
     /// retry is not allowed to become an unbounded second backlog.
     pub fn project_journal<J: Journal>(&mut self, journal: &J) -> ProjectionBatch {
         let observations = journal.retained_observations_from(self.next);

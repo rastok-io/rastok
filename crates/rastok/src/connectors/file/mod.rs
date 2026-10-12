@@ -324,7 +324,7 @@ struct WorkerResult {
 /// Every call owns a cancellation flag and one detached worker. A worker
 /// publishes no result when cancellation wins before an effect commits; if a
 /// read or rename wins the race, its possibly-late completion remains visible
-/// to the generic close-once dispatcher.
+/// to the generic close-once Driver poller.
 #[derive(Debug)]
 pub struct File<'plan> {
     _plan: &'plan crate::plan::ValidatedExecutionPlan,
@@ -469,7 +469,7 @@ impl CallConnectorDriver for File<'_> {
         }
         // A single poll may observe several independent worker completions.
         // Their OS scheduling order is not semantic; correlation identity is
-        // the stable tie-break before the dispatcher journals them.
+        // the stable tie-break before the Driver poller journals them.
         answers.sort_by_key(|response| response.call_id);
         answers
     }

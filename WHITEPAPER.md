@@ -5,7 +5,7 @@
 > native outbound Call Retry and typed measurement retention are executable.
 > The [C4 qualification](docs/architecture/retry-c4-qualification.md) records
 > the qualified native-Retry base. The current cutover's measurements,
-> single reviewed blessing and verification results are in the
+> single reviewed approval and verification results are in the
 > [identity inventory](docs/architecture/human-review-v20-identity.md); external
 > [opening gates](docs/architecture/opening-showcase.md) remain separate.
 > Process jobs use `std/process@4`; resident Sessions use `std/process@5`.
@@ -1824,7 +1824,7 @@ of an OS process boundary.
 An inbound Connector is a logical producer with its own stable replica
 provenance. Whether its Driver physically lives beside the Coordinator or in a
 Worker is a deployment choice. The Driver proposes a draft; runtime authority
-assigns its sequence, mints the complete inbound envelope, evaluates the first
+assigns its sequence, constructs the complete inbound envelope, evaluates the first
 target address, journals that route, and only then delivers. Workers perform
 outbound effects through bound Outbound Connector Drivers. A child spawned by
 the `Process` Connector is workload isolation, not itself a Rastok Worker.

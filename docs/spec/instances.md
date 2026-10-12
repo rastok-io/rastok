@@ -119,7 +119,7 @@ integrity check, never as routing authority. Changing `data` or metadata after
 entry never migrates the current instance.
 
 `meta.sys.id` is therefore a valid key and naturally means one instance per
-entering envelope. Inbound-envelope identity is minted by its logical producer
+entering envelope. Inbound-envelope identity is assigned by its logical producer
 before target routing; the provenance replica is not the target shard.
 
 The **selected** key is exposed as contextual `instance.key`, not copied into
@@ -139,7 +139,7 @@ therefore names one final target instance reference while the validated owner
 tree and journaled parent/child lifecycle facts retain the chain that led to
 it.
 
-An inbound source follows the same rule. Its boot adapter may accept and mint
+An inbound source follows the same rule. Its boot adapter may accept and construct
 an immutable envelope, which then selects the entered owner chain. Any
 Connector field required to open the listener, poller, or other source before
 that envelope exists must close no later than boot. An instance-site field is

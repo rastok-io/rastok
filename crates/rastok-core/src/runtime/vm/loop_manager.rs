@@ -196,7 +196,7 @@ impl Vm<'_> {
     // Queue time belongs to the Call budget. An entry may time out before it
     // reaches the runnable head, but its terminal still belongs to its own
     // Loop application. Retain that admission before closing the queued Call;
-    // retrying an interrupted expiry cannot mint another run or regain fuel.
+    // retrying an interrupted expiry cannot create another run or regain fuel.
     pub(super) fn admit_expiring_call_loop(
         &mut self,
         journal: &mut dyn Journal,

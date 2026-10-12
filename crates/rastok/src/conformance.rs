@@ -256,7 +256,7 @@ pub fn verify(
         }
     }
 
-    // The timeout and cancel disciplines: only the machine mints a
+    // The timeout and cancel disciplines: only the runtime constructs a
     // timeout, and a cancelled call gains no late causal fact.
     if let Some(mute_source) = &profile.mute_source {
         match mute_battery(mute_source, registry, drivers) {
@@ -1050,7 +1050,7 @@ fn source_exit_case(vm: &Vm<'_>) -> Option<String> {
 }
 
 /// The mute battery: under a declared budget and a silent driver,
-/// the machine mints the timeout — never the Driver — the call
+/// the runtime constructs the timeout — never the Driver — the Call
 /// closes exactly once, and a cancelled call gains no late causal
 /// fact.
 fn mute_battery(

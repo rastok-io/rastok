@@ -152,9 +152,9 @@ impl core::error::Error for IdentityError {}
 ///   [dialogue: key = 42]               segment: a nested keyed Node
 /// ```
 ///
-/// The byte carrier is deliberately opaque to routing consumers. It is the
-/// exact canonical-CBOR form specified by `identity.md`; comparing or hashing
-/// it never depends on a Rust enum order or a host word size.
+/// The canonical CBOR encoding specified by `identity.md` is opaque to routing
+/// consumers. Equality and hashing use that encoding, independently of Rust
+/// enum order or host word size.
 #[derive(Clone)]
 pub struct InstanceAddress {
     scope: Arc<node::OwnerPath>,
@@ -425,9 +425,9 @@ impl Generation {
     }
 }
 
-/// One owner's logical instance policy. A missing key selects the singleton
-/// address inside the parent instance; persistent remains an explicit value
-/// in the categorical plan even when its source spelling was omitted.
+/// Validated instance policy of one Node. A missing key selects the singleton
+/// address within its parent instance. The plan records the resolved lifetime
+/// explicitly, including the persistent default when no lifetime was written.
 #[derive(Debug, Clone, PartialEq)]
 pub struct InstanceSpec {
     /// Expression and inferred type of the selected key, when keyed.

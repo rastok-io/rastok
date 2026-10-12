@@ -46,7 +46,7 @@ pub trait ConnectorDriverFactory {
     /// object. C2's global binder is the sole caller. Binding may reserve
     /// passive host resources whose availability must be proved atomically
     /// for the family (for example, all listener sockets of an inbound
-    /// server). It must not acknowledge input, mint causal facts, or perform
+    /// server). It must not acknowledge input, create causal facts, or perform
     /// an outbound effect; those actions remain behind the bound role views.
     ///
     /// # Errors

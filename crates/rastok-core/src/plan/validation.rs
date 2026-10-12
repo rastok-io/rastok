@@ -1374,7 +1374,7 @@ fn instance_key_signature(
 
 /// The node ordering the lowering emits: operators before
 /// connectors, then by path — mirrored here so a reordered node
-/// table refuses instead of minting a second byte form of the same
+/// table refuses instead of producing a second byte form of the same
 /// graph.
 fn handler_decisions_hold(
     plan: &ExecutionPlan,

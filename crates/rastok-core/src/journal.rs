@@ -868,7 +868,7 @@ pub enum CloseVerdict {
 pub struct CommittedIngress {
     /// The allocated or validated sequence.
     pub seq: u64,
-    /// The envelope born here — its four `sys` fields minted by the runtime.
+    /// The admitted envelope, with its four runtime-assigned `sys` fields.
     pub envelope: Envelope,
     /// The committed record.
     pub record: IngressRecord,
@@ -1239,7 +1239,7 @@ pub trait Journal {
     /// `meta.ext.session_id` by the journal.
     fn prepare_ingress(&self, submission: IngressProposal) -> Result<PreparedIngress, Error>;
 
-    /// Mints a Connector-origin root without committing it. The source node
+    /// Constructs a Connector-origin root without committing it. The source node
     /// is derived from the typed provenance and recorded separately so replay
     /// can route from the same output endpoint.
     ///
@@ -1266,7 +1266,7 @@ pub trait Journal {
     ) -> Result<CommittedIngress, Error>;
 
     /// The one accepting transaction of an inbound submission:
-    /// allocate or validate the sequence, derive the root id, mint
+    /// allocate or validate the sequence, derive the root id, construct
     /// `meta.sys` (no parent; the envelope is its own origin), build
     /// the envelope, and commit. Only after this returns may the
     /// caller acknowledge the transport — commit-then-ack.
@@ -1447,7 +1447,7 @@ pub struct MemJournal {
     /// TRANSACTION remain the only authorities.
     inbound_calls: BTreeMap<InboundCallId, InboundCallLifecycle>,
     /// Replay-derived Loop fold, replaced only with the committed record.
-    /// The independent Fold reader reconstructs it from `records`; ordinary
+    /// The independent LoopView reader reconstructs it from `records`; ordinary
     /// non-Loop journals allocate nothing for this index.
     command_loops: Option<Box<loop_protocol::LoopView>>,
 }

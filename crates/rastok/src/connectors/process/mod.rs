@@ -4,7 +4,7 @@
 //! The real Process Driver behind its Connector contract — where the graph's
 //! intent becomes an actual effect on the machine.
 //!
-//! A Driver is an [`OutboundConnectorDriver`]: the dispatcher hands it
+//! A Driver is an [`OutboundConnectorDriver`]: the Driver poller hands it
 //! journaled intents and collects its answers. Nothing else changes shape —
 //! the Lab's scripted worlds and real Drivers are interchangeable
 //! behind the same trait, which is the point: a simulation exercises
@@ -478,7 +478,7 @@ impl ProcessSettings {
 ///
 /// The Driver is asynchronous, as the [`OutboundConnectorDriver`] contract
 /// demands: a Driver answers or stays silent — it never times itself out. Only
-/// the scheduler mints TimeoutExpired; when the machine closes a
+/// the scheduler constructs TimeoutExpired; when the machine closes a
 /// call, [`CallConnectorDriver::cancel`] kills the child. Every pipe drains on
 /// its own detached thread through a channel, so a descendant that
 /// inherits the pipes can never hang this process: readers are never
@@ -1213,7 +1213,7 @@ graph real : App {
     /// Drives one submission to stability against real children: the
     /// wall clock maps onto the virtual clock in small steps, so
     /// declared budgets expire for real and the scheduler — never
-    /// the Driver — mints the timeouts.
+    /// the Driver — constructs the timeouts.
     fn run_submission(
         source: &str,
         submission: IngressProposal,
@@ -1530,7 +1530,7 @@ graph mute : App {
             started.elapsed() < std::time::Duration::from_secs(10),
             "the budget actually fired"
         );
-        // The scheduler minted it: the closure is a Timeout fact,
+        // The scheduler constructed it: the closure is a Timeout fact,
         // never a driver-fabricated failure response.
         assert!(journal.records().iter().any(|record| matches!(
             record,

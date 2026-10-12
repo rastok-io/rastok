@@ -69,7 +69,7 @@ command **without** `--bless`. The output assertion and golden should fail.
 The diagnostic names the first differing record and field, labels the expected
 and actual values, and reports the recorded input/transaction/Call context.
 Later differences are consequences, not a guessed source-code cause.
-Restore the line and rerun; do not bless merely to make a failure disappear.
+Restore the line and rerun; do not approve a new golden merely to make a failure disappear.
 
 ## Carry forward
 
