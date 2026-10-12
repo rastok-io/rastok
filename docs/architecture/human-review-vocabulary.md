@@ -44,6 +44,11 @@ themselves **⟂** to confirm:
    `status` field with `Option` fields for the data of other states is
    refused: it makes a false state representable. Renaming removes the
    names that duplicate a state without adding one.
+6. **A collision is settled with an existing word first** (12 October,
+   after `Arrival`). A new word is the last resort, when neither the
+   specification nor a validated suffix (`*View`, `*Spec`, `*Kind`) covers
+   the thing; the ledger exists to end up with fewer words, not different
+   ones.
 
 ## Collisions to settle first
 
@@ -186,11 +191,15 @@ stay.
 projection and a measurement. The specification uses "retained
 observation" for the second. Sharpened by collision 8 (observation = a
 Driver's report before commit). Proposed, awaiting Yoann (12 October): `Observed { node, port, envelope }`
-→ **`Arrival`**, its own doc's word ("every envelope reaching a node port …
-in arrival order"), `observations()` → `arrivals()`; `DeliveryView`
-withdrawn, this log is kept live, not rebuilt from facts;
-`AccountingObservation`, `ObservationScope` → **`Measurement`**,
-**`MeasurementScope`** (their own doc says "retained measurement");
+→ **`DeliveryView`**: a delivery as the debugger sees it (node, port,
+envelope; no edge, no cursor), read by the Lab's expectations, `main` and
+the UI view; the `*View` suffix is already validated, so no new word.
+`Arrival`, proposed and withdrawn the same night (Yoann: "why not
+Departure too?"): a word the specification does not have, invented to fix
+a collision. Not `trace`: in the specification that is a Scenario's outer
+trace, what goes in, not what comes out. `AccountingObservation`,
+`ObservationScope` → **`Measurement`**, **`MeasurementScope`** (their own
+doc says "retained measurement");
 `RecordObservation` stays: the specification's "retained observation" has
 the same sense, what was seen without carrying identity.
 **⟂ 2d.** `Delivery { port, edge: String, seq, source_instance, envelope }`
