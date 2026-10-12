@@ -120,7 +120,23 @@ Ranked by the cost of leaving them to the external reviewer.
    **`PrivacyDeclaration`** (controller-supplied, verified for completeness
    and digest only; not `PrivacyFacts`, Yoann: "fact" already has its
    sense); `CostProfile` → **`PriceBook`** (its own doc's word);
-   `json::HydrationProfile` → **`HydrationPolicy`** (its own doc's word);
+   `json::HydrationProfile` → **`MaterializationPolicy`** (Yoann, 12 October:
+   "hydration" is ORM imagery; he wants the technical word for turning JSON
+   into a typed struct). The universal word is deserialization, but the
+   specification and the code already have their own for exactly this
+   operation: a payload is `Encoded { encoding, bytes }` or
+   `Materialized(Value)`, and materializing is producing the typed core value
+   under the declared schema, 57 specification uses, 334 in code,
+   `materialize`, `materialize_deep`, `materialize_with`. `hydrate` is the
+   second half of JSON decoding, after the parse: "hydrates an already parsed
+   JSON value … objects become canonical structs by member name". So
+   `hydrate` / `hydrate_with_profile` → `materialize` /
+   `materialize_with_policy`, module `json/hydration.rs` →
+   `json/materialization.rs`, and the specification's 31 "hydration" (12 in
+   decisions.md) align on "materialization" in the realignment's doc pass,
+   Yoann's call. Not `DeserializationPolicy`: two words for one operation;
+   the module doc says once "materialization, what other stacks call
+   deserialization";
    `conformance::Profile` read 12 October: the contract under test, a
    happy-path probe with its submission and exit case, one provocation per
    provocable terminal case, the unprovable cases with their reasons, the
