@@ -60,20 +60,46 @@ Ranked by the cost of leaving them to the external reviewer.
    isolation") and `runtime::GuestExecutor` ("pure, deterministic, budgeted
    guest execution — the contract the jq and SQL engines will implement").
    **⟂** rename both mechanisms away from the taxonomy word (interpreter,
-   evaluator, engine, …).
+   evaluator, engine, …). **Proposed 12 October:** `HandlerExecutor` →
+   **`TransactionPreparer`**. It is a function object bound to a plan, a
+   graph version and the logical time, `fire(&self, slot, instance,
+   delivery, state) -> TransactionOutcome`, and it prepares every
+   transaction, Connector completions included, so "Handler" was already too
+   narrow; "prepare" is the journal's own word (`prepare_ingress` /
+   `commit_ingress`). `TransactionBuilder` (Yoann's question) not retained:
+   a Rust reader expects the builder pattern, setters then `build()`, which
+   this is not, and "builder" already means the envelope builder in the
+   same file (six uses). `GuestExecutor` → **`GuestRunner`**: the
+   specification says "guest language" and "guest program", the trait's one
+   method is `run`, and the implementations run guest programs. Not
+   `GuestEngine` (Yoann: no), not `GuestLanguage` (names the language, not
+   what runs it), not `GuestRuntime` ("runtime" is the project's word for
+   the whole execution layer).
 2. **Dispatch.** In the specification and the plan, Dispatch is the
    Operator's typed decision tree (`plan::Dispatch`, `DispatchStep`; spec 82
    uses). At the boundary, `boundary::Dispatcher` is "the loop between the
    journal and the outbound drivers" (spec "dispatcher" 11 uses), with
    `DispatchError`, `DispatchSelection` (runtime, the handler match) on both
    sides of the word. **⟂** keep Dispatch for the Operator tree; give the
-   boundary loop its own word.
+   boundary loop its own word. **Settled 12 October (Yoann):**
+   `boundary::Dispatcher` → **`DriverPoller`**, consistent with the decided
+   verb `poll_drivers`; `Dispatch`, `DispatchStep`, `DispatchSelection` stay,
+   the specification's sense. Not "loop", the Extension's taxonomy word.
 3. **Bindings.** Four unrelated meanings: the verified Driver routing table
    (`OutboundConnectorBindings`, `SessionConnectorBindings`, host
    `RuntimeBindings`), the deployment boot inputs (`BootBindings`), the
    expression evaluation environment (`expr::Bindings`, `LazyBindings`) and
    the per-request Driver settings (`HttpClientRequestBindings`,
    `FileRequestBindings`, `ProcessRequestBindings`). **⟂** one word each.
+   **12 October:** the specification itself has two senses, name bindings in
+   expressions (the main one) and "the Driver binding" of a Connector at
+   deployment. `expr::Bindings`, `LazyBindings` stay (main sense);
+   `OutboundConnectorBindings`, `SessionConnectorBindings`, host
+   `RuntimeBindings` stay (the bound Drivers, one doc sentence says so);
+   `BootBindings` **kept for now** (Yoann): the resolved `env()` / `secret()`
+   values are names bound at boot, a binding in the main sense. Proposed:
+   `*RequestBindings` → **`*RequestSettings`**, per-request Driver settings
+   are not bindings in either sense.
 4. **Emission.** Two types of that name: `journal::Emission` ("one emission
    of a transaction, in text order") and `plan::emission::Emission` ("what an
    emission builds"). Same word, two layers, both public. **⟂** the plan
@@ -90,14 +116,22 @@ Ranked by the cost of leaving them to the external reviewer.
    profiles with `ProfileSelector`, `ProfileProtocol`), and
    `json::HydrationProfile`. The specification uses "profile" for the
    deployment profile and the Contract profile. **⟂** keep those two; rename
-   the other four.
+   the other four. **Proposed 12 October:** `PrivacyProfile` →
+   **`PrivacyDeclaration`** (controller-supplied, verified for completeness
+   and digest only; not `PrivacyFacts`, Yoann: "fact" already has its
+   sense); `CostProfile` → **`PriceBook`** (its own doc's word);
+   `json::HydrationProfile` → **`HydrationPolicy`** (its own doc's word);
+   `conformance::Profile` ("what one connector offers the harness") to read
+   before naming.
 6. **Node.** `plan::Node` is an executable row only, narrower than the
    specification's Node, which includes Graph. Settled by D-2026-10-11-1;
    listed here for completeness.
 7. **Spec.** `instance::Spec` ("one owner's logical instance policy") is a
    bare generic noun; the other `*Spec` types (`ConnectorSpec`, `LoopSpec`,
    `RetrySpec`, `ExtensionSpec`) carry their subject. **⟂** `InstanceSpec`,
-   or the specification's word, policy.
+   or the specification's word, policy. **Proposed 12 October:**
+   **`InstanceSpec`**: `instance.key`, `instance.ttl` are header
+   declarations, exactly what the plan's `*Spec` names.
 8. **Event.** An exchange cardinality (`ConnectorExchange::Event`), four
    observation carriers (`BoundaryEvent`, `InboundCallEvent`,
    `SessionDriverEvent`, `LifecycleEvent`), and a syntax trigger
@@ -351,7 +385,9 @@ Confirm the verb; it is not in the specification's main vocabulary (18).
 implements row 2 of the Contract sheet, *Direction* (who starts), not row 1,
 *Role* (what it bridges). Plain word: `ConnectorDirection`; but
 `node::Direction` already names a port's Input/Output, so one of the two
-must yield the word (raised 11 October).
+must yield the word (raised 11 October). **Settled 12 October (Yoann):**
+`ConnectorRoles` → **`ConnectorDirection`**; proposed with it,
+`node::Direction` → **`PortDirection`** so both say their subject.
 
 ### 9. Time — budget, deadline, timeout, lifetime, expiry, delay
 
@@ -424,7 +460,11 @@ Loop protocol, no collision.
 | admission | the specification's central word (186 uses, ten files): a delivery entering an address, root or internal; the "admission point" is mailbox reservation plus the producer's route commit; `OpeningAdmissionId`, Loop re-admission, the `idle` deadline runs from the last admission | **kept**, examined for removal and refused: no existing word covers every delivery (ingress = roots only, acceptance = the positive outcome only, entry = the Loop's entry port, enter = no verdict); "admission control" is the standard systems term for a bounded entry with accept / pending / reject; removing it is a specification change, not a code rename | decided |
 | the ingress chain: `IngressSubmission`, `SubmissionSequence`, `IngressProposal` (with its `reference` field), `IngressEnvelopeProvenance`, `IngressAcceptance`, `IngressDecision`, `inject_submission` | the door's wrappings and verdicts, eight words for one thing offered and judged | **flattened to the specification's words** (11 October, night): `IngressProposal { provenance, draft: EnvelopeDraft, sequence: IngressSequence, session }` is what is proposed, by the host or a Driver (the port is inside the draft, 12 October) (`IngressSubmission` disappears into it; `SubmissionSequence` → `IngressSequence { Next, Explicit }`); `RetainedProposal { handle, proposal }` is the proposal a Driver keeps while it waits; `IngressEnvelopeProvenance` → `IngressProvenance`; `IngressAdmission { Accepted(AdmittedIngress), Pending, Rejected(IngressRejection) }` stays the verdict; `IngressAcceptance` → **`AdmittedIngress { envelope, exchange }`**, named by its place in the chain beside `PreparedIngress` and `CommittedIngress` (Yoann: not `AdmittedRoot`; "root" reads as an image even though the specification uses it 192 times); `IngressDecision` → `Result<AdmittedIngress, IngressRejection>`, the verdict without `Pending` as a standard type; the one transaction behind both doors, `inject_submission`, → `admit_proposal`; `inject` and `admit_ingress` stay as the two doors. Words after: draft, proposal, admission, rejection, ingress; gone: submission, acceptance, decision. `AdmittedIngress` is what the Driver is told (two ids, portable); `CommittedIngress` is the journal's return (seq, envelope, record): the two doc lines must state that difference. Cost: `IngressSubmission` in 16 files, `IngressDecision` in 8, all host Drivers; a code lot, with the realignment or after the opening | decided |
 | `plan::emission::Emission` | the lowered right-hand side of `out = …`: `Identity`, `Patch`, `FreshData`, `Data`, `Nothing`; held as `value` by `DispatchStep::Emit` and by `MultiEmitValues` | **`EmitValue`** (12 October, Fable's final proposal after `EmissionSpec` and `EmissionKind` were examined; Yoann's ok to confirm). The word of its neighbours, `Emit { port, value }`, `MultiEmitValues`, `FieldWrite.value`, and the specification's phrase "a braced value is classified once". In a plan every noun is the checked text of what will happen at run time, so "value" means the value expression, as the code already uses it. `journal::Emission` keeps the specification's word; `runtime.rs` imports both today and aliases the plan one `PlanEmission`, which disappears. Not retained: `EmissionSpec` (coherent with the header configurations `ConnectorSpec`, `LoopSpec`, `RetrySpec`, `ExtensionSpec`, not with the handler body where it lives, and `MultiEmitValues` would have had to follow); `EmissionKind` (the code's 18 `*Kind` enums are category tags of a thing that lives elsewhere, 9 of 144 variants carry a small detail; here three of five variants are the content); `EmittedEnvelope` for the journal; `EmissionForm`; `EmissionRule`; `EmissionRecipe`. The `*Spec` suffix stays what it is, the plan's checked description of an authored header declaration; collision 7 concerns only the bare `instance::Spec` | decided in substance |
-| `Packet` (loop, retry, instance_stop) | the protocol's sparse contribution to one transaction (its own doc line): Loop = contexts, routes, commands produced and consumed, facts; Retry = attempt context and facts; instance stop = commands produced and consumed | The inner words are validated (fact, command, rows above). The container word is still open: `Contribution` (the doc's word), or by content | open |
+| `boundary::Dispatcher` | the loop between the journal and the outbound Drivers: each journaled open call is handed to its Driver exactly once, journal before effect, and closures settle through the close-once race | **`DriverPoller`** (Yoann, 12 October), with the verb `poll_drivers`; the Operator's `Dispatch` keeps the specification's word. Collision 2 closed | decided |
+| `ConnectorRoles` | Inbound, Outbound, both: row 2 of the Contract sheet, *Direction* | **`ConnectorDirection`** (Yoann, 12 October); `node::Direction` → `PortDirection` proposed with it | decided |
+| `BootBindings` | fully resolved boot inputs: the `env()` / `secret()` values bound at boot | **kept** (Yoann, 12 October): a binding in the specification's main sense | decided |
+| `syntax::ExtensionEvent` | recovery-only capture of the removed `.start` / `.stop` forms | proposed **`RemovedLifecycleHook`**: the parser already has `RemovedWindowMode` for the same job | proposed |
+| `Packet` (loop, retry, instance_stop) | the protocol's sparse contribution to one transaction (its own doc line): Loop = contexts, routes, commands produced and consumed, facts; Retry = attempt context and facts; instance stop = commands produced and consumed | **`LoopRecord`**, **`RetryRecord`**, **`InstanceCommands`** (Yoann, 12 October, "quite ok"): the names the public fields of `TransactionRecord` already carry (`loop_record`, `retry_record`, `instance_commands`), so no new word. Reservation written in each doc: a `LoopRecord` is the Loop protocol's part of a transaction record, carried by it and never standalone, not a fourth causal record kind. `Contribution` not retained | decided |
 
 ## What validation produces
 
