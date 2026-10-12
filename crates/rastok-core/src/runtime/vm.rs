@@ -692,7 +692,7 @@ impl crate::boundary::CompletionCheck for PlanCompletionCheck<'_> {
                 && !matches!(&output.data, Data::Materialized(_))
             {
                 return Err(format!(
-                    "`{connector}.out` requires a hydrated JSON value before retention"
+                    "`{connector}.out` requires a deserialized JSON value before retention"
                 ));
             }
             if output.port.name() == "exit" && !matches!(&output.data, Data::Materialized(_)) {

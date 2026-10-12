@@ -2829,7 +2829,7 @@ graph app : App {
             crate::deployment::PolicyName::new(value)
                 .unwrap_or_else(|error| panic!("policy ref: {error}"))
         };
-        let privacy = crate::deployment::PrivacyProfile::new(
+        let privacy = crate::deployment::PrivacyDeclaration::new(
             crate::deployment::PrivacyProfileName::new("privacy.example/support@1")
                 .expect("stable privacy profile"),
             policy("ropa/support"),
@@ -2908,7 +2908,7 @@ graph app : App {
         ));
         assert!(missing_conditions_journal.records().is_empty());
 
-        let regulated_privacy = crate::deployment::PrivacyProfile::new(
+        let regulated_privacy = crate::deployment::PrivacyDeclaration::new(
             crate::deployment::PrivacyProfileName::new("privacy.example/regulated@1")
                 .expect("stable privacy profile"),
             policy("ropa/regulated"),
@@ -2972,7 +2972,7 @@ graph app : App {
             Err(crate::runtime::vm::VmFault::UnsupportedDataPolicy { .. })
         ));
 
-        let recipient_privacy = crate::deployment::PrivacyProfile::new(
+        let recipient_privacy = crate::deployment::PrivacyDeclaration::new(
             crate::deployment::PrivacyProfileName::new("privacy.example/disclosure@1")
                 .expect("stable privacy profile"),
             policy("ropa/disclosure"),

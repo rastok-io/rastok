@@ -466,7 +466,7 @@ Independent valid samples remain readable even if their sum would overflow.
 An annotated value retained only as bytes cannot be decoded by this inspection
 helper; its normal codec must have materialized it. Missing data is never zero.
 
-The existing deployment `CostProfile` and its run-header attestation keep
+The existing deployment `PriceBook` and its run-header attestation keep
 their encoded representation for compatibility. They may supply declared
 provider/model context for the matching causal Connector; M1 does not apply
 their tariffs or infer a financial basis from a sample. These metadata must

@@ -292,7 +292,7 @@ Never put a credential value in such a payload: Connector
 authentication consumes a `secret()` reference at its declared setting, and
 raw `@secret` envelope fields refuse at source check and remain fail-closed at
 VM boot for foreign packages. Physical price rows belong
-to the deployment `CostProfile`, keyed by the exact Connector path, rather
+to the deployment `PriceBook`, keyed by the exact Connector path, rather
 than to Driver code or graph identity.
 
 ### 2. Separate pure exchange protocol from the effect

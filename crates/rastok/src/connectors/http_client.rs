@@ -65,7 +65,7 @@ pub(crate) struct HttpClientPlanBinding {
     pub(crate) max_body: u64,
     pub(crate) versions: Vec<HttpVersion>,
     pub(crate) response_type: Option<crate::datatype::DataType>,
-    pub(crate) json_profile: rastok_core::json::HydrationProfile,
+    pub(crate) json_profile: rastok_core::json::DeserializationPolicy,
 }
 
 #[derive(Debug)]
@@ -336,9 +336,9 @@ impl HttpClientRequestSettings {
             versions,
             response_type: self.response_types.get(connector).cloned(),
             json_profile: match spec.attribute("json_profile") {
-                None => rastok_core::json::HydrationProfile::Strict,
+                None => rastok_core::json::DeserializationPolicy::Strict,
                 Some(AttrSetting::Word(word)) if word == "projected" => {
-                    rastok_core::json::HydrationProfile::Projected
+                    rastok_core::json::DeserializationPolicy::Projected
                 }
                 Some(_) => return None,
             },

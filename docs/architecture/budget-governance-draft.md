@@ -208,7 +208,7 @@ This JSON is illustrative, not a frozen deployment schema.
 10. Money is exact decimal plus currency. No float or implicit FX is admitted.
     Any later conversion must name amount, source/target currencies, rate,
     authority and effective timestamp.
-11. A `PriceBook`/`CostProfile` is versioned deployment input. Every quote or
+11. A `PriceBook` is versioned deployment input. Every quote or
     reservation records its profile reference and digest; price changes do not
     rewrite history.
 12. Strict policy uses provider-declared or otherwise guaranteed ceilings.

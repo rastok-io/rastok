@@ -672,7 +672,7 @@ fn completion_for(
     result: CallResult,
     request: &HttpRequest,
     response_type: Option<&crate::datatype::DataType>,
-    json_profile: rastok_core::json::HydrationProfile,
+    json_profile: rastok_core::json::DeserializationPolicy,
 ) -> Option<(Completion, usize)> {
     match result {
         CallResult::Cancelled => None,
@@ -698,7 +698,7 @@ fn completion_for(
                 let Data::Materialized(value) = data else {
                     return None;
                 };
-                rastok_core::json::hydrate_with_profile(ty, value, json_profile)
+                rastok_core::json::deserialize_with_policy(ty, value, json_profile)
                     .ok()
                     .map(Data::materialized)
             });
@@ -1323,7 +1323,7 @@ pub(super) async fn probe_http3_server(
             max_body: 1024 * 1024,
             versions: vec![HttpVersion::Http3],
             response_type: None,
-            json_profile: rastok_core::json::HydrationProfile::Strict,
+            json_profile: rastok_core::json::DeserializationPolicy::Strict,
         },
         tls: TlsMaterial {
             ca: Some(ca.to_vec()),
@@ -1708,7 +1708,7 @@ mod tests {
                     max_body: 1024,
                     versions: vec![version],
                     response_type: None,
-                    json_profile: rastok_core::json::HydrationProfile::Strict,
+                    json_profile: rastok_core::json::DeserializationPolicy::Strict,
                 },
                 tls: TlsMaterial {
                     ca: None,
@@ -1834,7 +1834,7 @@ graph bounded_request : App {
                     },
                     &request,
                     None,
-                    rastok_core::json::HydrationProfile::Strict,
+                    rastok_core::json::DeserializationPolicy::Strict,
                 )
                 .expect("a retained response")
                 .0;
@@ -1867,7 +1867,7 @@ graph bounded_request : App {
                     },
                     &request,
                     None,
-                    rastok_core::json::HydrationProfile::Strict,
+                    rastok_core::json::DeserializationPolicy::Strict,
                 )
                 .expect("a usable response produces one completion")
                 .0
@@ -1911,7 +1911,7 @@ graph bounded_request : App {
                 },
                 &request,
                 None,
-                rastok_core::json::HydrationProfile::Strict,
+                rastok_core::json::DeserializationPolicy::Strict,
             )
             .expect("an invalid typed projection does not discard the response")
             .0;
@@ -1923,7 +1923,7 @@ graph bounded_request : App {
     }
 
     #[test]
-    fn typed_json_response_is_hydrated_before_a_completion_exists() {
+    fn typed_json_response_is_deserialized_before_a_completion_exists() {
         use crate::datatype::{DataType, DecimalType, StructType, TypeField};
         let schema = DataType::Struct(
             StructType::new(vec![
@@ -1966,7 +1966,7 @@ graph bounded_request : App {
                     },
                     &request,
                     Some(&schema),
-                    rastok_core::json::HydrationProfile::Strict,
+                    rastok_core::json::DeserializationPolicy::Strict,
                 )
                 .unwrap();
                 let outputs = completion.into_outputs();
@@ -1987,7 +1987,7 @@ graph bounded_request : App {
                     let data = outputs[0].data.materialized_value().unwrap();
                     assert!(schema.accepts(data));
                     let Value::Struct(fields) = data else {
-                        panic!("hydrated struct")
+                        panic!("deserialized struct")
                     };
                     assert_eq!(
                         fields[0].1,
@@ -2053,11 +2053,11 @@ graph app : App {
         .unwrap();
         assert_eq!(
             projected.plan_binding(&path).unwrap().json_profile,
-            rastok_core::json::HydrationProfile::Projected
+            rastok_core::json::DeserializationPolicy::Projected
         );
         assert_eq!(
             typed.plan_binding(&path).unwrap().json_profile,
-            rastok_core::json::HydrationProfile::Strict
+            rastok_core::json::DeserializationPolicy::Strict
         );
         let ty = typed.plan_binding(&path).unwrap().response_type.unwrap();
         assert!(matches!(ty, crate::datatype::DataType::Struct(_)));

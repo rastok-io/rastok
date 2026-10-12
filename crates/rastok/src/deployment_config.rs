@@ -9,12 +9,12 @@
 //! values. Secret contents are never accepted by this format: a profile names
 //! one process-environment coordinate and its separately attested version.
 
-use crate::accounting::{CostProfile, CostProfileName, ExactDecimal, UnitPrice};
+use crate::accounting::{ExactDecimal, PriceBook, PriceBookName, UnitPrice};
 use crate::deployment::{
-    BootBindings, DeploymentError, DeploymentProfile, EnvironmentName, PolicyName, PrivacyProfile,
-    PrivacyProfileName, PrivacyRetention, RecipientPolicy, SecretBinding, SecretMaterial,
-    SecretName, SecretProvider, SecretProviderError, SecretProviderId, SecretVersion,
-    TransferPolicy,
+    BootBindings, DeploymentError, DeploymentProfile, EnvironmentName, PolicyName,
+    PrivacyDeclaration, PrivacyProfileName, PrivacyRetention, RecipientPolicy, SecretBinding,
+    SecretMaterial, SecretName, SecretProvider, SecretProviderError, SecretProviderId,
+    SecretVersion, TransferPolicy,
 };
 use crate::node;
 use crate::schema_annotation::{CurrencyCode, MeasureId};
@@ -87,7 +87,7 @@ fn parse(text: &str) -> Result<DeploymentProfile, DeploymentConfigError> {
     })
 }
 
-fn cost_profile(raw: RawCostProfile) -> Result<CostProfile, DeploymentConfigError> {
+fn cost_profile(raw: RawCostProfile) -> Result<PriceBook, DeploymentConfigError> {
     let mut rules = Vec::with_capacity(raw.prices.len());
     for raw in raw.prices {
         let connector = node::Path::new(raw.connector.split('.').map(String::from))
@@ -108,8 +108,8 @@ fn cost_profile(raw: RawCostProfile) -> Result<CostProfile, DeploymentConfigErro
             .map_err(DeploymentConfigError::Accounting)?,
         );
     }
-    CostProfile::new(
-        CostProfileName::new(raw.reference).map_err(DeploymentConfigError::Accounting)?,
+    PriceBook::new(
+        PriceBookName::new(raw.reference).map_err(DeploymentConfigError::Accounting)?,
         rules,
     )
     .map_err(DeploymentConfigError::Accounting)
@@ -149,7 +149,7 @@ fn parse_exact_decimal(text: &str) -> Result<ExactDecimal, DeploymentConfigError
         .map_err(|_| DeploymentConfigError::InvalidDecimal(text.to_string()))
 }
 
-fn privacy_profile(raw: RawPrivacy) -> Result<PrivacyProfile, DeploymentConfigError> {
+fn privacy_profile(raw: RawPrivacy) -> Result<PrivacyDeclaration, DeploymentConfigError> {
     if raw.retention != "run_scoped" {
         return Err(DeploymentConfigError::UnsupportedRetention(raw.retention));
     }
@@ -168,7 +168,7 @@ fn privacy_profile(raw: RawPrivacy) -> Result<PrivacyProfile, DeploymentConfigEr
     };
     let recipients = refs(raw.recipients)?;
     let transfers = refs(raw.transfer_safeguards)?;
-    PrivacyProfile::new(
+    PrivacyDeclaration::new(
         PrivacyProfileName::new(raw.reference).map_err(DeploymentConfigError::Profile)?,
         PolicyName::new(raw.processing_activity).map_err(DeploymentConfigError::Profile)?,
         refs(raw.purposes)?,

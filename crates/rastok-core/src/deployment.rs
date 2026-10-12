@@ -10,7 +10,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt;
 
-use crate::accounting::{CostProfile, CostProfileName};
+use crate::accounting::{PriceBook, PriceBookName};
 use crate::canonical_cbor::{Value as Cbor, encode};
 use crate::value::Value;
 
@@ -375,7 +375,7 @@ pub struct PrivacyRequirements {
 /// digest only; it never certifies that a legal judgement is substantively
 /// correct.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PrivacyProfile {
+pub struct PrivacyDeclaration {
     reference: PrivacyProfileName,
     processing_activity: PolicyName,
     purposes: Vec<PolicyName>,
@@ -388,7 +388,7 @@ pub struct PrivacyProfile {
     digest: [u8; 32],
 }
 
-impl PrivacyProfile {
+impl PrivacyDeclaration {
     /// Builds one canonical, run-scoped privacy profile.
     ///
     /// # Errors
@@ -501,7 +501,7 @@ pub struct PrivacyAttestation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CostProfileAttestation {
     /// Stable deployment profile reference.
-    pub reference: CostProfileName,
+    pub reference: PriceBookName,
     /// Digest of every price and dimension in force.
     pub digest: [u8; 32],
 }
@@ -534,8 +534,8 @@ pub struct DeploymentAttestation {
 pub struct DeploymentProfile {
     environment: BTreeMap<EnvironmentName, Value>,
     secrets: BTreeMap<SecretName, SecretBinding>,
-    privacy: Option<PrivacyProfile>,
-    cost_profile: Option<CostProfile>,
+    privacy: Option<PrivacyDeclaration>,
+    cost_profile: Option<PriceBook>,
 }
 
 impl DeploymentProfile {
@@ -547,7 +547,7 @@ impl DeploymentProfile {
     pub fn new(
         environment: BTreeMap<EnvironmentName, Value>,
         secrets: BTreeMap<SecretName, SecretBinding>,
-        privacy: Option<PrivacyProfile>,
+        privacy: Option<PrivacyDeclaration>,
     ) -> Result<Self, DeploymentError> {
         if secrets
             .iter()
@@ -566,7 +566,7 @@ impl DeploymentProfile {
     /// Attaches one optional exact price profile without changing graph
     /// identity. Its reference and digest enter the run attestation at boot.
     #[must_use]
-    pub fn with_cost_profile(mut self, profile: CostProfile) -> Self {
+    pub fn with_cost_profile(mut self, profile: PriceBook) -> Self {
         self.cost_profile = Some(profile);
         self
     }
@@ -583,8 +583,8 @@ impl DeploymentProfile {
 pub struct BootBindings {
     environment: BTreeMap<EnvironmentName, Value>,
     secrets: BTreeMap<SecretName, SecretMaterial>,
-    privacy: Option<PrivacyProfile>,
-    cost_profile: Option<CostProfile>,
+    privacy: Option<PrivacyDeclaration>,
+    cost_profile: Option<PriceBook>,
     attestation: DeploymentAttestation,
 }
 
@@ -669,13 +669,13 @@ impl BootBindings {
 
     /// Full privacy profile used to validate a personal-data plan.
     #[must_use]
-    pub fn privacy(&self) -> Option<&PrivacyProfile> {
+    pub fn privacy(&self) -> Option<&PrivacyDeclaration> {
         self.privacy.as_ref()
     }
 
     /// Attested deployment profile metadata; M1 does not calculate a price from it.
     #[must_use]
-    pub fn cost_profile(&self) -> Option<&CostProfile> {
+    pub fn cost_profile(&self) -> Option<&PriceBook> {
         self.cost_profile.as_ref()
     }
 
@@ -853,7 +853,7 @@ mod tests {
     #[test]
     fn privacy_digest_is_canonical_and_regime_coverage_is_explicit() {
         let build = |purposes| {
-            PrivacyProfile::new(
+            PrivacyDeclaration::new(
                 PrivacyProfileName::new("privacy.example/support@1")
                     .unwrap_or_else(|error| panic!("profile ref: {error}")),
                 policy("ropa/support"),
@@ -888,7 +888,7 @@ mod tests {
             criminal_offence: false,
             external_disclosure: true,
         }));
-        let disclosed = PrivacyProfile::new(
+        let disclosed = PrivacyDeclaration::new(
             PrivacyProfileName::new("privacy.example/support-disclosed@1")
                 .unwrap_or_else(|error| panic!("profile ref: {error}")),
             policy("ropa/support"),

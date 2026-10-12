@@ -13,7 +13,8 @@
 )]
 
 use rastok::conformance::{
-    InterleaveExpectation, InterleaveProbe, Profile, Provocation, assert_conformant, verify,
+    DriverTestFixture, ExitCaseTest, InterleaveExpectation, InterleaveProbe, assert_conformant,
+    verify,
 };
 use rastok::connectors::{DriverRegistry, HttpClientConfig, HttpClientFactory, RuntimeBindings};
 use rastok::contract::ContractCatalog;
@@ -370,13 +371,13 @@ lab authenticated {
 fn http_client_passes_the_connector_neutral_call_battery() {
     let server = LoopbackServer::start();
     let unreachable = unused_address();
-    let profile = Profile {
+    let profile = DriverTestFixture {
         contract: &HTTP_CLIENT,
         source: probe("happy", &server.url("/happy"), "text", "1s", "1KiB"),
         input: "request",
         happy_exit_case: "Completed",
         provocations: vec![
-            Provocation {
+            ExitCaseTest {
                 exit_case: "ServerError",
                 source: probe(
                     "server_error",
@@ -387,7 +388,7 @@ fn http_client_passes_the_connector_neutral_call_battery() {
                 ),
                 input: "request",
             },
-            Provocation {
+            ExitCaseTest {
                 exit_case: "ConnectFailed",
                 source: probe(
                     "connect_failed",
@@ -398,12 +399,12 @@ fn http_client_passes_the_connector_neutral_call_battery() {
                 ),
                 input: "request",
             },
-            Provocation {
+            ExitCaseTest {
                 exit_case: "TlsFailed",
                 source: probe("tls_failed", &server.tls_url("/tls"), "json", "1s", "1KiB"),
                 input: "request",
             },
-            Provocation {
+            ExitCaseTest {
                 exit_case: "ProtocolFailed",
                 source: probe(
                     "protocol_failed",
@@ -414,18 +415,18 @@ fn http_client_passes_the_connector_neutral_call_battery() {
                 ),
                 input: "request",
             },
-            Provocation {
+            ExitCaseTest {
                 exit_case: "BodyTooLarge",
                 source: probe("large", &server.url("/large"), "text", "1s", "4B"),
                 input: "x",
             },
-            Provocation {
+            ExitCaseTest {
                 exit_case: "DecodeFailed",
                 source: probe("bad_json", &server.url("/bad-json"), "json", "1s", "1KiB"),
                 input: "request",
             },
         ],
-        unprovable: vec![
+        untestable: vec![
             (
                 "DnsFailed",
                 "a portable test cannot replace the host resolver through the public Driver",

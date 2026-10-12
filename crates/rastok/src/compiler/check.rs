@@ -3207,7 +3207,7 @@ impl Checker<'_, '_> {
                         None
                     }
                     _ => Some(format!(
-                        "`{}` cannot be refined: the Contract/codec must admit JSON output hydration; no port is added",
+                        "`{}` cannot be refined: the Contract/codec must admit JSON output deserialization; no port is added",
                         port.name.text
                     )),
                 }
@@ -3234,7 +3234,7 @@ impl Checker<'_, '_> {
             };
             if !rastok_core::json::supports_type(schema.ty()) {
                 self.bag.push(Diagnostic::new(E_TYPE_INVALID, Phase::Check,
-                    format!("`{}` has no exact JSON hydration profile; use JSON structs, collections, enums, exact numbers and nullable fields", port.name.text))
+                    format!("`{}` has no exact JSON deserialization profile; use JSON structs, collections, enums, exact numbers and nullable fields", port.name.text))
                     .with_span(port.span).with_field("port", port.name.text.clone()));
                 continue;
             }

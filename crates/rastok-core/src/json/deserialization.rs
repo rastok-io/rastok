@@ -1,4 +1,4 @@
-//! The declared codec schema, not object insertion order, owns materialization.
+//! Converts parsed JSON values to the type declared by the codec schema.
 
 use alloc::boxed::Box;
 use alloc::string::ToString;
@@ -9,7 +9,7 @@ use crate::value::{Value, ValueKind, ValuePathSegment};
 
 /// Struct-member policy chosen by a validated codec, never by response contents.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum HydrationProfile {
+pub enum DeserializationPolicy {
     /// Every declared member must be present, and no extra member is admitted.
     #[default]
     Strict,
@@ -18,7 +18,7 @@ pub enum HydrationProfile {
     Projected,
 }
 
-/// Whether the exact JSON hydration profile defines this entire schema.
+/// Whether the exact JSON deserialization profile defines this entire schema.
 /// No byte, temporal, float or discriminator convention is guessed.
 #[must_use]
 pub fn supports_type(ty: &DataType) -> bool {
@@ -52,26 +52,26 @@ pub fn supports_type(ty: &DataType) -> bool {
     ty.check_bounds().is_ok() && supported(ty)
 }
 
-/// Hydrates an already parsed JSON value using one explicit codec schema.
+/// Deserializes an already parsed JSON value using one explicit codec schema.
 /// Objects become canonical structs by member name; all declared fields,
 /// including nullable ones, must be present. Decimals rescale exactly.
 ///
 /// # Errors
 /// A path-bearing conformance refusal whose Display omits payload values.
 /// Unsupported schema encodings refuse rather than selecting a convention.
-pub fn hydrate(ty: &DataType, value: Value) -> Result<Value, Box<ConformanceViolation>> {
-    hydrate_with_profile(ty, value, HydrationProfile::Strict)
+pub fn deserialize(ty: &DataType, value: Value) -> Result<Value, Box<ConformanceViolation>> {
+    deserialize_with_policy(ty, value, DeserializationPolicy::Strict)
 }
 
-/// Hydrates parsed JSON under an explicit member policy. Both profiles produce
+/// Deserializes parsed JSON under an explicit member policy. Both profiles produce
 /// ordinary closed structs and reject incompatible present values.
 ///
 /// # Errors
-/// The same path-bearing, payload-free conformance refusals as [`hydrate`].
-pub fn hydrate_with_profile(
+/// The same path-bearing, payload-free conformance refusals as [`deserialize`].
+pub fn deserialize_with_policy(
     ty: &DataType,
     value: Value,
-    profile: HydrationProfile,
+    profile: DeserializationPolicy,
 ) -> Result<Value, Box<ConformanceViolation>> {
     let refusal = |reason| {
         Box::new(ConformanceViolation {
@@ -88,7 +88,7 @@ pub fn hydrate_with_profile(
     if let Err(error) = value.check_consistency() {
         return Err(refusal(ConformanceReason::MalformedValue(error.defect)));
     }
-    hydrate_at(ty, value, profile)
+    deserialize_at(ty, value, profile)
 }
 
 fn at(
@@ -101,10 +101,10 @@ fn at(
     })
 }
 
-fn hydrate_at(
+fn deserialize_at(
     ty: &DataType,
     value: Value,
-    profile: HydrationProfile,
+    profile: DeserializationPolicy,
 ) -> Result<Value, Box<ConformanceViolation>> {
     let found = ValueKind::of(&value);
     let refusal = |reason| {
@@ -122,7 +122,7 @@ fn hydrate_at(
             for field in record.fields() {
                 let value = match members.remove(field.name()) {
                     Some(value) => value,
-                    None if profile == HydrationProfile::Projected
+                    None if profile == DeserializationPolicy::Projected
                         && DataType::Null.is_assignable_to(field.ty()) =>
                     {
                         Value::Null
@@ -134,12 +134,12 @@ fn hydrate_at(
                     }
                 };
                 let value = at(
-                    hydrate_at(field.ty(), value, profile),
+                    deserialize_at(field.ty(), value, profile),
                     ValuePathSegment::Field(field.name().to_string()),
                 )?;
                 fields.push((field.name().to_string(), value));
             }
-            if profile == HydrationProfile::Strict
+            if profile == DeserializationPolicy::Strict
                 && let Some(name) = members.keys().next()
             {
                 return Err(refusal(ConformanceReason::UnexpectedField(name.clone())));
@@ -152,7 +152,7 @@ fn hydrate_at(
                 .enumerate()
                 .map(|(index, value)| {
                     at(
-                        hydrate_at(array.element(), value, profile),
+                        deserialize_at(array.element(), value, profile),
                         ValuePathSegment::Index(index),
                     )
                 })
@@ -164,7 +164,7 @@ fn hydrate_at(
                 .into_iter()
                 .map(|(name, value)| {
                     at(
-                        hydrate_at(map.value(), value, profile),
+                        deserialize_at(map.value(), value, profile),
                         ValuePathSegment::MapValue(name.clone()),
                     )
                     .map(|value| (name, value))
@@ -182,7 +182,7 @@ fn hydrate_at(
                 .enumerate()
                 .find(|(_, branch)| (**branch == DataType::Null) == is_null)
                 .ok_or_else(|| refusal(ConformanceReason::TypeMismatch))?;
-            let value = hydrate_at(branch, value, profile)?;
+            let value = deserialize_at(branch, value, profile)?;
             Value::StructuralUnion {
                 branch: u16::try_from(index)
                     .map_err(|_| refusal(ConformanceReason::TypeMismatch))?,
@@ -248,11 +248,11 @@ mod tests {
     fn read(ty: &DataType, text: &str) -> Result<Value, Box<ConformanceViolation>> {
         let (value, consumed) = crate::json::parse_value(text).unwrap();
         assert_eq!(consumed, text.len());
-        hydrate(ty, value)
+        deserialize(ty, value)
     }
 
     #[test]
-    fn object_members_hydrate_by_name_with_exact_decimal_and_integer_values() {
+    fn object_members_deserialize_by_name_with_exact_decimal_and_integer_values() {
         let a = read(&response(), r#"{"usage":{"tokens":120},"cost":0.0042}"#).unwrap();
         let b = read(&response(), r#"{"cost":42e-4,"usage":{"tokens":120}}"#).unwrap();
         assert_eq!(a, b);
@@ -321,7 +321,7 @@ mod tests {
         ]);
         let project = |json| {
             let (value, _) = crate::json::parse_value(json).unwrap();
-            hydrate_with_profile(&ty, value, HydrationProfile::Projected)
+            deserialize_with_policy(&ty, value, DeserializationPolicy::Projected)
         };
         let absent = project(r#"{"required":"ok","extra":"NOT-RETAINED"}"#).unwrap();
         assert_eq!(
@@ -367,9 +367,10 @@ mod tests {
         }"#,
         )
         .unwrap();
-        let hydrated = hydrate_with_profile(&ty, value, HydrationProfile::Projected).unwrap();
-        assert!(ty.accepts(&hydrated));
-        let Value::Struct(fields) = hydrated else {
+        let deserialized =
+            deserialize_with_policy(&ty, value, DeserializationPolicy::Projected).unwrap();
+        assert!(ty.accepts(&deserialized));
+        let Value::Struct(fields) = deserialized else {
             panic!("struct")
         };
         let Value::Map(map) = &fields[0].1 else {
@@ -410,7 +411,7 @@ mod tests {
             DataType::MediaType,
         ] {
             assert!(!supports_type(&record(vec![("x", ty.clone())])));
-            assert!(hydrate(&ty, Value::Text(String::from("guess"))).is_err());
+            assert!(deserialize(&ty, Value::Text(String::from("guess"))).is_err());
         }
     }
 }

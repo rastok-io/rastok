@@ -8,7 +8,8 @@
 #![allow(clippy::expect_used)]
 
 use rastok::conformance::{
-    InterleaveExpectation, InterleaveProbe, Profile, Provocation, assert_conformant, verify,
+    DriverTestFixture, ExitCaseTest, InterleaveExpectation, InterleaveProbe, assert_conformant,
+    verify,
 };
 use rastok::connectors::{DriverRegistry, FileFactory};
 use rastok::contract::ContractCatalog;
@@ -107,34 +108,34 @@ fn file_registry(root: &Path) -> DriverRegistry {
 #[test]
 fn file_passes_the_connector_neutral_battery() {
     let root = TestRoot::new();
-    let profile = Profile {
+    let profile = DriverTestFixture {
         contract: &FILE,
         source: read_probe("happy", "happy.bin", "16B"),
         input: "ignored",
         happy_exit_case: "Completed",
         provocations: vec![
-            Provocation {
+            ExitCaseTest {
                 exit_case: "NotFound",
                 source: read_probe("missing", "missing.bin", "16B"),
                 input: "ignored",
             },
-            Provocation {
+            ExitCaseTest {
                 exit_case: "NotAFile",
                 source: read_probe("directory", "directory", "16B"),
                 input: "ignored",
             },
-            Provocation {
+            ExitCaseTest {
                 exit_case: "InvalidPath",
                 source: read_probe("invalid", "../outside", "16B"),
                 input: "ignored",
             },
-            Provocation {
+            ExitCaseTest {
                 exit_case: "ReadLimitExceeded",
                 source: read_probe("bounded", "large.bin", "4B"),
                 input: "ignored",
             },
         ],
-        unprovable: vec![
+        untestable: vec![
             (
                 "PermissionDenied",
                 "no portable fixture can force host permission denial across supported systems",

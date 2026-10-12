@@ -13,8 +13,10 @@ use alloc::vec::Vec;
 
 use crate::value::Value;
 
-mod hydration;
-pub use hydration::{HydrationProfile, hydrate, hydrate_with_profile, supports_type};
+mod deserialization;
+pub use deserialization::{
+    DeserializationPolicy, deserialize, deserialize_with_policy, supports_type,
+};
 
 // Compatibility spellings for the reader's callers. The logical decimal
 // budget belongs to `datatype`; JSON owns only its origin-specific parsing and

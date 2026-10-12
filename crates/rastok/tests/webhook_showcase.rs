@@ -7,7 +7,7 @@ use rastok::accounting::{ExactDecimal, accounting_observations};
 use rastok::compiler::compile;
 use rastok::contract::ContractCatalog;
 use rastok::deployment::{
-    BootBindings, DeploymentProfile, EnvironmentName, PolicyName, PrivacyProfile,
+    BootBindings, DeploymentProfile, EnvironmentName, PolicyName, PrivacyDeclaration,
     PrivacyProfileName, PrivacyRetention, RecipientPolicy, SecretBinding, SecretMaterial,
     SecretName, SecretProvider, SecretProviderError, SecretProviderId, SecretVersion,
     TransferPolicy,
@@ -32,7 +32,7 @@ impl SecretProvider for FixtureSecrets {
 fn boot(with_privacy: bool) -> BootBindings {
     let policy = |name| PolicyName::new(name).unwrap();
     let privacy = with_privacy.then(|| {
-        PrivacyProfile::new(
+        PrivacyDeclaration::new(
             PrivacyProfileName::new("privacy.example/showcase-webhook@1").unwrap(),
             policy("showcase/fictional-webhook"),
             vec![policy("purpose/local-synthetic-demonstration")],

@@ -2,14 +2,13 @@
 // onto the virtual clock — the frontier lints stop at this file for
 // the same reason they stop at the Driver layer.
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
-//! The connector conformance harness — the ten contract cases of
-//! `stdlib.md` §1 as one reusable battery over the role-aware runtime binding
-//! seam.
+//! Connector conformance tests for the ten contract cases of `stdlib.md` §1,
+//! using registered Drivers and the ordinary runtime bindings.
 //!
-//! A new connector brings three things: its contract sheet, a registered
-//! Driver factory, and an exchange-specific profile — a minimal probe unit, one happy
-//! input, one provocation per provocable terminal case, and a stated
-//! reason for every terminal case the harness cannot reach.
+//! A fixture is prepared test material. Here it contains a small graph, inputs
+//! and expected results for a Driver; in the Lab, it supplies the data for a
+//! scenario. Driver fixtures also state why any terminal case cannot be tested
+//! by this suite.
 //!
 //! The battery proves sheet shape and exact resolved `exit` type, stable
 //! Connector identity and outbound role binding, silence before start,
@@ -38,20 +37,20 @@ use crate::plan::{GraphVersion, ValidatedExecutionPlan};
 use crate::runtime::vm::Vm;
 use std::collections::BTreeSet;
 
-/// One way to force one declared terminal case out of the Driver.
+/// Graph source and input chosen to produce one declared Driver exit case.
 #[derive(Debug, Clone)]
-pub struct Provocation {
-    /// The declared `exit` case this provocation must produce.
+pub struct ExitCaseTest {
+    /// The declared `exit` case expected from this test.
     pub exit_case: &'static str,
-    /// A probe unit whose run ends with that case at the root sink.
+    /// DSL source for the graph exercising this exit case.
     pub source: String,
     /// The submission line driving it.
     pub input: &'static str,
 }
 
-/// What one connector offers the harness.
+/// Prepared graphs, inputs and expected exit cases for Call Driver tests.
 #[derive(Debug, Clone)]
-pub struct Profile {
+pub struct DriverTestFixture {
     /// The contract sheet under test.
     pub contract: &'static ConnectorContract,
     /// A minimal probe unit exercising the happy path.
@@ -61,10 +60,10 @@ pub struct Profile {
     /// The terminal case produced by the happy path.
     pub happy_exit_case: &'static str,
     /// One provocation per provocable declared terminal case.
-    pub provocations: Vec<Provocation>,
+    pub provocations: Vec<ExitCaseTest>,
     /// Declared terminal cases this Driver cannot be provoked into, each
     /// with its reason — stated, never silent.
-    pub unprovable: Vec<(&'static str, &'static str)>,
+    pub untestable: Vec<(&'static str, &'static str)>,
     /// A probe whose driver stays mute under a declared budget, for
     /// the timeout and cancel disciplines; `None` skips that battery
     /// (and leaves `TimeoutExpired` unproven).
@@ -78,13 +77,9 @@ pub struct Profile {
     pub interleave: Option<InterleaveProbe>,
 }
 
-/// Backwards-compatible explicit name for the original one-request/one-exit
-/// conformance profile.
-pub type CallProfile = Profile;
-
-/// What an independent inbound Event offers the shared battery.
+/// A validated graph and expected outputs for an inbound Event Driver test.
 #[derive(Debug)]
-pub struct EventProfile<'plan> {
+pub struct EventTestFixture<'plan> {
     /// The Event contract sheet under test.
     pub contract: &'static ConnectorContract,
     /// Validated probe containing the bound Event source and its route.
@@ -93,9 +88,9 @@ pub struct EventProfile<'plan> {
     pub expected_outputs: Vec<Data>,
 }
 
-/// What a many-message Session offers the shared battery.
+/// A validated graph, messages and expected terminals for Session Driver tests.
 #[derive(Debug)]
-pub struct SessionProfile<'plan> {
+pub struct SessionTestFixture<'plan> {
     /// The Session contract sheet under test.
     pub contract: &'static ConnectorContract,
     /// Validated probe containing the bound Session Connector.
@@ -141,7 +136,7 @@ pub struct InterleaveExpectation {
 }
 
 /// The harness verdict: what was proven, what was declared
-/// unprovable, and every discipline violation found.
+/// untestable, and every discipline violation found.
 #[derive(Debug, Clone, Default)]
 pub struct Report {
     /// Terminal cases proven by a provocation or the mute battery.
@@ -162,7 +157,11 @@ impl Report {
 
 /// Runs the whole battery over one Driver.
 #[must_use]
-pub fn verify(profile: &Profile, registry: &ContractCatalog, drivers: &DriverRegistry) -> Report {
+pub fn verify(
+    profile: &DriverTestFixture,
+    registry: &ContractCatalog,
+    drivers: &DriverRegistry,
+) -> Report {
     let mut report = Report::default();
     sheet_completeness(profile.contract, &mut report);
 
@@ -281,8 +280,8 @@ pub fn verify(profile: &Profile, registry: &ContractCatalog, drivers: &DriverReg
     }
 
     // No silent gap: declared terminal cases are proven or stated
-    // unprovable.
-    for (kind, reason) in &profile.unprovable {
+    // untestable.
+    for (kind, reason) in &profile.untestable {
         if !report.unproven_cases.iter().any(|(known, _)| known == kind)
             && !report.proven_cases.contains(kind)
         {
@@ -297,7 +296,7 @@ pub fn verify(profile: &Profile, registry: &ContractCatalog, drivers: &DriverReg
                 .any(|(known, _)| *known == kind);
         if !covered {
             report.violations.push(format!(
-                "declared terminal case `{kind}` is neither provoked nor declared unprovable"
+                "declared terminal case `{kind}` is neither provoked nor declared untestable"
             ));
         }
     }
@@ -307,7 +306,7 @@ pub fn verify(profile: &Profile, registry: &ContractCatalog, drivers: &DriverReg
 /// Runs the Event-shaped battery: retained proposal, commit-before-decision,
 /// ordinary bounded routing, and no fabricated call/session fact.
 #[must_use]
-pub fn verify_event(profile: &EventProfile<'_>, drivers: &DriverRegistry) -> Report {
+pub fn verify_event(profile: &EventTestFixture<'_>, drivers: &DriverRegistry) -> Report {
     let mut report = Report::default();
     sheet_completeness(profile.contract, &mut report);
     if profile.contract.exchange != crate::connector::ConnectorExchange::Event {
@@ -391,7 +390,7 @@ pub fn verify_event(profile: &EventProfile<'_>, drivers: &DriverRegistry) -> Rep
 /// two concurrent opens, crossed observations, one write per session,
 /// write-ambiguity abandonment, terminal correlation, and post-exit silence.
 #[must_use]
-pub fn verify_session(profile: &SessionProfile<'_>, drivers: &DriverRegistry) -> Report {
+pub fn verify_session(profile: &SessionTestFixture<'_>, drivers: &DriverRegistry) -> Report {
     let mut report = Report::default();
     sheet_completeness(profile.contract, &mut report);
     if profile.contract.exchange != crate::connector::ConnectorExchange::Session {
@@ -1003,7 +1002,7 @@ fn audit_journal(journal: &MemJournal, report: &mut Report) {
 }
 
 fn run_provocation(
-    provocation: &Provocation,
+    provocation: &ExitCaseTest,
     registry: &ContractCatalog,
     drivers: &DriverRegistry,
 ) -> Result<(), String> {

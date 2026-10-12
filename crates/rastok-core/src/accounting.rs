@@ -138,11 +138,11 @@ impl Money {
     }
 }
 
-/// Stable deployment price-profile identity.
+/// The name used to select a deployment price book.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct CostProfileName(String);
+pub struct PriceBookName(String);
 
-impl CostProfileName {
+impl PriceBookName {
     /// Builds one bounded, whitespace-free stable reference.
     ///
     /// # Errors
@@ -259,23 +259,25 @@ impl UnitPrice {
     }
 }
 
-/// Canonical optional deployment price book.
+/// Named unit prices supplied by deployment, sorted by Connector and measure.
+/// The digest covers all rows and their provider/model dimensions; storing a
+/// price book does not calculate costs or create measurement samples.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CostProfile {
-    reference: CostProfileName,
+pub struct PriceBook {
+    reference: PriceBookName,
     rules: Vec<UnitPrice>,
     digest: [u8; 32],
 }
 
-impl CostProfile {
-    /// Sorts and seals one closed profile.
+impl PriceBook {
+    /// Sorts the unit prices and computes their canonical digest.
     ///
     /// # Errors
     ///
     /// A Connector/measure pair has exactly one rule, and every rule for one
     /// Connector must agree on provider/model dimensions.
     pub fn new(
-        reference: CostProfileName,
+        reference: PriceBookName,
         mut rules: Vec<UnitPrice>,
     ) -> Result<Self, AccountingError> {
         rules.sort_by(|left, right| {
@@ -314,7 +316,7 @@ impl CostProfile {
 
     /// Stable profile reference.
     #[must_use]
-    pub const fn reference(&self) -> &CostProfileName {
+    pub const fn reference(&self) -> &PriceBookName {
         &self.reference
     }
 
@@ -484,7 +486,7 @@ impl AccountingObservation {
 pub fn accounting_observations(
     plan: &ValidatedExecutionPlan,
     records: &[Record],
-    profile: Option<&CostProfile>,
+    profile: Option<&PriceBook>,
 ) -> Result<Vec<AccountingObservation>, AccountingError> {
     let structural = observations_for_records_from(records, 0);
     let mut result = Vec::new();
@@ -652,7 +654,7 @@ fn scope_for(
     connector: Option<&node::Path>,
     lineage_connector: Option<&node::Path>,
     port: node::Port,
-    profile: Option<&CostProfile>,
+    profile: Option<&PriceBook>,
 ) -> ObservationScope {
     let connector = connector
         .or_else(|| correlation.connector())
@@ -1014,7 +1016,7 @@ mod tests {
         node::Path::new(["model"]).unwrap_or_else(|error| panic!("path: {error}"))
     }
 
-    fn profile(prices: &[(&str, u64, i128, i32, &str)]) -> CostProfile {
+    fn profile(prices: &[(&str, u64, i128, i32, &str)]) -> PriceBook {
         let rules = prices
             .iter()
             .map(|(id, units, unscaled, scale, currency)| {
@@ -1032,8 +1034,8 @@ mod tests {
                 .unwrap_or_else(|error| panic!("unit price: {error}"))
             })
             .collect();
-        CostProfile::new(
-            CostProfileName::new("pricing.example/test@1")
+        PriceBook::new(
+            PriceBookName::new("pricing.example/test@1")
                 .unwrap_or_else(|error| panic!("profile ref: {error}")),
             rules,
         )

@@ -12,7 +12,8 @@ use rastok::boundary::{
     ProcessExit, RequestPreparation, Response, SchedulerCompletion,
 };
 use rastok::conformance::{
-    InterleaveExpectation, InterleaveProbe, Profile, Provocation, assert_conformant, verify,
+    DriverTestFixture, ExitCaseTest, InterleaveExpectation, InterleaveProbe, assert_conformant,
+    verify,
 };
 use rastok::connector::{ConnectorDirection, ContractId, PROCESS_CONNECTOR_ID};
 use rastok::connectors::{
@@ -188,35 +189,35 @@ fn process_registry() -> DriverRegistry {
         .expect("Process is registered once")
 }
 
-fn process_profile() -> Profile {
-    Profile {
+fn process_profile() -> DriverTestFixture {
+    DriverTestFixture {
         contract: &PROCESS,
         source: HAPPY.into(),
         input: "salut",
         happy_exit_case: "Exited",
         provocations: vec![
-            Provocation {
+            ExitCaseTest {
                 exit_case: "Exited",
                 source: EXEC_FAILED.into(),
                 input: "salut",
             },
-            Provocation {
+            ExitCaseTest {
                 exit_case: "SpawnFailed",
                 source: SPAWN_FAILED.into(),
                 input: "salut",
             },
-            Provocation {
+            ExitCaseTest {
                 exit_case: "DecodeFailed",
                 source: DECODE_ERROR.into(),
                 input: "salut",
             },
-            Provocation {
+            ExitCaseTest {
                 exit_case: "OutputOverflow",
                 source: OUTPUT_OVERFLOW.into(),
                 input: "salut",
             },
         ],
-        unprovable: vec![
+        untestable: vec![
             (
                 "CaptureFailed",
                 "a pipe READ error cannot be provoked portably from a real child; \
@@ -349,13 +350,13 @@ impl ConnectorDriverFactory for LiarFactory {
 
 #[test]
 fn a_malformed_terminal_case_fails_the_battery() {
-    let profile = Profile {
+    let profile = DriverTestFixture {
         contract: &PROCESS,
         source: HAPPY.into(),
         input: "salut",
         happy_exit_case: "Exited",
         provocations: Vec::new(),
-        unprovable: Vec::new(),
+        untestable: Vec::new(),
         mute_source: None,
         interleave: None,
     };
@@ -467,13 +468,13 @@ impl ConnectorDriverFactory for SwapperFactory {
 
 #[test]
 fn crossed_concurrent_replies_fail_the_battery() {
-    let profile = Profile {
+    let profile = DriverTestFixture {
         contract: &PROCESS,
         source: HAPPY.into(),
         input: "salut",
         happy_exit_case: "Exited",
         provocations: Vec::new(),
-        unprovable: Vec::new(),
+        untestable: Vec::new(),
         mute_source: None,
         interleave: Some(InterleaveProbe {
             source: PAIR.into(),

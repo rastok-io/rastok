@@ -39,7 +39,7 @@ graph app : App {{
 #[test]
 fn a_json_response_refines_only_the_existing_output_and_retains_its_annotations() {
     let compilation = checked(&source("json", "output out: ModelResponse"))
-        .expect("the JSON codec hydrates the declared response type");
+        .expect("the JSON codec deserializes the declared response type");
     let model = &compilation.plan.plan().nodes[0];
     assert_eq!(model.ports.len(), 3);
     let out = model
@@ -204,7 +204,7 @@ fn unsupported_json_target_encodings_refuse_at_check() {
             bag.diagnostics()
                 .iter()
                 .any(|d| d.code().as_str() == "E-TYPE-INVALID"
-                    && d.message().contains("JSON hydration")),
+                    && d.message().contains("JSON deserialization")),
             "{bag:?}"
         );
     }
@@ -239,12 +239,12 @@ fn the_independent_validator_rejects_forged_codec_capabilities() {
         .1 = AttrSetting::Word(String::from("text"));
     assert!(
         ValidatedExecutionPlan::try_new(forged).is_err(),
-        "text has no JSON hydration capability"
+        "text has no JSON deserialization capability"
     );
 }
 
 #[test]
-fn malformed_native_or_unhydrated_data_cannot_enter_the_outbound_journal() {
+fn malformed_native_or_undeserialized_data_cannot_enter_the_outbound_journal() {
     use rastok::{
         boundary::*,
         envelope::{Data, Encoding, Namespace, Value},

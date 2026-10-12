@@ -2112,7 +2112,7 @@ graph inbound : App {
             }
             .into_value(),
         );
-        let profile = crate::conformance::SessionProfile {
+        let profile = crate::conformance::SessionTestFixture {
             contract,
             plan: &plan,
             connector: node::Path::new(["first"]).unwrap(),
@@ -2953,7 +2953,7 @@ graph api : App {
             common: crate::stdlib::PROCESS.common,
             selector: crate::stdlib::PROCESS.selector.clone(),
         }));
-        let profile = crate::conformance::EventProfile {
+        let profile = crate::conformance::EventTestFixture {
             contract,
             plan: &plan,
             expected_outputs: vec![Data::materialized(Value::Text(String::from("event-4")))],

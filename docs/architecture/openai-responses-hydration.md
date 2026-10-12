@@ -59,7 +59,7 @@ measurement evidence. The executable adapter retains selected quantities on
 ## Contact with Rastok's executable codec
 
 [Types §4.1](../spec/types.md#41-explicit-json-response-types-in-m1) and
-[`json::hydrate`](../../crates/rastok-core/src/json/hydration.rs) agree:
+[`json::deserialize`](../../crates/rastok-core/src/json/deserialization.rs) agree:
 
 | Situation | Current M1 rule | Consequence for Responses |
 |---|---|---|
