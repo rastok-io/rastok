@@ -1,10 +1,12 @@
-   # Vocabulary ledger — the named entities of the code, for validation
+   # Vocabulary ledger — the named entities of the code, validated
 
-> Draft of 11 October 2026, prepared by Fable for Yoann's validation during
-> the M1 human review. Status: **nothing here is decided**. Each line marked
-> **⟂** is a question for Yoann; a validated answer moves to the
-> [review ledger](human-review-m1.md) and, when it touches code, to the
-> realignment lot of [D-2026-10-11-1](../spec/decisions.md).
+> Drafted 11 October 2026 by Fable; every line validated by Yoann on 11 and
+> 12 October. Status: **closed — every ⟂ is settled**. Decisions are
+> recorded in place, and the rename lot they produce is the
+> [Outcome](#outcome--the-rename-lot-closed-12-october) section. Yoann
+> decided on 12 October that the lot is applied **with the realignment of
+> [D-2026-10-11-1](../spec/decisions.md), before the opening**, together
+> with A-T4-4; the T4 second pass is suspended after its block 1 until then.
 
 ## Why and how
 
@@ -20,8 +22,8 @@ alias) and **238** in `rastok` (152 structs, 81 enums, 3 traits, two
 aliases); the complete list is the appendix. Each family below names the
 competing words, quotes the type's own first doc line as its meaning, and
 gives the word's frequency in `docs/spec/*.md` as evidence of which word the
-specification already uses. Three rules are proposed for the validation,
-themselves **⟂** to confirm:
+specification already uses. Six rules were confirmed during the validation; rules 5 and 6 were added
+on the way, each after a case that needed it:
 
 1. **One word per concept.** When the specification has a word, the code
    takes it. A word that exists only in the code names a mechanism, not a
@@ -591,7 +593,7 @@ stays, the result of one run.
 module says the layer; the lowering, the one file holding both, prefixes
 `hir::`, as one writes `syn::Item`.
 **Settled 12 October (Yoann, batch ok: "pour le reste on est à peu près bon").** Accepted.
-## Validated so far — 11 October, evening
+## Validated — 11 and 12 October
 
 | Term today | What it is | Yoann's decision | Status |
 |---|---|---|---|
@@ -619,8 +621,9 @@ module says the layer; the lowering, the one file holding both, prefixes
 
 Every line of this ledger is settled. What follows is the deliverable: the
 renames to apply, by family, with what stays and why. No rename changes a
-journal byte; the codec writes fields, not type names. Placement of the lot
-(with realignment lot 1, or after the opening) is Yoann's decision.
+journal byte; the codec writes fields, not type names. Placement decided 12 October (Yoann): the lot is applied with the
+realignment, before the opening; the T4 second pass is suspended after block
+1 so that the realignment, A-T4-4 and this lot start.
 
 ### Renames
 

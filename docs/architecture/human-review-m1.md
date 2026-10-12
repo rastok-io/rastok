@@ -56,6 +56,18 @@ The same evening a [vocabulary ledger](human-review-vocabulary.md) was
 drafted at Yoann's request: every public type of both crates by family, the
 overlapping terms first, 42 questions for his validation.
 
+**Reading — 12 October.** The vocabulary ledger was validated line by line
+with Yoann and closed: every **⟂** is settled, and its
+[Outcome](human-review-vocabulary.md#outcome--the-rename-lot-closed-12-october)
+section is the rename lot, about forty renames and zero journal bytes. Yoann
+then decided to **stop the review here** and start the work it produced: the
+realignment of D-2026-10-11-1 (lots 1 and 2), A-T4-4 inside lot 1, and the
+rename lot with them, all before the opening. The T4 second pass is suspended
+after block 1; blocks 2–7 are read on the realigned code. Astra's
+cross-check of the three documents found two stale sentences, the ledger
+header still saying "nothing here is decided" and the disposition row below
+placing lot 1 "after the opening"; both are corrected in this touch.
+
 Rastok promises that the same validated plan and the same journaled inputs
 produce the same execution, identities and trace. The review reads what
 carries that promise first (identity, journal, validated plan, VM), then what
@@ -989,7 +1001,7 @@ brief references it by line.
 | Before the 23/24 October freeze, zero bytes | A-T2-8 (three comments, `loop.md` recipe); key-24 precision in `identity.md` — both landed 8 October |
 | v21, after the opening | A-T2-9 (Loop fold learns the closing scope), A-T2-10 (`loop_protocol::Packet::tree`), A-T2-11 (one Retry carrier matrix, one terminal-case reading, `Timing` classification), A-T4-1 (drain cancels before `begin_settlement`), A-T4-2 (one fuel resolution, two cosmetic residues) |
 | M2, with the durable journal | A-T4-3 and the `instance_commands` re-fold (A-T2-3), one lifecycle fold for the three protocols (A-T2-2(b)) |
-| Realignment lot 1 (D-2026-10-11-1), after the opening | A-T4-4 (11 October) |
+| Realignment lot 1 (D-2026-10-11-1), before the opening | A-T4-4 (11 October) |
 
 Yoann's 8 October brief dates the real freeze **Friday 23 October**; this
 ledger, `ROADMAP.md:59`, `opening-showcase.md:3` and `decisions.md:137` say
@@ -1001,7 +1013,9 @@ is taken as the intent.
 Graph Loop manager (`graph_loop.rs` except its recovery check), and the
 `unreachable!`/`unwrap_or_else` sites of `vm.rs` one by one.
 Block 1, `inject_submission`, was read on 11 October: see the second pass
-above; blocks 2–7 remain.
+above; blocks 2–7 remain. **12 October:** suspended here by Yoann's
+decision, so that the realignment, A-T4-4 and the rename lot start; blocks
+2–7 are read on the realigned code.
 
 ## Realignment on the Node ontology — decided 2026-10-11
 
