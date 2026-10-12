@@ -1308,7 +1308,7 @@ pub trait Journal {
     /// transactions; no Worker-local counter participates.
     fn instance_generation_for_admission(
         &self,
-        address: &instance::Identity,
+        address: &instance::InstanceAddress,
     ) -> Result<instance::Generation, Error>;
 
     /// Reconstructs the command-based Loop protocol from committed facts.
@@ -2303,7 +2303,7 @@ impl Journal for MemJournal {
 
     fn instance_generation_for_admission(
         &self,
-        address: &instance::Identity,
+        address: &instance::InstanceAddress,
     ) -> Result<instance::Generation, Error> {
         self.admissions.instance_generation_for_admission(address)
     }
@@ -2625,7 +2625,7 @@ mod tests {
 
     fn instance(owner: &str, generation: u64) -> instance::Generation {
         let owner = crate::node::OwnerPath::new([owner]).expect("valid owner path");
-        instance::Generation::new(instance::Identity::singleton(&owner), generation)
+        instance::Generation::new(instance::InstanceAddress::singleton(&owner), generation)
     }
 
     fn provenance(path: &str) -> IngressEnvelopeProvenance {
@@ -3008,7 +3008,7 @@ mod tests {
             && !instance.address().owner().is_root())
         .then(|| {
             instance::Generation::new(
-                instance::Identity::singleton(&crate::node::OwnerPath::root()),
+                instance::InstanceAddress::singleton(&crate::node::OwnerPath::root()),
                 0,
             )
         });
@@ -3036,7 +3036,7 @@ mod tests {
 
     fn activate_root(journal: &mut MemJournal) {
         let root = instance::Generation::new(
-            instance::Identity::singleton(&crate::node::OwnerPath::root()),
+            instance::InstanceAddress::singleton(&crate::node::OwnerPath::root()),
             0,
         );
         journal
@@ -3049,7 +3049,7 @@ mod tests {
         let mut journal = MemJournal::new(GraphVersion(1));
         activate_root(&mut journal);
         let parent = instance::Generation::new(
-            instance::Identity::singleton(&node::OwnerPath::new(["window"]).unwrap()),
+            instance::InstanceAddress::singleton(&node::OwnerPath::new(["window"]).unwrap()),
             0,
         );
         journal
@@ -3059,14 +3059,16 @@ mod tests {
             ))
             .unwrap();
         let source = instance::Generation::new(
-            instance::Identity::singleton(&node::OwnerPath::new(["window", "total"]).unwrap()),
+            instance::InstanceAddress::singleton(
+                &node::OwnerPath::new(["window", "total"]).unwrap(),
+            ),
             0,
         );
         let mut start = lifecycle_transaction(source.clone(), node::Lifecycle::Start);
         start.parent_instance = Some(parent.clone());
         journal.commit(start).unwrap();
         let outside = instance::Generation::new(
-            instance::Identity::singleton(&node::OwnerPath::new(["outside"]).unwrap()),
+            instance::InstanceAddress::singleton(&node::OwnerPath::new(["outside"]).unwrap()),
             0,
         );
         journal
@@ -3078,7 +3080,7 @@ mod tests {
         request_close(&mut journal, parent.clone());
         let owner = node::OwnerPath::new(["window", "bridge"]).unwrap();
         let address = |path: &node::OwnerPath, key: &str| {
-            instance::Identity::new(
+            instance::InstanceAddress::new(
                 path,
                 &[instance::Segment::SelectedKey {
                     scope: owner.clone(),
@@ -3148,7 +3150,7 @@ mod tests {
     #[test]
     fn observable_time_must_match_the_retained_acceptance_instant() {
         let reference = instance::Generation::new(
-            instance::Identity::singleton(&crate::node::OwnerPath::root()),
+            instance::InstanceAddress::singleton(&crate::node::OwnerPath::root()),
             0,
         );
         let mut record = lifecycle_transaction(reference, node::Lifecycle::Start);
@@ -3312,11 +3314,13 @@ mod tests {
 
     #[test]
     fn admission_prefix_and_live_index_agree_through_inner_first_closing() {
-        let root =
-            instance::Generation::new(instance::Identity::singleton(&node::OwnerPath::root()), 0);
+        let root = instance::Generation::new(
+            instance::InstanceAddress::singleton(&node::OwnerPath::root()),
+            0,
+        );
         let parent = instance("window", 0);
         let child = instance::Generation::new(
-            instance::Identity::singleton(&node::OwnerPath::new(["window", "sum"]).unwrap()),
+            instance::InstanceAddress::singleton(&node::OwnerPath::new(["window", "sum"]).unwrap()),
             0,
         );
         let other = instance("other", 0);
@@ -3406,7 +3410,7 @@ mod tests {
     #[test]
     fn generations_are_a_journal_fold_and_lifecycle_cannot_double_transition() {
         let mut journal = MemJournal::new(GraphVersion(1));
-        let address = instance::Identity::singleton(
+        let address = instance::InstanceAddress::singleton(
             &crate::node::OwnerPath::new(["worker"]).expect("valid owner path"),
         );
         let first = instance::Generation::new(address.clone(), 0);
@@ -3440,7 +3444,7 @@ mod tests {
             .commit(lifecycle_transaction(first.clone(), node::Lifecycle::Start))
             .unwrap();
         let root = instance::Generation::new(
-            instance::Identity::singleton(&crate::node::OwnerPath::root()),
+            instance::InstanceAddress::singleton(&crate::node::OwnerPath::root()),
             0,
         );
         request_close(&mut journal, root.clone());
@@ -3536,7 +3540,7 @@ mod tests {
     #[test]
     fn a_committed_route_keeps_its_reserved_generation_until_start_materializes() {
         let mut journal = MemJournal::new(GraphVersion(1));
-        let address = instance::Identity::singleton(
+        let address = instance::InstanceAddress::singleton(
             &crate::node::OwnerPath::new(["worker"]).expect("valid owner path"),
         );
         let reserved = instance::Generation::new(address.clone(), 0);
@@ -3613,7 +3617,7 @@ mod tests {
 
     #[test]
     fn the_instance_lifetime_ref_seals_address_and_generation() {
-        let address = instance::Identity::singleton(
+        let address = instance::InstanceAddress::singleton(
             &crate::node::OwnerPath::new(["worker"]).expect("valid owner path"),
         );
         let first = ids::instance_lifetime_id(&instance::Generation::new(address.clone(), 0));

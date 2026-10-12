@@ -335,7 +335,7 @@ mod tests {
     #[test]
     fn sibling_deliveries_of_one_origin_open_distinct_runs() {
         let owner = node::OwnerPath::new(["loop"]).unwrap();
-        let instance = instance::Generation::new(instance::Identity::singleton(&owner), 0);
+        let instance = instance::Generation::new(instance::InstanceAddress::singleton(&owner), 0);
         let envelope = Id::derive(crate::envelope::IdKind::Root, &[b"same-origin"]);
         let left =
             OpeningAdmissionId::Delivery(super::super::ids::delivery_id("left>loop.in", envelope));

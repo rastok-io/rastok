@@ -13,7 +13,7 @@ fn advancing_time_keeps_each_ready_transaction_individually_inspectable() {
     let lab = &compilation.labs[0];
     let simulation = &lab.simulations[0];
     let expected = rastok::lab::run(&compilation.plan, GraphVersion(1), lab);
-    let mut session = rastok::lab::ScenarioSession::try_new(
+    let mut session = rastok::lab::Simulator::try_new(
         &compilation.plan,
         GraphVersion(1),
         &simulation.name,

@@ -51,9 +51,9 @@ fn first_loop(journal: &MemJournal) -> rastok::journal::LoopRunId {
         .0
 }
 
-fn int_address(owner: &str, value: i64) -> instance::Identity {
+fn int_address(owner: &str, value: i64) -> instance::InstanceAddress {
     let owner = node::OwnerPath::new([owner]).expect("valid owner path");
-    instance::Identity::new(
+    instance::InstanceAddress::new(
         &owner,
         &[instance::Segment::SelectedKey {
             scope: owner.clone(),
@@ -615,7 +615,7 @@ graph rooted : App {
     };
     let expected = |node: &str| {
         instance::Generation::new(
-            instance::Identity::new(
+            instance::InstanceAddress::new(
                 &node::OwnerPath::new([node]).expect("valid owner path"),
                 core::slice::from_ref(&frame),
             )
@@ -755,7 +755,7 @@ graph nested : App {
         .collect();
     assert_eq!(transactions.len(), 2, "the child handler fires twice");
     let session = node::OwnerPath::new(["sessions"]).expect("valid Graph owner");
-    let expected = instance::Identity::new(
+    let expected = instance::InstanceAddress::new(
         &node::OwnerPath::new(["sessions", "greet"]).expect("valid child owner"),
         &[instance::Segment::SelectedKey {
             scope: session,
@@ -1762,8 +1762,10 @@ graph lifecycle : App {
             _ => None,
         })
         .collect();
-    let root =
-        instance::Generation::new(instance::Identity::singleton(&node::OwnerPath::root()), 0);
+    let root = instance::Generation::new(
+        instance::InstanceAddress::singleton(&node::OwnerPath::root()),
+        0,
+    );
     let seven = instance::Generation::new(int_address("counter", 7), 0);
     let nine = instance::Generation::new(int_address("counter", 9), 0);
     assert_eq!(
@@ -4501,7 +4503,7 @@ impl Journal for FlakyJournal {
     }
     fn instance_generation_for_admission(
         &self,
-        address: &instance::Identity,
+        address: &instance::InstanceAddress,
     ) -> Result<instance::Generation, rastok::journal::Error> {
         self.inner.instance_generation_for_admission(address)
     }

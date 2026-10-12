@@ -21,14 +21,14 @@ package "rastok-core — no_std + alloc" as CORE {
   rectangle "node / connector\nPath, Port, Kind, Extension, Trigger\nContractId, roles, exchange profiles" as NODE
   rectangle "datatype / value / envelope\nDataType, Value, Envelope, Data\none logical type/value authority" as DATA
   rectangle "expr / json / trivia\nTree, Signature, EvalValue\nbounded pure evaluation and exact readers" as EXPR
-  rectangle "instance / canonical / canonical_cbor\nIdentity, Segment, Generation\ncanonical registry and byte discipline" as IDENTITY
+  rectangle "instance / canonical / canonical_cbor\nInstanceAddress, Segment, Generation\ncanonical registry and byte discipline" as IDENTITY
   rectangle "plan / loop_proof\nValidatedExecutionPlan, Owner, Dispatch\nRouteRule, ExtensionSpec, LoopSpec/LoopExpiredOutput, RetrySpec\nindependent scope, type and proof validation" as PLAN
   rectangle "runtime\nTransactionPreparer, Vm, Mailboxes, Scheduler\nLoop / Retry managers; spatial/exchange recovery\nGraph has no application handler" as VM
   rectangle "boundary\nInbound/Outbound Driver traits\nCallOpen, Completion, CallId, SessionId\nDriverPoller and Contract completion checks" as BOUNDARY
   rectangle "journal / deadline / codec / loop_protocol / retry_protocol / instance_stop\nJournal, MemJournal, Record\nruns, Held/Consumed/Published and instance commands\nunsealed original deadlines; no disk backend" as JOURNAL
   rectangle "schema_annotation / data_policy\nSchemaPath; four standard annotations, typed metadata\nindependent propagation and redaction" as POLICY
   rectangle "deployment\nBootReference, BootBindings, SecretName\nrun-scoped privacy/price attestations" as DEPLOY
-  rectangle "observation / accounting\nRecordObservation / AccountingObservation\nindividual exact samples and provenance\nno report or automatic pricing" as REPORT
+  rectangle "observation / accounting\nRecordObservation / Measurement\nindividual exact samples and provenance\nno report or automatic pricing" as REPORT
 }
 
 ENTRY -[hidden]right-> COMP

@@ -953,8 +953,10 @@ mod tests {
     fn the_loop_protocol_registry_pins_open_admit_and_observed_time() {
         use crate::journal::loop_protocol::{Fact, LoopRecord, OpeningAdmissionId, run_ref};
         let owner = crate::node::OwnerPath::root();
-        let instance =
-            crate::instance::Generation::new(crate::instance::Identity::singleton(&owner), 0);
+        let instance = crate::instance::Generation::new(
+            crate::instance::InstanceAddress::singleton(&owner),
+            0,
+        );
         let root = crate::envelope::Id::from_bytes([3; 16]);
         let state = Envelope::new(
             crate::envelope::Meta::new(crate::envelope::MetaSys::root(root, 1)),

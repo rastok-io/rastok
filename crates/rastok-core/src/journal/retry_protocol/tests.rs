@@ -51,7 +51,7 @@ struct Fixture {
 impl Fixture {
     fn new(attempts: u64) -> Self {
         let instance = instance::Generation::new(
-            instance::Identity::singleton(
+            instance::InstanceAddress::singleton(
                 &node::OwnerPath::new(vec![String::from("pay")]).unwrap(),
             ),
             0,

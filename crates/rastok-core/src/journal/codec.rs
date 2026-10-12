@@ -147,7 +147,7 @@ fn read_owner(value: &Cbor) -> Result<node::OwnerPath, Error> {
 fn instance(value: &Cbor) -> Result<instance::Generation, Error> {
     let [address, generation] = array(value)?;
     Ok(instance::Generation::new(
-        instance::Identity::decode(bytes(address)?).map_err(Error::Read)?,
+        instance::InstanceAddress::decode(bytes(address)?).map_err(Error::Read)?,
         uint(generation)?,
     ))
 }

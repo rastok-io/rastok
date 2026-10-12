@@ -4,7 +4,7 @@
 use rastok::compiler::compile;
 use rastok::contract::ContractCatalog;
 use rastok::journal::Record;
-use rastok::lab::{self, ScenarioSession};
+use rastok::lab::{self, Simulator};
 use rastok::plan::GraphVersion;
 
 const SOURCE: &str = include_str!("fixtures/lab-http-source.rkg");
@@ -88,7 +88,7 @@ fn decoded_requests_use_the_source_contract_without_a_physical_driver_or_app_inp
     );
 
     let simulation = &compilation.labs[0].simulations[0];
-    let mut stepped = ScenarioSession::try_new(
+    let mut stepped = Simulator::try_new(
         &compilation.plan,
         GraphVersion(1),
         &simulation.name,

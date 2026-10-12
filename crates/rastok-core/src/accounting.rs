@@ -378,7 +378,7 @@ impl MeasureSample {
 
 /// Causal provenance of one retained measurement, without grouping.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ObservationScope {
+pub struct MeasurementScope {
     origin_id: Option<Id>,
     instance: Option<instance::Generation>,
     owner: Option<node::OwnerPath>,
@@ -390,7 +390,7 @@ pub struct ObservationScope {
     model: Option<String>,
 }
 
-impl ObservationScope {
+impl MeasurementScope {
     /// Root flow identity.
     #[must_use]
     pub const fn origin_id(&self) -> Option<Id> {
@@ -448,14 +448,14 @@ impl ObservationScope {
 
 /// Accounting facts observed at one exact envelope/port point.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AccountingObservation {
+pub struct Measurement {
     record: RecordObservation,
     envelope_id: Id,
-    scope: ObservationScope,
+    scope: MeasurementScope,
     measures: Vec<MeasureSample>,
 }
 
-impl AccountingObservation {
+impl Measurement {
     /// Structural transition and correlation from the A5 retained stream.
     #[must_use]
     pub const fn record(&self) -> &RecordObservation {
@@ -470,7 +470,7 @@ impl AccountingObservation {
 
     /// Complete per-flow dimensions.
     #[must_use]
-    pub const fn scope(&self) -> &ObservationScope {
+    pub const fn scope(&self) -> &MeasurementScope {
         &self.scope
     }
 
@@ -487,7 +487,7 @@ pub fn accounting_observations(
     plan: &ValidatedExecutionPlan,
     records: &[Record],
     profile: Option<&PriceBook>,
-) -> Result<Vec<AccountingObservation>, AccountingError> {
+) -> Result<Vec<Measurement>, AccountingError> {
     let structural = observations_for_records_from(records, 0);
     let mut result = Vec::new();
     for (index, (record, observation)) in records.iter().zip(structural).enumerate() {
@@ -655,7 +655,7 @@ fn scope_for(
     lineage_connector: Option<&node::Path>,
     port: node::Port,
     profile: Option<&PriceBook>,
-) -> ObservationScope {
+) -> MeasurementScope {
     let connector = connector
         .or_else(|| correlation.connector())
         .or(lineage_connector);
@@ -664,7 +664,7 @@ fn scope_for(
         .map_or((None, None), |(provider, model)| {
             (Some(provider.to_string()), Some(model.to_string()))
         });
-    ObservationScope {
+    MeasurementScope {
         origin_id: correlation.origin_id(),
         instance: correlation.instance().cloned(),
         owner: correlation.owner().cloned(),
@@ -728,11 +728,11 @@ fn connector_which_emitted(
 }
 
 fn observe_envelope(
-    result: &mut Vec<AccountingObservation>,
+    result: &mut Vec<Measurement>,
     record: RecordObservation,
     envelope: &crate::envelope::Envelope,
     annotations: &AnnotationTable,
-    scope: ObservationScope,
+    scope: MeasurementScope,
 ) -> Result<(), AccountingError> {
     if annotations.is_empty() {
         return Ok(());
@@ -777,7 +777,7 @@ fn observe_envelope(
         }
     }
     if !measures.is_empty() {
-        result.push(AccountingObservation {
+        result.push(Measurement {
             record,
             envelope_id: envelope.meta().sys().id(),
             scope,

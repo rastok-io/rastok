@@ -1015,7 +1015,7 @@ pub struct Vm<'plan> {
     /// Session terminal observations waiting for their causal transaction.
     settled_sessions: VecDeque<SettledSession>,
     /// Live keyed/singleton instances whose lifecycle is observable.
-    instances: BTreeMap<instance::Generation, instance::Live>,
+    instances: BTreeMap<instance::Generation, instance::LiveInstance>,
     /// Selected successor generations not yet allowed to start.
     waiting: BTreeMap<instance::Generation, WaitingInstance>,
     /// Rebuildable index of instances that have won a close request but have
@@ -2192,10 +2192,10 @@ impl<'plan> Vm<'plan> {
                 self.scheduler.mailboxes.peek_next_where(|_, reference| {
                     matches!(
                         instances.get(reference),
-                        Some(instance::Live {
+                        Some(instance::LiveInstance {
                             phase: instance::Phase::Open,
                             ..
-                        }) | Some(instance::Live {
+                        }) | Some(instance::LiveInstance {
                             phase: instance::Phase::Closing {
                                 stage: instance::ClosingStage::Draining,
                                 ..
@@ -2240,10 +2240,10 @@ impl<'plan> Vm<'plan> {
                 .next_runnable_key(after.as_ref(), |_, reference| {
                     matches!(
                         self.instances.get(reference),
-                        Some(instance::Live {
+                        Some(instance::LiveInstance {
                             phase: instance::Phase::Open,
                             ..
-                        }) | Some(instance::Live {
+                        }) | Some(instance::LiveInstance {
                             phase: instance::Phase::Closing {
                                 stage: instance::ClosingStage::Draining,
                                 ..
@@ -3501,10 +3501,10 @@ impl<'plan> Vm<'plan> {
                 .next_runnable_key(after.as_ref(), |_, reference| {
                     matches!(
                         self.instances.get(reference),
-                        Some(instance::Live {
+                        Some(instance::LiveInstance {
                             phase: instance::Phase::Open,
                             ..
-                        }) | Some(instance::Live {
+                        }) | Some(instance::LiveInstance {
                             phase: instance::Phase::Closing {
                                 stage: instance::ClosingStage::Draining,
                                 ..
@@ -3578,10 +3578,10 @@ impl<'plan> Vm<'plan> {
                 .peek_next_where(|_, reference| {
                     matches!(
                         self.instances.get(reference),
-                        Some(instance::Live {
+                        Some(instance::LiveInstance {
                             phase: instance::Phase::Open,
                             ..
-                        }) | Some(instance::Live {
+                        }) | Some(instance::LiveInstance {
                             phase: instance::Phase::Closing {
                                 stage: instance::ClosingStage::Draining,
                                 ..
@@ -3599,10 +3599,10 @@ impl<'plan> Vm<'plan> {
                 .next_runnable_key(after.as_ref(), |_, reference| {
                     matches!(
                         self.instances.get(reference),
-                        Some(instance::Live {
+                        Some(instance::LiveInstance {
                             phase: instance::Phase::Open,
                             ..
-                        }) | Some(instance::Live {
+                        }) | Some(instance::LiveInstance {
                             phase: instance::Phase::Closing {
                                 stage: instance::ClosingStage::Draining,
                                 ..
@@ -4340,10 +4340,10 @@ impl<'plan> Vm<'plan> {
             let owner = waiting.candidate.owner;
             self.instances.insert(
                 reference.clone(),
-                instance::Live {
+                instance::LiveInstance {
                     owner,
                     parent: waiting.candidate.parent.clone(),
-                    frames: waiting.candidate.frames,
+                    segments: waiting.candidate.frames,
                     values: waiting.candidate.values,
                     settings: waiting.candidate.settings,
                     created_by: waiting.created_by.clone(),
@@ -5737,7 +5737,7 @@ impl<'plan> Vm<'plan> {
             let target = match edge.to.as_ref().and_then(|to| to.node) {
                 Some(target) => Some(
                     if let Some(target) = self.prepare_direct_inbound_call_response_target(
-                        edge.scope,
+                        edge.owner,
                         source_instance,
                         target,
                         envelope,
@@ -5746,7 +5746,7 @@ impl<'plan> Vm<'plan> {
                     } else {
                         self.prepare_target(
                             journal,
-                            edge.scope,
+                            edge.owner,
                             source_instance,
                             edge.to.as_ref().ok_or_else(|| VmFault::PlanInvariant {
                                 node: self.plan.nodes[target.index()].path.clone(),
@@ -6094,7 +6094,7 @@ impl<'plan> Vm<'plan> {
 
     fn closing_generation_for_internal_route(
         &self,
-        address: &instance::Identity,
+        address: &instance::InstanceAddress,
         source: Option<&instance::Generation>,
         lifetime: &instance::Lifetime,
     ) -> Option<instance::Generation> {
@@ -6190,7 +6190,7 @@ impl<'plan> Vm<'plan> {
             None => (BTreeMap::new(), Vec::new()),
             Some(reference) => {
                 if let Some(instance) = self.instances.get(reference) {
-                    (instance.values.clone(), instance.frames.clone())
+                    (instance.values.clone(), instance.segments.clone())
                 } else if let Some(waiting) = self.waiting.get(reference) {
                     (
                         waiting.candidate.values.clone(),
@@ -6247,7 +6247,7 @@ impl<'plan> Vm<'plan> {
             }
             _ => None,
         };
-        let address = instance::Identity::new(&owner.path, &frames)
+        let address = instance::InstanceAddress::new(&owner.path, &frames)
             .map_err(|error| VmFault::Fault(Fault::Unrepresentable(error.to_string())))?;
         // The journal normally selects the current generation. Only Closing
         // is different: external traffic belongs to the reserved successor,
@@ -6847,10 +6847,10 @@ impl<'plan> Vm<'plan> {
                     let is_closing = matches!(phase, instance::Phase::Closing { .. });
                     self.instances.insert(
                         reference.clone(),
-                        instance::Live {
+                        instance::LiveInstance {
                             owner: candidate.owner,
                             parent: candidate.parent.clone(),
-                            frames: candidate.frames.clone(),
+                            segments: candidate.frames.clone(),
                             values: candidate.values.clone(),
                             settings: candidate.settings.clone(),
                             created_by: envelope.clone(),

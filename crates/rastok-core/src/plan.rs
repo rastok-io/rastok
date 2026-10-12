@@ -5,6 +5,10 @@
 //! constants are the boot-time reductions; the semantic identity was
 //! taken earlier, over the canonical HIR (`identity.md` §1), and rides
 //! beside the plan as [`SemanticHash`].
+//!
+//! A `*Spec` describes an authored header declaration after checking and
+//! resolution: for example a Connector, an Extension or an instance policy.
+//! It is configuration for execution, not mutable state of a running instance.
 
 use crate::instance;
 mod annotation_resolution;
@@ -538,7 +542,7 @@ impl ExecutionPlan {
 
     /// The instance policy owned by one executable Node.
     #[must_use]
-    pub fn node_instance(&self, slot: Slot) -> Option<&instance::Spec> {
+    pub fn node_instance(&self, slot: Slot) -> Option<&instance::InstanceSpec> {
         let node = self.nodes.get(slot.index())?;
         self.owner(node.owner).map(|owner| &owner.instance)
     }
@@ -650,7 +654,7 @@ pub struct Owner {
     /// Complete Extension specifications in canonical order.
     pub extensions: Vec<ExtensionSpec>,
     /// Orthogonal logical addressing and lifetime policy.
-    pub instance: instance::Spec,
+    pub instance: instance::InstanceSpec,
     /// Immutable bindings owned by this scope, in canonical name order.
     pub vals: Vec<OwnerValue>,
 }
@@ -949,7 +953,7 @@ pub struct Handler {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Edge {
     /// Lexical Graph owner in which this route was declared.
-    pub scope: node::OwnerSlot,
+    pub owner: node::OwnerSlot,
     /// The emitting end.
     pub from: EdgeEnd,
     /// The receiving end; `None` is the explicit discard.

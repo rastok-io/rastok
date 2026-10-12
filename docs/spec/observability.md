@@ -400,7 +400,7 @@ may enrich an annotated envelope lazily:
 
 ```text
 RecordObservation     = record transition + typed correlation
-AccountingObservation = RecordObservation + envelope id
+Measurement = RecordObservation + envelope id
                        + exact measure/cost samples + flow scope
 ```
 

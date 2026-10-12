@@ -1244,8 +1244,8 @@ fn verify_instance_key_types(
                             let target = edge.to.as_ref()?;
                             let target_owner = plan.nodes.get(target.node?.index())?.owner;
                             (owner_contains(plan, owner, target_owner)
-                                && edge.scope != owner
-                                && owner_contains(plan, edge.scope, owner))
+                                && edge.owner != owner
+                                && owner_contains(plan, edge.owner, owner))
                             .then(|| ports.endpoint_type(target).cloned())
                             .flatten()
                         })
@@ -3257,22 +3257,22 @@ fn owners_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     };
     for edge in &plan.edges {
         if !matches!(
-            plan.owner(edge.scope).map(|owner| &owner.kind),
+            plan.owner(edge.owner).map(|owner| &owner.kind),
             Some(OwnerKind::Graph)
         ) {
-            return Err(PlanValidationError::InvalidEdgeScope { owner: edge.scope });
+            return Err(PlanValidationError::InvalidEdgeScope { owner: edge.owner });
         }
         let endpoint_is_scoped = |endpoint: &EdgeEnd| {
             endpoint.node.is_none_or(|slot| {
                 plan.nodes
                     .get(slot.index())
-                    .is_some_and(|node| is_descendant(node.owner, edge.scope))
+                    .is_some_and(|node| is_descendant(node.owner, edge.owner))
             })
         };
         if !endpoint_is_scoped(&edge.from)
             || edge.to.as_ref().is_some_and(|to| !endpoint_is_scoped(to))
         {
-            return Err(PlanValidationError::InvalidEdgeScope { owner: edge.scope });
+            return Err(PlanValidationError::InvalidEdgeScope { owner: edge.owner });
         }
     }
     owner_values_well_formed(plan)?;

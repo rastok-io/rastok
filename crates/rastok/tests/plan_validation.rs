@@ -352,7 +352,7 @@ fn bare_operator_plan() -> ExecutionPlan {
                 kind: plan::OwnerKind::Graph,
                 ports: vec![],
                 extensions: vec![plan::ExtensionSpec::App],
-                instance: instance::Spec {
+                instance: instance::InstanceSpec {
                     key: None,
                     lifetime: instance::Lifetime::Persistent,
                     closing: None,
@@ -365,7 +365,7 @@ fn bare_operator_plan() -> ExecutionPlan {
                 kind: plan::OwnerKind::Node(Slot::new(0)),
                 ports: vec![],
                 extensions: vec![],
-                instance: instance::Spec {
+                instance: instance::InstanceSpec {
                     key: None,
                     lifetime: instance::Lifetime::Persistent,
                     closing: None,
@@ -583,7 +583,7 @@ fn an_unconstrained_raw_port_never_becomes_variant() {
 #[test]
 fn a_raw_instance_requires_a_canonical_key_type() {
     let mut raw = raw_probe();
-    owner_mut(&mut raw, "relay").instance = instance::Spec {
+    owner_mut(&mut raw, "relay").instance = instance::InstanceSpec {
         key: Some(expr::Tree {
             root: expr::Expr::Literal(rastok::value::Value::Int(1)),
             ty: DataType::Variant,
@@ -609,7 +609,7 @@ fn every_duration_lifetime_requires_a_positive_value() {
         instance::Lifetime::Tumbling(0),
     ] {
         let mut raw = raw_probe();
-        owner_mut(&mut raw, "relay").instance = instance::Spec {
+        owner_mut(&mut raw, "relay").instance = instance::InstanceSpec {
             key: Some(expr::Tree {
                 root: expr::Expr::Literal(rastok::value::Value::Int(1)),
                 ty: DataType::INT,
@@ -848,7 +848,7 @@ fn a_raw_owner_parent_must_be_an_enclosing_graph() {
 fn an_edge_scope_must_name_a_graph_owner() {
     let mut raw = raw_probe();
     let relay = owner_slot(&raw, "relay");
-    raw.edges[0].scope = relay;
+    raw.edges[0].owner = relay;
 
     assert_eq!(
         ValidatedExecutionPlan::try_new(raw).unwrap_err(),
@@ -1112,7 +1112,7 @@ fn instance_values_and_authorized_connector_settings_share_one_phase_judge() {
 #[test]
 fn a_raw_instance_key_admits_sys_but_not_destination_context() {
     let mut raw = raw_probe();
-    owner_mut(&mut raw, "relay").instance = instance::Spec {
+    owner_mut(&mut raw, "relay").instance = instance::InstanceSpec {
         key: Some(expr::Tree {
             root: expr::Expr::Path(vec![
                 String::from("meta"),
@@ -1285,7 +1285,7 @@ fn a_boundary_input_cannot_be_an_edge_target() {
     plan.boundary
         .sort_by(|left, right| left.key().cmp(&right.key()));
     plan.edges.push(Edge {
-        scope: node::OwnerSlot::new(0),
+        owner: node::OwnerSlot::new(0),
         from: EdgeEnd {
             node: Some(Slot::new(0)),
             port: port("out"),
@@ -1321,7 +1321,7 @@ fn a_boundary_output_cannot_be_an_edge_source() {
     plan.boundary
         .sort_by(|left, right| left.key().cmp(&right.key()));
     plan.edges.push(Edge {
-        scope: node::OwnerSlot::new(0),
+        owner: node::OwnerSlot::new(0),
         from: EdgeEnd {
             node: None,
             port: port("response"),
@@ -1351,7 +1351,7 @@ fn conventional_ports_hold_their_directions() {
     // inside the graph — refuses.
     let mut plan = raw_probe();
     plan.edges.push(Edge {
-        scope: node::OwnerSlot::new(0),
+        owner: node::OwnerSlot::new(0),
         from: EdgeEnd {
             node: Some(Slot::new(0)),
             port: port("out"),
@@ -1377,7 +1377,7 @@ fn conventional_ports_hold_their_directions() {
     // Conventional `out` used as a SOURCE refuses likewise.
     let mut plan = raw_probe();
     plan.edges.push(Edge {
-        scope: node::OwnerSlot::new(0),
+        owner: node::OwnerSlot::new(0),
         from: EdgeEnd {
             node: None,
             port: port("out"),
@@ -1616,7 +1616,7 @@ fn an_edge_to_an_unknown_port_refuses() {
     // — the reference is not usable in the required role.
     let mut plan = raw_probe();
     plan.edges.push(Edge {
-        scope: node::OwnerSlot::new(0),
+        owner: node::OwnerSlot::new(0),
         from: EdgeEnd {
             node: Some(Slot::new(0)),
             port: port("ghost"),
@@ -1635,7 +1635,7 @@ fn an_edge_to_an_unknown_port_refuses() {
     // A boundary port that exists nowhere refuses by its own name.
     let mut plan = raw_probe();
     plan.edges.push(Edge {
-        scope: node::OwnerSlot::new(0),
+        owner: node::OwnerSlot::new(0),
         from: EdgeEnd {
             node: None,
             port: port("ghost"),

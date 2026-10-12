@@ -260,7 +260,7 @@ impl Vm<'_> {
             };
             prepared.push(PreparedEdge {
                 edge: Edge {
-                    scope,
+                    owner: scope,
                     from,
                     to: Some(to),
                 },

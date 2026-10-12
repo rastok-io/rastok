@@ -85,7 +85,7 @@ fn the_chat_lab_has_the_same_causal_history_when_stepped() {
     let simulation = &lab.simulations[0];
     let batch = rastok::lab::run(&compilation.plan, GraphVersion(1), lab);
     for (scenario, expected) in simulation.scenarios.iter().zip(batch) {
-        let mut session = rastok::lab::ScenarioSession::try_new(
+        let mut session = rastok::lab::Simulator::try_new(
             &compilation.plan,
             GraphVersion(1),
             &simulation.name,

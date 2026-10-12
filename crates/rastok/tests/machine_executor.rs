@@ -89,12 +89,12 @@ fn input(text: &str) -> envelope::Delivery {
 
 fn singleton() -> instance::Generation {
     let owner = node::OwnerPath::new(["probe"]).expect("valid owner");
-    instance::Generation::new(instance::Identity::singleton(&owner), 0)
+    instance::Generation::new(instance::InstanceAddress::singleton(&owner), 0)
 }
 
 fn text_key(value: &str) -> instance::Generation {
     let owner = node::OwnerPath::new(["probe"]).expect("valid owner");
-    let address = instance::Identity::new(
+    let address = instance::InstanceAddress::new(
         &owner,
         &[instance::Segment::SelectedKey {
             scope: owner.clone(),

@@ -578,7 +578,7 @@ mod tests {
 
     fn open(fuel: u64) -> (LoopRunId, instance::Generation, Vec<LoopRecord>) {
         let instance = instance::Generation::new(
-            instance::Identity::singleton(&node::OwnerPath::new(["host"]).unwrap()),
+            instance::InstanceAddress::singleton(&node::OwnerPath::new(["host"]).unwrap()),
             0,
         );
         open_at(instance, fuel)
@@ -654,8 +654,10 @@ mod tests {
     }
 
     fn rooted(instance: &instance::Generation) -> Vec<Record> {
-        let root =
-            instance::Generation::new(instance::Identity::singleton(&node::OwnerPath::root()), 0);
+        let root = instance::Generation::new(
+            instance::InstanceAddress::singleton(&node::OwnerPath::root()),
+            0,
+        );
         vec![start(&root, None), start(instance, Some(&root))]
     }
 
@@ -750,7 +752,7 @@ mod tests {
         let mut records = rooted(&instance);
         records.extend(packets.into_iter().map(|packet| record(&instance, packet)));
         let child = instance::Generation::new(
-            instance::Identity::singleton(&node::OwnerPath::new(["host", "child"]).unwrap()),
+            instance::InstanceAddress::singleton(&node::OwnerPath::new(["host", "child"]).unwrap()),
             0,
         );
         records.push(start(&child, Some(&instance)));
@@ -783,8 +785,10 @@ mod tests {
         let mut expired_parent = fold.clone();
         expired_parent.apply_transaction(closed).unwrap();
         let successor = instance::Generation::new(instance.address().clone(), 1);
-        let root =
-            instance::Generation::new(instance::Identity::singleton(&node::OwnerPath::root()), 0);
+        let root = instance::Generation::new(
+            instance::InstanceAddress::singleton(&node::OwnerPath::root()),
+            0,
+        );
         let Record::Transaction(successor_start) = start(&successor, Some(&root)) else {
             unreachable!()
         };
@@ -803,7 +807,7 @@ mod tests {
         let mut records = rooted(&parent);
         records.extend(packets.into_iter().map(|packet| record(&parent, packet)));
         let child = instance::Generation::new(
-            instance::Identity::singleton(&node::OwnerPath::new(["host", "child"]).unwrap()),
+            instance::InstanceAddress::singleton(&node::OwnerPath::new(["host", "child"]).unwrap()),
             0,
         );
         records.push(start(&child, Some(&parent)));
@@ -841,7 +845,7 @@ mod tests {
         let child_owner = node::OwnerPath::new(["host", "child"]).unwrap();
         let tenant = |name: &str, path: &node::OwnerPath| {
             instance::Generation::new(
-                instance::Identity::new(
+                instance::InstanceAddress::new(
                     path,
                     &[instance::Segment::SelectedKey {
                         scope: owner.clone(),
@@ -857,8 +861,10 @@ mod tests {
         let bob = tenant("bob", &owner);
         let alice_child = tenant("alice", &child_owner);
         let bob_child = tenant("bob", &child_owner);
-        let root =
-            instance::Generation::new(instance::Identity::singleton(&node::OwnerPath::root()), 0);
+        let root = instance::Generation::new(
+            instance::InstanceAddress::singleton(&node::OwnerPath::root()),
+            0,
+        );
         let (run, _, packets) = open_at(alice.clone(), 2);
         let mut records = vec![
             start(&root, None),
@@ -896,7 +902,7 @@ mod tests {
         records.extend(packets.into_iter().map(|packet| record(&instance, packet)));
         let fold = LoopView::from_records(&records).unwrap();
         let target = instance::Generation::new(
-            instance::Identity::singleton(&node::OwnerPath::new(["host", "child"]).unwrap()),
+            instance::InstanceAddress::singleton(&node::OwnerPath::new(["host", "child"]).unwrap()),
             0,
         );
         let envelope = state(1);

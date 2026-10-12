@@ -111,7 +111,7 @@ fn two_tenants_keep_the_request_fixed_and_only_alice_retries() {
 
     let simulation = &compilation.labs[0].simulations[0];
     for (scenario, expected) in simulation.scenarios.iter().zip(&runs) {
-        let mut session = rastok::lab::ScenarioSession::try_new_program(
+        let mut session = rastok::lab::Simulator::try_new_program(
             &compilation.plan,
             compilation.hash,
             GraphVersion(1),

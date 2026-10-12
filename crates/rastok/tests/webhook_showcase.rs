@@ -319,7 +319,7 @@ fn every_webhook_transition_redacts_personal_data_and_the_secret_before_presenta
         Some(&boot),
     );
     for (scenario, batch) in simulation.scenarios.iter().zip(&expected) {
-        let mut session = lab::ScenarioSession::try_new_program(
+        let mut session = lab::Simulator::try_new_program(
             &compilation.plan,
             compilation.hash,
             GraphVersion(1),

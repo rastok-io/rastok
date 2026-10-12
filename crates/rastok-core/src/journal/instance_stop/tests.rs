@@ -27,7 +27,7 @@ fn instance(path: &str, tenant: &str, generation: u64) -> instance::Generation {
         value: Value::Text(tenant.into()),
     };
     instance::Generation::new(
-        instance::Identity::new(&owner(path), &[frame]).unwrap(),
+        instance::InstanceAddress::new(&owner(path), &[frame]).unwrap(),
         generation,
     )
 }
@@ -67,8 +67,10 @@ fn initial() -> (
     instance::Generation,
     instance::Generation,
 ) {
-    let root =
-        instance::Generation::new(instance::Identity::singleton(&node::OwnerPath::root()), 0);
+    let root = instance::Generation::new(
+        instance::InstanceAddress::singleton(&node::OwnerPath::root()),
+        0,
+    );
     let alice = instance("conversation", "alice", 0);
     let worker = instance("conversation.worker", "alice", 0);
     let decide = instance("conversation.decide", "alice", 0);
@@ -235,7 +237,8 @@ fn multiple_keyed_children_require_an_exact_source_binding() {
         value: Value::Text("alice".into()),
     };
     let second = instance::Generation::new(
-        instance::Identity::new(&owner("conversation.worker"), &[parent_key, sibling_key]).unwrap(),
+        instance::InstanceAddress::new(&owner("conversation.worker"), &[parent_key, sibling_key])
+            .unwrap(),
         0,
     );
     records.push(start(&second, Some(&alice)));

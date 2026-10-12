@@ -10,7 +10,7 @@ use crate::instance;
 pub(crate) trait InstanceAdmissions {
     fn instance_generation_for_admission(
         &self,
-        address: &instance::Identity,
+        address: &instance::InstanceAddress,
     ) -> Result<instance::Generation, Error>;
     fn instance_commands(&self) -> Result<instance_stop::InstanceCommandView, Error>;
 }
@@ -18,7 +18,7 @@ pub(crate) trait InstanceAdmissions {
 impl<T: Journal + ?Sized> InstanceAdmissions for &T {
     fn instance_generation_for_admission(
         &self,
-        address: &instance::Identity,
+        address: &instance::InstanceAddress,
     ) -> Result<instance::Generation, Error> {
         Journal::instance_generation_for_admission(*self, address)
     }
@@ -31,7 +31,7 @@ impl<T: Journal + ?Sized> InstanceAdmissions for &T {
 /// It carries no authority beyond the accepted lifecycle records.
 #[derive(Debug, Default)]
 pub(super) struct Fold {
-    instance_lifecycles: BTreeMap<instance::Identity, InstanceLifecycle>,
+    instance_lifecycles: BTreeMap<instance::InstanceAddress, InstanceLifecycle>,
     /// Fast rejection: ordinary admission need not walk ancestors if none close.
     active_close_roots: BTreeSet<instance::Generation>,
 }
@@ -49,7 +49,7 @@ impl Fold {
     /// `starts` is also the next generation ordinal whenever no generation is
     /// active. A durable implementation rebuilds the same projection while
     /// replaying `l:start`/`l:stop`; no Worker-local counter participates.
-    fn instance_lifecycle(&self, address: &instance::Identity) -> InstanceLifecycle {
+    fn instance_lifecycle(&self, address: &instance::InstanceAddress) -> InstanceLifecycle {
         self.instance_lifecycles
             .get(address)
             .cloned()
@@ -58,7 +58,7 @@ impl Fold {
 
     pub(super) fn active_instance_ref(
         &self,
-        address: &instance::Identity,
+        address: &instance::InstanceAddress,
     ) -> Option<instance::Generation> {
         let lifecycle = self.instance_lifecycle(address);
         lifecycle
@@ -116,7 +116,7 @@ impl Fold {
 
     pub(super) fn instance_generation_for_admission(
         &self,
-        address: &instance::Identity,
+        address: &instance::InstanceAddress,
     ) -> Result<instance::Generation, Error> {
         let lifecycle = self.instance_lifecycle(address);
         let closing = lifecycle.active
@@ -223,7 +223,7 @@ impl AdmissionPrefix {
 impl InstanceAdmissions for AdmissionPrefix {
     fn instance_generation_for_admission(
         &self,
-        address: &instance::Identity,
+        address: &instance::InstanceAddress,
     ) -> Result<instance::Generation, Error> {
         self.admissions.instance_generation_for_admission(address)
     }

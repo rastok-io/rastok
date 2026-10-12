@@ -502,7 +502,7 @@ graph g : App {
     assert!(
         plan.edges
             .iter()
-            .all(|edge| plan.owners[edge.scope.index()].path.is_root())
+            .all(|edge| plan.owners[edge.owner.index()].path.is_root())
     );
 }
 

@@ -49,7 +49,7 @@
 
 ## E-2026-09-14-4 — interactive Session mocks reached assertions too early — RESOLVED
 
-- **Where:** `lab.rs`, `ScenarioSession::step_transaction` and `poll_world`.
+- **Where:** `lab.rs`, `Simulator::step_transaction` and `poll_world`.
 - **Defect:** absence of ready VM work was mistaken for quiescence while a
   just-opened scripted Session still had frames to offer. Later multi-frame
   replies could also enter between transactions differently from batch runs.

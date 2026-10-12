@@ -7,7 +7,7 @@ use crate::expr::{BinaryOp, EvalValue, Expr};
 #[must_use]
 pub fn expectation_json(
     plan: &ValidatedExecutionPlan,
-    session: &crate::lab::ScenarioSession<'_, '_>,
+    session: &crate::lab::Simulator<'_, '_>,
 ) -> JsonValue {
     let Some(inspection) = session.last_expectation() else {
         return JsonValue::Null;
@@ -115,7 +115,7 @@ mod tests {
         .unwrap();
         let simulation = &compilation.labs[0].simulations[0];
         for (index, expected_matches) in [(0, 0), (1, 1)] {
-            let mut session = crate::lab::ScenarioSession::try_new(
+            let mut session = crate::lab::Simulator::try_new(
                 &compilation.plan,
                 crate::plan::GraphVersion(1),
                 &simulation.name,
@@ -177,7 +177,7 @@ lab hidden { simulation inspect on app { scenario private {
         )
         .unwrap();
         let simulation = &compilation.labs[0].simulations[0];
-        let mut session = crate::lab::ScenarioSession::try_new(
+        let mut session = crate::lab::Simulator::try_new(
             &compilation.plan,
             crate::plan::GraphVersion(1),
             &simulation.name,

@@ -758,7 +758,7 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
             detail: "a lowered edge lost its lexical Graph scope",
         })?;
         plan.edges.push(Edge {
-            scope,
+            owner: scope,
             from: endpoint(&edge.from)?,
             to: match &edge.to {
                 EdgeTarget::Port(end) => Some(endpoint(end)?),
@@ -880,9 +880,9 @@ fn lower_instance(
     policy: Option<&InstancePolicy>,
     constants: &std::collections::BTreeMap<String, crate::value::Value>,
     owner: &str,
-) -> Result<instance::Spec, LowerError> {
+) -> Result<instance::InstanceSpec, LowerError> {
     let Some(policy) = policy else {
-        return Ok(instance::Spec {
+        return Ok(instance::InstanceSpec {
             key: None,
             lifetime: instance::Lifetime::Persistent,
             closing: None,
@@ -902,7 +902,7 @@ fn lower_instance(
         InstanceLifetime::SinglePass => instance::Lifetime::SinglePass,
         InstanceLifetime::Tumbling(value) => instance::Lifetime::Tumbling(duration(value)?),
     };
-    Ok(instance::Spec {
+    Ok(instance::InstanceSpec {
         key: policy
             .key
             .as_ref()

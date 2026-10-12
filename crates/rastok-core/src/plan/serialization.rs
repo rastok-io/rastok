@@ -538,7 +538,7 @@ fn plan_constant_tree(constant: &PlanConstant) -> Cbor {
     ])
 }
 
-fn instance_tree(instance: &instance::Spec) -> Cbor {
+fn instance_tree(instance: &instance::InstanceSpec) -> Cbor {
     let mut fields = BTreeMap::from([(2, lifetime_tree(&instance.lifetime))]);
     if let Some(key) = &instance.key {
         fields.insert(1, tree_tree(key));
@@ -674,7 +674,7 @@ fn edge_tree(edge: &Edge) -> Cbor {
         None => Cbor::Null,
     };
     Cbor::Array(vec![
-        Cbor::Uint(edge.scope.index() as u64),
+        Cbor::Uint(edge.owner.index() as u64),
         endpoint_tree(&edge.from),
         to,
     ])
@@ -1893,9 +1893,9 @@ fn plan_constant_from(tree: &Cbor) -> Result<PlanConstant, DecodeError> {
     }
 }
 
-fn instance_from(tree: &Cbor) -> Result<instance::Spec, DecodeError> {
+fn instance_from(tree: &Cbor) -> Result<instance::InstanceSpec, DecodeError> {
     let fields = map_of(tree, "instance")?;
-    Ok(instance::Spec {
+    Ok(instance::InstanceSpec {
         key: find(fields, 1).map(tree_from).transpose()?,
         lifetime: lifetime_from(get(fields, 2, "instance lifetime")?)?,
         closing: find(fields, 3).map(closing_from).transpose()?,
@@ -2145,12 +2145,12 @@ fn var_from(tree: &Cbor) -> Result<VarCell, DecodeError> {
 fn edge_from(tree: &Cbor) -> Result<Edge, DecodeError> {
     match array_of(tree, "edge")? {
         [scope, from, Cbor::Null] => Ok(Edge {
-            scope: node::OwnerSlot::new(u32_from(scope, "edge scope")?),
+            owner: node::OwnerSlot::new(u32_from(scope, "edge scope")?),
             from: endpoint_from(from)?,
             to: None,
         }),
         [scope, from, to] => Ok(Edge {
-            scope: node::OwnerSlot::new(u32_from(scope, "edge scope")?),
+            owner: node::OwnerSlot::new(u32_from(scope, "edge scope")?),
             from: endpoint_from(from)?,
             to: Some(endpoint_from(to)?),
         }),
@@ -2602,7 +2602,7 @@ mod tests {
             kind: OwnerKind::Graph,
             ports: vec![],
             extensions: vec![ExtensionSpec::App],
-            instance: instance::Spec {
+            instance: instance::InstanceSpec {
                 key: None,
                 lifetime: instance::Lifetime::Persistent,
                 closing: None,
@@ -2618,7 +2618,7 @@ mod tests {
             kind: OwnerKind::Node(Slot::new(slot)),
             ports: vec![],
             extensions: vec![],
-            instance: instance::Spec {
+            instance: instance::InstanceSpec {
                 key: None,
                 lifetime: instance::Lifetime::Persistent,
                 closing: None,
@@ -2629,7 +2629,7 @@ mod tests {
 
     fn instance_package() -> Vec<u8> {
         let mut instance_owner = node_owner("worker", 0);
-        instance_owner.instance = instance::Spec {
+        instance_owner.instance = instance::InstanceSpec {
             key: Some(expr::Tree {
                 root: expr::Expr::Path(vec![text("meta"), text("sys"), text("id")]),
                 ty: DataType::Text,
@@ -3500,7 +3500,7 @@ mod tests {
             kind: OwnerKind::Graph,
             ports: vec![],
             extensions: vec![],
-            instance: instance::Spec {
+            instance: instance::InstanceSpec {
                 key: Some(expr::Tree {
                     root: expr::Expr::Path(vec![text("meta"), text("app"), text("workspace")]),
                     ty: DataType::Text,
@@ -3682,7 +3682,7 @@ mod tests {
             ],
             edges: vec![
                 Edge {
-                    scope: node::OwnerSlot::new(0),
+                    owner: node::OwnerSlot::new(0),
                     from: EdgeEnd {
                         node: None,
                         port: port("in"),
@@ -3693,7 +3693,7 @@ mod tests {
                     }),
                 },
                 Edge {
-                    scope: node::OwnerSlot::new(0),
+                    owner: node::OwnerSlot::new(0),
                     from: EdgeEnd {
                         node: Some(Slot::new(0)),
                         port: port("extra"),

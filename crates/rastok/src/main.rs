@@ -855,7 +855,7 @@ fn simulate_with_ui(
         eprintln!("error: this unit declares no scenario");
         return ExitCode::FAILURE;
     };
-    let mut session = match lab::ScenarioSession::try_new_program(
+    let mut session = match lab::Simulator::try_new_program(
         &compilation.plan,
         compilation.hash,
         GraphVersion(1),
@@ -1322,7 +1322,7 @@ fn recreate_scenario<'plan>(
     simulation_name: &str,
     scenario_name: &str,
     boot: Option<&rastok::deployment::BootBindings>,
-) -> Result<lab::ScenarioSession<'plan, 'plan>, String> {
+) -> Result<lab::Simulator<'plan, 'plan>, String> {
     let simulation = compilation
         .labs
         .iter()
@@ -1336,7 +1336,7 @@ fn recreate_scenario<'plan>(
         .ok_or_else(|| {
             format!("simulation `{simulation_name}` has no scenario `{scenario_name}`")
         })?;
-    lab::ScenarioSession::try_new_program(
+    lab::Simulator::try_new_program(
         &compilation.plan,
         compilation.hash,
         GraphVersion(1),
@@ -1350,7 +1350,7 @@ fn recreate_scenario<'plan>(
 #[cfg(feature = "hosted-ui")]
 fn simulation_view(
     compilation: &Compilation,
-    session: &lab::ScenarioSession<'_, '_>,
+    session: &lab::Simulator<'_, '_>,
     golden_failures: &[String],
 ) -> serde_json::Value {
     let next_injection = match session.next_injection_draft() {

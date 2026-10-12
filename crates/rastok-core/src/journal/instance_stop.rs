@@ -230,7 +230,7 @@ fn read_instance(value: &crate::canonical_cbor::Value) -> Result<instance::Gener
         return Err(Error::PacketShape);
     };
     Ok(instance::Generation::new(
-        crate::instance::Identity::decode(address).map_err(|_| Error::Target)?,
+        crate::instance::InstanceAddress::decode(address).map_err(|_| Error::Target)?,
         *generation,
     ))
 }

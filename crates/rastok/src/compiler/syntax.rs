@@ -487,7 +487,7 @@ pub enum Trigger {
         /// The qualifying historical Extension name.
         extension: Name,
         /// The qualified lifecycle event.
-        event: ExtensionEvent,
+        event: RemovedLifecycleHook,
     },
     /// `on <child>.<output>` — an output emitted by a direct child of the
     /// lexical Graph. This form is meaningful only for Graph-owned handlers;
@@ -506,7 +506,7 @@ pub enum Trigger {
 
 /// Recovery-only capture of a removed Extension-qualified lifecycle event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExtensionEvent {
+pub enum RemovedLifecycleHook {
     /// `.start`
     Start,
     /// `.stop`

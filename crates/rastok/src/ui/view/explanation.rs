@@ -318,7 +318,7 @@ pub(super) fn history(plan: &ValidatedExecutionPlan, records: &[Record]) -> Hist
                     else {
                         continue;
                     };
-                    let scope = &plan.owners[edge.scope.index()].path;
+                    let scope = &plan.owners[edge.owner.index()].path;
                     let mut source = Some(&route.target);
                     while let Some(reference) = source {
                         let Some((owner, parent)) = parents.get(reference) else {
@@ -755,7 +755,7 @@ mod tests {
         )
         .unwrap();
         let simulation = &compilation.labs[0].simulations[0];
-        let mut session = crate::lab::ScenarioSession::try_new(
+        let mut session = crate::lab::Simulator::try_new(
             &compilation.plan,
             crate::plan::GraphVersion(1),
             &simulation.name,
@@ -849,7 +849,7 @@ mod tests {
         )
         .unwrap();
         let simulation = &compilation.labs[0].simulations[0];
-        let mut session = crate::lab::ScenarioSession::try_new(
+        let mut session = crate::lab::Simulator::try_new(
             &compilation.plan,
             crate::plan::GraphVersion(1),
             &simulation.name,
@@ -927,7 +927,7 @@ lab joined {
         )
         .unwrap();
         let simulation = &compilation.labs[0].simulations[0];
-        let mut session = crate::lab::ScenarioSession::try_new(
+        let mut session = crate::lab::Simulator::try_new(
             &compilation.plan,
             crate::plan::GraphVersion(1),
             &simulation.name,

@@ -2842,9 +2842,9 @@ mod instance_address_tests {
     use super::*;
     use crate::datatype::{DateUnit, EnumType, StructType, TemporalType, TypeField};
 
-    fn address(ty: DataType, value: Value) -> instance::Identity {
+    fn address(ty: DataType, value: Value) -> instance::InstanceAddress {
         let owner = node::OwnerPath::new(["node"]).expect("valid owner");
-        instance::Identity::new(
+        instance::InstanceAddress::new(
             &owner,
             &[instance::Segment::SelectedKey {
                 scope: owner.clone(),

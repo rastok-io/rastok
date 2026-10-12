@@ -39,12 +39,12 @@ package "envelope" {
 }
 
 package "instance / node" {
-  class "instance::Spec" as Spec {
+  class "instance::InstanceSpec" as Spec {
     key: Option<expr::Tree>
     lifetime: Lifetime
     closing: Option<Closing>
   }
-  class "instance::Identity" as Identity {
+  class "instance::InstanceAddress" as Identity {
     scope: Arc<node::OwnerPath>
     bytes: Arc<[u8]>
   }
@@ -53,10 +53,10 @@ package "instance / node" {
     ProcessingTimeBox
   }
   class "instance::Generation" as Generation {
-    address: Identity
+    address: InstanceAddress
     generation: u64
   }
-  class "instance::Live" as Live {
+  class "instance::LiveInstance" as Live {
     ephemeral lifecycle / admission state
     residual: Vec<Delivery>
     crate-private; not journal authority

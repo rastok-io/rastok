@@ -15,7 +15,7 @@ fn resident_gateway_steps_deliver_opening_before_frames_like_the_batch_lab() {
     let simulation = &lab.simulations[0];
     let batch = rastok::lab::run(&compilation.plan, GraphVersion(1), lab);
     for (scenario, expected) in simulation.scenarios.iter().zip(batch) {
-        let mut session = rastok::lab::ScenarioSession::try_new(
+        let mut session = rastok::lab::Simulator::try_new(
             &compilation.plan,
             GraphVersion(1),
             &simulation.name,

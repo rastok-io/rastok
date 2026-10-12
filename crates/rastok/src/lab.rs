@@ -143,7 +143,7 @@ impl core::fmt::Display for ScenarioStepError {
 /// The batch Lab runner below is implemented in terms of this session, so the
 /// UI cannot acquire a second simulation semantics.
 #[derive(Debug)]
-pub struct ScenarioSession<'plan, 'scenario> {
+pub struct Simulator<'plan, 'scenario> {
     plan: &'plan ValidatedExecutionPlan,
     simulation: String,
     scenario: &'scenario Scenario,
@@ -163,7 +163,7 @@ pub struct ScenarioSession<'plan, 'scenario> {
     next_injection_override: Option<Draft>,
 }
 
-impl<'plan, 'scenario> ScenarioSession<'plan, 'scenario> {
+impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
     /// Creates a fresh VM, journal, virtual clock and scripted Driver world.
     ///
     /// # Errors
@@ -796,7 +796,7 @@ fn run_scenario(
     scenario: &Scenario,
     boot: Option<&crate::deployment::BootBindings>,
 ) -> ScenarioRun {
-    match ScenarioSession::try_new_inner(
+    match Simulator::try_new_inner(
         plan,
         hash,
         graph_version,
@@ -1884,7 +1884,7 @@ lab m0_probe {
         let simulation = &lab.simulations[0];
 
         for (scenario, expected) in simulation.scenarios.iter().zip(batched) {
-            let mut interactive = ScenarioSession::try_new(
+            let mut interactive = Simulator::try_new(
                 &compilation.plan,
                 GraphVersion(1),
                 &simulation.name,
@@ -1924,7 +1924,7 @@ lab m0_probe {
         let simulation = &compilation.labs[0].simulations[0];
         let scenario = &simulation.scenarios[0];
         let new_session = || {
-            ScenarioSession::try_new(
+            Simulator::try_new(
                 &compilation.plan,
                 GraphVersion(1),
                 &simulation.name,

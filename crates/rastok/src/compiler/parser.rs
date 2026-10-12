@@ -17,9 +17,9 @@ use crate::compiler::lexer::{
 use crate::compiler::syntax::{
     Annotation, Attribute, BaseType, CmpOp, ConnectorDecl, Dispatch, EdgeCaseSet, EdgeDecl,
     EdgeDestination, EdgeEndpoint, EdgeMatch, EdgeMatchArm, ErrorNode, ExpectStep, ExprSource,
-    ExtensionEvent, FieldDecl, FrontendPayload, FrontendValue, GraphDecl, GraphItem, Guard,
-    HandlerDecl, IntLit, LValue, LabDecl, MatchArm, MatchSelector, MockDecl, Name, OperatorDecl,
-    OperatorItem, PortDecl, PortDirection, PortPath, RemovedLifetimeValue, RemovedPartitionDecl,
+    FieldDecl, FrontendPayload, FrontendValue, GraphDecl, GraphItem, Guard, HandlerDecl, IntLit,
+    LValue, LabDecl, MatchArm, MatchSelector, MockDecl, Name, OperatorDecl, OperatorItem, PortDecl,
+    PortDirection, PortPath, RemovedLifecycleHook, RemovedLifetimeValue, RemovedPartitionDecl,
     RemovedPartitionField, RemovedPerClause, RemovedWindowMode, ScalarType, ScenarioDecl,
     ScenarioItem, SchemaAnnotation, SchemaAnnotationArgument, SchemaAnnotationConstant,
     SimulationDecl, Statement, StructBody, StructEntry, SubBlock, SyntaxTree, TaggedCaseDecl,
@@ -1433,8 +1433,8 @@ impl<'src> Parser<'src, '_> {
                     let member = self.name("an output port")?;
                     if matches!(qualifier.text.as_str(), "Loop" | "Saga") {
                         let event = match member.text.as_str() {
-                            "start" => ExtensionEvent::Start,
-                            "stop" => ExtensionEvent::Stop,
+                            "start" => RemovedLifecycleHook::Start,
+                            "stop" => RemovedLifecycleHook::Stop,
                             _ => {
                                 self.error_expected("`start` or `stop`");
                                 return None;
@@ -4086,7 +4086,7 @@ graph m0_probe : App {
         };
         assert!(matches!(
             &removed_lifecycle.trigger,
-            Trigger::Extension { extension, event: ExtensionEvent::Stop } if extension.text == "Loop"
+            Trigger::Extension { extension, event: RemovedLifecycleHook::Stop } if extension.text == "Loop"
         ));
         assert!(removed_lifecycle.dispatch.is_none());
     }

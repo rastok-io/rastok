@@ -211,7 +211,7 @@ fn responses_debugger_projects_each_transition_without_materializing_the_bearer(
     let boot = boot();
     let simulation = &compilation.labs[0].simulations[0];
     for scenario in &simulation.scenarios {
-        let mut session = rastok::lab::ScenarioSession::try_new_program(
+        let mut session = rastok::lab::Simulator::try_new_program(
             &compilation.plan,
             compilation.hash,
             GraphVersion(1),

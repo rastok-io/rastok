@@ -18,7 +18,7 @@ fn count(ty: &str, data: Data) -> Result<Value, Fault> {
     );
     let compiled = compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap();
     let owner = OwnerPath::new(["count"]).unwrap();
-    let generation = instance::Generation::new(instance::Identity::singleton(&owner), 0);
+    let generation = instance::Generation::new(instance::InstanceAddress::singleton(&owner), 0);
     let delivery = Delivery {
         port: Port::new("in").unwrap(),
         edge: ".in>count.in".into(),
@@ -166,7 +166,7 @@ graph g : App {
         &Data::materialized(Value::Int(2))
     );
     let scope = OwnerPath::new(["names"]).unwrap();
-    let expected = instance::Identity::new(
+    let expected = instance::InstanceAddress::new(
         &scope,
         &[instance::Segment::SelectedKey {
             scope: scope.clone(),

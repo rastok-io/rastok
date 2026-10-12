@@ -1,11 +1,11 @@
 //! One instance: declared policy, unique identity and live generation.
 //!
-//! - [`Spec`] declares the key, [`Lifetime`] and bounded [`Closing`] policy.
-//! - [`Identity`] seals the static scope and dynamic [`Segment`] chain;
+//! - [`InstanceSpec`] declares the key, [`Lifetime`] and bounded [`Closing`] policy.
+//! - [`InstanceAddress`] seals the static scope and dynamic [`Segment`] chain;
 //!   [`Generation`] fences successive lifetimes at that same identity.
 //! - [`crate::runtime::State`] holds private `var` cells per generation.
 //!   Its plan-checked accessors remain in the runtime, not in this module.
-//! - `Live` is the crate-private, ephemeral bundle reconstructed by the VM.
+//! - `LiveInstance` is the crate-private runtime state reconstructed by the VM.
 //! - [`crate::journal::instance_stop`] records exact-generation closure.
 //!
 //! ```text
@@ -156,47 +156,47 @@ impl core::error::Error for IdentityError {}
 /// exact canonical-CBOR form specified by `identity.md`; comparing or hashing
 /// it never depends on a Rust enum order or a host word size.
 #[derive(Clone)]
-pub struct Identity {
+pub struct InstanceAddress {
     scope: Arc<node::OwnerPath>,
     bytes: Arc<[u8]>,
 }
 
-impl PartialEq for Identity {
+impl PartialEq for InstanceAddress {
     fn eq(&self, other: &Self) -> bool {
         self.bytes == other.bytes
     }
 }
 
-impl Eq for Identity {}
+impl Eq for InstanceAddress {}
 
-impl PartialOrd for Identity {
+impl PartialOrd for InstanceAddress {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Ord for Identity {
+impl Ord for InstanceAddress {
     fn cmp(&self, other: &Self) -> Ordering {
         self.bytes.cmp(&other.bytes)
     }
 }
 
-impl Hash for Identity {
+impl Hash for InstanceAddress {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.bytes.hash(state);
     }
 }
 
-impl fmt::Debug for Identity {
+impl fmt::Debug for InstanceAddress {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Identity")
+        f.debug_struct("InstanceAddress")
             .field("scope", &self.scope)
             .field("bytes", &self.bytes)
             .finish()
     }
 }
 
-impl Identity {
+impl InstanceAddress {
     fn seal(owner: &node::OwnerPath, frames: &[Segment]) -> Self {
         let tree = Cbor::Array(vec![
             owner_path_tree(owner),
@@ -389,14 +389,14 @@ fn owner_path_tree(owner: &node::OwnerPath) -> Cbor {
 /// Complete reference to one live generation of a logical address.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Generation {
-    address: Identity,
+    address: InstanceAddress,
     generation: u64,
 }
 
 impl Generation {
     /// Couples an address with its journal-derived generation.
     #[must_use]
-    pub const fn new(address: Identity, generation: u64) -> Self {
+    pub const fn new(address: InstanceAddress, generation: u64) -> Self {
         Self {
             address,
             generation,
@@ -405,7 +405,7 @@ impl Generation {
 
     /// The stable logical address; generation is deliberately excluded.
     #[must_use]
-    pub const fn address(&self) -> &Identity {
+    pub const fn address(&self) -> &InstanceAddress {
         &self.address
     }
 
@@ -429,7 +429,7 @@ impl Generation {
 /// address inside the parent instance; persistent remains an explicit value
 /// in the categorical plan even when its source spelling was omitted.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Spec {
+pub struct InstanceSpec {
     /// Expression and inferred type of the selected key, when keyed.
     pub key: Option<expr::Tree>,
     /// When the selected instance closes automatically.
@@ -466,12 +466,14 @@ pub enum Lifetime {
     Tumbling(i64),
 }
 
-/// One selected owner generation and its immutable instance bundle.
+/// Runtime state for one selected instance generation. Its instance-scoped
+/// values and resolved settings are immutable; activity, residual deliveries
+/// and lifecycle phase change as the VM processes committed records.
 #[derive(Debug, Clone)]
-pub(crate) struct Live {
+pub(crate) struct LiveInstance {
     pub(crate) owner: node::OwnerSlot,
     pub(crate) parent: Option<Generation>,
-    pub(crate) frames: Vec<Segment>,
+    pub(crate) segments: Vec<Segment>,
     pub(crate) values: BTreeMap<String, crate::value::Value>,
     pub(crate) settings: BTreeMap<String, crate::value::Value>,
     pub(crate) created_by: Envelope,
@@ -512,7 +514,7 @@ mod tests {
     #[test]
     fn retained_addresses_round_trip_and_refuse_forged_typed_keys() {
         let owner = node::OwnerPath::new(["worker"]).unwrap();
-        let address = Identity::new(
+        let address = InstanceAddress::new(
             &owner,
             &[
                 Segment::SelectedKey {
@@ -527,10 +529,13 @@ mod tests {
             ],
         )
         .unwrap();
-        assert_eq!(Identity::decode(address.as_bytes()).unwrap(), address);
+        assert_eq!(
+            InstanceAddress::decode(address.as_bytes()).unwrap(),
+            address
+        );
         let mut trailing = address.as_bytes().to_vec();
         trailing.push(0);
-        assert!(Identity::decode(&trailing).is_err());
+        assert!(InstanceAddress::decode(&trailing).is_err());
         let (mut tree, _) = crate::canonical_cbor::decode(address.as_bytes()).unwrap();
         let Cbor::Array(parts) = &mut tree else {
             panic!("address")
@@ -545,7 +550,7 @@ mod tests {
             panic!("typed key")
         };
         key[1] = canonical::value(&Value::Int(7));
-        assert!(Identity::decode(&crate::canonical_cbor::encode(&tree)).is_err());
+        assert!(InstanceAddress::decode(&crate::canonical_cbor::encode(&tree)).is_err());
     }
 
     #[test]
@@ -565,7 +570,7 @@ mod tests {
                 },
             ]
         };
-        let address = Identity::new(&parent, &frames("alice", 10)).unwrap();
+        let address = InstanceAddress::new(&parent, &frames("alice", 10)).unwrap();
         for (key, at, matches) in [
             ("alice", 10, true),
             ("bob", 10, false),
@@ -577,16 +582,16 @@ mod tests {
                 ty: DataType::INT,
                 value: Value::Int(7),
             });
-            let descendant = Identity::new(&child, &frames).unwrap();
+            let descendant = InstanceAddress::new(&child, &frames).unwrap();
             assert_eq!(address.contains_address(&descendant), matches);
             assert!(!descendant.contains_address(&address));
         }
-        assert!(!address.contains_address(&Identity::singleton(&child)));
+        assert!(!address.contains_address(&InstanceAddress::singleton(&child)));
         assert!(
-            !Identity::singleton(&parent)
-                .contains_address(&Identity::new(&child, &frames("alice", 10)).unwrap())
+            !InstanceAddress::singleton(&parent)
+                .contains_address(&InstanceAddress::new(&child, &frames("alice", 10)).unwrap())
         );
-        assert!(!address.contains_address(&Identity::singleton(
+        assert!(!address.contains_address(&InstanceAddress::singleton(
             &node::OwnerPath::new(["other"]).unwrap()
         )));
     }
@@ -618,10 +623,10 @@ mod tests {
                 value: key,
             },
         ];
-        let address = Identity::new(&child, &frames).expect("canonical address");
+        let address = InstanceAddress::new(&child, &frames).expect("canonical address");
         assert_eq!(
             address.as_bytes(),
-            Identity::new(&child, &frames)
+            InstanceAddress::new(&child, &frames)
                 .expect("same address")
                 .as_bytes()
         );
@@ -632,7 +637,7 @@ mod tests {
     #[test]
     fn one_selected_text_key_has_architecture_neutral_address_bytes() {
         let owner = node::OwnerPath::new(["node"]).expect("valid owner");
-        let address = Identity::new(
+        let address = InstanceAddress::new(
             &owner,
             &[Segment::SelectedKey {
                 scope: owner.clone(),
@@ -654,7 +659,7 @@ mod tests {
     #[test]
     fn owner_segments_are_structural_address_identity() {
         let owner = node::OwnerPath::new(["outer", "inner"]).expect("valid nested owner");
-        let address = Identity::singleton(&owner);
+        let address = InstanceAddress::singleton(&owner);
 
         assert_eq!(
             address.as_bytes(),
@@ -700,7 +705,7 @@ mod tests {
             (String::from("token"), token),
         ]);
         let address = |value| {
-            Identity::new(
+            InstanceAddress::new(
                 &owner,
                 &[Segment::SelectedKey {
                     scope: owner.clone(),
@@ -735,7 +740,7 @@ mod tests {
             },
         ];
         assert_eq!(
-            Identity::new(&owner, &reversed),
+            InstanceAddress::new(&owner, &reversed),
             Err(IdentityError::NonCanonicalFrames)
         );
         let wrong = vec![Segment::SelectedKey {
@@ -744,7 +749,7 @@ mod tests {
             value: Value::Text(String::from("alice")),
         }];
         assert!(matches!(
-            Identity::new(&owner, &wrong),
+            InstanceAddress::new(&owner, &wrong),
             Err(IdentityError::KeyTypeMismatch(_))
         ));
     }

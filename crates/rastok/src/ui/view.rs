@@ -615,7 +615,7 @@ fn topology(
             json!({
                 "index": index,
                 "route": route,
-                "scope": plan.owners[edge.scope.index()].path.to_string(),
+                "scope": plan.owners[edge.owner.index()].path.to_string(),
                 "source": endpoint_json(&edge.from, true),
                 "target": edge.to.as_ref().map_or_else(
                     || json!({
@@ -629,7 +629,7 @@ fn topology(
                             ),
                             edge.from.port,
                         ),
-                        "owner": format!("owner:{}", edge.scope.index()),
+                        "owner": format!("owner:{}", edge.owner.index()),
                         "port": JsonValue::Null,
                     }),
                     |target| endpoint_json(target, false),
@@ -1589,7 +1589,7 @@ mod tests {
 
         let connector = crate::node::Path::new(["peer"]).unwrap();
         let generation = instance::Generation::new(
-            instance::Identity::singleton(&crate::node::OwnerPath::new(["peer"]).unwrap()),
+            instance::InstanceAddress::singleton(&crate::node::OwnerPath::new(["peer"]).unwrap()),
             0,
         );
         for completed in [false, true] {
@@ -1634,7 +1634,7 @@ mod tests {
         .unwrap();
         let version = crate::plan::GraphVersion(1);
         let simulation = &compilation.labs[0].simulations[0];
-        let mut session = crate::lab::ScenarioSession::try_new_program(
+        let mut session = crate::lab::Simulator::try_new_program(
             &compilation.plan,
             compilation.hash,
             version,
@@ -2002,7 +2002,7 @@ graph inspected : App {
         )
         .unwrap();
         let simulation = &compilation.labs[0].simulations[0];
-        let mut session = crate::lab::ScenarioSession::try_new(
+        let mut session = crate::lab::Simulator::try_new(
             &compilation.plan,
             crate::plan::GraphVersion(1),
             &simulation.name,
@@ -2290,7 +2290,7 @@ lab webhook { simulation requests on app { scenario classified {
         )
         .unwrap();
         let simulation = &compilation.labs[0].simulations[0];
-        let mut session = crate::lab::ScenarioSession::try_new(
+        let mut session = crate::lab::Simulator::try_new(
             &compilation.plan,
             crate::plan::GraphVersion(1),
             &simulation.name,
