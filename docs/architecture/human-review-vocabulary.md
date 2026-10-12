@@ -119,7 +119,9 @@ Ranked by the cost of leaving them to the external reviewer.
    the other four. **Proposed 12 October:** `PrivacyProfile` →
    **`PrivacyDeclaration`** (controller-supplied, verified for completeness
    and digest only; not `PrivacyFacts`, Yoann: "fact" already has its
-   sense); `CostProfile` → **`PriceBook`** (its own doc's word);
+   sense); `CostProfile` → **`PriceBook`** (Yoann, 12 October; its own doc's word;
+   `PriceTable` offered as the plainer word and not retained),
+   `CostProfileName` → `PriceBookName`;
    `json::HydrationProfile` → **`DeserializationPolicy`** in module `json`
    (Yoann, 12 October: `JsonDeserializationPolicy`; written qualified,
    `json::DeserializationPolicy`, the module already says Json, as
@@ -139,8 +141,19 @@ Ranked by the cost of leaving them to the external reviewer.
    `conformance::Profile` read 12 October: the contract under test, a
    happy-path probe with its submission and exit case, one provocation per
    provocable terminal case, the unprovable cases with their reasons, the
-   mute probe for the timeout battery, the interleaved-correlation probe →
-   **`DriverProbes`**, "probe" being the module's own word for each of them.
+   mute probe for the timeout battery, the interleaved-correlation probe
+   (examples: File reads `missing.bin` → `NotFound`, a directory →
+   `NotAFile`, `../outside` → `InvalidPath`, `large.bin` under a 4-byte
+   limit → `ReadLimitExceeded`; unprovable `PermissionDenied`, "no portable
+   fixture can force host permission denial"). Yoann did not know the
+   word "provocation", which settles it: the module takes the universal
+   test words. Proposed: `Profile` → **`DriverConformanceCases`**,
+   `EventProfile` / `SessionProfile` → **`EventConformanceCases`** /
+   **`SessionConformanceCases`**; `Provocation` → **`ExitCaseTest`**, an
+   input built to force one declared exit case; `unprovable` →
+   **`untestable`**, the declared cases no portable test can force, each
+   with its written reason. `DriverProbes` withdrawn: "probe" is the
+   module's word, not the reader's.
 6. **Node.** `plan::Node` is an executable row only, narrower than the
    specification's Node, which includes Graph. Settled by D-2026-10-11-1;
    listed here for completeness.
