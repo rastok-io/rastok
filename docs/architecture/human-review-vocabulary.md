@@ -275,6 +275,8 @@ trace, what goes in, not what comes out. `AccountingObservation`,
 doc says "retained measurement");
 `RecordObservation` stays: the specification's "retained observation" has
 the same sense, what was seen without carrying identity.
+**Corrected 12 October after Astra's review:** `Observed` → `EnvelopeView`,
+not `DeliveryView`: the log also records each emission at its source port.
 **⟂ 2d.** `Delivery { port, edge: String, seq, source_instance, envelope }`
 carries two derivable fields: `port` follows from the edge, and `edge` is
 canonical text where it is a wiring index, text that also enters
@@ -422,6 +424,8 @@ collides with family 9.
 which effective type. Not `LoopTerminal` (Fable's first proposal): the
 specification reserves "terminal" for the Connectors' terminal facts, the
 `*Exit` types. "Expiry" returns to the time family.
+**Corrected 12 October after Astra's review:** `LoopExpiredOutput`; the type
+only names the output for `LoopExpired`, `LoopTermination` overclaimed.
 ### 7. Execution — transaction, step, firing, fault
 
 | Code | Where | Meaning | Spec (uses) |
@@ -600,7 +604,7 @@ module says the layer; the lowering, the one file holding both, prefixes
 | `Draft`, `PortOutput` | what the world provides, at ingress (`Draft { data, ext }`, always beside a `port`) and as a Driver's output (`PortOutput { port, data, ext }`): the same two fields, the same owner, the same rule, the Driver proposes and the VM mints; no `sys`, no `app` | **one type, `EnvelopeDraft { port, data, ext }`** (word closed 11 October, night; merge 12 October). Draft is the specification's word (26 uses) and says the state: not yet an envelope, it becomes one when the admission or the Connector transaction commits. The port belongs to the draft: the ingress doc already says "source port of the draft", the Driver trait says Drivers "birth drafts and never envelopes", and a draft is never built without a port. `PortOutput` disappears; `Completion` holds ordered drafts with exactly one on `exit`, last; the session terminal is a draft. No byte changes: the codec already writes `[port, data, ext]`. `EnvelopeContent` dropped: structural, and too close to `data`. Not `envelope_data` | decided |
 | mint (doc comments: "the journal mints the id") | derive and assign the definitive identity | **identify** / **assign_identity** | decided |
 | `pump` | one boundary round with the Drivers | **`poll_drivers`** | decided |
-| `CompletionGate`, `OpenGate` | a conformance check of a Driver's completion against the Contract | **`CompletionCheck`** | decided |
+| `CompletionGate`, `OpenGate`, `PlanGate` | a conformance check of a Driver's completion against the Contract: the trait, the implementation that accepts anything, the plan-backed one | **`CompletionCheck`**, **`AcceptAnyCompletion`**, **`PlanCompletionCheck`** (Astra's split, 12 October: a trait and its implementations cannot share a name) | decided |
 | bless (goldens, witnesses) | accept a new reference | **approve** | decided |
 | `Fold` | a read model rebuilt from committed journal facts: for Loop, every open run with its instance, entry port, iteration, remaining budget, state envelope, admission and pending command | **`LoopView`**, **`RetryView`**, **`InstanceCommandView`** — "a view of" something, less academic than projection (Yoann) | decided |
 | `Intent` (`SessionOpenIntent`, `SessionWriteIntent`) | the description of an outbound effect handed to the Driver after its open fact committed | name the effect, drop the suffix: **`CallOpen`**, **`SessionOpen`**, **`SessionWrite`**; journal-before-effect is stated once, on the Dispatcher | decided |
@@ -636,7 +640,7 @@ realignment, before the opening; the T4 second pass is suspended after block
 | `inject_submission` | `admit_proposal` | `inject`, `admit_ingress` stay as the two doors |
 | `BoundaryEvent`, `InboundCallEvent`, `SessionDriverEvent`, `LifecycleEvent` | `BoundaryObservation`, `InboundCallObservation`, `SessionObservation`, `LifecycleObservation` | event = exchange kind only; fix the `BoundaryEvent` doc ("fact") |
 | `Intent`, `SessionOpenIntent`, `SessionWriteIntent` | `CallOpen`, `SessionOpen`, `SessionWrite` | journal-before-effect stated once on the poller |
-| `CompletionGate`, `OpenGate` | `CompletionCheck` | |
+| `CompletionGate` (trait), `OpenGate`, `PlanGate` | `CompletionCheck` (trait), `AcceptAnyCompletion`, `PlanCompletionCheck` | a trait and its two implementations cannot share one name; the permissive one says it checks nothing (Astra, 12 October) |
 | `Dispatcher`, `DispatchError` | `DriverPoller`, `PollFault` | `Dispatch*` of the Operator stay |
 | `pump`, `PumpBatch`, `PumpReport`, `InboundCall*PumpReport`, `pump_inbound*`, `InboundPumpError` | `poll_drivers`, `PollBatch`, `PollReport`, `InboundCall*PollReport`, `poll_inbound*`, `InboundPollError` | |
 | `ConnectorRoles`, `node::Direction` | `ConnectorDirection`, `PortDirection` | |
@@ -648,7 +652,7 @@ realignment, before the opening; the T4 second pass is suspended after block
 | `TimeAdvance::step` | `advance_once` | `Vm::step` stays |
 | `VmError` | `VmFault` | `Fault` stays; module `Error`s stay |
 | `DatedPayload` | `Obligation` | "dated" leaves the timeline vocabulary |
-| `Observed`, `observations()` | `DeliveryView`, accessor follows | |
+| `Observed`, `observations()` | `EnvelopeView`, accessor follows | an envelope seen at a node port, leaving or arriving: `vm.rs` logs the emission at its source port ("`expect relay.out` watches departures") and each delivery at its target, so `DeliveryView` covered half (Astra, 12 October) |
 | `AccountingObservation`, `ObservationScope` | `Measurement`, `MeasurementScope` | `RecordObservation` stays |
 | `CostProfile`, `CostProfileName` | `PriceBook`, `PriceBookName` | |
 | `PrivacyProfile` | `PrivacyDeclaration` | |
@@ -660,8 +664,9 @@ realignment, before the opening; the T4 second pass is suspended after block
 | `instance::Identity` | `InstanceAddress` | `Id` stays |
 | `Live`, `Live::frames` | `LiveInstance`, `segments` | "bundle" is prose only |
 | `Edge::scope` | `owner` | |
-| `LoopExpiry` | `LoopTermination` | |
+| `LoopExpiry` | `LoopExpiredOutput` | only the output chosen to publish `LoopExpired`; `LoopSpec.terminals` are the business terminals, so `LoopTermination` overclaimed (Astra, 12 October) |
 | `Fold` (loop, retry, instance_stop) | `LoopView`, `RetryView`, `InstanceCommandView` | |
+| `LoopDelay` (type shared by `LoopSpec.delay` and `RetrySpec.delay`) | `DelayPolicy` | Loop and Retry share the policy, not the concept; `Obligation::LoopDelay` / `RetryDelay` stay two obligations (Astra, 12 October) |
 | `Packet` (loop, retry, instance_stop) | `LoopRecord`, `RetryRecord`, `InstanceCommands` | the names their fields already carry |
 | mint, bless (doc verbs) | identify / assign_identity, approve | |
 
@@ -693,7 +698,11 @@ The two halves of a `DriverPoller` round; `AdmittedIngress` (what the
 Driver is told) versus `CommittedIngress` (the journal's return); what a
 `*Spec` is in the plan; fixture = prepared test material, a scenario's in
 the Lab, a Driver's in conformance; the three time words at the head of
-`timing.rs`; `LiveInstance`'s "immutable values and settings".
+`timing.rs`; `LiveInstance`'s "immutable values and settings"; `EmitValue` is
+"the expression evaluated to build the envelope", not a computed value;
+`*View` is a read-only view for a reader — the Loop, Retry and
+InstanceCommand views rebuilt from the journal, `EnvelopeView` the
+debugger's live log (both Astra).
 
 ## What validation produces
 
