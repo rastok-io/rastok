@@ -363,6 +363,7 @@ index); confirm the surviving word (index, not slot, not handle).
 | "scope" | everywhere | the closing scope (`close_scope`), the owner scope (`Segment::scope`), the edge scope (`Edge::scope`) | scope 90 |
 
 **⟂ 5a.** Collision 7 (`Spec`).
+**Settled 12 October (Yoann, batch ok: "pour le reste on est à peu près bon").** `InstanceSpec`.
 **⟂ 5b.** "bundle" (8 uses) names the immutable values of a `Live`; `Live`
 itself has no specification word. Confirm "live instance" / "bundle" or
 pick one.
@@ -433,11 +434,13 @@ specification reserves "terminal" for the Connectors' terminal facts, the
 | `Vm`, `TimeAdvance`, `step`, `drain`, `pump`, `advance` | vm | the pure execution engine; the resumable discrete-time sweep; the four host verbs | step 33, advance 63, drain 42, pump 18 |
 
 **⟂ 7a.** Collision 1 (`*Executor`).
+**Settled 12 October (Yoann, batch ok: "pour le reste on est à peu près bon").** `TransactionPreparer`, `GuestRunner`.
 **⟂ 7b.** `Vm::step` is one transaction; `TimeAdvance::step` is one
 transaction, one expiry or one poll. Same verb, two granularities.
 **Proposed 12 October:** `Vm::step` keeps the specification's `step`, one
 transaction (33 uses); `TimeAdvance::step` → **`advance_once`**, one unit of
 the `advance` it slices (a transaction, an expiry or a poll).
+**Settled 12 October (Yoann, batch ok: "pour le reste on est à peu près bon").** `advance_once`.
 **⟂ 7c.** Fault / VmError / Error: "fault" is the specification's word for
 a transaction that committed nothing; `VmError` is also that. Confirm the
 split (Fault = evaluation, VmError = machine) or merge the words.
@@ -447,12 +450,14 @@ its own doc says "a machine fault … never a business error", and "error" is
 the specification's word for the `err` port and business error values (170
 uses); with `DriverPoller`, `DispatchError` → **`PollFault`**. Module-local
 `Error` types stay, the `io::Error` convention.
+**Settled 12 October (Yoann, batch ok: "pour le reste on est à peu près bon").** `VmFault`, `PollFault`; `Fault` stays.
 **⟂ 7d.** The spec's **Worker** has no type (ledger, parked remarks).
 
 **Proposed 12 October:** a **`Worker`** type in the `rastok` crate, the
 specification's word (64 uses), owning the hosted loop of `main.rs` and
 `lab.rs` (boot, rounds, stepping, shutdown); created with the runtime
 organisation lot of D-2026-10-11-1, not a rename.
+**Settled 12 October (Yoann, batch ok: "pour le reste on est à peu près bon").** `Worker`, with the runtime organisation lot.
 ### 8. The boundary — driver, contract, binding, dispatcher, gate, pump
 
 | Code | Where | Meaning | Spec (uses) |
@@ -466,6 +471,7 @@ organisation lot of D-2026-10-11-1, not a rename.
 | `*Factory`, `*Config`, `*Binding`, `*RequestBindings` | connectors (host) | per-family construction, configuration, plan binding, request settings | — |
 
 **⟂ 8a.** Collision 2 (`Dispatch`/`Dispatcher`) and 3 (`Bindings`).
+**Settled 12 October (Yoann, batch ok: "pour le reste on est à peu près bon").** Collision 2 closed (`DriverPoller`); collision 3: `*RequestSettings`, the rest kept.
 **⟂ 8b.** "pump" has one meaning (a boundary round) and three report types.
 Confirm the verb; it is not in the specification's main vocabulary (18).
 **Settled 12 October:** the verb is `poll_drivers` (11 October) and every
@@ -517,6 +523,7 @@ the terminal fact. The specification uses all three this way. Confirm, and
 state it once in `timing.rs`.
 **12 October:** confirmed as is; the three words and their stage are
 stated once at the head of `timing.rs`.
+**Settled 12 October (Yoann, batch ok: "pour le reste on est à peu près bon").** Confirmed.
 **⟂ 9b.** `LoopExpiry` (6c).
 **Settled 12 October:** see 6c, `LoopTermination`.
 **⟂ 9c.** The decided time model (D-2026-10-10-1) adds *instant*, *origin*,
@@ -563,6 +570,7 @@ Loop protocol, no collision.
 | `Compilation`, `Unit`, `Hir`, `SyntaxTree`, `SymbolTable`, `Diagnostic`, `Bag` | compiler | the compiler's layers and side tables | — |
 
 **⟂ 11a.** Collision 5 (`Profile`).
+**Settled 12 October (Yoann, batch ok: "pour le reste on est à peu près bon").** `PrivacyDeclaration`, `PriceBook`, `json::DeserializationPolicy`, `DriverTestFixture`.
 **⟂ 11b.** `ScenarioSession` reuses "session", the Connector exchange word.
 **Proposed 12 October:** `ScenarioSession` → **`Simulator`**, the
 specification's own word (simulation-semantics §1: "the simulator — the
@@ -575,12 +583,14 @@ never enter the core plan (zero mentions in `plan.rs`; the `lab` corpus is
 "never deployed"), and the live thing is not a declaration. `ScenarioWorld`
 withdrawn: "world" is the fixture half. `ScenarioRun { report, records }`
 stays, the result of one run.
+**Settled 12 October (Yoann, batch ok: "pour le reste on est à peu près bon").** `Simulator`.
 **⟂ 11c.** The HIR mirrors plan names (`hir::Node`, `Graph`, `Handler`,
 `Edge`) — same word, previous layer. Acceptable by module path; confirm.
 
 **Proposed 12 October:** accepted as is; same concept, previous layer, the
 module says the layer; the lowering, the one file holding both, prefixes
 `hir::`, as one writes `syn::Item`.
+**Settled 12 October (Yoann, batch ok: "pour le reste on est à peu près bon").** Accepted.
 ## Validated so far — 11 October, evening
 
 | Term today | What it is | Yoann's decision | Status |
@@ -598,12 +608,89 @@ module says the layer; the lowering, the one file holding both, prefixes
 | command | what a protocol asks the next transaction to do: Loop `Command`, `CommandProduced`, `CommandId`; instance-stop `Command`; `instance_commands` on the transaction record | **kept.** With fact, the two CQRS words of the journal protocols; no third word for them | decided |
 | admission | the specification's central word (186 uses, ten files): a delivery entering an address, root or internal; the "admission point" is mailbox reservation plus the producer's route commit; `OpeningAdmissionId`, Loop re-admission, the `idle` deadline runs from the last admission | **kept**, examined for removal and refused: no existing word covers every delivery (ingress = roots only, acceptance = the positive outcome only, entry = the Loop's entry port, enter = no verdict); "admission control" is the standard systems term for a bounded entry with accept / pending / reject; removing it is a specification change, not a code rename | decided |
 | the ingress chain: `IngressSubmission`, `SubmissionSequence`, `IngressProposal` (with its `reference` field), `IngressEnvelopeProvenance`, `IngressAcceptance`, `IngressDecision`, `inject_submission` | the door's wrappings and verdicts, eight words for one thing offered and judged | **flattened to the specification's words** (11 October, night): `IngressProposal { provenance, draft: EnvelopeDraft, sequence: IngressSequence, session }` is what is proposed, by the host or a Driver (the port is inside the draft, 12 October) (`IngressSubmission` disappears into it; `SubmissionSequence` → `IngressSequence { Next, Explicit }`); `RetainedProposal { handle, proposal }` is the proposal a Driver keeps while it waits; `IngressEnvelopeProvenance` → `IngressProvenance`; `IngressAdmission { Accepted(AdmittedIngress), Pending, Rejected(IngressRejection) }` stays the verdict; `IngressAcceptance` → **`AdmittedIngress { envelope, exchange }`**, named by its place in the chain beside `PreparedIngress` and `CommittedIngress` (Yoann: not `AdmittedRoot`; "root" reads as an image even though the specification uses it 192 times); `IngressDecision` → `Result<AdmittedIngress, IngressRejection>`, the verdict without `Pending` as a standard type; the one transaction behind both doors, `inject_submission`, → `admit_proposal`; `inject` and `admit_ingress` stay as the two doors. Words after: draft, proposal, admission, rejection, ingress; gone: submission, acceptance, decision. `AdmittedIngress` is what the Driver is told (two ids, portable); `CommittedIngress` is the journal's return (seq, envelope, record): the two doc lines must state that difference. Cost: `IngressSubmission` in 16 files, `IngressDecision` in 8, all host Drivers; a code lot, with the realignment or after the opening | decided |
-| `plan::emission::Emission` | the lowered right-hand side of `out = …`: `Identity`, `Patch`, `FreshData`, `Data`, `Nothing`; held as `value` by `DispatchStep::Emit` and by `MultiEmitValues` | **`EmitValue`** (12 October, Fable's final proposal after `EmissionSpec` and `EmissionKind` were examined; Yoann's ok to confirm). The word of its neighbours, `Emit { port, value }`, `MultiEmitValues`, `FieldWrite.value`, and the specification's phrase "a braced value is classified once". In a plan every noun is the checked text of what will happen at run time, so "value" means the value expression, as the code already uses it. `journal::Emission` keeps the specification's word; `runtime.rs` imports both today and aliases the plan one `PlanEmission`, which disappears. Not retained: `EmissionSpec` (coherent with the header configurations `ConnectorSpec`, `LoopSpec`, `RetrySpec`, `ExtensionSpec`, not with the handler body where it lives, and `MultiEmitValues` would have had to follow); `EmissionKind` (the code's 18 `*Kind` enums are category tags of a thing that lives elsewhere, 9 of 144 variants carry a small detail; here three of five variants are the content); `EmittedEnvelope` for the journal; `EmissionForm`; `EmissionRule`; `EmissionRecipe`. The `*Spec` suffix stays what it is, the plan's checked description of an authored header declaration; collision 7 concerns only the bare `instance::Spec` | decided in substance |
+| `plan::emission::Emission` | the lowered right-hand side of `out = …`: `Identity`, `Patch`, `FreshData`, `Data`, `Nothing`; held as `value` by `DispatchStep::Emit` and by `MultiEmitValues` | **`EmitValue`** (12 October, Fable's final proposal after `EmissionSpec` and `EmissionKind` were examined; Yoann's ok to confirm). The word of its neighbours, `Emit { port, value }`, `MultiEmitValues`, `FieldWrite.value`, and the specification's phrase "a braced value is classified once". In a plan every noun is the checked text of what will happen at run time, so "value" means the value expression, as the code already uses it. `journal::Emission` keeps the specification's word; `runtime.rs` imports both today and aliases the plan one `PlanEmission`, which disappears. Not retained: `EmissionSpec` (coherent with the header configurations `ConnectorSpec`, `LoopSpec`, `RetrySpec`, `ExtensionSpec`, not with the handler body where it lives, and `MultiEmitValues` would have had to follow); `EmissionKind` (the code's 18 `*Kind` enums are category tags of a thing that lives elsewhere, 9 of 144 variants carry a small detail; here three of five variants are the content); `EmittedEnvelope` for the journal; `EmissionForm`; `EmissionRule`; `EmissionRecipe`. The `*Spec` suffix stays what it is, the plan's checked description of an authored header declaration; collision 7 concerns only the bare `instance::Spec` | decided (batch ok, 12 October) |
 | `boundary::Dispatcher` | the loop between the journal and the outbound Drivers: each journaled open call is handed to its Driver exactly once, journal before effect, and closures settle through the close-once race | **`DriverPoller`** (Yoann, 12 October), with the verb `poll_drivers`; the Operator's `Dispatch` keeps the specification's word. Collision 2 closed | decided |
 | `ConnectorRoles` | Inbound, Outbound, both: row 2 of the Contract sheet, *Direction* | **`ConnectorDirection`** (Yoann, 12 October); `node::Direction` → `PortDirection` proposed with it | decided |
 | `BootBindings` | fully resolved boot inputs: the `env()` / `secret()` values bound at boot | **kept** (Yoann, 12 October): a binding in the specification's main sense | decided |
-| `syntax::ExtensionEvent` | recovery-only capture of the removed `.start` / `.stop` forms | proposed **`RemovedLifecycleHook`**: the parser already has `RemovedWindowMode` for the same job | proposed |
+| `syntax::ExtensionEvent` | recovery-only capture of the removed `.start` / `.stop` forms | **`RemovedLifecycleHook`**: the parser already has `RemovedWindowMode` for the same job | decided (batch ok, 12 October) |
 | `Packet` (loop, retry, instance_stop) | the protocol's sparse contribution to one transaction (its own doc line): Loop = contexts, routes, commands produced and consumed, facts; Retry = attempt context and facts; instance stop = commands produced and consumed | **`LoopRecord`**, **`RetryRecord`**, **`InstanceCommands`** (Yoann, 12 October, "quite ok"): the names the public fields of `TransactionRecord` already carry (`loop_record`, `retry_record`, `instance_commands`), so no new word. Reservation written in each doc: a `LoopRecord` is the Loop protocol's part of a transaction record, carried by it and never standalone, not a fourth causal record kind. `Contribution` not retained | decided |
+
+## Outcome — the rename lot, closed 12 October
+
+Every line of this ledger is settled. What follows is the deliverable: the
+renames to apply, by family, with what stays and why. No rename changes a
+journal byte; the codec writes fields, not type names. Placement of the lot
+(with realignment lot 1, or after the opening) is Yoann's decision.
+
+### Renames
+
+| Today | Decided | Note |
+|---|---|---|
+| `Draft`, `PortOutput` | `EnvelopeDraft { port, data, ext }` | one type for what the world provides, both directions |
+| `IngressSubmission`, `IngressProposal.reference` | `IngressProposal { provenance, draft, sequence, session }`, `RetainedProposal { handle, proposal }` | the port is inside the draft |
+| `SubmissionSequence`, `IngressEnvelopeProvenance` | `IngressSequence`, `IngressProvenance` | |
+| `IngressAcceptance`, `IngressDecision` | `AdmittedIngress { envelope, exchange }`, `Result<AdmittedIngress, IngressRejection>` | `IngressAdmission`, `IngressRejection` stay |
+| `inject_submission` | `admit_proposal` | `inject`, `admit_ingress` stay as the two doors |
+| `BoundaryEvent`, `InboundCallEvent`, `SessionDriverEvent`, `LifecycleEvent` | `BoundaryObservation`, `InboundCallObservation`, `SessionObservation`, `LifecycleObservation` | event = exchange kind only; fix the `BoundaryEvent` doc ("fact") |
+| `Intent`, `SessionOpenIntent`, `SessionWriteIntent` | `CallOpen`, `SessionOpen`, `SessionWrite` | journal-before-effect stated once on the poller |
+| `CompletionGate`, `OpenGate` | `CompletionCheck` | |
+| `Dispatcher`, `DispatchError` | `DriverPoller`, `PollFault` | `Dispatch*` of the Operator stay |
+| `pump`, `PumpBatch`, `PumpReport`, `InboundCall*PumpReport`, `pump_inbound*`, `InboundPumpError` | `poll_drivers`, `PollBatch`, `PollReport`, `InboundCall*PollReport`, `poll_inbound*`, `InboundPollError` | |
+| `ConnectorRoles`, `node::Direction` | `ConnectorDirection`, `PortDirection` | |
+| `HttpClientRequestBindings`, `FileRequestBindings`, `ProcessRequestBindings` | `*RequestSettings` | `BootBindings`, `expr::Bindings`, `*ConnectorBindings` stay |
+| `HandlerExecutor`, `GuestExecutor` | `TransactionPreparer`, `GuestRunner` | Executor returns to the taxonomy |
+| `Built`, `BuiltData` | `BuiltEmission`, `BuiltPayload` | crate-private |
+| `plan::emission::Emission` | `EmitValue` | `journal::Emission` stays; `PlanEmission` alias disappears |
+| `Vm::drain`, `drain_with_bindings` | `run_ready`, `run_ready_with_bindings` | the closing sense of drain stays |
+| `TimeAdvance::step` | `advance_once` | `Vm::step` stays |
+| `VmError` | `VmFault` | `Fault` stays; module `Error`s stay |
+| `DatedPayload` | `Obligation` | "dated" leaves the timeline vocabulary |
+| `Observed`, `observations()` | `DeliveryView`, accessor follows | |
+| `AccountingObservation`, `ObservationScope` | `Measurement`, `MeasurementScope` | `RecordObservation` stays |
+| `CostProfile`, `CostProfileName` | `PriceBook`, `PriceBookName` | |
+| `PrivacyProfile` | `PrivacyDeclaration` | |
+| `json::HydrationProfile`, `hydrate`, `hydrate_with_profile`, `json/hydration.rs` | `json::DeserializationPolicy`, `deserialize`, `deserialize_with_policy`, `json/deserialization.rs` | `materialize` does not move |
+| `conformance::Profile`, `EventProfile`, `SessionProfile`, `Provocation`, `unprovable` | `DriverTestFixture`, `EventTestFixture`, `SessionTestFixture`, `ExitCaseTest`, `untestable` | |
+| `ScenarioSession` | `Simulator` | `hir::Scenario`, `ScenarioRun` stay |
+| `syntax::ExtensionEvent` | `RemovedLifecycleHook` | |
+| `instance::Spec` | `InstanceSpec` | |
+| `instance::Identity` | `InstanceAddress` | `Id` stays |
+| `Live`, `Live::frames` | `LiveInstance`, `segments` | "bundle" is prose only |
+| `Edge::scope` | `owner` | |
+| `LoopExpiry` | `LoopTermination` | |
+| `Fold` (loop, retry, instance_stop) | `LoopView`, `RetryView`, `InstanceCommandView` | |
+| `Packet` (loop, retry, instance_stop) | `LoopRecord`, `RetryRecord`, `InstanceCommands` | the names their fields already carry |
+| mint, bless (doc verbs) | identify / assign_identity, approve | |
+
+### With the realignment (D-2026-10-11-1)
+
+`Slot` / `OwnerSlot` → `NodeIndex`; `EdgeEnd`, `EndpointOwner`,
+`RouteDestination` → `Endpoint` (index + port) and `Destination`;
+`Delivery.edge` becomes an index and `Delivery.port` is derived; a `Worker`
+type in the `rastok` crate owns the hosted loop.
+
+### Kept after examination
+
+admission; `instance::Generation` (always qualified, never imported bare);
+`BootBindings`, `expr::Bindings`, `*ConnectorBindings`; `Dispatch`,
+`DispatchStep`, `DispatchSelection`; `journal::Emission`, `Delivery`,
+`RoutedDelivery`, `RouteTarget`; `RecordObservation`; `Fault`; drain
+(closing sense, `drain_for`), `try_drain`; module-local `Error`; the HIR
+names; budget / deadline / timeout; activation / trigger / firing;
+`DeploymentProfile`, `contract::Profile`; the `*Record` and `*Exit` types.
+
+### Specification sentences to align
+
+extensions.md §1 "A Driver supplies a typed event" → observation; the 31
+"hydration" → deserialization. Both in the realignment's doc pass.
+
+### Docs to write once
+
+The two halves of a `DriverPoller` round; `AdmittedIngress` (what the
+Driver is told) versus `CommittedIngress` (the journal's return); what a
+`*Spec` is in the plan; fixture = prepared test material, a scenario's in
+the Lab, a Driver's in conformance; the three time words at the head of
+`timing.rs`; `LiveInstance`'s "immutable values and settings".
 
 ## What validation produces
 
