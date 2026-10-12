@@ -17,7 +17,7 @@ The original handoff follows as historical evidence, not current schema rules.
 [D-2026-09-15-5](../spec/decisions.md#d-2026-09-15-5--define-flat-annotation-capable-structs-with-one-type-system)
 and [annotations.md](../spec/annotations.md) settle the `@struct` model.
 [D-2026-09-15-6](../spec/decisions.md#d-2026-09-15-6--hydrate-annotated-response-types-before-retry-disposition)
-settles typed response hydration in place of a separate extraction mapping.
+settles typed response deserialization in place of a separate extraction mapping.
 The repository contact below is against `58555a7` on `rework/retry`.
 The tree was clean before the documentary pass. Subsequent source work is
 recorded separately below. The later §4.1/§11 inventory adds application tag 6
@@ -40,7 +40,7 @@ Settled:
   `sum` argument encoding remains metadata, not an executable report policy;
 - simple author-chosen measure ids, with no required OTel, `rastok.*` or
   `std.*` prefix (D-2026-09-16-3); quantity names do not confer interpretation;
-- the response type itself maps JSON fields; hydration supplies annotated
+- the response type itself maps JSON fields; deserialization supplies annotated
   values on every attempt before Retry disposition, without an extractor DSL;
 - monetary `@measure`, without a separate `@cost` spelling, preserving
   currency, evidence and exact arithmetic (D-2026-09-16-4);
@@ -63,7 +63,7 @@ The integration must still specify, before the affected code:
    replacement of `@cost`, scalar versus Money-shaped currency authority,
    sum and reported/calculated evidence. Other monetary ids now use the common
    binding inventoried in §4.1 and implemented in §14; they retain their identity.
-4. **Hydration binding.** Subsequently settled by D-2026-09-16-1 and §7:
+4. **Deserialization binding.** Subsequently settled by D-2026-09-16-1 and §7:
    explicit output refinement, a bounded HttpClient JSON profile and existing
    DecodeFailed behavior. No general serializer or new extraction mechanism.
 5. **Transport.** Append the exact affected tables, tags and canonical hash
@@ -78,7 +78,7 @@ spelling or to implement a generic annotation language/plugin system first.
 | Existing seam | Evidence | Integration consequence |
 |---|---|---|
 | Logical type/value algebra | [`datatype.rs`](../../crates/rastok-core/src/datatype.rs), `TypeField`, `StructType`, `DataType`; [types §2](../spec/types.md#2-the-logical-type-tree) | Reuse scalar/enum/decimal/struct validation; enforce flatness after aliases, no parallel quantity type syntax |
-| Exact JSON numbers | [`json.rs`](../../crates/rastok-core/src/json.rs), `parse_value`; `datatype.rs::narrow_decimal` | The reader already retains exact integers/decimals and checked rescaling exists; hydration should reuse them, not add a parser or pass through floats |
+| Exact JSON numbers | [`json.rs`](../../crates/rastok-core/src/json.rs), `parse_value`; `datatype.rs::narrow_decimal` | The reader already retains exact integers/decimals and checked rescaling exists; deserialization should reuse them, not add a parser or pass through floats |
 | Type and annotation parser | [`parser.rs`](../../crates/rastok/src/compiler/parser.rs), `type_ref`, `base_type`, `schema_annotations` | Add the disjoint `@ struct` base-type form, retain the postfix application position and named arguments |
 | Annotation resolution at the initial contact | [`check.rs`](../../crates/rastok/src/compiler/check.rs), `resolve_data_annotation` | The original five builtin names used closed checks, not stdlib `@struct` declarations; §10 subsequently unifies monetary source syntax without losing target/constant diagnostics |
 | Sparse schema policy | [`schema_annotation.rs`](../../crates/rastok-core/src/schema_annotation.rs), `AnnotationTable`, `SchemaPath`, `DataAnnotation` | Reuse canonical target paths and compact resolved policy; a generic source declaration does not require a heap map per runtime value |
@@ -86,18 +86,18 @@ spelling or to implement a generic annotation language/plugin system first.
 | Measures | `measure_spec`, `MeasureCarrier` and `MeasureQuantity` | Today the field registry is closed and the fold only admits integer/duration quantities; custom decimal measurements are not delivered |
 | Decimal costs | [`accounting.rs`](../../crates/rastok-core/src/accounting.rs), `ExactDecimal`, `Money`, `UnitPrice`, `CostReport` | Reuse exact arithmetic and currency/evidence checks; pricing currently takes an integral quantity and also needs an exact decimal path |
 | Attempt observations | `accounting_observations` reads INBOUND and every TRANSACTION emission | Held emissions are already visible to the accounting reader, not only published graph deliveries |
-| Dynamic response extraction at initial contact | Historical `agent-http-candidate.rkg`, `operator measure`; replaced by [agent-http.rkg](../../examples/agent-http.rkg) | That downstream Operator did not execute for a held attempt; the replacement hydrates annotated fields on the original Connector emission |
+| Dynamic response extraction at initial contact | Historical `agent-http-candidate.rkg`, `operator measure`; replaced by [agent-http.rkg](../../examples/agent-http.rkg) | That downstream Operator did not execute for a held attempt; the replacement deserializes annotated fields on the original Connector emission |
 | Retry authority | [`retry-c1-algebra.md`](retry-c1-algebra.md#9-accounting-policy-and-inspection), [C3 §5](retry-c3-implementation.md#5-closing-clarification-and-remaining-qualification) | Keep exact operation/attempt/Call correlation; no observation can release a held result or become a second consumption |
 
 Function names identify the intended seams, not a required public API.
 No new `AnnotationInterpreter` trait, third-party dependency or dynamic
 registry loader is justified by this contact.
 
-## 3. Typed hydration, not a second extraction language
+## 3. Typed deserialization, not a second extraction language
 
-The [approved response example](../spec/annotations.md#61-hydration-supplies-the-values)
+The [approved response example](../spec/annotations.md#61-deserialization-supplies-the-values)
 puts `@measure` on the fields of an ordinary response type, including amounts.
-The codec hydrates that type on each attempt; the accounting reader observes
+The codec deserializes that type on each attempt; the accounting reader observes
 the typed fields already retained by the Connector transaction. Process,
 File and HttpClient remain generic Contracts, without provider-specific
 usage fields or a custom extractor executing business code.
@@ -107,11 +107,11 @@ HTTP JSON output is `variant`: silently changing it from a downstream port
 or a reporting request would violate the fixed Contract. Source syntax and
 the versioned profile inventory must make the new binding explicit. No
 additional source-to-target path map, field renaming or silent partial-record
-projection is needed for the accepted same-shape hydration use case.
+projection is needed for the accepted same-shape deserialization use case.
 
 The required cases are known zero, unavailable expected value, invalid
 present value and no observation required. A timeout can remain unknown even
-with hydration; a missing price is different from a missing quantity.
+with deserialization; a missing price is different from a missing quantity.
 An invalid native Contract payload remains a Contract violation, not a valid
 sample manufactured as zero or as a successful decode. The typed codec must
 preserve decimal lexemes exactly rather than recover a decimal from a binary
@@ -138,7 +138,7 @@ not additive expenses.
 | A0 — this handoff | Chosen syntax, consumer map, repository gaps, explicit pre-code decisions | Documentary review; no executable claim |
 | A1 — definitions and authority | Flat type checking, annotation application/alias resolution, stdlib signatures and protected bindings | LL(1) success/recovery/rejection tests; alias-hidden composite refusal; ordinary data equivalence; spoofed semantic binding rejection |
 | A2 — measurement retention | Simple declared ids, exact signed samples and canonical monetary metadata | Registry migration; exact original values; unit and basis separation; neutral monetary spelling migration; no duplicate sample or automatic total |
-| A3 — response hydration | Explicit typed codec binding, exact materialization before disposition, attempt scope and coverage | Retained 5xx with usage, timeout without usage, final response with usage; exact decimal and conformance refusals; each prefix/replay identical; original Operator not executed; policy-safe retention/display |
+| A3 — response deserialization | Explicit typed codec binding, exact materialization before disposition, attempt scope and coverage | Retained 5xx with usage, timeout without usage, final response with usage; exact decimal and conformance refusals; each prefix/replay identical; original Operator not executed; policy-safe retention/display |
 | A4 — qualification and migration | Exact transport inventory, source gate opening, updated examples/docs, one reviewed blessing | Full Rust/core/no_std/UI matrix, hostile package checks, causal/identity witnesses, new embedded image and heap measurements |
 
 A1 transport cannot be improvised while A2/A3 introduce more metadata later:
@@ -206,7 +206,7 @@ reduced Retry/full recovery to 1,040,824 B, 7,752 B below 1 MiB, with
 unchanged 130,560 B peak heap. No gate has been raised. This closes the
 measured code overflow, not qualification of additional metadata or every
 retention profile. Section 11 records the subsequent annotation checkpoint.
-Before the response-handoff/hydration follow-ups, the default echo image had
+Before the response-handoff/deserialization follow-ups, the default echo image had
 44,844 B of code margin; the extra Retry/full-recovery qualification image
 exceeded 1 MiB by 70,924 B. These are different workloads,
 not a single green result. The 16-frame-per-channel Retry workload has only
@@ -215,7 +215,7 @@ annotation tables are free without an explicit decision and new measurements.
 The subsequent C3 response-handoff fix was measured separately: its unchanged
 healthy heap profile is recorded alongside the still-over-budget Retry image
 in [C3 §4](retry-c3-implementation.md#4-measured-cortex-m33-memory-not-an-extrapolation).
-The later hydration measurements are retained in §7 below.
+The later deserialization measurements are retained in §7 below.
 
 The [opening ledger](opening-showcase.md) also retains independent browser
 qualification, two unaided quickstart trials, remaining distribution/remote
@@ -247,7 +247,9 @@ and six `site_content` tests pass. Formatting, strict workspace Clippy and
 rustdoc pass. Retry's separate storage-refusal follow-up is recorded in C3;
 these results are not a blessing of candidate v19 or a claim of M1 closure.
 
-## 7. Existing-output JSON hydration
+<a id="7-existing-output-json-hydration"></a>
+
+## 7. Existing-output JSON deserialization
 
 16 September, D-2026-09-16-1. This inventory preceded implementation:
 
@@ -272,7 +274,7 @@ refinements remain named unsupported profiles, not silent fallbacks.
 This is the typed-value prerequisite, not delivery of generic annotation
 bindings, decimal business aggregation, or final Retry/M1 qualification.
 
-Evidence for this bounded slice: five core hydration tests, seven source/plan/
+Evidence for this bounded slice: five core deserialization tests, seven source/plan/
 Lab/gate tests and two physical-codec/binding tests pass. They cover member
 order, exact decimals and integer bounds, nullable collections, malformed
 JSON, missing/extra/wrong fields, unsupported encodings, forged codec pins,
@@ -288,7 +290,7 @@ one delivered response. Every journal prefix restores without re-preparing
 or recalling the Driver. No downstream extractor runs. This is evidence for
 existing M1.8 measures/costs, not generic decimal business measures.
 
-The identical Cortex-M33 workloads were remeasured after hydration:
+The identical Cortex-M33 workloads were remeasured after deserialization:
 
 | Image | Heap peak | `.text + .rodata` | Code margin against 1 MiB |
 |---|---:|---:|---:|
@@ -297,13 +299,13 @@ The identical Cortex-M33 workloads were remeasured after hydration:
 
 Both execute with `SPIKE_OK`; the Retry image is still not qualified against
 the code gate. These Process workloads measure the effect on existing images,
-not a maximum-size JSON hydration workload. No bound or golden was changed.
+not a maximum-size JSON deserialization workload. No bound or golden was changed.
 
 The final combined `cargo test --workspace --all-features --no-fail-fast`
 run reports **1,475 passed, 9 failed, 0 ignored**, 52 groups including the two
 empty doctest groups. The nine failures are the unblessed candidate changes
 enumerated in [C3 §6](retry-c3-implementation.md#6-check-results-with-snapshot-boundaries),
-not new hydration failures. Formatting, strict workspace Clippy, rustdoc,
+not new deserialization failures. Formatting, strict workspace Clippy, rustdoc,
 the no-default-feature build and all three configured core no_std targets
 pass. No JavaScript/browser or external protocol campaign was rerun.
 
@@ -361,7 +363,7 @@ must not be replaced with a double.
 D-2026-09-16-3 settles the naming question: no mandatory prefix, and authors
 choose their measure ids. `amount` and `tokens` name quantities; `currency`
 and `provider` are context. Their spelling alone grants no interpretation,
-hydration, dynamic labels or aggregation. The annotation binding, ordinary
+deserialization, dynamic labels or aggregation. The annotation binding, ordinary
 numeric type, explicit unit and sum-only profile remain the authorities.
 
 Repository contact: `MeasureId::new` already accepts unprefixed lexical names,
@@ -369,7 +371,7 @@ but `schema_annotation.rs::measure_spec` still enforces the closed M1.8
 registry. Source acceptance therefore requires more than deleting a prefix.
 The common inventory must account for replacement bindings, token subset
 relations, price-profile references and annotated-program identities. Existing
-hydration and accounting evidence in §7 uses the old ids; it is not evidence
+deserialization and accounting evidence in §7 uses the old ids; it is not evidence
 that new business ids are executable. No source, format or golden changes in
 this documentary follow-up.
 
@@ -648,7 +650,7 @@ not requirements to restore their removed APIs.
 
 The implementation removes `CostReport`, report rows, automatic tariff
 application, subset arithmetic and `unpriced` results. It preserves exact
-sample readers, typed hydration, annotation definitions and argument
+sample readers, typed deserialization, annotation definitions and argument
 encodings, deployment attestations and original journaled values. Existing
 profile metadata can supply provenance/evidence, but is not a pricing engine.
 No package/Contract/recording field, version, runtime command or golden changes
@@ -886,7 +888,7 @@ OTLP feature, pricing, report, new journal fact or additional package version.
 
 Required regressions: exact two-field ordinary data/aliases; signed integer and
 decimal amounts without currency magic; rejected removed arguments and old
-schema/tag; conflicting units; typed JSON hydration before Held disposition;
+schema/tag; conflicting units; typed JSON deserialization before Held disposition;
 original samples after every recovery prefix without duplicates; privacy and
 unchanged unattached-definition identity. Run the fixed embedded Retry workload
 before final qualification: the last measured margins are only 2,020 B code
@@ -897,7 +899,7 @@ and 512 B heap. No gate may be raised to absorb this migration.
 The [common C4 ledger](retry-c4-qualification.md) closes A4's implementation,
 fixture migration and local verification. The standard definition has exactly
 `id: text` and `unit: text`; stdlib, source checking, independent package
-validation, original-attempt hydration and inspection agree. `@cost` and
+validation, original-attempt deserialization and inspection agree. `@cost` and
 former currency/basis/aggregation/subset arguments refuse by name. There is
 no monetary authority hidden in a unit and no M1 report or aggregate.
 
@@ -912,7 +914,7 @@ margin; freshly blessed echo also passes. No limit is raised.
 The shared blessing updates only the inventoried packages, hashes, recording
 tuple digest and affected gallery traces. Echo/JSONL/gauge causal seals and
 gauge's semantic hash stay unchanged. Six new Responses goldens complement
-local physical hydration and no-secret-retention tests; no paid provider
+local physical deserialization and no-secret-retention tests; no paid provider
 qualification is implied. Earlier checkpoints above preserve their facts,
 but pending bindings, example migration and blessing are no longer M1 work.
 

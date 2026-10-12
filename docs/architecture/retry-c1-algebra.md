@@ -371,7 +371,7 @@ never elapsed wall time. An explicit stop is not attempt-bound exhaustion.
 
 ## 9. Accounting, policy and inspection
 
-The subsequent [annotation-type and hydration decisions](../spec/annotations.md#61-hydration-supplies-the-values)
+The subsequent [annotation-type and deserialization decisions](../spec/annotations.md#61-deserialization-supplies-the-values)
 choose typed response decoding before attempt disposition, not an executable
 extractor or downstream handler replay. Their [integration gates](annotation-types-m1.md)
 must close the raw-response gap below without changing attempt disposition
@@ -397,7 +397,7 @@ run. Merely retaining its JSON body does not produce typed `@measure` values.
 Do not claim the existing adapter already measures intermediate attempts;
 unsupported extraction remains unknown, not zero. C3 must qualify native
 annotated attempt evidence and state this adapter limitation. D-2026-09-15-6
-now approves hydration using the response's annotated type; its explicit codec
+now approves deserialization using the response's annotated type; its explicit codec
 binding still requires implementation and qualification, not hidden handler replay.
 
 The debugger projects iteration / operation / attempt separately, including

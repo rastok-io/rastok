@@ -8,7 +8,7 @@ is authorized by this update. The current representation is **v20 /
 diagnostic recording v4**, reviewed and inventoried in the
 [human-review identity ledger](human-review-v20-identity.md). Exact-instance
 closure, resident Process, native Retry, flat annotation types and bounded
-typed HTTP hydration keep their execution semantics. The
+typed HTTP deserialization keep their execution semantics. The
 [C4 ledger](retry-c4-qualification.md) records the preceding native-Retry
 qualification; its 18 September counts and unchanged-witness claims below
 are dated evidence, not the status of the subsequent compact representation.
@@ -61,7 +61,7 @@ impact is submitted to Yoann in the ledger, not reclassified.
 | Bounded-join expiry productibility | Done | 14 destination tests; 9 September combined baseline: 1,297 Rust tests passed |
 | `run --record`, `replay [--ui]` | Done within the diagnostic contract | CLI and real-Chrome tests prove read-only prefix navigation and no Driver on replay; `@personal` and boot-dependent profiles still refuse persistence, as documented |
 | Readable golden divergence | Done | Expected/actual labels, first record and field, retained causal context; shared CLI/UI path; classified values hidden; byte/seal comparison unchanged |
-| Flat annotation types and generic business measurements | Done — executable two-field contract | `type Name = @struct { ... }` uses ordinary data identity and independently validated metadata. `@measure(id, unit)` retains signed integer/decimal original samples; monetary units have no special policy. Former cost/registry tags and arguments refuse by name. Stdlib/checker/core, typed hydration, held-attempt retention and hostile-package tests are part of [C4](retry-c4-qualification.md); reports, subsets and pricing are removed, not unfinished. |
+| Flat annotation types and generic business measurements | Done — executable two-field contract | `type Name = @struct { ... }` uses ordinary data identity and independently validated metadata. `@measure(id, unit)` retains signed integer/decimal original samples; monetary units have no special policy. Former cost/registry tags and arguments refuse by name. Stdlib/checker/core, typed deserialization, held-attempt retention and hostile-package tests are part of [C4](retry-c4-qualification.md); reports, subsets and pricing are removed, not unfinished. |
 | `rastok new` | Done | One executable typed graph plus Lab; tests simulate it and prove no overwrite and path/name refusals |
 | Optional JSON member presence | Done | Approved `has(object.member)`, core evaluator, independent package validation, constant folding, classification and pinned CEL differential tests; absence is distinct from null and observed zero; no witness re-blessing |
 | Loop / Retry / Saga separation | Done for the admitted M1 profile | Finite outbound Call Retry retains the prepared operation, all original attempts and exact closure-based deadlines; final-only publication and exact-prefix recovery are qualified. Loop progresses state, Retry repeats an operation; same-owner composition and unsupported hosts refuse. Saga remains deferred. [C4](retry-c4-qualification.md) records the common blessing and the unchanged embedded limits. |
@@ -185,7 +185,7 @@ F-06 and hosted activation remain separate from this documentary correction.
 
 ## Historical candidate qualification — 17 September
 
-After projected Responses hydration, browser corrections and explicit-unit
+After projected Responses deserialization, browser corrections and explicit-unit
 registry retirement, the final workspace/all-features/no-fail-fast run has
 **1,527 passes, 9 failures, 0 ignored tests, 58 result groups**. The failures
 are the inventoried candidate identity/recording/golden expectations, not

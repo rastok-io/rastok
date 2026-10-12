@@ -282,7 +282,7 @@ Absent usage remains unknown; Retry never invents zero cost.
 D-2026-09-16-7 removes the measurement report from M1. Qualification checks
 the original typed fields, annotation definitions and exact attempt/emission
 references directly, including every recovery cut and diagnostic recording.
-Retained raw JSON alone is not proof of typed hydration. Policy validation and
+Retained raw JSON alone is not proof of typed deserialization. Policy validation and
 redaction apply equally to intermediate completions. No new counter,
 reconstructed fake envelope or observation stream becomes the authority.
 

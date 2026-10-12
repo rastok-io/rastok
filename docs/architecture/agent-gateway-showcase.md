@@ -7,7 +7,7 @@ product. It changes no Contract, package version, journal key or language rule.
 **17 September status:** the resident bridge evidence below remains dated.
 The v19 candidate admits ordinary Calls without `effect`. The HTTP draft is
 replaced by [agent-http.rkg](../../examples/agent-http.rkg), with six executable
-scenarios and explicit projected JSON hydration of OpenAI Responses. Its
+scenarios and explicit projected JSON deserialization of OpenAI Responses. Its
 [qualification ledger](openai-responses-hydration.md#implementation-and-qualification--17-september)
 separates local wire/Retry/recording evidence from a paid provider invocation,
 which was not performed. Final candidate blessing and browser qualification

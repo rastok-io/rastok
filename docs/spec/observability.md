@@ -7,7 +7,7 @@
 
 > **Format 20 target — 6 October 2026.** Security, privacy,
 > propagation and late-bound secret guarantees remain in force, alongside [flat annotation types](annotations.md), typed response
-> hydration and original signed measurements. Under D-2026-09-18-1 every
+> deserialization and original signed measurements. Under D-2026-09-18-1 every
 > measure has exactly `id` and `unit`: money is a quantity with a currency
 > unit, not a second annotation profile. The [annotation inventory](../architecture/annotation-types-m1.md)
 > and [common qualification](../architecture/retry-c4-qualification.md) track
@@ -453,7 +453,7 @@ envelope's sealed parent chain; Node and port still name the current point.
 The lineage walk stops at the current record, so a later record cannot
 explain an earlier sample. No attribution is guessed from topology.
 
-A Connector with a declared response type hydrates the fields before
+A Connector with a declared response type deserializes the fields before
 retention. Retry Held and Published batches retain those exact original
 emissions, including signed quantities and refunds. Consuming a Held batch
 does not produce another measurement-bearing emission. Recovery and diagnostic

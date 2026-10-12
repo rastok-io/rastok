@@ -89,7 +89,7 @@ older executable HTTP example:
 | `transport_failure` | 10 | `2382de8b0715e6136e37f516ab8067771ef1137c9c21049775448bce72be8032` |
 | `http_errors` | 18 | `5437810490b743e54ab028631f1f02821df600e1f2680e36ff9e6fdc6bb2ce38` |
 
-These are Lab outcomes. Local physical HTTP tests separately prove hydration,
+These are Lab outcomes. Local physical HTTP tests separately prove deserialization,
 wrong-type refusal, absent/null versus reported zero and secret-free retention.
 No paid OpenAI call or inference idempotence is claimed.
 

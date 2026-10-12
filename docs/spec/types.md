@@ -426,7 +426,7 @@ A declared or OpenAPI-derived schema is an expectation, not proof that the
 remote API complies. Invalid JSON or an incompatible actual body produces
 the existing `DecodeFailed` terminal, with no partial response or fabricated
 measurement. A valid decoded 500–599 still produces its typed `out` and
-`ServerError`. Hydration precedes the retained completion and Retry disposition.
+`ServerError`. Deserialization precedes the retained completion and Retry disposition.
 The Lab supplies typed responses; the VM rejects malformed native completions
 before journalization rather than repairing them. No general serializer,
 OpenAPI fetch at runtime or wire-schema negotiation is introduced.

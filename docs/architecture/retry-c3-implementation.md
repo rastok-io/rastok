@@ -397,14 +397,14 @@ lost the handed-off responses. Strict Clippy, formatting, rustdoc and the same
 three no_std targets pass. The before/after images in §4 are measured after
 this functional correction. The eight new flat-type source tests and six
 site-contract tests also pass in the combined tree; annotation interpretation
-and typed response hydration are separate gates at that snapshot.
+and typed response deserialization are separate gates at that snapshot.
 
 The subsequent typed-JSON slice adds a passing seventeenth `retry_runtime`
 test: annotated quantities and provider costs from held and published attempts
 are counted exactly once, including after recovery of each prefix. It does
 not change the Retry protocol, request descriptor or journal. Updated image
 measurements, including the still-red code-size result, are retained in
-[the hydration ledger](annotation-types-m1.md#7-existing-output-json-hydration).
+[the deserialization ledger](annotation-types-m1.md#7-existing-output-json-deserialization).
 
 The 16 September typed-JSON combined workspace run (flat types, response-handoff
 fix and typed HTTP responses) is **1,475 passed, 9 failed, 0 ignored**, across
@@ -422,7 +422,7 @@ core no_std checks also pass at this final code snapshot. The image reruns in
 §4.1 include these corrections.
 
 The complete follow-up run reports **1,476 passed, 9 failed, 0 ignored**,
-across the same 52 groups. Its nine failure names match the earlier hydration
+across the same 52 groups. Its nine failure names match the earlier deserialization
 checkpoint exactly; no test or golden was changed to remove a failure.
 An initial cold run instead reported 1,475 passed / 10 failed: the extra
 local WebSocket gateway probe could not reach its listener within its existing

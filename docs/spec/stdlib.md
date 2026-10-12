@@ -222,13 +222,13 @@ request.
 > [C1](../architecture/retry-c1-identity.md) inventories the version,
 > cardinality, validation and golden changes. D-2026-09-16-1 also admits
 > `output out: Response` under `codec = json`, using the existing port table.
-> The body is hydrated by field name before retention; a mismatching actual
+> The body is deserialized by field name before retention; a mismatching actual
 > API response is `DecodeFailed`, not a partially usable value. See
 > [the exact M1 schema profile](types.md#41-explicit-json-response-types-in-m1).
 > D-2026-09-17-1 additionally defines an opt-in `json_profile = projected` for
 > optional/additional JSON members, executable in the `@3` Contract.
 > It requires `codec = json` and a declared struct output. Omission keeps strict
-> hydration; it adds no default attribute, port or request field.
+> deserialization; it adds no default attribute, port or request field.
 > See its [normalization and qualification contract](../architecture/openai-responses-hydration.md#4-limited-projected-profile).
 
 | Case | Contract |

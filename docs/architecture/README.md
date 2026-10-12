@@ -24,7 +24,7 @@ Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
   placement candidates rather than new Executors or mandatory tasks;
 - [`annotation-types-m1.md`](annotation-types-m1.md) for the approved `@struct`
   syntax, protected stdlib/runtime metadata boundary,
-  business-measure/typed-hydration migration, dated checkpoints and current
+  business-measure/typed-deserialization migration, dated checkpoints and current
   two-field measurement contract;
 - [`retry-extension-refactor.md`](retry-extension-refactor.md) for the approved
   Loop/Retry separation and C0–C4 gates; C1's [algebra](retry-c1-algebra.md),

@@ -138,7 +138,7 @@ RASTOK_SHOWCASE_MODEL_TOKEN=lab-only-not-a-credential RASTOK_SHOWCASE_MODEL_TOKE
 ```
 
 Read `ModelResponse`, then `model`: `output out: ModelResponse` and
-`json_profile = projected` hydrate the declared fields before an emission is
+`json_profile = projected` deserialize the declared fields before an emission is
 recorded. Additional JSON members are omitted; absent nullable fields become
 null; a wrong type still gives `DecodeFailed`. This is an explicit selected
 view of Responses, not a new rule that makes every struct open.

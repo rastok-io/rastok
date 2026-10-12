@@ -73,7 +73,7 @@ The checkout uses **v20 / diagnostic recording v4**. The
 owns the reviewed single blessing and current qualification. The
 [C4 ledger](docs/architecture/retry-c4-qualification.md) is dated evidence
 for the preceding native-Retry base. The executable scope includes native Retry,
-typed Responses hydration and generic `@measure(id, unit)` samples retained
+typed Responses deserialization and generic `@measure(id, unit)` samples retained
 on original attempts. The six-chapter gallery, editor grammar and publication
 assets are migrated. OTLP export and the Budget Extension remain outside M1;
 measurements do not introduce reporting, aggregation or charging authority.
@@ -125,7 +125,7 @@ The subsequent D-2026-09-15-5 approved flat annotation-capable types,
 `type Name = @struct { ... }`, using the existing value algebra and explicit
 stdlib/runtime interpretations. The [annotation integration handoff](docs/architecture/annotation-types-m1.md)
 separates flat declarations from annotation bindings, exact business
-measurements and type-directed response hydration (D-2026-09-15-6).
+measurements and type-directed response deserialization (D-2026-09-15-6).
 The first source slice checked flat data with unchanged structural identity.
 D-2026-09-16-5 then retained declared descriptive annotation applications, their
 nominal definition and ordinary typed constants in candidate tag 6. Aliases
@@ -140,9 +140,9 @@ D-2026-09-16-7 removed reports, automatic pricing and generic subset arithmetic
 from M1; it did not remove retention or Retry qualification, close A4 or
 bless candidate v19.
 D-2026-09-16-1 bound `output out: Response` on HttpClient's JSON
-profile, with exact field hydration and runtime `DecodeFailed` on incompatible
+profile, with exact field deserialization and runtime `DecodeFailed` on incompatible
 bodies; other codec refinements remained unsupported. The existing annotations
-could therefore observe both held and published typed attempts. That hydration
+could therefore observe both held and published typed attempts. That deserialization
 change allocated no format field; descriptive applications added only the
 inventoried candidate annotation tuple. No golden was blessed at this step. Its
 Retry image remained at 130,560 B peak heap. After named monetary binding and
@@ -168,7 +168,7 @@ Gallery and annotation migration, the one v19/v3 blessing and browser/release
 qualification were not closed by that source opening.
 The [projected JSON follow-up](docs/architecture/openai-responses-hydration.md)
 implemented the approved nullable/additional-member profile without changing
-ordinary structs, default hydration or the plan version. The Responses gateway
+ordinary structs, default deserialization or the plan version. The Responses gateway
 then had six executable Lab scenarios; local physical HTTP tests proved original
 samples before Retry disposition. No paid OpenAI call was claimed. On the same
 Retry/recovery package, code was **1,048,520 B**, leaving **56 B** below 1 MiB;

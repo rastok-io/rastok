@@ -30,7 +30,7 @@ Node
 | `Graph` | typed boundary, lexical child Nodes, wiring, and immutable owner values |
 | `Executor` | Node whose bounded activations produce atomic journal transactions |
 | `Operator` | Executor whose transitions are described by DSL handlers and Dispatch |
-| `Connector` | Executor whose transitions are described by one versioned Contract and typed Driver events |
+| `Connector` | Executor whose transitions are described by one versioned Contract and typed Driver observations |
 | `Extension` | separately validated protocol attached to one Node owner |
 | `Manager` | journal-derived runtime agent of a temporal Extension; not a Node or port |
 
@@ -55,7 +55,7 @@ category does not require a public Rust trait.
 A Connector's Contract/exchange/cursor state is semantic, belongs to the core,
 and is recoverable from the journal. Its Driver's socket, process, file handle,
 pool, and library state are physical and reconstructible. A Driver supplies a
-typed event; it cannot write semantic state or the journal directly. A
+typed observation; it cannot write semantic state or the journal directly. A
 Connector has no DSL handler or author-declared `var` in the current profile.
 
 ## 2. Source forms

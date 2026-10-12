@@ -255,7 +255,9 @@ Any `gen_ai.*` id has the same authority as any other id and still needs an
 explicit unit. Monetary and aggregation arguments are not fields of the
 shared schema. No report or subset relationship is implemented in M1.
 
-### 6.1 Hydration supplies the values
+<a id="61-hydration-supplies-the-values"></a>
+
+### 6.1 Deserialization supplies the values
 
 [D-2026-09-15-6](decisions.md#d-2026-09-15-6--hydrate-annotated-response-types-before-retry-disposition)
 chooses the response type itself as the mapping from JSON fields to typed
@@ -288,14 +290,14 @@ connector model : HttpClient {
 ```
 
 For `{"usage":{"input_tokens":120,"output_tokens":45},"amount":0.0042}`,
-successful hydration supplies 120 input tokens, 45 output tokens and exactly
+successful deserialization supplies 120 input tokens, 45 output tokens and exactly
 0.0042 USD from that response. The annotation arguments do not change; the
 values of their target fields supply the samples. Optionality and invalid
 fields follow the declared type/codec rules, never an invented zero.
-Exact decimal hydration must not pass through binary floating point.
+Exact decimal deserialization must not pass through binary floating point.
 
 The selected response schema and its annotations belong to an explicitly
-validated Connector codec profile. Every attempt is hydrated and policy
+validated Connector codec profile. Every attempt is deserialized and policy
 checked before its payload is committed and before Retry retains or publishes
 it. The journal therefore retains typed source evidence; a read-only observation
 does not decode raw bytes, execute an Operator, create an emission or change
@@ -316,7 +318,7 @@ See [types §4.1](types.md#41-explicit-json-response-types-in-m1) for the bounde
 schema profile, including opt-in projected JSON for nullable/additional members;
 other codecs and ordinary closed structs are unchanged. A projected null supplies
 no sample, while a reported numeric zero does. Descriptive annotation definitions
-are admitted separately. Generic subsets are outside M1; all numerical quantities use this hydration path before Retry disposition.
+are admitted separately. Generic subsets are outside M1; all numerical quantities use this deserialization path before Retry disposition.
 
 ## 7. Extensions can consume metadata without becoming annotations
 
@@ -364,7 +366,7 @@ follow the shared signature in §5.
 
 The executable security/privacy interpretations remain authoritative. The initial
 flat-data slice changed no plan format, Contract or recording. Typed HTTP
-hydration is part of `http-client@3`, using existing plan and annotation tables;
+deserialization is part of `http-client@3`, using existing plan and annotation tables;
 its namespace movement is enumerated in the v20 inventory. Source, hostile-package,
 original-attempt and UI evidence is recorded in the
 [qualification ledger](../architecture/retry-c4-qualification.md). Remaining

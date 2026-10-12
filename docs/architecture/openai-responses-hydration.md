@@ -1,4 +1,4 @@
-# OpenAI Responses — schema contact before typed hydration
+# OpenAI Responses — schema contact before typed deserialization
 
 17 September 2026, qualification updated 18 September. **Limited codec profile
 and HTTP adapter implemented in v19.** The [common C4 ledger](retry-c4-qualification.md)
@@ -80,15 +80,15 @@ resolve the optional/evolving-schema mismatch.
 
 The target spelling is `json_profile = projected`, a plan-time HttpClient
 attribute admitted only with `codec = json` and an explicitly typed struct
-output. Omission keeps strict hydration exactly as specified today. There is
+output. Omission keeps strict deserialization exactly as specified today. There is
 no implicit profile choice based on the URL, provider, response or annotations.
 No default attribute is added to programs which do not opt in.
 
 At each expected struct in the declared response schema:
 
-| JSON member | Projected hydration |
+| JSON member | Projected deserialization |
 |---|---|
-| Declared and present | Recursively validate and hydrate under the declared type |
+| Declared and present | Recursively validate and deserialize under the declared type |
 | Declared, absent, type admitting null (for example `T?`) | Supply typed null, never a numeric default |
 | Declared, absent, non-nullable | `DecodeFailed`, no partial `out` |
 | Not declared | Omit from the projected struct |
@@ -97,7 +97,7 @@ At each expected struct in the declared response schema:
 This is a **lossy, explicit projection at the codec boundary**, not an open
 Rastok struct. The resulting ordinary struct still contains exactly its
 declared fields. Absent and explicit null intentionally become the same
-typed value in this profile; `has` on the hydrated struct cannot recover that
+typed value in this profile; `has` on the deserialized struct cannot recover that
 wire distinction. Additional members are not retained in the projected DATA
 or its diagnostic recording. Authors who need an untyped subtree can declare
 that member as `variant` or a typed map, both already supported. No hidden raw
@@ -111,8 +111,8 @@ subtree. Arrays recurse into their declared element type. No renaming, computed
 field, per-field default, general union discriminator or new optional-field
 type is introduced.
 
-Hydration and policy checks still precede completion retention and Retry's
-Held/Published decision. Only the original successfully hydrated emission
+Deserialization and policy checks still precede completion retention and Retry's
+Held/Published decision. Only the original successfully deserialized emission
 supplies samples. Null supplies no measure; numeric zero supplies zero. Neither
 held-attempt extraction by a downstream Operator nor an aggregate is added.
 
@@ -201,8 +201,8 @@ because `variant` already includes null and those union branches overlap.
 
 ## Implementation and qualification — 17 September
 
-The shared hydrator has explicit `Strict` and `Projected` policies. The existing
-`hydrate` entry point remains strict. HttpClient obtains its policy only from
+The shared deserializer has explicit `Strict` and `Projected` policies. The existing
+`deserialize` entry point remains strict. HttpClient obtains its policy only from
 the validated plan; neither the request descriptor, deployment overrides nor
 the response can select it. The independent validator checks the attribute's
 value and JSON/struct restriction, not a compiler claim. Omission produces the
@@ -221,7 +221,7 @@ schema or a promise to accept every provider error-body shape.
 Tests cover recursive optional structs, maps/arrays, enum decoding, exact counts,
 zero, extra members, wrong types, missing required members, malformed JSON,
 duplicate keys and numeric overflow even in omitted members. Complete parse
-and hydration precede the completion; invalid bodies retain only `DecodeFailed`.
+and deserialization precede the completion; invalid bodies retain only `DecodeFailed`.
 Source tests cover profile identity, package round trips and forged settings.
 The adapter checks original per-job samples, no manufactured currency amounts,
 determinism and bearer canaries at each debugger transition.

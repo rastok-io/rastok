@@ -76,7 +76,7 @@ fact, additional version or separate blessing.
 | RetrySpec key 3 | optional fixed/exponential delay, existing delay encoding and bounded values |
 | RetrySpec keys 4 / 5 | resolved request entry / Call terminal names, checked against the Contract |
 | HttpClient terminal type | ServerError { status: int } added; usable 500–599 only; Completed covers the other admitted final statuses |
-| HttpClient JSON output (16 September amendment) | Explicit `output out: T` refines the existing output under the JSON hydration profile; `T` and its annotations use existing port/schema tables, no new key; unrefined output remains `variant` |
+| HttpClient JSON output (16 September amendment) | Explicit `output out: T` refines the existing output under the JSON deserialization profile; `T` and its annotations use existing port/schema tables, no new key; unrefined output remains `variant` |
 | HttpClient projected JSON (17 September amendment) | Opt-in plan attribute `json_profile = projected` in the existing attribute table; required JSON/struct output independently checked. No default row, new key, journal fact or recording tuple. Strict plans and request descriptors stay unchanged; opting in changes the program hash. |
 | frame cardinality | canonical set of response-producing terminal cases replaces the single-case internal rule |
 

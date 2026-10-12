@@ -20,7 +20,7 @@
 > remains in [release qualification](release-qualification.md).
 
 > **Current-state pointer (2026-09-18).** Native Retry, generic measurements,
-> typed HTTP hydration and the common v19/v3 qualification are recorded in
+> typed HTTP deserialization and the common v19/v3 qualification are recorded in
 > [C4](retry-c4-qualification.md); the live M1/release checklist is
 > [opening-showcase.md](opening-showcase.md). The following September 9 pointer
 > and the dated ledger are historical.
