@@ -5,7 +5,7 @@ skinparam shadowing false
 
 actor Caller
 participant "Hosted runner / Lab" as Entry
-participant "Core VM / dispatcher" as Core
+participant "Core VM / DriverPoller" as Core
 database "Journal" as Journal
 participant "Bound Driver" as Driver
 participant "External system" as World
@@ -39,7 +39,7 @@ A timeout is a scheduler decision, not a Driver reply.
 An outbound result is not a new INGRESS root.
 end note
 note over Driver,World
-Drivers never mint envelopes or write journal records.
+Drivers never assign envelope identities or write journal records.
 Recovery never blindly repeats the physical effect.
 end note
 @enduml

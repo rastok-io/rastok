@@ -944,7 +944,7 @@ impl Checker<'_, '_> {
         attribute: &SynAttribute,
         signature: &expr::Signature,
         consts: &BTreeMap<String, crate::value::Value>,
-    ) -> Option<LoopDelay> {
+    ) -> Option<DelayPolicy> {
         self.extension_delay(attribute, signature, consts, "Loop", E_LOOP)
     }
 
@@ -955,7 +955,7 @@ impl Checker<'_, '_> {
         consts: &BTreeMap<String, crate::value::Value>,
         extension: &str,
         code: Code,
-    ) -> Option<LoopDelay> {
+    ) -> Option<DelayPolicy> {
         let refuse = |checker: &mut Self, span: Span, detail: String| {
             checker.bag.push(
                 Diagnostic::new(code, Phase::Check, &detail)
@@ -1057,7 +1057,7 @@ impl Checker<'_, '_> {
                 }
             };
             match kind.text.as_str() {
-                "fixed" => LoopDelay::Fixed {
+                "fixed" => DelayPolicy::Fixed {
                     after: duration("after")?,
                 },
                 "exponential" => {
@@ -1080,7 +1080,7 @@ impl Checker<'_, '_> {
                         );
                         return None;
                     }
-                    LoopDelay::Exponential { first, ceiling }
+                    DelayPolicy::Exponential { first, ceiling }
                 }
                 other => {
                     refuse(

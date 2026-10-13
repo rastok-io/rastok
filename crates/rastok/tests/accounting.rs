@@ -204,7 +204,7 @@ graph priced_call : App {
     )
     .expect("canonical price profile");
     let boot = BootBindings::resolve(
-        DeploymentProfile::empty().with_cost_profile(profile.clone()),
+        DeploymentProfile::empty().with_price_book(profile.clone()),
         &NoSecrets,
     )
     .expect("the secret-free deployment resolves");

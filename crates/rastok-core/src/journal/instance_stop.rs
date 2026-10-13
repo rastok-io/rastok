@@ -130,14 +130,14 @@ impl InstanceCommands {
     ///
     /// # Errors
     /// Unknown keys, wrong arities, invalid references or command identities,
-    /// empty packets, mixed production/consumption, or noncanonical ordering.
+    /// empty command lists, mixed production/consumption, or noncanonical ordering.
     pub fn from_tree(tree: &crate::canonical_cbor::Value) -> Result<Self, Error> {
         use crate::canonical_cbor::Value as Cbor;
         let Cbor::Map(fields) = tree else {
-            return Err(Error::PacketShape);
+            return Err(Error::CommandsShape);
         };
         if fields.len() != 1 {
-            return Err(Error::PacketShape);
+            return Err(Error::CommandsShape);
         }
         if let Some(consumed) = fields.get(&2) {
             return Ok(Self {
@@ -146,15 +146,15 @@ impl InstanceCommands {
             });
         }
         let Some(Cbor::Array(commands)) = fields.get(&1) else {
-            return Err(Error::PacketShape);
+            return Err(Error::CommandsShape);
         };
         if commands.is_empty() {
-            return Err(Error::PacketShape);
+            return Err(Error::CommandsShape);
         }
         let mut produced = Vec::with_capacity(commands.len());
         for value in commands {
             let Cbor::Array(row) = value else {
-                return Err(Error::PacketShape);
+                return Err(Error::CommandsShape);
             };
             let [
                 id,
@@ -166,7 +166,7 @@ impl InstanceCommands {
                 cause,
             ] = row.as_slice()
             else {
-                return Err(Error::PacketShape);
+                return Err(Error::CommandsShape);
             };
             let source_instance = read_instance(source)?;
             let path = source_instance.address().owner().clone();
@@ -176,7 +176,7 @@ impl InstanceCommands {
                     2 => EndpointOwner::Node(
                         crate::node::Path::new(path.segments()).map_err(|_| Error::Source)?,
                     ),
-                    _ => return Err(Error::PacketShape),
+                    _ => return Err(Error::CommandsShape),
                 },
                 port: crate::node::Port::new(port).map_err(|_| Error::Source)?,
             };
@@ -194,7 +194,7 @@ impl InstanceCommands {
                 .last()
                 .is_some_and(|prior: &Command| prior.id >= command.id)
             {
-                return Err(Error::PacketShape);
+                return Err(Error::CommandsShape);
             }
             produced.push(command);
         }
@@ -211,23 +211,23 @@ fn id_tree(id: Id) -> crate::canonical_cbor::Value {
 
 fn read_id(value: &crate::canonical_cbor::Value) -> Result<Id, Error> {
     let crate::canonical_cbor::Value::Bytes(bytes) = value else {
-        return Err(Error::PacketShape);
+        return Err(Error::CommandsShape);
     };
     Ok(Id::from_bytes(
         bytes
             .as_slice()
             .try_into()
-            .map_err(|_| Error::PacketShape)?,
+            .map_err(|_| Error::CommandsShape)?,
     ))
 }
 
 fn read_instance(value: &crate::canonical_cbor::Value) -> Result<instance::Generation, Error> {
     use crate::canonical_cbor::Value as Cbor;
     let Cbor::Array(row) = value else {
-        return Err(Error::PacketShape);
+        return Err(Error::CommandsShape);
     };
     let [Cbor::Bytes(address), Cbor::Uint(generation)] = row.as_slice() else {
-        return Err(Error::PacketShape);
+        return Err(Error::CommandsShape);
     };
     Ok(instance::Generation::new(
         crate::instance::InstanceAddress::decode(address).map_err(|_| Error::Target)?,
@@ -274,7 +274,7 @@ pub struct InstanceCommandView {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
     /// Empty, mixed production/consumption, or noncanonical field shape.
-    PacketShape,
+    CommandsShape,
     /// Identity does not derive from the retained authority and cause.
     CommandIdentity,
     /// The same command identity was produced twice.
@@ -296,7 +296,7 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::PacketShape => "instance-stop packet is empty, mixed, or non-canonical",
+            Self::CommandsShape => "instance-stop commands are empty, mixed, or non-canonical",
             Self::CommandIdentity => "instance-stop identity contradicts its authority or cause",
             Self::DuplicateCommand => "instance-stop command was already produced",
             Self::Source => "instance-stop source has no matching retained emission or scope",
@@ -531,7 +531,7 @@ impl InstanceCommandView {
                 .windows(2)
                 .any(|pair| pair[0].id >= pair[1].id)
         {
-            return Err(Error::PacketShape);
+            return Err(Error::CommandsShape);
         }
         for command in &packet.produced {
             if owner_path(&command.source.owner) != *command.source_instance.address().owner()

@@ -225,7 +225,7 @@ fn process_profile() -> DriverTestFixture {
             ),
             (
                 "OutcomeUnknown",
-                "bounded Closing, not the Process Driver, mints this case after \
+                "bounded Closing, not the Process Driver, produces this case after \
                  cancellation remains unobserved through settlement",
             ),
         ],

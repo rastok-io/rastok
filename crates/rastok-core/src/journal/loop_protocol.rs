@@ -245,7 +245,7 @@ pub struct LoopRecord {
 }
 
 impl LoopRecord {
-    /// State envelopes retained by this packet, in producer/fact order.
+    /// State envelopes retained by this record, in producer/fact order.
     pub fn envelopes(&self) -> impl Iterator<Item = &Envelope> {
         self.produced
             .iter()
@@ -266,7 +266,7 @@ impl LoopRecord {
             }))
     }
 
-    /// Empty packets have no canonical presence in the journal.
+    /// Empty Loop records have no canonical presence in the journal.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.context.is_empty()

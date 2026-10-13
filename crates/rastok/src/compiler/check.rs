@@ -19,11 +19,11 @@ use loop_control::*;
 use routing::*;
 
 use crate::compiler::hir::{
-    AttrValue, Attribute, ClosedArm, ClosingPolicy, Const, Dispatch, Edge, EdgeTarget, EmitValue,
-    Endpoint, EndpointOwner, FieldWrite, Graph, Handler, Hir, InstanceLifetime, InstancePolicy,
-    LoopCommand, LoopCommandKind, LoopCommandTarget, LoopDelay, LoopSpec, MultiEmitValues, Node,
-    NodeSemantics, OpenArm, PortDirection, RouteArm, RouteDestination, RouteRule, RouteSelection,
-    Statement, Val, Var,
+    AttrValue, Attribute, ClosedArm, ClosingPolicy, Const, DelayPolicy, Dispatch, Edge, EdgeTarget,
+    EmitValue, Endpoint, EndpointOwner, FieldWrite, Graph, Handler, Hir, InstanceLifetime,
+    InstancePolicy, LoopCommand, LoopCommandKind, LoopCommandTarget, LoopSpec, MultiEmitValues,
+    Node, NodeSemantics, OpenArm, PortDirection, RouteArm, RouteDestination, RouteRule,
+    RouteSelection, Statement, Val, Var,
 };
 use crate::compiler::syntax::{
     Attribute as SynAttribute, BaseType, ConnectorDecl, Dispatch as SynDispatch, EdgeCaseSet,
@@ -7755,8 +7755,8 @@ fn remap_graph_assets(graph: &mut Graph, remap: &[u32]) {
         }
         match &mut spec.delay {
             None => {}
-            Some(LoopDelay::Fixed { after }) => expr(&mut after.tree.root, remap),
-            Some(LoopDelay::Exponential { first, ceiling }) => {
+            Some(DelayPolicy::Fixed { after }) => expr(&mut after.tree.root, remap),
+            Some(DelayPolicy::Exponential { first, ceiling }) => {
                 expr(&mut first.tree.root, remap);
                 expr(&mut ceiling.tree.root, remap);
             }

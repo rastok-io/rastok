@@ -11,7 +11,7 @@ use crate::journal::{DeadlineKind, Emission, deadline::Deadlines, ids};
 use alloc::collections::BTreeSet;
 use core::fmt;
 
-/// Why a candidate packet or Call fact cannot extend the retained prefix.
+/// Why a candidate record or Call fact cannot extend the retained prefix.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
     /// Invalid bound, case selection, delay or original repetition guarantee.
@@ -25,7 +25,7 @@ pub enum Error {
     /// No operation has been opened for this reference.
     UnknownOperation,
     /// Facts are on the wrong carrier or break an atomic pair.
-    PacketShape,
+    RecordShape,
     /// Phase, attempt ordinal or Closing contradicts this transition.
     Transition,
     /// A fresh admission changed DATA/metadata, its lineage or its cursor.
@@ -50,7 +50,7 @@ impl fmt::Display for Error {
             Self::OpeningIdentity => "Retry operation contradicts its exact opening admission",
             Self::DuplicateOperation => "Retry operation was already opened",
             Self::UnknownOperation => "Retry fact has no original operation",
-            Self::PacketShape => "Retry packet has an invalid carrier or broken atomic pair",
+            Self::RecordShape => "Retry record has an invalid carrier or broken atomic pair",
             Self::Transition => "Retry fact contradicts the retained phase, ordinal or Closing",
             Self::AdmissionIdentity => "Retry admission changed pinned state, lineage or delivery",
             Self::PinnedCall => "Retry Call contradicts the original prepared operation",
@@ -218,9 +218,9 @@ impl RetryView {
         self.closing.contains(instance)
     }
 
-    /// Fold one atomic packet. `at` is an explicit retained logical instant;
+    /// Fold one atomic record. `at` is an explicit retained logical instant;
     /// it can establish admission eligibility but never renews a deadline.
-    /// The opening authority is required only for an Opened packet.
+    /// The opening authority is required only for an Opened record.
     ///
     /// # Errors
     /// Contradictory facts leave the entire fold unchanged.
@@ -306,7 +306,7 @@ impl RetryView {
                     },
                 ],
             ) => self.close(*attempt, CloseReason::Stopped),
-            _ => Err(Error::PacketShape),
+            _ => Err(Error::RecordShape),
         }
     }
 
@@ -320,7 +320,7 @@ impl RetryView {
             pin,
         } = fact
         else {
-            return Err(Error::PacketShape);
+            return Err(Error::RecordShape);
         };
         if self.operations.contains_key(operation) {
             return Err(Error::DuplicateOperation);
@@ -387,7 +387,7 @@ impl RetryView {
             delivery,
         } = fact
         else {
-            return Err(Error::PacketShape);
+            return Err(Error::RecordShape);
         };
         let state = self
             .operations
@@ -612,7 +612,7 @@ impl RetryView {
         Ok(())
     }
 
-    /// Check a producer packet against the transaction's actual ordered
+    /// Check a producer record against the transaction's actual ordered
     /// emissions. Empty physical routes are never a substitute for this fact.
     ///
     /// # Errors
@@ -624,7 +624,7 @@ impl RetryView {
     ) -> Result<(), Error> {
         let batch = match packet.facts.first() {
             Some(Fact::Held(batch) | Fact::Published(batch)) => batch,
-            _ => return Err(Error::PacketShape),
+            _ => return Err(Error::RecordShape),
         };
         let state = self
             .operations

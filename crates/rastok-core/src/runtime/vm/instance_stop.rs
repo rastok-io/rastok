@@ -212,7 +212,7 @@ impl Vm<'_> {
         }
     }
 
-    pub(super) fn retained_command_packet(commands: &[Command]) -> Option<Box<InstanceCommands>> {
+    pub(super) fn retained_commands(commands: &[Command]) -> Option<Box<InstanceCommands>> {
         (!commands.is_empty()).then(|| {
             Box::new(InstanceCommands {
                 produced: commands.to_vec(),

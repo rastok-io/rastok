@@ -425,7 +425,7 @@ fn key_name(key: u64) -> String {
 
 // ----- projection: the per-species tables -----
 
-fn loop_packet_tree(packet: &crate::journal::loop_protocol::LoopRecord) -> Cbor {
+fn loop_record_tree(packet: &crate::journal::loop_protocol::LoopRecord) -> Cbor {
     use crate::journal::loop_protocol::{CloseReason, CommandValue, Fact, OpeningAdmissionId};
     let id = |id: crate::envelope::Id| Cbor::Bytes(id.as_bytes().to_vec());
     let mut fields = BTreeMap::new();
@@ -716,7 +716,7 @@ fn record_tree(record: &Record) -> Cbor {
                 );
             }
             if let Some(packet) = transaction.loop_protocol() {
-                pairs.insert(40, loop_packet_tree(packet));
+                pairs.insert(40, loop_record_tree(packet));
             }
             if let Some(packet) = transaction.instance_commands.as_deref() {
                 pairs.insert(crate::journal::instance_stop::CAUSAL_KEY, packet.tree());

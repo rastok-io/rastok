@@ -1439,7 +1439,7 @@ pub struct MemJournal {
     next_seq: BTreeMap<IngressProvenance, u64>,
     /// Replay-derived lifecycle fold, maintained atomically with `records`.
     /// It is an index over causal facts, never a second generation authority.
-    admissions: admission::Fold,
+    admissions: admission::AdmissionView,
     /// Replay-derived Session fold. It is an index over the three ordinary
     /// causal record kinds, never a fourth record stream.
     sessions: BTreeMap<SessionId, SessionLifecycle>,
@@ -1485,7 +1485,7 @@ impl MemJournal {
             deployment_attestation: None,
             records: Vec::new(),
             next_seq: BTreeMap::new(),
-            admissions: admission::Fold::default(),
+            admissions: admission::AdmissionView::default(),
             sessions: BTreeMap::new(),
             inbound_calls: BTreeMap::new(),
             command_loops: None,

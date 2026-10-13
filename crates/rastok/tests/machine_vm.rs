@@ -649,7 +649,7 @@ graph rooted : App {
     assert_ne!(
         transactions[0].emissions[0].envelope.meta().sys().id(),
         root_id,
-        "the first hop really minted different meta.sys"
+        "the first hop assigned different meta.sys fields"
     );
 }
 
@@ -4323,7 +4323,7 @@ graph websocket : App {
             panic!("the uncongested opening must commit")
         };
         let Some(InboundExchangeId::Session(session)) = accepted.exchange else {
-            panic!("an opening must mint a SessionId")
+            panic!("an opening must have a SessionId")
         };
         session
     };

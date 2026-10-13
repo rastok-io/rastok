@@ -27,10 +27,11 @@ impl<T: Journal + ?Sized> InstanceAdmissions for &T {
     }
 }
 
-/// The single admission-generation fold, held live or fed an exact prefix.
-/// It carries no authority beyond the accepted lifecycle records.
+/// Instance generations and closing scopes derived from accepted lifecycle records.
+/// Live admission and recovery apply the same records to this view; recovery
+/// stops at the prefix being reconstructed, before any later lifecycle facts.
 #[derive(Debug, Default)]
-pub(super) struct Fold {
+pub(super) struct AdmissionView {
     instance_lifecycles: BTreeMap<instance::InstanceAddress, InstanceLifecycle>,
     /// Fast rejection: ordinary admission need not walk ancestors if none close.
     active_close_roots: BTreeSet<instance::Generation>,
@@ -44,7 +45,7 @@ pub(super) struct InstanceLifecycle {
     closing: bool,
 }
 
-impl Fold {
+impl AdmissionView {
     /// Cached projection of the pure lifecycle fold for one logical address.
     /// `starts` is also the next generation ordinal whenever no generation is
     /// active. A durable implementation rebuilds the same projection while
@@ -195,7 +196,7 @@ impl Fold {
 
 #[derive(Default)]
 pub(crate) struct AdmissionPrefix {
-    admissions: Fold,
+    admissions: AdmissionView,
     instance_commands: Option<Box<instance_stop::InstanceCommandView>>,
 }
 

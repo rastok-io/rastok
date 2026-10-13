@@ -434,7 +434,7 @@ fn http_client_passes_the_connector_neutral_call_battery() {
             ),
             (
                 "OutcomeUnknown",
-                "bounded Closing, not the HttpClient Driver, mints this case after settlement",
+                "bounded Closing, not the HttpClient Driver, produces this case after settlement",
             ),
         ],
         mute_source: Some(probe("mute", &server.url("/mute"), "text", "50ms", "1KiB")),

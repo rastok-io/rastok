@@ -194,7 +194,7 @@ pub enum Fact {
         /// Winning Call, also the original deadline's causal authority.
         call: CallId,
     },
-    /// Final batch uses ordinary authored routes, without reminting envelopes.
+    /// Final batch uses ordinary authored routes, without changing envelope identities.
     Published(Batch),
     /// Publication or exact-instance Closing ends the operation.
     Close {
@@ -244,10 +244,10 @@ impl RetryRecord {
     /// belong to retention; the seal commits to the prepared digest instead.
     #[must_use]
     pub fn tree(&self) -> crate::canonical_cbor::Value {
-        encoding::packet_tree(self, encoding::causal_pin, crate::canonical::envelope)
+        encoding::record_tree(self, encoding::causal_pin, crate::canonical::envelope)
     }
 
-    /// Empty packets have no serialized presence.
+    /// Empty Retry records have no serialized presence.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.context.is_none() && self.facts.is_empty()

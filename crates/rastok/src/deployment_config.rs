@@ -12,7 +12,7 @@
 use crate::accounting::{ExactDecimal, PriceBook, PriceBookName, UnitPrice};
 use crate::deployment::{
     BootBindings, DeploymentError, DeploymentProfile, EnvironmentName, PolicyName,
-    PrivacyDeclaration, PrivacyProfileName, PrivacyRetention, RecipientPolicy, SecretBinding,
+    PrivacyDeclaration, PrivacyDeclarationName, PrivacyRetention, RecipientPolicy, SecretBinding,
     SecretMaterial, SecretName, SecretProvider, SecretProviderError, SecretProviderId,
     SecretVersion, TransferPolicy,
 };
@@ -82,12 +82,12 @@ fn parse(text: &str) -> Result<DeploymentProfile, DeploymentConfigError> {
     let profile = DeploymentProfile::new(environment, secrets, privacy)
         .map_err(DeploymentConfigError::Profile)?;
     Ok(match cost_profile {
-        Some(cost_profile) => profile.with_cost_profile(cost_profile),
+        Some(cost_profile) => profile.with_price_book(cost_profile),
         None => profile,
     })
 }
 
-fn cost_profile(raw: RawCostProfile) -> Result<PriceBook, DeploymentConfigError> {
+fn cost_profile(raw: RawPriceBook) -> Result<PriceBook, DeploymentConfigError> {
     let mut rules = Vec::with_capacity(raw.prices.len());
     for raw in raw.prices {
         let connector = node::Path::new(raw.connector.split('.').map(String::from))
@@ -169,7 +169,7 @@ fn privacy_profile(raw: RawPrivacy) -> Result<PrivacyDeclaration, DeploymentConf
     let recipients = refs(raw.recipients)?;
     let transfers = refs(raw.transfer_safeguards)?;
     PrivacyDeclaration::new(
-        PrivacyProfileName::new(raw.reference).map_err(DeploymentConfigError::Profile)?,
+        PrivacyDeclarationName::new(raw.reference).map_err(DeploymentConfigError::Profile)?,
         PolicyName::new(raw.processing_activity).map_err(DeploymentConfigError::Profile)?,
         refs(raw.purposes)?,
         refs(raw.legal_bases)?,
@@ -221,12 +221,12 @@ struct RawDeployment {
     #[serde(default)]
     secrets: Vec<RawSecret>,
     privacy: Option<RawPrivacy>,
-    cost_profile: Option<RawCostProfile>,
+    cost_profile: Option<RawPriceBook>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RawCostProfile {
+struct RawPriceBook {
     reference: String,
     prices: Vec<RawUnitPrice>,
 }
@@ -402,7 +402,7 @@ mod tests {
     }
 
     #[test]
-    fn an_exact_cost_profile_is_typed_and_attested_outside_graph_identity() {
+    fn an_exact_price_book_is_typed_and_attested_outside_graph_identity() {
         let profile = parse(
             r#"{
   "environment": [],
@@ -424,10 +424,10 @@ mod tests {
         .expect("the exact price profile parses");
         let boot = BootBindings::resolve(profile, &FixedProvider)
             .expect("a profile without secrets resolves");
-        let cost = boot.cost_profile().expect("typed price profile");
+        let cost = boot.price_book().expect("typed price profile");
         let attested = boot
             .attestation()
-            .cost_profile
+            .price_book
             .as_ref()
             .expect("run header cost attestation");
         assert_eq!(

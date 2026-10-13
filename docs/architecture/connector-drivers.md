@@ -26,7 +26,7 @@
 
 An inbound binding may reserve every passive listener governed by its Contract so a
 partial bind cannot expose a half-live service. This is fail-fast host
-provisioning, not causal execution: it cannot acknowledge a request, mint a
+provisioning, not causal execution: it cannot acknowledge a request, identify a
 fact, or perform an outbound effect. Any arrival in the short pre-Worker gap
 remains pending under the Driver's ordinary finite capacities.
 
@@ -70,7 +70,7 @@ Port types alone do not describe an exchange's lifecycle or cardinality.
 
 The HttpServer ack Lab model owns one bounded decoded-request proposal and one
 acknowledgement slot. It uses `RuntimeBindings::poll_inbound` and the generic
-inbound Call terminal queue; the core still mints the root, Call reference,
+inbound Call terminal queue; the core still assigns the root identity, Call reference,
 routes and journal records. The scenario selects `listener.out`, not an extra
 test-only App input. Pending admission cannot acknowledge or overwrite the
 request. HttpServer respond and Session source scripting remain check-time
@@ -86,7 +86,7 @@ and D-2026-09-09-3 for the separation.
 
 `InboundConnectorDriver` retains and proposes one bounded external arrival at
 a time. This world-originated fact enters the Connector instance's ordinary
-mailbox only after INGRESS admission. The Driver does not mint root envelopes:
+mailbox only after INGRESS admission. The Driver does not assign root identities:
 sequencing, routing, admission, identity and journal commit remain runtime authorities. The runtime answers
 accepted only after commit, pending without a callback under pressure, or a
 portable rejection. A proposal also names the exact Connector Node that owns
@@ -194,7 +194,7 @@ roles.
 
 For Call Drivers, finite outbound pressure is expressed by the closed
 `CallStart::Pending` verdict. The already-journaled intent stays open, no
-effect starts and the dispatcher offers it again after capacity returns.
+effect starts and the DriverPoller offers it again after capacity returns.
 `Started` transfers ownership exactly once. A Driver must never translate a
 full local queue or byte semaphore into a domain result such as
 `ConnectFailed`; backpressure changes pacing only.
@@ -406,10 +406,10 @@ physical assembly choice, never an alternate VM, plan or simulation model.
 ## Review checklist
 
 - No external observation occurs before the corresponding journal boundary.
-- No Driver writes journal records or mints envelopes.
+- No Driver writes journal records or assigns envelope identities.
 - No semantic default or type decision is duplicated in Driver code.
 - No concrete Connector id is matched in the VM.
 - Binding is complete before execution and registration order never selects.
 - Real and mocked worlds share the same plan, request protocol and result gate.
-- Every terminal case is proven or explicitly unprovable in conformance.
+- Every terminal case is proven or explicitly untestable in conformance.
 - Any semantic/package/causal identity move is declared before goldens change.

@@ -31,7 +31,7 @@ pub(super) fn causal_pin(pin: &Pin) -> Cbor {
 
 /// Fact tags/order are shared by the lossless carrier and the causal seal;
 /// only operation pins and envelope payload representations differ.
-pub(crate) fn packet_tree(
+pub(crate) fn record_tree(
     packet: &RetryRecord,
     pin: fn(&Pin) -> Cbor,
     envelope: fn(&Envelope) -> Cbor,

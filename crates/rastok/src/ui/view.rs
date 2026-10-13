@@ -1321,7 +1321,7 @@ fn meta_json(meta: &crate::envelope::Meta) -> JsonValue {
 
 fn draft_meta_json(ext: &Namespace) -> JsonValue {
     json!({
-        "sys": { "pending": "minted on admission" },
+        "sys": { "pending": "identity assigned on admission" },
         "app": {},
         "ext": namespace_json(ext),
     })
@@ -2211,7 +2211,10 @@ graph inspected : App {
         };
         let rendered = scenario_injection_json(&compilation.plan, &draft);
         assert_eq!(rendered["position"], "before-app-input");
-        assert_eq!(rendered["meta"]["sys"]["pending"], "minted on admission");
+        assert_eq!(
+            rendered["meta"]["sys"]["pending"],
+            "identity assigned on admission"
+        );
         assert_eq!(rendered["type"], "struct");
         assert_eq!(rendered["data"]["kind"], "struct");
         assert_eq!(rendered["data"]["content"]["count"], 3);
@@ -2223,7 +2226,10 @@ graph inspected : App {
         assert_eq!(rendered["position"], "before-source-output");
         assert_eq!(rendered["connector"], "listener");
         assert_eq!(rendered["port"], "out");
-        assert_eq!(rendered["meta"]["sys"]["pending"], "minted on admission");
+        assert_eq!(
+            rendered["meta"]["sys"]["pending"],
+            "identity assigned on admission"
+        );
     }
 
     #[test]

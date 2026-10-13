@@ -1,4 +1,4 @@
-//! The key-58 packet has a specific carrier, not an ignorable annotation.
+//! The key-43 record has a specific carrier, not an ignorable annotation.
 //! This checks shape and disposition without a plan; the operation fold and
 //! spatial recovery separately bind it to the original Contract/admission.
 
@@ -11,29 +11,29 @@ pub(crate) fn validate_transaction(record: &TransactionRecord) -> Result<(), Err
     let manager = record.trigger == Trigger::Lifecycle(Lifecycle::Retry);
     let Some(packet) = record.retry_record.as_deref() else {
         return if manager {
-            Err(Error::PacketShape)
+            Err(Error::RecordShape)
         } else {
             Ok(())
         };
     };
     let Some(first) = packet.facts.first() else {
-        return Err(Error::PacketShape);
+        return Err(Error::RecordShape);
     };
     if packet
         .facts
         .iter()
         .any(|fact| fact.operation() != first.operation())
     {
-        return Err(Error::PacketShape);
+        return Err(Error::RecordShape);
     }
     match (packet.context, packet.facts.as_slice()) {
         (Some(context), [Fact::Held(batch)]) if context == batch.attempt => {
             if !record.routes.is_empty()
                 || record.instance_commands.is_some()
-                || record.loop_protocol().is_some_and(|loop_packet| {
-                    !loop_packet.facts.is_empty()
-                        || !loop_packet.produced.is_empty()
-                        || !loop_packet.consumed.is_empty()
+                || record.loop_protocol().is_some_and(|loop_record| {
+                    !loop_record.facts.is_empty()
+                        || !loop_record.produced.is_empty()
+                        || !loop_record.consumed.is_empty()
                 })
             {
                 return Err(Error::Batch);
@@ -80,7 +80,7 @@ pub(crate) fn validate_transaction(record: &TransactionRecord) -> Result<(), Err
                 },
             ],
         ) if batch.attempt == *attempt && attempt.ordinal > 0 => manager_carrier(record),
-        _ => Err(Error::PacketShape),
+        _ => Err(Error::RecordShape),
     }
 }
 
@@ -100,7 +100,7 @@ fn manager_carrier(record: &TransactionRecord) -> Result<(), Error> {
             !packet.facts.is_empty() || !packet.produced.is_empty() || !packet.consumed.is_empty()
         })
     {
-        return Err(Error::PacketShape);
+        return Err(Error::RecordShape);
     }
     if !record.routes.is_empty()
         && !record.retry_record.as_deref().is_some_and(|packet| {
@@ -110,7 +110,7 @@ fn manager_carrier(record: &TransactionRecord) -> Result<(), Error> {
                 .any(|fact| matches!(fact, Fact::Admitted { .. }))
         })
     {
-        return Err(Error::PacketShape);
+        return Err(Error::RecordShape);
     }
     Ok(())
 }

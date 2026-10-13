@@ -331,7 +331,7 @@ fn retry_manager_retention_does_not_invent_a_semantic_now_read() {
     opened.logical_time = None;
     validate_transaction(&opened).unwrap();
     opened.logical_time = Some(0);
-    assert_eq!(validate_transaction(&opened), Err(Error::PacketShape));
+    assert_eq!(validate_transaction(&opened), Err(Error::RecordShape));
 }
 
 #[test]
@@ -375,7 +375,7 @@ fn retained_retry_carriers_cannot_hide_dispositions_or_application_work() {
     }
     let mut orphan = opened;
     orphan.retry_record = None;
-    assert_eq!(validate_transaction(&orphan), Err(Error::PacketShape));
+    assert_eq!(validate_transaction(&orphan), Err(Error::RecordShape));
     assert!(
         crate::journal::codec::Decoder::default()
             .decode(&crate::journal::codec::encode(
@@ -663,7 +663,7 @@ fn atomic_pairs_whole_batch_and_exact_admissions_cannot_be_forged() {
     refuses_unchanged(
         &mut fold,
         &manager(vec![Fact::Consumed(batch.clone())]),
-        Error::PacketShape,
+        Error::RecordShape,
         11,
     );
     let mut forged = batch.clone();
@@ -967,14 +967,14 @@ fn opening_is_bound_to_original_plan_contract_input_and_exact_identity() {
         Err(Error::DuplicateOperation)
     );
     assert_eq!(fold, before);
-    refuses_unchanged(&mut fold, &RetryRecord::default(), Error::PacketShape, 0);
+    refuses_unchanged(&mut fold, &RetryRecord::default(), Error::RecordShape, 0);
     refuses_unchanged(
         &mut fold,
         &RetryRecord {
             context: Some(f.attempt(1)),
             facts: vec![],
         },
-        Error::PacketShape,
+        Error::RecordShape,
         0,
     );
 }
@@ -983,13 +983,13 @@ fn opening_is_bound_to_original_plan_contract_input_and_exact_identity() {
 fn each_algebra_prefix_reconstructs_without_a_saved_manager_or_driver() {
     #[derive(Clone)]
     enum Retained {
-        Packet(RetryRecord, i64),
+        Record(RetryRecord, i64),
         Open(CallOpen, AttemptId),
         Settle(CallOpen, AttemptId, String, i64, Option<Deadlines>),
     }
     fn apply(f: &Fixture, fold: &mut RetryView, fact: &Retained) {
         match fact {
-            Retained::Packet(packet, at) => fold.apply(packet, Some(&f.authority()), *at).unwrap(),
+            Retained::Record(packet, at) => fold.apply(packet, Some(&f.authority()), *at).unwrap(),
             Retained::Open(intent, attempt) => fold.open_call(*attempt, intent).unwrap(),
             Retained::Settle(intent, attempt, case, at, schedule) => fold
                 .settle(
@@ -1005,7 +1005,7 @@ fn each_algebra_prefix_reconstructs_without_a_saved_manager_or_driver() {
         }
     }
     let f = Fixture::new(3);
-    let mut history = vec![Retained::Packet(
+    let mut history = vec![Retained::Record(
         manager(vec![f.opened(), f.admitted(1, None)]),
         0,
     )];
@@ -1039,17 +1039,17 @@ fn each_algebra_prefix_reconstructs_without_a_saved_manager_or_driver() {
             publish(&batch)
         };
         live.apply(&packet, None, at).unwrap();
-        history.push(Retained::Packet(packet, at));
+        history.push(Retained::Record(packet, at));
         if ordinal < 3 {
             let packet = advance(&batch);
             live.apply(&packet, None, at + 250).unwrap();
-            history.push(Retained::Packet(packet, at + 250));
+            history.push(Retained::Record(packet, at + 250));
             let packet = manager(vec![f.admitted(
                 ordinal + 1,
                 Some((intent.call_id, *batch.emissions.last().unwrap())),
             )]);
             live.apply(&packet, None, at + 250).unwrap();
-            history.push(Retained::Packet(packet, at + 250));
+            history.push(Retained::Record(packet, at + 250));
         }
     }
     let mut expected = RetryView::default();

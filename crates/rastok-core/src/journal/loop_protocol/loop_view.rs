@@ -14,11 +14,11 @@ use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 use core::fmt;
 
-/// A rejected causal packet. No part of the packet changes the fold.
+/// A rejected Loop record. No part of the record changes the view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {
     /// An empty, redundant or non-canonical extension.
-    PacketShape,
+    RecordShape,
     /// A context repeats a run or names a run which is not active.
     Context,
     /// The carrying Executor or manager is outside the run's exact instance scope.
@@ -48,7 +48,7 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::PacketShape => "Loop packet is empty or non-canonical",
+            Self::RecordShape => "Loop record is empty or non-canonical",
             Self::Context => "Loop context is repeated, unknown, or inactive",
             Self::ContextOwner => "Loop context or manager fact belongs to another instance scope",
             Self::ContextDelivery => "Loop routed context has no unique retained delivery",
@@ -120,7 +120,7 @@ impl LoopView {
     /// Reconstructs every r2 run from committed transactions.
     ///
     /// # Errors
-    /// The first contradictory packet, without returning partial state.
+    /// The first contradictory record, without returning partial state.
     pub fn from_records(records: &[Record]) -> Result<Self, Error> {
         let mut fold = Self::default();
         for record in records {
@@ -142,12 +142,12 @@ impl LoopView {
         self.runs.iter()
     }
 
-    /// Checks the protocol algebra of a packet, without its carrying record.
+    /// Checks a Loop record without the transaction that carries it.
     /// Journal acceptance and replay must use [`Self::apply_transaction`] to
     /// also establish instance scope, routed deliveries and published expiry.
     ///
     /// # Errors
-    /// A malformed packet or invalid transition. `self` is unchanged.
+    /// A malformed record or invalid transition. `self` is unchanged.
     pub fn apply(&mut self, packet: &LoopRecord) -> Result<(), Error> {
         let mut candidate = self.clone();
         candidate.apply_inner(packet)?;
@@ -155,7 +155,7 @@ impl LoopView {
         Ok(())
     }
 
-    /// Applies lifecycle links and a record's r2 packet atomically. Context
+    /// Applies lifecycle links and the transaction's Loop record atomically. Context
     /// scope follows exact parent-generation facts, never owner-name prefixes.
     ///
     /// This is not a spatial consumption or quiescence proof: those additionally
@@ -291,7 +291,7 @@ impl LoopView {
                 .windows(2)
                 .all(|pair| pair[0].delivery < pair[1].delivery)
         {
-            return Err(Error::PacketShape);
+            return Err(Error::RecordShape);
         }
         self.context(&packet.context)?;
         for command in &packet.produced {

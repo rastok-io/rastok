@@ -92,15 +92,15 @@ pub struct LoopSpec {
     /// alone; when both are present, fuel remains the operational cap.
     pub fuel: Option<Const>,
     /// Optional re-entry timing policy.
-    pub delay: Option<LoopDelay>,
+    pub delay: Option<DelayPolicy>,
     /// Independently checkable termination proof, when declared.
     pub proof: Option<crate::loop_proof::Certificate>,
 }
 
-/// Closed Loop re-entry delay policy.
+/// Recurrence delay policy shared by Loop applications and Retry attempts.
 #[derive(Debug, Clone, PartialEq)]
-pub enum LoopDelay {
-    /// Every `next` waits the same positive duration.
+pub enum DelayPolicy {
+    /// Every recurrence waits the same positive duration.
     Fixed {
         /// Fixed delay.
         after: Const,
@@ -163,7 +163,7 @@ pub struct RetrySpec {
     /// Canonically sorted terminal names, checked against the Contract.
     pub cases: Vec<String>,
     /// Backoff starts at the winning retained Call closure.
-    pub delay: Option<LoopDelay>,
+    pub delay: Option<DelayPolicy>,
     /// Resolved Call request port.
     pub entry: node::Port,
     /// Resolved Call terminal port; Retry does not add one.

@@ -234,7 +234,7 @@ impl Vm<'_> {
             )?
         };
         self.check_instance_command_room(admissions, &commands)?;
-        if inbound.instance_commands != Self::retained_command_packet(&commands) {
+        if inbound.instance_commands != Self::retained_commands(&commands) {
             return Err(invalid(
                 index,
                 "inbound instance commands contradict the exact accepting prefix",

@@ -602,7 +602,7 @@ fn every_committed_prefix_restores_cursors_state_and_pending_loop_commands() {
 }
 
 #[test]
-fn a_loop_packet_cannot_borrow_another_executors_transaction() {
+fn a_loop_record_cannot_borrow_another_executors_transaction() {
     let plan = compile("Loop.fuel = 1; on in { Loop.again }");
     let mut vm = Vm::boot(&plan, GraphVersion(1));
     let mut journal = MemJournal::new(GraphVersion(1));

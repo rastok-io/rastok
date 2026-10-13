@@ -6,10 +6,10 @@ use crate::journal::retry_protocol::{
 use crate::plan::SemanticHash;
 use alloc::collections::BTreeSet;
 
-/// Lossless key 43 payload. An empty packet must be omitted by its carrier.
+/// Lossless key 43 payload. An empty record must be omitted by its carrier.
 #[must_use]
-pub fn retry_packet(packet: &RetryRecord) -> Cbor {
-    rp::encoding::packet_tree(packet, retained_pin, envelope)
+pub fn retry_record(packet: &RetryRecord) -> Cbor {
+    rp::encoding::record_tree(packet, retained_pin, envelope)
 }
 
 fn retained_pin(pin: &Pin) -> Cbor {
@@ -53,17 +53,17 @@ fn batch(operation: &Cbor, ordinal: &Cbor, call: &Cbor, emissions: &Cbor) -> Res
 }
 
 impl Decoder {
-    /// Decode a sparse Retry packet using the same envelope prefix as records.
+    /// Decode a sparse Retry record using the same envelope prefix as records.
     ///
     /// # Errors
     /// Empty/unknown fields, malformed tags and references, noncanonical pins,
     /// or missing parents. The protocol fold still validates carriers and state.
-    pub fn retry_packet(&mut self, value: &Cbor) -> Result<RetryRecord, Error> {
+    pub fn retry_record(&mut self, value: &Cbor) -> Result<RetryRecord, Error> {
         let Cbor::Map(fields) = value else {
-            return Err(Error::Invalid("Retry packet map"));
+            return Err(Error::Invalid("Retry record map"));
         };
         if fields.is_empty() || fields.keys().any(|key| !matches!(key, 1 | 2)) {
-            return Err(Error::Invalid("Retry packet fields"));
+            return Err(Error::Invalid("Retry record fields"));
         }
         let context = fields
             .get(&1)
@@ -283,26 +283,26 @@ mod tests {
             }]),
         ];
         for packet in packets {
-            let encoded = encode(&retry_packet(&packet));
+            let encoded = encode(&retry_record(&packet));
             let (tree, read) = decode(&encoded).unwrap();
             assert_eq!(read, encoded.len());
-            let decoded = reader.retry_packet(&tree).unwrap();
+            let decoded = reader.retry_record(&tree).unwrap();
             assert_eq!(decoded, packet);
-            assert_eq!(encode(&retry_packet(&decoded)), encoded);
+            assert_eq!(encode(&retry_record(&decoded)), encoded);
         }
     }
 
     #[test]
     fn causal_and_retained_pins_share_the_registry_but_not_request_bytes_or_time() {
         let (mut reader, _, _, packet) = fixture();
-        assert_eq!(reader.retry_packet(&retry_packet(&packet)).unwrap(), packet);
+        assert_eq!(reader.retry_record(&retry_record(&packet)).unwrap(), packet);
         let mut later = packet.clone();
         let Fact::Opened { pin, .. } = &mut later.facts[0] else {
             unreachable!()
         };
         pin.opened_at = i64::MAX;
         assert_eq!(later.tree(), packet.tree());
-        assert_ne!(retry_packet(&later), retry_packet(&packet));
+        assert_ne!(retry_record(&later), retry_record(&packet));
 
         let Cbor::Map(fields) = packet.tree() else {
             unreachable!()
@@ -359,12 +359,12 @@ mod tests {
                 ),
             ]));
             assert_eq!(packet.tree(), expected);
-            assert_eq!(retry_packet(&packet), expected);
+            assert_eq!(retry_record(&packet), expected);
         }
     }
 
     #[test]
-    fn retry_packet_refuses_unknown_empty_and_ambiguous_shapes() {
+    fn retry_record_refuses_unknown_empty_and_ambiguous_shapes() {
         let (_, _, operation, _) = fixture();
         let field = |value| Cbor::Map(BTreeMap::from([(2, list([value]))]));
         let invalid = [
@@ -426,7 +426,7 @@ mod tests {
             ])),
         ];
         for tree in invalid {
-            assert!(Decoder::default().retry_packet(&tree).is_err(), "{tree:?}");
+            assert!(Decoder::default().retry_record(&tree).is_err(), "{tree:?}");
         }
     }
 
@@ -434,14 +434,14 @@ mod tests {
     fn retry_pins_require_a_retained_source_and_canonical_settings() {
         let (_, _, _, packet) = fixture();
         assert_eq!(
-            Decoder::default().retry_packet(&retry_packet(&packet)),
+            Decoder::default().retry_record(&retry_record(&packet)),
             Err(Error::Invalid(
                 "Retry pin envelope is not in retained prefix"
             ))
         );
         for duplicate in [false, true] {
             let (mut reader, _, _, _) = fixture();
-            let mut tree = retry_packet(&packet);
+            let mut tree = retry_record(&packet);
             let Cbor::Map(fields) = &mut tree else {
                 unreachable!()
             };
@@ -463,13 +463,13 @@ mod tests {
                 settings.reverse();
             }
             assert_eq!(
-                reader.retry_packet(&tree),
+                reader.retry_record(&tree),
                 Err(Error::Invalid("Retry pin settings are not canonical"))
             );
         }
         let (mut reader, _, _, packet) = fixture();
         assert!(
-            reader.retry_packet(&packet.tree()).is_err(),
+            reader.retry_record(&packet.tree()).is_err(),
             "a causal digest is not a retained request"
         );
     }

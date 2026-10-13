@@ -1291,7 +1291,7 @@ impl Vm<'_> {
                 let mut expected = self.routed_deliveries(&prepared);
                 expected.sort();
                 if expected != record.routes
-                    || record.instance_commands != Self::retained_command_packet(&prepared.commands)
+                    || record.instance_commands != Self::retained_commands(&prepared.commands)
                     || packet.routes != prepared.contexts
                     || (!matches!(fact, Fact::Expired { .. }) && !record.emissions.is_empty())
                 {

@@ -803,7 +803,7 @@ fn lower_loop_spec(
 }
 
 fn lower_delay(
-    delay: Option<&crate::compiler::hir::LoopDelay>,
+    delay: Option<&crate::compiler::hir::DelayPolicy>,
     constants: &std::collections::BTreeMap<String, crate::value::Value>,
 ) -> Option<DelayPolicy> {
     let constant = |value: &crate::compiler::hir::Const| PlanConstant {
@@ -811,10 +811,10 @@ fn lower_delay(
         resolved: value.value.clone(),
     };
     delay.map(|delay| match delay {
-        crate::compiler::hir::LoopDelay::Fixed { after } => DelayPolicy::Fixed {
+        crate::compiler::hir::DelayPolicy::Fixed { after } => DelayPolicy::Fixed {
             after: constant(after),
         },
-        crate::compiler::hir::LoopDelay::Exponential { first, ceiling } => {
+        crate::compiler::hir::DelayPolicy::Exponential { first, ceiling } => {
             DelayPolicy::Exponential {
                 first: constant(first),
                 ceiling: constant(ceiling),
@@ -1311,14 +1311,14 @@ impl Writer<'_> {
         }
     }
 
-    fn delay(&mut self, delay: Option<&crate::compiler::hir::LoopDelay>) {
+    fn delay(&mut self, delay: Option<&crate::compiler::hir::DelayPolicy>) {
         match delay {
             None => self.tag(0),
-            Some(crate::compiler::hir::LoopDelay::Fixed { after }) => {
+            Some(crate::compiler::hir::DelayPolicy::Fixed { after }) => {
                 self.tag(1);
                 self.tree(&after.tree);
             }
-            Some(crate::compiler::hir::LoopDelay::Exponential { first, ceiling }) => {
+            Some(crate::compiler::hir::DelayPolicy::Exponential { first, ceiling }) => {
                 self.tag(2);
                 self.tree(&first.tree);
                 self.tree(&ceiling.tree);
@@ -1937,7 +1937,7 @@ impl Writer<'_> {
                     .assets
                     .get(*index as usize)
                     .map(|blob| blob.digest)
-                    .unwrap_or_else(|| unreachable!("the checker minted the index"));
+                    .unwrap_or_else(|| unreachable!("the checker assigned the index"));
                 self.hasher.update(&digest);
             }
             expr::Expr::Path(segments) => {
@@ -2831,7 +2831,7 @@ graph app : App {
                 .unwrap_or_else(|error| panic!("policy ref: {error}"))
         };
         let privacy = crate::deployment::PrivacyDeclaration::new(
-            crate::deployment::PrivacyProfileName::new("privacy.example/support@1")
+            crate::deployment::PrivacyDeclarationName::new("privacy.example/support@1")
                 .expect("stable privacy profile"),
             policy("ropa/support"),
             vec![policy("purpose/support")],
@@ -2911,7 +2911,7 @@ graph app : App {
         assert!(missing_conditions_journal.records().is_empty());
 
         let regulated_privacy = crate::deployment::PrivacyDeclaration::new(
-            crate::deployment::PrivacyProfileName::new("privacy.example/regulated@1")
+            crate::deployment::PrivacyDeclarationName::new("privacy.example/regulated@1")
                 .expect("stable privacy profile"),
             policy("ropa/regulated"),
             vec![policy("purpose/regulated-support")],
@@ -2975,7 +2975,7 @@ graph app : App {
         ));
 
         let recipient_privacy = crate::deployment::PrivacyDeclaration::new(
-            crate::deployment::PrivacyProfileName::new("privacy.example/disclosure@1")
+            crate::deployment::PrivacyDeclarationName::new("privacy.example/disclosure@1")
                 .expect("stable privacy profile"),
             policy("ropa/disclosure"),
             vec![policy("purpose/model-service")],

@@ -320,7 +320,7 @@ in -> relay -> out
         spec.fuel.as_ref().map(|fuel| &fuel.value),
         Some(&crate::value::Value::Int(4))
     );
-    let LoopDelay::Exponential { first, ceiling } = spec.delay.expect("delay") else {
+    let DelayPolicy::Exponential { first, ceiling } = spec.delay.expect("delay") else {
         panic!("expected exponential delay");
     };
     assert_eq!(first.value, crate::value::Value::Duration(100_000_000));

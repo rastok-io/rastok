@@ -338,7 +338,7 @@ fn command_identity_includes_cause_scope_target_and_generation() {
 }
 
 #[test]
-fn retention_round_trip_rejects_changed_authority_and_empty_packets() {
+fn codec_round_trip_rejects_changed_authority_and_empty_commands() {
     use crate::canonical_cbor::{Value as Cbor, decode, encode};
     let (_, alice, worker, decide) = initial();
     let (_, command) = production(&decide, &alice, &worker, 1);
@@ -359,7 +359,7 @@ fn retention_round_trip_rejects_changed_authority_and_empty_packets() {
     }
     assert_eq!(
         InstanceCommands::from_tree(&Cbor::Map(BTreeMap::new())),
-        Err(Error::PacketShape)
+        Err(Error::CommandsShape)
     );
     let mut forged = command;
     forged.target = instance("conversation.worker", "bob", 0);

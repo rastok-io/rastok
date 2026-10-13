@@ -22,7 +22,7 @@ use alloc::vec::Vec;
 use core::fmt;
 
 mod retry;
-pub use retry::retry_packet;
+pub use retry::retry_record;
 
 #[cfg(test)]
 mod tests;
@@ -412,7 +412,7 @@ pub fn encode(value: &Record) -> Cbor {
                         list([Cbor::Uint(2), id(reference.id())])
                     }
                 }),
-                optional(value.loop_record.as_deref(), loop_packet),
+                optional(value.loop_record.as_deref(), loop_record),
                 optional(value.logical_time.as_ref(), |value| integer(*value)),
                 list(value.consumed.iter().map(|value| {
                     list([
@@ -444,7 +444,7 @@ pub fn encode(value: &Record) -> Cbor {
                     value.instance_commands.as_deref(),
                     journal::instance_stop::InstanceCommands::tree,
                 ),
-                optional(value.retry_record.as_deref(), retry_packet),
+                optional(value.retry_record.as_deref(), retry_record),
             ])
         }
         Record::Egress(journal::EgressRecord::Call(value)) => list([
@@ -460,7 +460,7 @@ pub fn encode(value: &Record) -> Cbor {
             },
             optional(value.closed_at.as_ref(), |value| integer(*value)),
             schedule(value.deadlines.as_deref()),
-            optional(value.retry_record.as_deref(), retry_packet),
+            optional(value.retry_record.as_deref(), retry_record),
         ]),
         Record::Egress(journal::EgressRecord::Session(value)) => list([
             Cbor::Uint(4),
@@ -490,7 +490,7 @@ pub fn encode(value: &Record) -> Cbor {
     }
 }
 
-fn loop_packet(value: &lp::LoopRecord) -> Cbor {
+fn loop_record(value: &lp::LoopRecord) -> Cbor {
     list([
         list(value.context.iter().map(|value| id(value.id()))),
         list(value.routes.iter().map(|value| {
@@ -722,7 +722,7 @@ impl Decoder {
             instance_commands: read_optional(instance_commands, |value| {
                 journal::instance_stop::InstanceCommands::from_tree(value)
                     .map(Box::new)
-                    .map_err(|_| Error::Invalid("instance-stop packet"))
+                    .map_err(|_| Error::Invalid("instance-stop commands"))
             })?,
             routes: items(routes)?
                 .iter()
@@ -789,7 +789,7 @@ impl Decoder {
             })
         };
         Ok(Record::Transaction(Box::new(journal::TransactionRecord {
-            retry_record: read_optional(retry, |value| self.retry_packet(value).map(Box::new))?,
+            retry_record: read_optional(retry, |value| self.retry_record(value).map(Box::new))?,
             owner_path: read_owner(owner)?,
             instance: instance(instance_ref)?,
             parent_instance: read_optional(parent, instance)?,
@@ -808,7 +808,7 @@ impl Decoder {
                     _ => return Err(Error::Invalid("inbound exit kind")),
                 }))
             })?,
-            loop_record: read_optional(packet, |value| self.loop_packet(value).map(Box::new))?,
+            loop_record: read_optional(packet, |value| self.loop_record(value).map(Box::new))?,
             logical_time: read_optional(at, |value| signed(value).map_err(Error::Read))?,
             consumed: items(consumed)?
                 .iter()
@@ -852,7 +852,7 @@ impl Decoder {
             instance_commands: read_optional(instance_commands, |value| {
                 journal::instance_stop::InstanceCommands::from_tree(value)
                     .map(Box::new)
-                    .map_err(|_| Error::Invalid("instance-stop packet"))
+                    .map_err(|_| Error::Invalid("instance-stop commands"))
             })?,
         })))
     }
@@ -872,7 +872,7 @@ impl Decoder {
             status,
             closed_at: read_optional(closed_at, |value| signed(value).map_err(Error::Read))?,
             deadlines: read_schedule(schedule)?,
-            retry_record: read_optional(retry, |value| self.retry_packet(value).map(Box::new))?,
+            retry_record: read_optional(retry, |value| self.retry_record(value).map(Box::new))?,
         };
         journal::acceptance::validate_call(&record).map_err(Error::CallTiming)?;
         Ok(Record::Egress(journal::EgressRecord::Call(Box::new(
@@ -916,7 +916,7 @@ impl Decoder {
             },
         ))))
     }
-    fn loop_packet(&mut self, value: &Cbor) -> Result<lp::LoopRecord, Error> {
+    fn loop_record(&mut self, value: &Cbor) -> Result<lp::LoopRecord, Error> {
         let [context, routes, produced, consumed, facts] = array(value)?;
         let produced = items(produced)?
             .iter()

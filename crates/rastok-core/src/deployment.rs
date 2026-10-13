@@ -283,12 +283,12 @@ impl fmt::Display for SecretProviderError {
 
 impl core::error::Error for SecretProviderError {}
 
-/// Stable reference to one controller-owned privacy profile.
+/// Stable name of one controller-owned privacy declaration.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct PrivacyProfileName(String);
+pub struct PrivacyDeclarationName(String);
 
-impl PrivacyProfileName {
-    /// Builds one stable profile reference.
+impl PrivacyDeclarationName {
+    /// Builds the stable name of a privacy declaration.
     ///
     /// # Errors
     ///
@@ -376,7 +376,7 @@ pub struct PrivacyRequirements {
 /// correct.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrivacyDeclaration {
-    reference: PrivacyProfileName,
+    reference: PrivacyDeclarationName,
     processing_activity: PolicyName,
     purposes: Vec<PolicyName>,
     legal_bases: Vec<PolicyName>,
@@ -397,7 +397,7 @@ impl PrivacyDeclaration {
     /// non-empty where selected and contain no duplicates.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        reference: PrivacyProfileName,
+        reference: PrivacyDeclarationName,
         processing_activity: PolicyName,
         purposes: Vec<PolicyName>,
         legal_bases: Vec<PolicyName>,
@@ -437,9 +437,9 @@ impl PrivacyDeclaration {
         Ok(profile)
     }
 
-    /// Stable profile reference.
+    /// Stable name of this privacy declaration.
     #[must_use]
-    pub fn reference(&self) -> &PrivacyProfileName {
+    pub fn reference(&self) -> &PrivacyDeclarationName {
         &self.reference
     }
 
@@ -491,16 +491,16 @@ impl PrivacyDeclaration {
 /// Attested profile identity stored in a run header, never in graph identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrivacyAttestation {
-    /// Stable profile reference.
-    pub reference: PrivacyProfileName,
-    /// Digest of all profile facts used at boot.
+    /// Stable name of the privacy declaration selected at deployment.
+    pub reference: PrivacyDeclarationName,
+    /// Digest of all declaration facts used at boot.
     pub digest: [u8; 32],
 }
 
-/// Cost-profile identity stored in the run header, never in graph identity.
+/// Price book name and digest stored in the run header, outside graph identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CostProfileAttestation {
-    /// Stable deployment profile reference.
+pub struct PriceBookAttestation {
+    /// Stable name of the price book selected at deployment.
     pub reference: PriceBookName,
     /// Digest of every price and dimension in force.
     pub digest: [u8; 32],
@@ -523,10 +523,10 @@ pub struct DeploymentAttestation {
     pub environment: Vec<EnvironmentAttestation>,
     /// Versioned secret coordinates, sorted by logical reference.
     pub secrets: Vec<SecretBinding>,
-    /// Privacy profile identity when personal data is admitted.
+    /// Privacy declaration identity when personal data is admitted.
     pub privacy: Option<PrivacyAttestation>,
-    /// Retained price-profile identity; M1 performs no automatic pricing.
-    pub cost_profile: Option<CostProfileAttestation>,
+    /// Recorded price book identity; M1 performs no automatic pricing.
+    pub price_book: Option<PriceBookAttestation>,
 }
 
 /// Typed physical configuration before providers return any material.
@@ -535,7 +535,7 @@ pub struct DeploymentProfile {
     environment: BTreeMap<EnvironmentName, Value>,
     secrets: BTreeMap<SecretName, SecretBinding>,
     privacy: Option<PrivacyDeclaration>,
-    cost_profile: Option<PriceBook>,
+    price_book: Option<PriceBook>,
 }
 
 impl DeploymentProfile {
@@ -559,15 +559,15 @@ impl DeploymentProfile {
             environment,
             secrets,
             privacy,
-            cost_profile: None,
+            price_book: None,
         })
     }
 
-    /// Attaches one optional exact price profile without changing graph
+    /// Attaches one optional price book without changing graph
     /// identity. Its reference and digest enter the run attestation at boot.
     #[must_use]
-    pub fn with_cost_profile(mut self, profile: PriceBook) -> Self {
-        self.cost_profile = Some(profile);
+    pub fn with_price_book(mut self, profile: PriceBook) -> Self {
+        self.price_book = Some(profile);
         self
     }
 
@@ -584,7 +584,7 @@ pub struct BootBindings {
     environment: BTreeMap<EnvironmentName, Value>,
     secrets: BTreeMap<SecretName, SecretMaterial>,
     privacy: Option<PrivacyDeclaration>,
-    cost_profile: Option<PriceBook>,
+    price_book: Option<PriceBook>,
     attestation: DeploymentAttestation,
 }
 
@@ -617,10 +617,10 @@ impl BootBindings {
                 reference: privacy.reference().clone(),
                 digest: *privacy.digest(),
             }),
-            cost_profile: profile
-                .cost_profile
+            price_book: profile
+                .price_book
                 .as_ref()
-                .map(|cost| CostProfileAttestation {
+                .map(|cost| PriceBookAttestation {
                     reference: cost.reference().clone(),
                     digest: *cost.digest(),
                 }),
@@ -629,7 +629,7 @@ impl BootBindings {
             environment: profile.environment,
             secrets,
             privacy: profile.privacy,
-            cost_profile: profile.cost_profile,
+            price_book: profile.price_book,
             attestation,
         })
     }
@@ -641,7 +641,7 @@ impl BootBindings {
             environment: BTreeMap::new(),
             secrets: BTreeMap::new(),
             privacy: None,
-            cost_profile: None,
+            price_book: None,
             attestation: DeploymentAttestation::default(),
         }
     }
@@ -673,10 +673,10 @@ impl BootBindings {
         self.privacy.as_ref()
     }
 
-    /// Attested deployment profile metadata; M1 does not calculate a price from it.
+    /// Attested price book; M1 does not calculate a price from it.
     #[must_use]
-    pub fn cost_profile(&self) -> Option<&PriceBook> {
-        self.cost_profile.as_ref()
+    pub fn price_book(&self) -> Option<&PriceBook> {
+        self.price_book.as_ref()
     }
 
     /// Run-header facts corresponding exactly to these bindings.
@@ -693,7 +693,7 @@ impl fmt::Debug for BootBindings {
             .field("environment", &self.environment.keys().collect::<Vec<_>>())
             .field("secrets", &self.secrets.keys().collect::<Vec<_>>())
             .field("privacy", &self.attestation.privacy)
-            .field("cost_profile", &self.attestation.cost_profile)
+            .field("price_book", &self.attestation.price_book)
             .finish()
     }
 }
@@ -854,7 +854,7 @@ mod tests {
     fn privacy_digest_is_canonical_and_regime_coverage_is_explicit() {
         let build = |purposes| {
             PrivacyDeclaration::new(
-                PrivacyProfileName::new("privacy.example/support@1")
+                PrivacyDeclarationName::new("privacy.example/support@1")
                     .unwrap_or_else(|error| panic!("profile ref: {error}")),
                 policy("ropa/support"),
                 purposes,
@@ -889,7 +889,7 @@ mod tests {
             external_disclosure: true,
         }));
         let disclosed = PrivacyDeclaration::new(
-            PrivacyProfileName::new("privacy.example/support-disclosed@1")
+            PrivacyDeclarationName::new("privacy.example/support-disclosed@1")
                 .unwrap_or_else(|error| panic!("profile ref: {error}")),
             policy("ropa/support"),
             vec![policy("purpose/support")],
@@ -913,7 +913,7 @@ mod tests {
     fn invalid_or_ambiguous_physical_names_refuse_at_construction() {
         assert!(EnvironmentName::new("9TOKEN").is_err());
         assert!(SecretName::new("providers/../token").is_err());
-        assert!(PrivacyProfileName::new("contains whitespace").is_err());
+        assert!(PrivacyDeclarationName::new("contains whitespace").is_err());
     }
 
     #[test]

@@ -154,7 +154,7 @@ fn file_passes_the_connector_neutral_battery() {
             ),
             (
                 "OutcomeUnknown",
-                "bounded Closing, not the File Driver, mints this case after settlement expires",
+                "bounded Closing, not the File Driver, produces this case after settlement expires",
             ),
         ],
         mute_source: None,
