@@ -1043,8 +1043,8 @@ pub struct Execution<'plan> {
     /// Non-causal observations collected by internal boundary polls between
     /// drain and settlement deadlines. The next public poll returns them.
     buffered_poll: PollReport,
-    /// The machine's virtual date, in nanoseconds; only
-    /// [`Self::advance`] moves it, discretely.
+    /// Current logical instant in nanoseconds, supplied by the host or Lab.
+    /// The semantic core never reads an ambient clock.
     now: i64,
     outputs: Vec<BoundaryOutput>,
     observed: Vec<EnvelopeView>,
@@ -1270,70 +1270,71 @@ impl<'plan> Execution<'plan> {
         })
     }
 
-    /// Boots the machine over a VALIDATED plan — once. The machine
-    /// dereferences the plan's tables without checking; the type is
-    /// what makes that safe, so no raw plan is accepted here. This
-    /// is a fresh boot; [`Self::recover_from_journal`] reconstructs the
-    /// admitted recovery profiles without executing a producer.
+    /// Creates fresh execution state for a validated plan at logical time zero.
+    /// No handler or Driver runs during construction. The validated plan
+    /// guarantees that its table indexes can be used without further checks.
+    /// Use [`Self::recover_from_journal`] to reconstruct a recorded execution.
     #[must_use]
-    pub fn boot(plan: &'plan ValidatedExecutionPlan, graph_version: GraphVersion) -> Self {
-        Self::boot_at(plan, graph_version, 0)
+    pub fn new(plan: &'plan ValidatedExecutionPlan, graph_version: GraphVersion) -> Self {
+        Self::new_at(plan, graph_version, 0)
     }
 
-    /// Boots with already resolved deployment inputs. Personal-data policy is
-    /// admitted only when the supplied privacy profile covers every legal
-    /// regime carried by the plan; raw secret-classified payloads remain
-    /// fail-closed because A4 resolves only reference-origin secrets.
+    /// Creates fresh execution state with resolved deployment inputs.
+    /// Personal-data policy requires a privacy declaration covering every
+    /// legal regime in the plan. Secret bindings resolve named references;
+    /// secret-classified input payloads are not admitted.
     #[must_use]
-    pub fn boot_with_deployment(
+    pub fn new_with_deployment(
         plan: &'plan ValidatedExecutionPlan,
         graph_version: GraphVersion,
         boot: &crate::deployment::BootBindings,
     ) -> Self {
-        Self::boot_at_with_deployment(plan, graph_version, 0, boot)
+        Self::new_at_with_deployment(plan, graph_version, 0, boot)
     }
 
-    /// Boots at an explicit logical instant, in nanoseconds since the Unix
-    /// epoch. Hosted code maps its monotonic time source here; Lab and bare
+    /// Creates fresh execution state at an explicit logical instant, in
+    /// nanoseconds since the Unix epoch. Hosted code maps its time source
+    /// here; Lab and bare
     /// metal may keep the deterministic epoch default or supply another
     /// origin. The semantic core never reads an ambient clock.
     #[must_use]
-    pub fn boot_at(
+    pub fn new_at(
         plan: &'plan ValidatedExecutionPlan,
         graph_version: GraphVersion,
         logical_time: i64,
     ) -> Self {
-        Self::boot_at_inner(plan, graph_version, logical_time, None)
+        Self::new_at_inner(plan, graph_version, logical_time, None)
     }
 
-    /// Boots at an explicit logical instant with fixed deployment inputs.
+    /// Creates fresh execution state at the supplied logical instant with
+    /// fixed deployment inputs.
     #[must_use]
-    pub fn boot_at_with_deployment(
+    pub fn new_at_with_deployment(
         plan: &'plan ValidatedExecutionPlan,
         graph_version: GraphVersion,
         logical_time: i64,
         boot: &crate::deployment::BootBindings,
     ) -> Self {
-        Self::boot_at_inner(plan, graph_version, logical_time, Some(boot))
+        Self::new_at_inner(plan, graph_version, logical_time, Some(boot))
     }
 
-    /// Boots the exact validated program, including its separately transported
-    /// semantic identity. Retry openings bind to this original identity; a
+    /// Creates execution state for the exact validated program, including its
+    /// separately transported semantic identity. Retry openings bind to it; a
     /// plan body alone cannot reconstruct it.
     #[must_use]
-    pub fn boot_program(
+    pub fn new_program(
         plan: &'plan ValidatedExecutionPlan,
         hash: crate::plan::SemanticHash,
         graph_version: GraphVersion,
         logical_time: i64,
         boot: Option<&crate::deployment::BootBindings>,
     ) -> Self {
-        let mut vm = Self::boot_at_inner(plan, graph_version, logical_time, boot);
+        let mut vm = Self::new_at_inner(plan, graph_version, logical_time, boot);
         vm.original_hash = Some(hash);
         vm
     }
 
-    fn boot_at_inner(
+    fn new_at_inner(
         plan: &'plan ValidatedExecutionPlan,
         graph_version: GraphVersion,
         logical_time: i64,
@@ -2279,22 +2280,19 @@ impl<'plan> Execution<'plan> {
         Ok(())
     }
 
-    /// Advances the virtual date to `target`, firing each scheduled
-    /// budget in expiry order — the discrete advance: time moves in
-    /// jumps, and the machine drains between them. Only the machine
-    /// constructs a timeout — a Driver answers or stays silent, never
-    /// times itself out. A budget runs from the DELIVERY, so an
-    /// expiry resolves wherever the obligation lives: a call still
-    /// open closes with a Timeout fact (and the driver is told to
-    /// cancel the in-flight work); a delivery still queued follows
-    /// the call-closed rule — its call opens and closes at the
-    /// expiry, back to back; an obligation already settled loses the
-    /// race and fires nothing.
+    /// Advances logical time to the absolute `target` instant in nanoseconds.
+    /// Processes scheduled obligations in deadline order and runs ready work
+    /// between deadlines. This may commit multiple transitions.
+    ///
+    /// Call budgets start at delivery, including time spent in the mailbox.
+    /// At expiry, an open Call closes with a timeout and its Driver is asked
+    /// to cancel. A queued Call opens and immediately closes with a timeout;
+    /// an already settled obligation produces no additional record.
     ///
     /// # Errors
     ///
     /// Journal refusals and faulting steps, as in [`Self::run_ready`].
-    pub fn advance(
+    pub fn advance_to(
         &mut self,
         journal: &mut dyn Journal,
         bindings: &mut dyn OutboundConnectorBindings,
@@ -2868,9 +2866,9 @@ impl<'plan> Execution<'plan> {
         Ok(())
     }
 
-    /// The machine's logical instant, in nanoseconds since the Unix epoch.
+    /// Returns the current logical instant in nanoseconds since the Unix epoch.
     #[must_use]
-    pub fn now(&self) -> i64 {
+    pub fn logical_time(&self) -> i64 {
         self.now
     }
 
@@ -3116,9 +3114,10 @@ impl<'plan> Execution<'plan> {
     ///
     /// Unlike [`Self::is_stable`], an open Call, Session or partial join does
     /// not by itself make work ready. Hosted stepping and the interactive Lab
-    /// use this distinction to stop at a genuine transaction boundary.
+    /// use this distinction to pause when only external input or a future
+    /// deadline can make further work ready.
     #[must_use]
-    pub fn has_ready_transaction(&self) -> bool {
+    pub fn has_ready_work(&self) -> bool {
         if !self.lifecycle.is_empty()
             || self.instance_command_ready()
             || self.single_pass_close().is_some()

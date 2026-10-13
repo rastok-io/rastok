@@ -102,7 +102,7 @@ fn run(source: &str) -> Vec<Record> {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
     let mut world = EchoWorld::default();
     let data = vec![(String::from("text"), Value::Text(String::from("salut")))];
     vm.accept_input(

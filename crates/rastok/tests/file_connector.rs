@@ -157,7 +157,7 @@ fn run_observed(root: &Path, source: &str, data: Data) -> (MemJournal, Vec<Strin
     let registry = registry(root);
     let mut bindings = RuntimeBindings::try_new(&plan, &registry).expect("File binds");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::boot(&plan, GraphVersion(1));
+    let mut vm = Execution::new(&plan, GraphVersion(1));
     vm.accept_input(&mut journal, submission(data))
         .expect("the input is admitted");
     drive(&mut vm, &mut journal, &mut bindings);
@@ -306,7 +306,7 @@ fn filesystem_observation_begins_only_after_the_outbound_open() {
     let registry = registry(root.path());
     let mut bindings = RuntimeBindings::try_new(&plan, &registry).expect("File binds");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::boot(&plan, GraphVersion(1));
+    let mut vm = Execution::new(&plan, GraphVersion(1));
     vm.accept_input(&mut journal, submission(Data::materialized(Value::Null)))
         .expect("the trigger is admitted");
 
@@ -332,7 +332,7 @@ fn replay_of_an_open_replace_never_reexecutes_the_file_effect() {
     let plan = compile_file(&source("replace", "artifact.bin", None));
     let registry = registry(root.path());
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::boot(&plan, GraphVersion(1));
+    let mut vm = Execution::new(&plan, GraphVersion(1));
     vm.accept_input(
         &mut journal,
         submission(Data::materialized(Value::Bytes(b"sealed".to_vec()))),

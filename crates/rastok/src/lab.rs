@@ -256,11 +256,11 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
         let execution = hash.map_or_else(
             || {
                 boot.map_or_else(
-                    || Execution::boot(plan, graph_version),
-                    |boot| Execution::boot_with_deployment(plan, graph_version, boot),
+                    || Execution::new(plan, graph_version),
+                    |boot| Execution::new_with_deployment(plan, graph_version, boot),
                 )
             },
-            |hash| Execution::boot_program(plan, hash, graph_version, 0, boot),
+            |hash| Execution::new_program(plan, hash, graph_version, 0, boot),
         );
         Ok(Self {
             plan,
@@ -553,7 +553,7 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
                 self.window_start = self.execution.envelope_views().len();
                 self.output_window_start = self.execution.outputs().len();
                 self.record_window_start = self.journal.records().len();
-                let target = self.execution.now().saturating_add(*nanos);
+                let target = self.execution.logical_time().saturating_add(*nanos);
                 self.advance = Some(TimeAdvance::new(target));
                 self.quiescent = false;
                 ScenarioActionKind::Advance
@@ -605,7 +605,7 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
             .execution
             .step_with_bindings(&mut self.journal, &mut self.driver)
             .map_err(|error| ScenarioStepError::Transaction(format!("a step faulted: {error}")))?;
-        let progressed = if self.execution.has_ready_transaction() {
+        let progressed = if self.execution.has_ready_work() {
             false
         } else {
             self.poll_driver().map_err(ScenarioStepError::Boundary)?
@@ -613,7 +613,7 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
         // A retained opening or write acknowledgement can make the next
         // scripted frame admissible without queuing an Executor transaction.
         // Confirm that the world is also at rest before advancing the script.
-        self.quiescent = !progressed && !self.execution.has_ready_transaction();
+        self.quiescent = !progressed && !self.execution.has_ready_work();
         Ok(ran)
     }
 
@@ -626,7 +626,7 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
             return Ok(false);
         }
         let progressed = self.poll_driver()?;
-        self.quiescent = !progressed && !self.execution.has_ready_transaction();
+        self.quiescent = !progressed && !self.execution.has_ready_work();
         Ok(progressed)
     }
 
@@ -711,7 +711,7 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
         }
         let progressed = inbound || report.settled > 0 || !report.rejected.is_empty();
         if !progressed
-            && !self.execution.has_ready_transaction()
+            && !self.execution.has_ready_work()
             && self.source_input.borrow().is_pending()
         {
             return Err(String::from(

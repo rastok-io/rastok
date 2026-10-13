@@ -493,14 +493,14 @@ fn run(
             return ExitCode::FAILURE;
         }
     };
-    let mut vm = Execution::boot_program(
+    let mut vm = Execution::new_program(
         &compilation.plan,
         compilation.hash,
         version,
         time.logical_now(),
         boot,
     );
-    if let Err(error) = recording_checkpoint(&mut recorder, &journal, vm.now()) {
+    if let Err(error) = recording_checkpoint(&mut recorder, &journal, vm.logical_time()) {
         eprintln!("error: {error}");
         return ExitCode::FAILURE;
     }
@@ -524,8 +524,8 @@ fn run(
     loop {
         let mut progressed = false;
         let target = time.logical_now();
-        if target > vm.now()
-            && let Err(error) = vm.advance(&mut journal, &mut world, target)
+        if target > vm.logical_time()
+            && let Err(error) = vm.advance_to(&mut journal, &mut world, target)
         {
             eprintln!("error: {error}");
             return ExitCode::FAILURE;
@@ -553,14 +553,16 @@ fn run(
         match drive_boundary(&mut vm, &mut journal, &mut world) {
             Ok(boundary_progress) => progressed |= boundary_progress,
             Err(error) => {
-                if let Err(record_error) = recording_checkpoint(&mut recorder, &journal, vm.now()) {
+                if let Err(record_error) =
+                    recording_checkpoint(&mut recorder, &journal, vm.logical_time())
+                {
                     eprintln!("error: {record_error}");
                 }
                 eprintln!("error: {error}");
                 return ExitCode::FAILURE;
             }
         }
-        if let Err(error) = recording_checkpoint(&mut recorder, &journal, vm.now()) {
+        if let Err(error) = recording_checkpoint(&mut recorder, &journal, vm.logical_time()) {
             eprintln!("error: {error}");
             return ExitCode::FAILURE;
         }
@@ -580,7 +582,7 @@ fn run(
         }
     }
     if let Some(recorder) = recorder {
-        match recorder.finish(&compilation, &journal, vm.now()) {
+        match recorder.finish(&compilation, &journal, vm.logical_time()) {
             Ok(()) => eprintln!(
                 "recorded: {} causal records · seal {}",
                 journal.records().len(),

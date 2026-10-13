@@ -1726,6 +1726,14 @@ records the checks actually run. The full lot 1 qualification remains open.
 Other constructor, clock and readiness method names are outside this naming
 decision.
 
+**Follow-up, 13 October:** Yoann subsequently authorizes finishing those
+methods: `boot*` becomes `new*`, `advance` becomes `advance_to`, `now()`
+becomes `logical_time()`, and `has_ready_transaction()` becomes
+`has_ready_work()`. The DSL and scenario names are unchanged. The precise
+mapping and narrow exception for RustRover's ambiguous-name selector are
+recorded in the [vocabulary follow-up](human-review-vocabulary.md#execution-methods--follow-up-approved-13-october-yoann).
+No clock representation or execution semantics changes.
+
 - **The hosted Worker has no name and no type** (raised 2026-10-11, during
   T4, by Yoann: "le main paraît un peu monolithique"). execution-model.md
   names the Worker that takes one mailbox and processes one transaction

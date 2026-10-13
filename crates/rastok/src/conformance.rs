@@ -212,7 +212,7 @@ pub fn verify(
     // reference can settle.
     {
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+        let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
         let mut bindings = match bind(&compilation.plan, drivers) {
             Ok(bindings) => bindings,
             Err(violation) => {
@@ -323,7 +323,7 @@ pub fn verify_event(profile: &EventTestFixture<'_>, drivers: &DriverRegistry) ->
         }
     };
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::boot(profile.plan, GraphVersion(1));
+    let mut vm = Execution::new(profile.plan, GraphVersion(1));
     let admission = match bindings.poll_inbound(&mut vm, &mut journal) {
         Ok(Some(admission)) => admission,
         Ok(None) => {
@@ -953,7 +953,7 @@ fn drive(
                 return Err("the run wedged: neither settled nor expired".into());
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
-            vm.advance(journal, driver, vm.now() + 10_000_000)
+            vm.advance_to(journal, driver, vm.logical_time() + 10_000_000)
                 .map_err(|error| format!("the advance faulted: {error}"))?;
         }
     }
@@ -1015,7 +1015,7 @@ fn run_provocation(
         )
     })?;
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
     let mut bindings = bind(&compilation.plan, drivers)?;
     drive(&mut vm, &mut journal, &mut bindings, provocation.input)
         .map_err(|violation| format!("the `{}` provocation: {violation}", provocation.exit_case))?;
@@ -1061,7 +1061,7 @@ fn mute_battery(
     let compilation = compile(&[source], registry)
         .map_err(|bag| format!("the mute probe does not compile: {:?}", bag.diagnostics()))?;
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
     let mut bindings = bind(&compilation.plan, drivers)?;
     drive(&mut vm, &mut journal, &mut bindings, "conformance")
         .map_err(|violation| format!("the mute battery: {violation}"))?;
@@ -1116,7 +1116,7 @@ fn interleave_battery(
         )
     })?;
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
     let mut bindings = bind(&compilation.plan, drivers)?;
     if probe.a == probe.b {
         return Err("the interleave payloads must differ, or a swap is invisible".into());
@@ -1185,7 +1185,7 @@ fn interleave_battery(
                 return Err("the interleave run wedged".into());
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
-            vm.advance(&mut journal, &mut bindings, vm.now() + 10_000_000)
+            vm.advance_to(&mut journal, &mut bindings, vm.logical_time() + 10_000_000)
                 .map_err(|error| format!("the advance faulted: {error}"))?;
         }
     }

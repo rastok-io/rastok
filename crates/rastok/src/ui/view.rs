@@ -288,7 +288,7 @@ pub fn snapshot(input: SnapshotInput<'_>) -> Result<UiSnapshot, serde_json::Erro
         },
         "execution": {
             "state": state.spelling(),
-            "logical_time_ns": vm.now().to_string(),
+            "logical_time_ns": vm.logical_time().to_string(),
             "awaiting_outbound_calls": vm.awaiting_outbound_calls(),
             "legal_commands": legal_commands,
         },
@@ -1777,7 +1777,7 @@ mod tests {
         let recording = crate::recording::Recording::capture(
             &compilation,
             session.journal(),
-            session.execution().now(),
+            session.execution().logical_time(),
         )
         .unwrap();
         let recording = crate::recording::Recording::decode(&recording.encode().unwrap()).unwrap();
@@ -1819,7 +1819,7 @@ mod tests {
         .expect("minimal graph");
         let version = crate::plan::GraphVersion(1);
         let journal = MemJournal::new(version);
-        let vm = Execution::boot(&compilation.plan, version);
+        let vm = Execution::new(&compilation.plan, version);
         let view = snapshot(SnapshotInput {
             revision: 0,
             mode: "simulate",
@@ -1895,7 +1895,7 @@ graph inspected : App {
         )
         .expect("the inspection fixture compiles");
         let journal = MemJournal::new(crate::plan::GraphVersion(1));
-        let vm = Execution::boot(&compilation.plan, crate::plan::GraphVersion(1));
+        let vm = Execution::new(&compilation.plan, crate::plan::GraphVersion(1));
         let inspection = vm.inspection();
         let active_instances = active_instance_lifecycles(&journal);
 
@@ -1975,7 +1975,7 @@ graph inspected : App {
         )
         .unwrap();
         let journal = MemJournal::new(crate::plan::GraphVersion(1));
-        let vm = Execution::boot(&compilation.plan, crate::plan::GraphVersion(1));
+        let vm = Execution::new(&compilation.plan, crate::plan::GraphVersion(1));
         let value = topology(
             &compilation.plan,
             &compilation.source_definitions,

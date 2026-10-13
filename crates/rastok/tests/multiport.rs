@@ -197,7 +197,7 @@ fn the_machine_verifies_the_ingress_port() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
     let submission = |port: &str| IngressProposal {
         provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
         draft: EnvelopeDraft {
@@ -782,7 +782,7 @@ fn the_braced_record_is_physically_a_struct() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
     vm.accept_input(
         &mut journal,
         IngressProposal {
@@ -895,7 +895,7 @@ fn an_empty_brace_is_an_empty_record() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
     vm.accept_input(
         &mut journal,
         IngressProposal {
@@ -935,7 +935,7 @@ fn a_whole_data_write_is_the_payload_itself() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
     vm.accept_input(
         &mut journal,
         IngressProposal {
@@ -1040,7 +1040,7 @@ fn identity_re_emits_the_materialized_envelope_whole() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
     let mut app = Namespace::new();
     // The one ext field this plan's schema declares — the standard
     // `content_type` (inject validates the zone, D-2026-08-10-1).
@@ -1099,7 +1099,7 @@ fn an_empty_nested_record_is_a_value_not_an_absence() {
         )
         .expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+        let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
         vm.accept_input(
             &mut journal,
             IngressProposal {
@@ -1333,7 +1333,7 @@ fn boundary_outputs_carry_their_port() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
     vm.accept_input(
         &mut journal,
         IngressProposal {
@@ -1387,7 +1387,7 @@ fn a_raw_ingress_holds_the_pin_before_any_append() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
     let submission = IngressProposal {
         provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
         draft: EnvelopeDraft {
@@ -1819,7 +1819,7 @@ fn the_bare_data_relay_preserves_the_logical_type() {
     .expect("a valid plan");
     let relay = |data: Value| {
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+        let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
         vm.accept_input(
             &mut journal,
             IngressProposal {
@@ -1870,7 +1870,7 @@ fn an_ingress_pin_violation_is_a_named_error() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
     let error = vm
         .accept_input(
             &mut journal,
@@ -2077,7 +2077,7 @@ fn the_struct_witness_survives_every_equivalent_spelling() {
         )
         .expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+        let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
         vm.accept_input(
             &mut journal,
             IngressProposal {
@@ -2190,7 +2190,7 @@ fn an_encoded_bare_relay_passes_the_representation_through() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
     vm.accept_input(
         &mut journal,
         IngressProposal {
@@ -2340,7 +2340,7 @@ fn data_materializes_only_on_demand() {
         )
         .expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+        let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
         vm.accept_input(
             &mut journal,
             IngressProposal {
@@ -2425,7 +2425,7 @@ fn short_circuits_never_demand_the_data() {
         )
         .expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+        let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
         vm.accept_input(
             &mut journal,
             IngressProposal {
@@ -2518,7 +2518,7 @@ fn the_carry_is_as_lazy_as_the_name() {
         )
         .expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+        let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
         vm.accept_input(
             &mut journal,
             IngressProposal {
@@ -2617,7 +2617,7 @@ fn an_inspection_then_identity_ships_the_filled_cell() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
     vm.accept_input(
         &mut journal,
         IngressProposal {
@@ -2709,7 +2709,7 @@ fn a_duplicated_struct_field_refuses_at_the_door() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
     let error = vm
         .accept_input(
             &mut journal,
@@ -2755,7 +2755,7 @@ fn the_conformance_judgement_is_matchable() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
     let submission = |data: Value| IngressProposal {
         provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
         draft: EnvelopeDraft {

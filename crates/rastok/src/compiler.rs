@@ -1072,7 +1072,7 @@ graph app : App {{
             .expect("the finite countdown is a valid Loop");
             let plan = Box::leak(Box::new(compilation.plan));
             let mut journal = MemJournal::new(crate::plan::GraphVersion(1));
-            let mut vm = Execution::boot(plan, crate::plan::GraphVersion(1));
+            let mut vm = Execution::new(plan, crate::plan::GraphVersion(1));
             vm.accept_input(
                 &mut journal,
                 IngressProposal {
@@ -1221,7 +1221,7 @@ graph app : App {
         .expect("the finite countdown is a valid Loop");
         let plan = Box::leak(Box::new(compilation.plan));
         let mut journal = MemJournal::new(crate::plan::GraphVersion(1));
-        let mut before_crash = Execution::boot(plan, crate::plan::GraphVersion(1));
+        let mut before_crash = Execution::new(plan, crate::plan::GraphVersion(1));
         before_crash
             .accept_input(
                 &mut journal,
@@ -1253,7 +1253,7 @@ graph app : App {
         }
         drop(before_crash);
 
-        let mut recovered = Execution::boot(plan, crate::plan::GraphVersion(1));
+        let mut recovered = Execution::new(plan, crate::plan::GraphVersion(1));
         recovered
             .recover_from_journal(&journal)
             .expect("the open run is reconstructed from journal facts");
@@ -1331,7 +1331,7 @@ graph app : App {
         .expect("the finite countdown is a valid Loop");
         let plan = Box::leak(Box::new(compilation.plan));
         let mut journal = MemJournal::new(crate::plan::GraphVersion(1));
-        let mut vm = Execution::boot(plan, crate::plan::GraphVersion(1));
+        let mut vm = Execution::new(plan, crate::plan::GraphVersion(1));
         for value in [2, 1] {
             vm.accept_input(
                 &mut journal,

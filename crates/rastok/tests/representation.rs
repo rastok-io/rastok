@@ -144,7 +144,7 @@ graph g : App {
 "#;
     let compiled = compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::boot(&compiled.plan, GraphVersion(1));
+    let mut vm = Execution::new(&compiled.plan, GraphVersion(1));
     vm.accept_input(
         &mut journal,
         IngressProposal {
@@ -209,7 +209,7 @@ fn loop_expiry_materializes_last_state_by_the_host_entry_type() {
             );
             let compiled = compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap();
             let mut journal = MemJournal::new(GraphVersion(1));
-            let mut vm = Execution::boot(&compiled.plan, GraphVersion(1));
+            let mut vm = Execution::new(&compiled.plan, GraphVersion(1));
             vm.accept_input(
                 &mut journal,
                 IngressProposal {
@@ -239,7 +239,7 @@ fn loop_expiry_materializes_last_state_by_the_host_entry_type() {
             };
             assert_eq!(output.payload, [("last_state".into(), expected)]);
             MemJournal::from_records(GraphVersion(1), None, journal.records()).unwrap();
-            let mut recovered = Execution::boot(&compiled.plan, GraphVersion(1));
+            let mut recovered = Execution::new(&compiled.plan, GraphVersion(1));
             recovered.recover_from_journal(&journal).unwrap();
             assert_eq!(recovered.outputs(), vm.outputs());
 
@@ -279,7 +279,7 @@ fn loop_expiry_materializes_last_state_by_the_host_entry_type() {
             }
             assert_eq!(changed, 1);
             let forged = MemJournal::from_records(GraphVersion(1), None, &forged).unwrap();
-            let mut recovery = Execution::boot(&compiled.plan, GraphVersion(1));
+            let mut recovery = Execution::new(&compiled.plan, GraphVersion(1));
             assert!(recovery.recover_from_journal(&forged).is_err());
         }
     }

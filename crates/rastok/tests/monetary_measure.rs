@@ -332,7 +332,7 @@ graph adjustments : App {{
             assert_eq!(hash, compiled.hash);
             let version = GraphVersion(1);
             let mut journal = MemJournal::new(version);
-            let mut vm = Execution::boot(&decoded, version);
+            let mut vm = Execution::new(&decoded, version);
             vm.accept_input(
                 &mut journal,
                 IngressProposal {

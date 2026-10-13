@@ -298,7 +298,7 @@ fn malformed_native_or_undeserialized_data_cannot_enter_the_outbound_journal() {
             data,
             responses: Vec::new(),
         };
-        let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+        let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
         vm.accept_input(
             &mut journal,

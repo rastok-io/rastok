@@ -56,7 +56,7 @@ impl TimeAdvance {
     /// the actual VM and journal after each successful step.
     ///
     /// # Errors
-    /// The same transaction, expiry or binding refusals as [`Execution::advance`].
+    /// The same transaction, expiry or binding refusals as [`Execution::advance_to`].
     /// A refused transaction/expiry retains its cursor for retry.
     pub fn advance_once(
         &mut self,

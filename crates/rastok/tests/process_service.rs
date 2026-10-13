@@ -281,7 +281,7 @@ mod real {
     fn unix_service_reuses_a_child_then_observes_quit_and_opens_fresh() {
         let source = SERVICE.replace("command = \"cat\"", r#"command = "/bin/sh"; args = ["-c", "while IFS= read -r line; do if [ \"$line\" = quit ]; then exit 0; fi; printf '%s\\n' \"$line\"; done"]"#);
         let compiled = compile(&[source.as_str()], &ContractCatalog::try_m0().unwrap()).unwrap();
-        let mut vm = Execution::boot(&compiled.plan, GraphVersion(1));
+        let mut vm = Execution::new(&compiled.plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
         let registry = hosted_registry(None).unwrap();
         let mut world = RuntimeBindings::try_new(&compiled.plan, &registry).unwrap();
@@ -327,7 +327,7 @@ mod real {
                 compile(&[source.as_str()], &ContractCatalog::try_m0().unwrap()).unwrap();
             let registry = hosted_registry(None).unwrap();
             let mut world = RuntimeBindings::try_new(&compiled.plan, &registry).unwrap();
-            let mut vm = Execution::boot(&compiled.plan, GraphVersion(1));
+            let mut vm = Execution::new(&compiled.plan, GraphVersion(1));
             let mut journal = MemJournal::new(GraphVersion(1));
             vm.accept_input(&mut journal, input("in", "ready")).unwrap();
             until(&mut vm, &mut journal, &mut world, |vm, _| {
@@ -337,9 +337,11 @@ mod real {
                 .unwrap();
             vm.run_ready_with_bindings(&mut journal, &mut world)
                 .unwrap();
-            vm.advance(&mut journal, &mut world, 1_000_000_000).unwrap();
+            vm.advance_to(&mut journal, &mut world, 1_000_000_000)
+                .unwrap();
             if ignore_term {
-                vm.advance(&mut journal, &mut world, 2_000_000_000).unwrap();
+                vm.advance_to(&mut journal, &mut world, 2_000_000_000)
+                    .unwrap();
             }
             until(&mut vm, &mut journal, &mut world, |vm, _| {
                 vm.outputs().len() == 2
@@ -372,7 +374,7 @@ mod real {
         let compiled = compile(&[graph], &ContractCatalog::try_m0().unwrap()).unwrap();
         let registry = hosted_registry(None).unwrap();
         let mut world = RuntimeBindings::try_new(&compiled.plan, &registry).unwrap();
-        let mut vm = Execution::boot(&compiled.plan, GraphVersion(1));
+        let mut vm = Execution::new(&compiled.plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
         vm.accept_input(&mut journal, input("in", "start")).unwrap();
         until(&mut vm, &mut journal, &mut world, |vm, _| {

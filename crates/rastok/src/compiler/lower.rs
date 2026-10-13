@@ -2345,7 +2345,7 @@ graph m0_probe : App {
             "the raw and independently derived resolved schemas agree"
         );
 
-        let mut vm = crate::runtime::execution::Execution::boot(&decoded, GraphVersion(1));
+        let mut vm = crate::runtime::execution::Execution::new(&decoded, GraphVersion(1));
         let mut journal = crate::journal::MemJournal::new(GraphVersion(1));
         assert_eq!(vm.step(&mut journal), Ok(false));
         assert!(journal.records().is_empty());
@@ -2375,7 +2375,7 @@ graph m0_probe : App {
             .expect("categorical validation retains the defensive secret policy");
         let bytes = crate::plan::encode(&plan, &hash);
         let (decoded, _) = crate::plan::decode(&bytes).expect("the forged package decodes");
-        let mut vm = crate::runtime::execution::Execution::boot(&decoded, GraphVersion(1));
+        let mut vm = crate::runtime::execution::Execution::new(&decoded, GraphVersion(1));
         let mut journal = crate::journal::MemJournal::new(GraphVersion(1));
         assert!(matches!(
             vm.step(&mut journal),
@@ -2751,7 +2751,7 @@ graph app : App {
             &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect("sensitive policy is executable after A3");
-        let mut vm = crate::runtime::execution::Execution::boot(&compilation.plan, GraphVersion(1));
+        let mut vm = crate::runtime::execution::Execution::new(&compilation.plan, GraphVersion(1));
         let mut journal = crate::journal::MemJournal::new(GraphVersion(1));
         let submission = crate::boundary::IngressProposal {
             provenance: crate::boundary::IngressProvenance::single(
@@ -2795,7 +2795,7 @@ graph app : App {
             &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect("personal-data policy crosses source and categorical validation");
-        let mut vm = crate::runtime::execution::Execution::boot(&compilation.plan, GraphVersion(1));
+        let mut vm = crate::runtime::execution::Execution::new(&compilation.plan, GraphVersion(1));
         let mut journal = crate::journal::MemJournal::new(GraphVersion(1));
         let error = vm
             .step(&mut journal)
@@ -2852,7 +2852,7 @@ graph app : App {
         let boot = crate::deployment::BootBindings::resolve(profile, &NoSecrets)
             .expect("a profile without secrets resolves");
 
-        let mut attested = crate::runtime::execution::Execution::boot_with_deployment(
+        let mut attested = crate::runtime::execution::Execution::new_with_deployment(
             &compilation.plan,
             GraphVersion(1),
             &boot,
@@ -2884,7 +2884,7 @@ graph app : App {
             .expect("the attested run-scoped journal admits personal data");
         assert_eq!(attested_journal.records().len(), 1);
 
-        let mut mismatched = crate::runtime::execution::Execution::boot_with_deployment(
+        let mut mismatched = crate::runtime::execution::Execution::new_with_deployment(
             &compilation.plan,
             GraphVersion(1),
             &boot,
@@ -2904,7 +2904,7 @@ graph app : App {
             &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect("Article 9 and 10 flags compile together");
-        let mut missing_conditions = crate::runtime::execution::Execution::boot_with_deployment(
+        let mut missing_conditions = crate::runtime::execution::Execution::new_with_deployment(
             &regulated.plan,
             GraphVersion(1),
             &boot,
@@ -2941,7 +2941,7 @@ graph app : App {
         let regulated_boot =
             crate::deployment::BootBindings::resolve(regulated_profile, &NoSecrets)
                 .expect("a profile without secrets resolves");
-        let mut admitted = crate::runtime::execution::Execution::boot_with_deployment(
+        let mut admitted = crate::runtime::execution::Execution::new_with_deployment(
             &regulated.plan,
             GraphVersion(1),
             &regulated_boot,
@@ -2972,7 +2972,7 @@ graph app : App {
             &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect("a personal-data disclosure compiles into policy");
-        let mut undeclared_recipient = crate::runtime::execution::Execution::boot_with_deployment(
+        let mut undeclared_recipient = crate::runtime::execution::Execution::new_with_deployment(
             &disclosed.plan,
             GraphVersion(1),
             &boot,
@@ -3009,7 +3009,7 @@ graph app : App {
             &NoSecrets,
         )
         .expect("a profile without secrets resolves");
-        let mut disclosed_vm = crate::runtime::execution::Execution::boot_with_deployment(
+        let mut disclosed_vm = crate::runtime::execution::Execution::new_with_deployment(
             &disclosed.plan,
             GraphVersion(1),
             &recipient_boot,
@@ -3065,7 +3065,7 @@ graph app : App {
         assert!(rendered.contains("providers/openai/token"));
         assert!(!rendered.contains("physical-secret"));
 
-        let mut unbound = crate::runtime::execution::Execution::boot(&decoded, GraphVersion(1));
+        let mut unbound = crate::runtime::execution::Execution::new(&decoded, GraphVersion(1));
         let mut journal = crate::journal::MemJournal::new(GraphVersion(1));
         assert!(matches!(
             unbound.step(&mut journal),

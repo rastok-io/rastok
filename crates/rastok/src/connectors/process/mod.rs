@@ -1224,7 +1224,7 @@ graph real : App {
         )
         .expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+        let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
         let mut world = Process::try_new(&compilation.plan).expect("the plan binds");
         vm.accept_input(&mut journal, submission).unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
@@ -1243,7 +1243,7 @@ graph real : App {
                     "the run wedged: neither settled nor expired"
                 );
                 std::thread::sleep(std::time::Duration::from_millis(10));
-                vm.advance(&mut journal, &mut world, vm.now() + 10_000_000)
+                vm.advance_to(&mut journal, &mut world, vm.logical_time() + 10_000_000)
                     .unwrap();
             }
         }
@@ -1797,7 +1797,7 @@ graph unframeable : App {
         )
         .expect("the route resolves to text");
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+        let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
         assert!(
             vm.accept_input(&mut journal, submission("salut")).is_err(),
             "a struct cannot enter a text route"

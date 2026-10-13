@@ -784,6 +784,29 @@ This addition supersedes only the corresponding “kept” entries of the
 for its checks. The remaining Node representation changes belong to lot 1,
 not to this naming addition.
 
+### Execution methods — follow-up approved 13 October (Yoann)
+
+The construction, time and readiness methods now follow the same interface:
+
+| Previous name | Decided name | Meaning preserved |
+|---|---|---|
+| `Execution::boot`, `boot_at`, `boot_with_deployment`, `boot_at_with_deployment`, `boot_program` | `new`, `new_at`, `new_with_deployment`, `new_at_with_deployment`, `new_program` | construct fresh state without starting a handler or Driver |
+| `Execution::advance` | `advance_to` | advance to an absolute logical instant, processing due obligations and ready work |
+| `Execution::now` | `logical_time` | read the current logical instant |
+| `Execution::has_ready_transaction` | `has_ready_work` | test for work that can proceed without new external input or a time advance |
+
+The DSL `now()` and scenario `advance` keep their names and semantics.
+`BootBindings` still describes deployment inputs. There is no `run()` or
+process-level `stop()` on `Execution`: the hosted Worker remains a separate
+lot. The private constructor becomes `new_at_inner`.
+
+Yoann authorizes a patch for the three ambiguous method declarations
+(`boot`, `advance`, `now`) and their verified references: RustRover's
+name-only selector cannot distinguish them from other symbols in the file.
+Unique names use semantic refactoring; verified references outside the IDE
+workspace are repaired under the earlier exception. No compatibility alias,
+journal field, package byte or execution rule changes.
+
 ## What validation produces
 
 For each **⟂**: keep / rename / merge, with the chosen word. The answers

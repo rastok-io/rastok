@@ -270,7 +270,7 @@ graph app : App {
         .unwrap()
         .0;
     for value in [false, true] {
-        let mut vm = Execution::boot(&decoded, plan::GraphVersion(1));
+        let mut vm = Execution::new(&decoded, plan::GraphVersion(1));
         let mut journal = MemJournal::new(plan::GraphVersion(1));
         vm.accept_input(
             &mut journal,
@@ -391,7 +391,7 @@ graph app : App {
     let compilation = compiler::compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
     let encoded = plan::encode(&compilation.plan, &compilation.hash);
     let decoded = plan::decode(&encoded).unwrap().0;
-    let mut vm = Execution::boot(&decoded, plan::GraphVersion(1));
+    let mut vm = Execution::new(&decoded, plan::GraphVersion(1));
     let mut journal = MemJournal::new(plan::GraphVersion(1));
     vm.accept_input(&mut journal, submission(Data::materialized(Value::Int(2))))
         .unwrap();
@@ -433,7 +433,7 @@ graph app : App {
     let compilation = compiler::compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
     let package = plan::encode(&compilation.plan, &compilation.hash);
     let decoded = plan::decode(&package).unwrap().0;
-    let mut vm = Execution::boot_at(&decoded, plan::GraphVersion(1), 17);
+    let mut vm = Execution::new_at(&decoded, plan::GraphVersion(1), 17);
     let mut journal = MemJournal::new(plan::GraphVersion(1));
     vm.accept_input(
         &mut journal,
@@ -473,7 +473,7 @@ graph app : App {
 }
 "#;
     let compilation = compiler::compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
-    let mut vm = Execution::boot(&compilation.plan, plan::GraphVersion(1));
+    let mut vm = Execution::new(&compilation.plan, plan::GraphVersion(1));
     let mut journal = MemJournal::new(plan::GraphVersion(1));
     vm.accept_input(&mut journal, submission(Data::materialized(Value::Int(0))))
         .unwrap();

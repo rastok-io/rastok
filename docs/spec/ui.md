@@ -399,7 +399,7 @@ and playback speed are physical.
 
 The authored-`advance` gap from the [independent audit](../architecture/m1.9-fable-ux-audit.md)
 is corrected at the controller/Lab seam. A caller-owned time-sweep cursor
-retains real intermediate states; batch `Execution::advance` drives the same cursor
+retains real intermediate states; batch `Execution::advance_to` drives the same cursor
 to completion. This is neither a new timer queue nor a journal authority.
 Same-instant expiry ordering and settlement polling remain unchanged. The
 regressions check both individual transaction visibility and identical final

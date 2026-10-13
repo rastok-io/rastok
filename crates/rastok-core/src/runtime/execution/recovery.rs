@@ -46,7 +46,7 @@ impl Execution<'_> {
     ) -> Result<(), ExecutionFault> {
         self.preflight(journal)?;
         let resume_at = self.now;
-        let mut candidate = Self::boot_at(self.plan, self.graph_version, 0);
+        let mut candidate = Self::new_at(self.plan, self.graph_version, 0);
         candidate.original_hash = self.original_hash;
         candidate.expected_deployment = self.expected_deployment.clone();
         candidate.unsupported_data_policy = self.unsupported_data_policy.clone();

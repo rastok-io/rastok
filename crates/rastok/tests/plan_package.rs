@@ -238,7 +238,7 @@ fn v16_retains_one_operator_loop_without_a_graph_handler_or_command_port() {
     use rastok::plan::GraphVersion;
     use rastok::runtime::execution::Execution;
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::boot(&decoded, GraphVersion(1));
+    let mut vm = Execution::new(&decoded, GraphVersion(1));
     vm.accept_input(
         &mut journal,
         IngressProposal {
@@ -808,7 +808,7 @@ fn run_boundary_probe(plan: &rastok::plan::ValidatedExecutionPlan) -> (Vec<Strin
     use rastok::plan::GraphVersion;
     use rastok::runtime::execution::Execution;
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::boot(plan, GraphVersion(1));
+    let mut vm = Execution::new(plan, GraphVersion(1));
     let submission = IngressProposal {
         provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
         draft: EnvelopeDraft {

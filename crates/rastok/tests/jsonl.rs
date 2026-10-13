@@ -29,7 +29,7 @@ fn drive(
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
     let mut world =
         rastok::connectors::Process::try_new(&compilation.plan).expect("the plan binds");
     vm.accept_input(
@@ -475,7 +475,7 @@ fn an_out_of_domain_decimal_refuses_at_the_door() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
     let refused = vm.accept_input(
         &mut journal,
         IngressProposal {

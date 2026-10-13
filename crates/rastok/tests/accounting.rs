@@ -55,7 +55,7 @@ graph accounting_probe : App {
     )
     .expect("the annotated probe compiles");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
     vm.accept_input(
         &mut journal,
         IngressProposal {
@@ -210,7 +210,7 @@ graph priced_call : App {
     .expect("the secret-free deployment resolves");
     let version = GraphVersion(1);
     let mut journal = MemJournal::new_with_deployment(version, boot.attestation().clone());
-    let mut vm = Execution::boot_with_deployment(&compilation.plan, version, &boot);
+    let mut vm = Execution::new_with_deployment(&compilation.plan, version, &boot);
     let mut world = rastok::connectors::Process::try_new(&compilation.plan).expect("Process binds");
     vm.accept_input(
         &mut journal,

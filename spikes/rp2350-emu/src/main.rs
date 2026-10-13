@@ -193,7 +193,7 @@ fn main() -> ! {
     //    relay sample, so the journal actor/trigger identifies the measured
     //    turn instead of assuming that one `step` has one static role.
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::boot(&plan, GraphVersion(1));
+    let mut vm = Execution::new(&plan, GraphVersion(1));
     let relay_owner = node::OwnerPath::new(["relay"]).expect("the measured owner path is valid");
     let relay_trigger = Trigger::Port(Port::new("in").expect("the measured port is valid"));
     let mut tx_ticks_total: u64 = 0;

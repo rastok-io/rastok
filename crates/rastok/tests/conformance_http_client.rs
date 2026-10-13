@@ -326,7 +326,7 @@ lab authenticated {
         .expect("the real Driver resolves its exact boot inputs");
     let version = GraphVersion(1);
     let mut journal = MemJournal::new_with_deployment(version, boot.attestation().clone());
-    let mut vm = Execution::boot_with_deployment(&compilation.plan, version, &boot);
+    let mut vm = Execution::new_with_deployment(&compilation.plan, version, &boot);
     vm.accept_input(
         &mut journal,
         rastok::boundary::IngressProposal {
@@ -506,7 +506,7 @@ graph app : App {{
     let mut world = RuntimeBindings::try_new(&compilation.plan, &registry()).expect("HTTP binder");
     let version = GraphVersion(1);
     let mut journal = MemJournal::new(version);
-    let mut vm = Execution::boot_program(&compilation.plan, compilation.hash, version, 0, None);
+    let mut vm = Execution::new_program(&compilation.plan, compilation.hash, version, 0, None);
     vm.accept_input(
         &mut journal,
         rastok::boundary::IngressProposal {
@@ -556,8 +556,8 @@ graph app : App {{
         .collect();
     assert_eq!(dispositions, ["held", "published"]);
     assert!(!format!("{:?}", journal.records()).contains("OMITTED-WIRE-DATA"));
-    let recording =
-        Recording::capture(&compilation, &journal, vm.now()).expect("diagnostic recording");
+    let recording = Recording::capture(&compilation, &journal, vm.logical_time())
+        .expect("diagnostic recording");
     let decoded =
         Recording::decode(&recording.encode().expect("encode")).expect("independent decode");
     assert_eq!(decoded.records(), journal.records());

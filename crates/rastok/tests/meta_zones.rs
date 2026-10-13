@@ -308,7 +308,7 @@ fn content_type_follows_the_payload_not_the_merge() {
         )
         .expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+        let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
         let mut ext = Namespace::new();
         ext.insert(
             String::from("content_type"),

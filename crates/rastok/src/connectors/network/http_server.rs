@@ -2157,7 +2157,7 @@ graph api : App {
         let mut server = HttpServer::try_bind(&plan, &[node], HttpServerConfig::default())
             .expect("the hosted server binds before execution");
         let address = server.local_addresses()[0];
-        let mut vm = Execution::boot(&plan, GraphVersion(1));
+        let mut vm = Execution::new(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
 
         let http1 = spawn_http1(address, "one");
@@ -2189,7 +2189,7 @@ graph api : App {
             .expect("the respond server binds before execution");
         let response = spawn_http1_with_body(server.local_addresses()[0], "request");
         let proposal = wait_for_proposal(&mut server);
-        let mut vm = Execution::boot(&plan, GraphVersion(1));
+        let mut vm = Execution::new(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
         let IngressAdmission::Accepted(accepted) = vm
             .accept_connector_output(&mut journal, &proposal)
@@ -2245,7 +2245,7 @@ graph api : App {
         .expect("the respond server binds before execution");
         let response = spawn_http1_with_body(server.local_addresses()[0], "request");
         let proposal = wait_for_proposal(&mut server);
-        let mut vm = Execution::boot(&plan, GraphVersion(1));
+        let mut vm = Execution::new(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
         let IngressAdmission::Accepted(accepted) = vm
             .accept_connector_output(&mut journal, &proposal)
@@ -2266,7 +2266,7 @@ graph api : App {
             .expect("one hosted family registers");
         let mut bindings = crate::connectors::RuntimeBindings::try_new(&plan, &registry)
             .expect("the validated server plan binds");
-        vm.advance(&mut journal, &mut bindings, 1_000_000_000)
+        vm.advance_to(&mut journal, &mut bindings, 1_000_000_000)
             .expect("the request deadline advances deterministically");
         assert!(vm.ready_inbound_call_responses().is_empty());
         let timeouts = vm.ready_inbound_call_timeouts();
@@ -2324,7 +2324,7 @@ graph api : App {
             let _ = sent.send(result);
         });
         let proposal = wait_for_proposal(&mut server);
-        let mut vm = Execution::boot(&plan, GraphVersion(1));
+        let mut vm = Execution::new(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
         let IngressAdmission::Accepted(accepted) = vm
             .accept_connector_output(&mut journal, &proposal)
@@ -2407,7 +2407,7 @@ graph api : App {
         let mut server =
             HttpServer::try_bind(&plan, &[node], config).expect("the bounded server binds");
         let address = server.local_addresses()[0];
-        let mut vm = Execution::boot(&plan, GraphVersion(1));
+        let mut vm = Execution::new(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
 
         let first = spawn_http1(address, "one");
@@ -2483,7 +2483,7 @@ graph api : App {
         } else {
             (&second, &first)
         };
-        let mut vm = Execution::boot(&plan, GraphVersion(1));
+        let mut vm = Execution::new(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
         let IngressAdmission::Accepted(accepted) = vm
             .accept_connector_output(&mut journal, &proposal)

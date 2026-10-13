@@ -24,7 +24,7 @@ fn emitted(body: &str) -> rastok::envelope::Data {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
     vm.accept_input(
         &mut journal,
         IngressProposal {
@@ -123,7 +123,7 @@ fn base64_with_a_content_type_is_whole_payload() {
         "typing the frontend content type is one declared H4.1 identity move"
     );
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
     vm.accept_input(
         &mut journal,
         IngressProposal {
@@ -396,7 +396,7 @@ fn an_asset_emission_runs_and_carries_its_type() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
     vm.accept_input(
         &mut journal,
         IngressProposal {
@@ -559,7 +559,7 @@ fn the_carry_survives_a_dead_earlier_write() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
     let mut ext = Namespace::new();
     ext.insert(
         String::from("content_type"),
@@ -615,7 +615,7 @@ fn inject_holds_the_ext_zone_to_the_schema() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
     let mut ext = Namespace::new();
     ext.insert(
         String::from("invented"),
@@ -718,7 +718,7 @@ fn the_meta_type_grid_is_closed_end_to_end() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
     let mut ext = Namespace::new();
     ext.insert(
         String::from("content_type"),
@@ -1235,7 +1235,7 @@ fn a_decimal_meta_value_round_trips_through_a_copy() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
     vm.accept_input(
         &mut journal,
         IngressProposal {

@@ -69,7 +69,7 @@ pub(super) fn run(plan: &ValidatedExecutionPlan, hash: SemanticHash) -> usize {
         frames,
         bytes,
     };
-    let mut vm = Execution::boot_program(plan, hash, GraphVersion(1), 0, None);
+    let mut vm = Execution::new_program(plan, hash, GraphVersion(1), 0, None);
     let mut journal = MemJournal::new(GraphVersion(1));
     for _ in 0..operations {
         vm.accept_input(
@@ -99,7 +99,7 @@ pub(super) fn run(plan: &ValidatedExecutionPlan, hash: SemanticHash) -> usize {
         }
         if world.ready.is_empty() {
             now += 1_000_000;
-            vm.advance(&mut journal, &mut world, now).unwrap();
+            vm.advance_to(&mut journal, &mut world, now).unwrap();
         }
     }
     assert!(vm.is_stable());
@@ -118,7 +118,7 @@ pub(super) fn run(plan: &ValidatedExecutionPlan, hash: SemanticHash) -> usize {
     );
     let records = journal.records().len();
     drop(vm);
-    let mut restored = Execution::boot_program(plan, hash, GraphVersion(1), now, None);
+    let mut restored = Execution::new_program(plan, hash, GraphVersion(1), now, None);
     let starts = world.starts;
     restored
         .recover_with_bindings(&journal, &mut world)

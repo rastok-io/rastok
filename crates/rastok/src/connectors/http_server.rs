@@ -456,7 +456,7 @@ mod lab_tests {
             .try_with(lab_factory(Rc::clone(&input)).unwrap())
             .unwrap();
         let mut bindings = RuntimeBindings::try_new(&compilation.plan, &registry).unwrap();
-        let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+        let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
         input
             .borrow_mut()
@@ -527,7 +527,7 @@ mod lab_tests {
             .try_with(lab_factory(Rc::clone(&input)).unwrap())
             .unwrap();
         let mut bindings = RuntimeBindings::try_new(&compilation.plan, &registry).unwrap();
-        let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+        let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
         let capacity = vm.inspection().mailbox_capacity;
         for action in 0..capacity {

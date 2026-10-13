@@ -357,7 +357,7 @@ impl Recording {
                 .ok_or(Error::Invalid("missing prefix observation"))?
         };
         let empty = BootBindings::empty();
-        let mut vm = Execution::boot_program(
+        let mut vm = Execution::new_program(
             &self.plan,
             self.hash,
             self.version,

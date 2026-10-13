@@ -38,7 +38,7 @@ graph adjustments : App {{
 fn execute(compiled: &Compilation) -> MemJournal {
     let version = GraphVersion(1);
     let mut journal = MemJournal::new(version);
-    let mut vm = Execution::boot(&compiled.plan, version);
+    let mut vm = Execution::new(&compiled.plan, version);
     vm.accept_input(
         &mut journal,
         IngressProposal {

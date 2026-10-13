@@ -76,7 +76,7 @@ graph app : App {{
             if respond { "{ out; server.in }" } else { "out" }
         );
         let plan = compile(&source);
-        let mut vm = Execution::boot(&plan, GraphVersion(1));
+        let mut vm = Execution::new(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
         let mut calls = Vec::new();
         for (reference, text) in [(1, "alice"), (2, "bob")] {

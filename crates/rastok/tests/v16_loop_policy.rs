@@ -43,7 +43,7 @@ graph app : App {
     let (plan, _) = plan::decode(&plan::encode(&compiled.plan, &compiled.hash)).unwrap();
     for n in [1, 4] {
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut vm = Execution::boot(&plan, GraphVersion(1));
+        let mut vm = Execution::new(&plan, GraphVersion(1));
         vm.accept_input(
             &mut journal,
             IngressProposal {
@@ -65,7 +65,7 @@ graph app : App {
         )
         .unwrap();
         for _ in 0..100 {
-            let mut restored = Execution::boot(&plan, GraphVersion(1));
+            let mut restored = Execution::new(&plan, GraphVersion(1));
             restored.recover_from_journal(&journal).unwrap();
             assert_eq!(restored.inspection(), vm.inspection());
             vm = restored;
