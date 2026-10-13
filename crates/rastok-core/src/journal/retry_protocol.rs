@@ -19,8 +19,8 @@ use alloc::vec::Vec;
 mod carriers;
 pub(crate) mod encoding;
 pub(crate) use carriers::validate_transaction;
-mod fold;
-pub use fold::{Error, Opening, Operation, Phase, RetryView, Settlement};
+mod retry_view;
+pub use retry_view::{Error, Opening, Operation, Phase, RetryView, Settlement};
 
 #[cfg(test)]
 mod tests;

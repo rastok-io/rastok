@@ -1,6 +1,5 @@
-//! The transaction executor and mailboxes, driven through compiled
-//! probes — integration tests of the core machinery, living in the
-//! std crate because they need the compiler.
+//! Transaction preparation and mailbox behavior, tested with compiled plans.
+//! These integration tests live in the hosted crate because they need the compiler.
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
 // Harness helpers live outside `#[test]` bodies, where the
 // allow-unwrap-in-tests toggle does not reach; a broken fixture's

@@ -1,5 +1,6 @@
-//! Pure attempt protocol. Spatial admission, owner ancestry, output typing and
-//! the exact carrier are independently checked when accepting journal records.
+//! Retry operation state reconstructed from committed journal records.
+//! Spatial admission, owner ancestry, output typing and the exact carrier are
+//! independently checked when accepting journal records.
 
 use super::*;
 use crate::boundary::CallOpen;

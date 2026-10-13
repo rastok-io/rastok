@@ -18,7 +18,7 @@ mod composition;
 mod dispatch;
 mod dispatch_resolution;
 mod dispatch_validation;
-mod emission;
+mod emit_value;
 mod graph_loop;
 mod productibility;
 mod retry;
@@ -36,7 +36,7 @@ pub use dispatch::{
     ClosedArm, Dispatch, DispatchStep, LoopCommand, MAX_DISPATCH_DEPTH, MultiEmitValues, OpenArm,
 };
 pub use dispatch_validation::{DispatchErrorKind, DispatchValidationError, validate_dispatch};
-pub use emission::{EmitValue, FieldWrite};
+pub use emit_value::{EmitValue, FieldWrite};
 pub use retry::LoopRepeatWarning;
 pub use routing::{
     Endpoint, EndpointOwner, InstanceStopTarget, LoopCommandKind, LoopCommandTarget, RouteArm,

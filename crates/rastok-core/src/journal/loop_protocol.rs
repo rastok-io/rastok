@@ -8,8 +8,8 @@ use crate::instance;
 use crate::node::Port;
 use alloc::vec::Vec;
 
-mod fold;
-pub use fold::{Error, LoopView, Phase, RunState};
+mod loop_view;
+pub use loop_view::{Error, LoopView, Phase, RunState};
 
 /// Exact admission which opens a run, not its possibly shared business origin.
 #[derive(Debug, Clone, PartialEq, Eq)]

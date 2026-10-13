@@ -1,5 +1,5 @@
-//! Protocol reconstruction only. Spatial quiescence and host/effect admission
-//! are obligations of the plan and Worker, not facts this fold invents.
+//! Loop run state reconstructed from committed journal transactions.
+//! Spatial quiescence and host admission are checked by the plan and Worker.
 
 use super::{
     CommandProduced, CommandValue, Fact, LoopRecord, OpeningAdmissionId, admission_ref,

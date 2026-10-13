@@ -1,4 +1,4 @@
-//! Envelope construction shared by checking, transport, proofs and execution.
+//! Envelope-construction expressions shared by checking, transport, proofs and execution.
 
 use alloc::vec::Vec;
 
