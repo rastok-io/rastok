@@ -2410,7 +2410,7 @@ graph api : App {
             node: Some(server_slot),
             port: node::Port::new("in").expect("the conventional input name is valid"),
         });
-        raw.boundary.retain(|decl| decl.port.name() != "out");
+        raw.owners[0].ports.retain(|decl| decl.port.name() != "out");
         let mut edges = core::mem::take(&mut raw.edges);
         edges.sort_by_key(|edge| raw.edge_text(edge));
         raw.edges = edges;

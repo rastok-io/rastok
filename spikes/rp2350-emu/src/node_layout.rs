@@ -94,7 +94,6 @@ struct Tables {
 fn header(plan: &ExecutionPlan, index: usize) -> Header {
     let owner = &plan.owners[index];
     let ports = match owner.kind {
-        OwnerKind::Graph if index == 0 => &plan.boundary,
         OwnerKind::Graph => &owner.ports,
         OwnerKind::Node(slot) => &plan.nodes[slot.index()].ports,
     };
@@ -314,17 +313,10 @@ pub(super) fn compare(plan: &ExecutionPlan) {
     );
     measure(
         "current",
-        || {
-            (
-                plan.owners.clone(),
-                plan.nodes.clone(),
-                plan.boundary.clone(),
-            )
-        },
-        |(owners, nodes, boundary)| {
+        || (plan.owners.clone(), plan.nodes.clone()),
+        |(owners, nodes)| {
             assert!(owners == &plan.owners);
             assert!(nodes == &plan.nodes);
-            assert!(boundary == &plan.boundary);
         },
     );
     measure(
@@ -356,7 +348,6 @@ fn compare_with_wiring(plan: &ExecutionPlan) {
             (
                 plan.owners.clone(),
                 plan.nodes.clone(),
-                plan.boundary.clone(),
                 plan.edges.clone(),
                 plan.routes.clone(),
                 plan.boundary_routes.clone(),

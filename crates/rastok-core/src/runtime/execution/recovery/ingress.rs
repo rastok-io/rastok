@@ -44,7 +44,7 @@ impl Execution<'_> {
             })
             .transpose()?;
         if source.is_none()
-            && !self.plan.boundary.iter().any(|port| {
+            && !self.plan.boundary().iter().any(|port| {
                 port.port == inbound.port && port.direction == node::PortDirection::Input
             })
         {

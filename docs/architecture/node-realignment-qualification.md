@@ -1,11 +1,12 @@
 # Node ontology realignment — qualification in progress
 
-Status: 13 October 2026. This records the preparation for lot 1 of
+Status: 14 October 2026. This records the preparation for lot 1 of
 [D-2026-10-11-1](../spec/decisions.md#d-2026-10-11-1--realign-the-plan-and-the-runtime-on-the-specifications-node-ontology-before-the-opening).
 The vocabulary follow-up is `2259fd4` and `beabf68`; the Execution interface
 is named in `90c646f` and `9218779`. The executable package remains format 20.
-The Operator-containment step below moves state and handlers into the
-Operator body, without changing the package tables. Graph and executor
+The Operator-containment step (`5513883`) moves state and handlers into the
+Operator body. The following step puts the App's port declarations on its
+root Graph. Neither changes the package tables. Graph and executor
 tables are not yet merged. The isolated allocation measurements below
 describe the preceding representation; no final Node layout has been selected.
 
@@ -430,3 +431,108 @@ Lot 1 remains open: one Node table, one reference wiring per Graph, private
 derived routing indexes, indexed mailbox deliveries, the package cutover
 and the final differential/workspace gate still remain. No push, tag or
 publication is performed.
+
+## Root Graph port ownership — 14 October
+
+The root App's declarations now reside in its Graph owner, exactly like
+the declarations of nested Graphs. `ExecutionPlan` no longer carries a
+separate `boundary` vector; `boundary()` borrows the root's ports and
+`graph_ports()` has no root-specific branch. Executor ports still belong to
+their executable Node rows until the two declaration tables are merged.
+
+The format-20 codec preserves its current wire layout: the root contract
+is written at plan key 2, while root-owner key 6 stays empty. Decoding moves
+that contract into the root Graph. A forged second root contract is rejected
+before that move, with the existing `InvalidGraphContract` diagnostic;
+nothing is overwritten or silently accepted. The serialized-depth walk
+continues to count root types at their actual wire location, and root
+annotations continue to use their resolved types. There is no new package
+reader, format bump or change to semantic hashing.
+
+A regression first failed on `5513883` because the root Graph's own port
+table was empty. It now requires both the root and a nested Graph to own
+their declared typed ports. A separate hostile-package test supplies both
+root-contract locations and requires rejection. Existing package round trips,
+depth checks, annotation checks and identity witnesses remain unchanged.
+
+The optional layout probe reads the root declarations from their new owner
+and no longer copies a separate boundary vector in its control sample.
+This step does not choose the final physical layout of the single Node table.
+
+The complete workspace test run now covers both this step and the preceding
+Operator-containment step: **1,580 passed, 0 failed, 0 ignored, 61 groups**.
+It ran with golden saving disabled:
+
+```sh
+env -u RASTOK_SAVE_GOLDENS cargo test --locked --workspace --all-features \
+  --no-fail-fast -- --quiet
+```
+
+The host again took substantial time to start test executables. An additional
+`--list` invocation prepared their startup in parallel; it ran no tests and
+does not contribute to the count above. The full Cargo run completed normally,
+including the real local-Driver and CLI tests. No timeout or system security
+setting changed, and no build ran alongside the network tests.
+
+Workspace formatting, strict all-target/all-feature Clippy and rustdoc pass.
+The three `no_std` checks (`thumbv7m-none-eabi`,
+`riscv32imac-unknown-none-elf`, `thumbv8m.main-none-eabihf`) pass as well.
+RustRover MCP's final build reports success with no problems. The rustdoc
+citation lint checks 213 Rust files with no relative Markdown links, and
+its four tests pass.
+
+The two normal Cortex-M33 images, built with `-D warnings` and without the
+layout probe, retain their packages, semantic hashes and record counts.
+
+| Root-owned App ports | Echo, 32 admissions | Retry with recovery |
+|---|---:|---:|
+| Heap after package decoding | 6,824 B | 5,620 B |
+| Decoder peak | 35,496 B | 30,352 B |
+| Whole-run allocator peak | 112,116 B | 130,528 B |
+| Heap change from `5513883` | 0 B | 0 B |
+| Heap margin below 128 KiB | 18,956 B | 544 B |
+| `.text` | 902,668 B | 963,028 B |
+| `.rodata` | 70,340 B | 81,104 B |
+| Code total | 973,008 B | 1,044,132 B |
+| Code change from `5513883` | +184 B | +312 B |
+| Code margin below 1 MiB | 75,568 B | 4,444 B |
+| Decode ticks, instruction-count proxy | 21,806 | 16,048 |
+| Journal records | 67 | 17 |
+| QEMU result | `SPIKE_OK` | `SPIKE_OK` |
+
+Retry's live heap remains 93,432 B after execution and 93,296 B after
+recovery. Both gates hold without a change to either limit. The remaining
+544 B of heap and 4,444 B of code do not qualify the future unified layout;
+that representation still needs its own complete measurements.
+
+Both updated `node-layout-probe` images also compile with `-D warnings` and
+finish in `SPIKE_OK`. Their equality checks include the root's moved port
+declarations. The control now copies two declaration vectors instead of a
+third, separate boundary vector; its measured stack-resident vector headers
+total 24 B. These are still isolated copies, not executions of a unified plan.
+
+| Current copied declarations, allocator bytes | Echo | Retry |
+|---|---:|---:|
+| Owner and executor tables | 3,216 | 2,544 |
+| Single Node table, inline bodies | 3,192 | 2,580 |
+| Single Node table, boxed bodies | 3,044 | 2,504 |
+| Single Node table, compact side tables | 3,044 | 2,504 |
+
+| Current declarations + wiring + indexes, resident / construction peak | Echo | Retry |
+|---|---:|---:|
+| Owner and executor tables | 3,584 / 3,592 B | 2,816 / 2,824 B |
+| Inline bodies | 4,084 / 4,892 B | 3,268 / 3,984 B |
+| Boxed bodies | 3,936 / 4,744 B | 3,192 / 3,908 B |
+| Compact side tables | 3,936 / 4,744 B | 3,192 / 3,908 B |
+
+The combined boxed experiment is therefore 352 B above the current echo
+control and 376 B above the Retry control. It still must be measured with
+the production decoder, execution and recovery before selecting the layout.
+Its instrumented code size is not the normal-image code-gate measurement.
+
+Final diff checks and formatting of the edited spike module pass. No
+package, causal trace, recording, fixture or example changed; no reference
+was regenerated. The human-review ledgers and `decisions.md` are untouched.
+Lot 1 remains open for the single Node table, private derived routing indexes,
+indexed mailbox deliveries, package cutover and differential qualification.
+No push, tag or publication is performed.

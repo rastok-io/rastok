@@ -390,12 +390,12 @@ fn typed_ports_travel_in_the_package() {
         compilation
             .plan
             .plan()
-            .boundary
+            .boundary()
             .iter()
             .any(|decl| decl.port.name() == "feed"
                 && decl.ty == Some(rastok::datatype::DataType::Text)),
         "the pinned boundary input travels: {:?}",
-        compilation.plan.plan().boundary
+        compilation.plan.plan().boundary()
     );
     let bytes = plan::encode(&compilation.plan, &compilation.hash);
     let (decoded, declared) = plan::decode(&bytes).expect("the typed package opens");
@@ -1602,8 +1602,8 @@ fn the_validator_refuses_mismatched_edge_pins() {
     .expect("a valid plan")
     .plan
     .into_inner();
-    let measure = plan
-        .boundary
+    let measure = plan.owners[0]
+        .ports
         .iter_mut()
         .find(|decl| decl.port.name() == "measure")
         .expect("the pinned output");

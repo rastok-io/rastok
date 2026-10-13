@@ -451,7 +451,6 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
         boundary_routes: Vec::new(),
         owners: Vec::new(),
         nodes: Vec::new(),
-        boundary: sorted_boundary(hir),
         edges: Vec::new(),
         routes: Vec::new(),
         // DERIVED from the writes the hash already seals — carried
@@ -506,11 +505,7 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
         let mut constants = graph_constant_environment(hir, &graph_path);
         let (kind, ports, extensions, instance, vals) = match checked {
             CheckedOwner::Graph(graph) => {
-                let mut ports = if graph.path.is_root() {
-                    Vec::new()
-                } else {
-                    graph.boundary.clone()
-                };
+                let mut ports = graph.boundary.clone();
                 ports.sort_by(|left, right| left.key().cmp(&right.key()));
                 let mut extensions = graph
                     .loop_spec
@@ -2336,7 +2331,7 @@ graph m0_probe : App {
             crate::plan::decode(&bytes).expect("the v15 package reads back");
         assert_eq!(decoded_hash, hash);
         assert_eq!(decoded, plan);
-        let annotations = &decoded.plan().boundary[0].annotations;
+        let annotations = &decoded.plan().boundary()[0].annotations;
         assert!(!annotations.is_empty());
         assert_eq!(
             decoded.resolved_ports().boundary()[0].annotations(),
@@ -2713,7 +2708,7 @@ graph app : App {
         let raw_output = compilation
             .plan
             .plan()
-            .boundary
+            .boundary()
             .iter()
             .find(|port| port.port.name() == "out");
         assert!(
@@ -3251,11 +3246,11 @@ graph m0_probe : App {
             ported.hash, bare_hash,
             "a declared boundary port is identity"
         );
-        assert_eq!(ported.plan.boundary.len(), 3);
+        assert_eq!(ported.plan.boundary().len(), 3);
         assert!(
             ported
                 .plan
-                .boundary
+                .boundary()
                 .iter()
                 .any(|port| port.port.name() == "feed")
         );

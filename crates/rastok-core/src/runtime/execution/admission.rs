@@ -188,7 +188,7 @@ impl Execution<'_> {
                 exchange: Some(exchange),
             })
         } else {
-            if !self.plan.boundary.iter().any(|decl| {
+            if !self.plan.boundary().iter().any(|decl| {
                 decl.port == submission.draft.port && decl.direction == node::PortDirection::Input
             }) {
                 return Err(ExecutionFault::UnknownIngress(

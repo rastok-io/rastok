@@ -251,7 +251,7 @@ fn plan_tree_with_resolved(
         (1, Cbor::Array(plan.nodes.iter().map(node_tree).collect())),
         (
             2,
-            Cbor::Array(plan.boundary.iter().map(port_decl_tree).collect()),
+            Cbor::Array(plan.boundary().iter().map(port_decl_tree).collect()),
         ),
         (3, Cbor::Array(plan.edges.iter().map(edge_tree).collect())),
         (4, Cbor::Array(plan.handlers().map(handler_tree).collect())),
@@ -416,6 +416,13 @@ fn node_tree(node: &Node) -> Cbor {
 }
 
 fn owner_tree(owner: &Owner) -> Cbor {
+    // Format 20 places the root contract at plan key 2. In memory it belongs
+    // to the root Graph, just like every nested Graph's contract.
+    let ports = if owner.path.is_root() {
+        &[][..]
+    } else {
+        owner.ports.as_slice()
+    };
     let kind = match owner.kind {
         OwnerKind::Graph => Cbor::Array(vec![Cbor::Uint(1)]),
         OwnerKind::Node(slot) => Cbor::Array(vec![Cbor::Uint(2), Cbor::Uint(slot.index() as u64)]),
@@ -434,10 +441,7 @@ fn owner_tree(owner: &Owner) -> Cbor {
             5,
             Cbor::Array(owner.vals.iter().map(owner_value_tree).collect()),
         ),
-        (
-            6,
-            Cbor::Array(owner.ports.iter().map(port_decl_tree).collect()),
-        ),
+        (6, Cbor::Array(ports.iter().map(port_decl_tree).collect())),
         (
             7,
             Cbor::Array(owner.extensions.iter().map(extension_spec_tree).collect()),
@@ -1177,12 +1181,14 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
             }
             annotations(&value.annotations, 5, &mut max, &mut stack);
         }
-        for decl in &owner.ports {
-            // owner port array at 3, declaration array at 4, fields at 5.
-            if let Some(ty) = &decl.ty {
-                stack.push(Item::Ty(ty, 5));
+        if !owner.path.is_root() {
+            for decl in &owner.ports {
+                // owner port array at 3, declaration array at 4, fields at 5.
+                if let Some(ty) = &decl.ty {
+                    stack.push(Item::Ty(ty, 5));
+                }
+                annotations(&decl.annotations, 5, &mut max, &mut stack);
             }
-            annotations(&decl.annotations, 5, &mut max, &mut stack);
         }
         for extension in &owner.extensions {
             // Extension array at 3, tagged payload at 4, policy map at 5.
@@ -1224,7 +1230,7 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
             }
         }
     }
-    for decl in &plan.boundary {
+    for decl in plan.boundary() {
         // decl array at 2, name and direction at 3 — and the
         // optional pinned type's root at 3.
         max = max.max(3);
@@ -1635,7 +1641,7 @@ fn err(detail: &str) -> DecodeError {
 
 fn plan_from(tree: &Cbor) -> Result<ExecutionPlan, DecodeError> {
     let pairs = map_of(tree, "plan")?;
-    let owners = array_of(get(pairs, 9, "plan owners")?, "plan owners")?
+    let mut owners = array_of(get(pairs, 9, "plan owners")?, "plan owners")?
         .iter()
         .map(owner_from)
         .collect::<Result<Vec<_>, _>>()?;
@@ -1647,6 +1653,21 @@ fn plan_from(tree: &Cbor) -> Result<ExecutionPlan, DecodeError> {
         .iter()
         .map(port_decl_from)
         .collect::<Result<Vec<_>, _>>()?;
+    let root = owners
+        .first_mut()
+        .filter(|root| {
+            root.path.is_root() && root.parent.is_none() && root.kind == OwnerKind::Graph
+        })
+        .ok_or(DecodeError::Invalid(PlanValidationError::MissingRootOwner))?;
+    if !root.ports.is_empty() {
+        return Err(DecodeError::Invalid(
+            PlanValidationError::InvalidGraphContract {
+                owner: root.path.to_string(),
+                detail: "the root Graph boundary belongs only to the plan boundary table",
+            },
+        ));
+    }
+    root.ports = boundary;
     let edges = array_of(get(pairs, 3, "plan edges")?, "plan edges")?
         .iter()
         .map(edge_from)
@@ -1717,7 +1738,6 @@ fn plan_from(tree: &Cbor) -> Result<ExecutionPlan, DecodeError> {
     Ok(ExecutionPlan {
         owners,
         nodes,
-        boundary,
         edges,
         routes,
         boundary_routes,
@@ -2683,7 +2703,6 @@ mod tests {
                 ports: vec![],
                 owner: node::OwnerSlot::new(1),
             }],
-            boundary: vec![],
             edges: vec![],
             app_schema: vec![],
             ext_schema: vec![],
@@ -2729,15 +2748,16 @@ mod tests {
         ValidatedExecutionPlan::try_new(ExecutionPlan {
             boundary_routes: Vec::new(),
             routes: vec![],
-            owners: vec![root_owner()],
-            nodes: vec![],
-            boundary: vec![PortDecl {
-                port: port("in"),
-                direction: node::PortDirection::Input,
-
-                ty: Some(ty),
-                annotations,
+            owners: vec![Owner {
+                ports: vec![PortDecl {
+                    port: port("in"),
+                    direction: node::PortDirection::Input,
+                    ty: Some(ty),
+                    annotations,
+                }],
+                ..root_owner()
             }],
+            nodes: vec![],
             edges: vec![],
             app_schema: vec![],
             ext_schema: vec![],
@@ -2851,7 +2871,7 @@ mod tests {
             ));
             let plan = annotated_boundary_plan(annotation);
             assert_eq!(deepest_level(plan.plan()), levels(&plan_tree(plan.plan())));
-            let table = &plan.plan().boundary[0].annotations;
+            let table = &plan.plan().boundary()[0].annotations;
             assert_eq!(
                 annotation_table_level(table),
                 levels(&annotation_table_tree(table))
@@ -2974,7 +2994,7 @@ mod tests {
             DataType::Float(crate::datatype::FloatType::Binary64),
         ] {
             let mut forged = plan.plan().clone();
-            forged.boundary[0].ty = Some(target);
+            forged.owners[0].ports[0].ty = Some(target);
             assert!(
                 ValidatedExecutionPlan::try_new(forged).is_err(),
                 "numeric target checked independently"
@@ -2999,14 +3019,14 @@ mod tests {
         };
         let original = annotated_boundary_plan(note(DataType::Text, Value::Text(text("a"))));
         let mut raw = original.plan().clone();
-        let mut other = raw.boundary[0].clone();
+        let mut other = raw.boundary()[0].clone();
         other.port = port("other");
         other.annotations = AnnotationTable::new(vec![(
             SchemaPath::root(),
             one_annotation(note(DataType::Bool, Value::Bool(true))),
         )])
         .expect("other site");
-        raw.boundary.push(other);
+        raw.owners[0].ports.push(other);
         let error =
             ValidatedExecutionPlan::try_new(raw).expect_err("one declaring name has one schema");
         assert!(
@@ -3123,7 +3143,7 @@ mod tests {
         let (decoded, _) = decode(&package).expect("typed annotations read back");
         assert_eq!(decoded, plan);
         assert_eq!(
-            decoded.plan().boundary[0].annotations,
+            decoded.plan().boundary()[0].annotations,
             *decoded.resolved_ports().boundary()[0].annotations()
         );
     }
@@ -3251,7 +3271,6 @@ mod tests {
             routes: vec![],
             owners: vec![root_owner(), nested],
             nodes: vec![],
-            boundary: vec![],
             edges: vec![],
             app_schema: vec![],
             ext_schema: vec![],
@@ -3713,7 +3732,22 @@ mod tests {
         ExecutionPlan {
             boundary_routes: Vec::new(),
             routes: vec![],
-            owners: vec![root_owner(), node_owner("relay", 0), node_owner("shell", 1)],
+            owners: vec![
+                Owner {
+                    ports: vec![
+                        PortDecl {
+                            port: port("entry"),
+                            direction: node::PortDirection::Input,
+                            ty: Some(DataType::array(DataType::INT)),
+                            annotations: AnnotationTable::empty(),
+                        },
+                        PortDecl::untyped(port("feed"), node::PortDirection::Output),
+                    ],
+                    ..root_owner()
+                },
+                node_owner("relay", 0),
+                node_owner("shell", 1),
+            ],
             nodes: vec![
                 Node {
                     path: node::Path::new(["relay"]).unwrap(),
@@ -3752,16 +3786,6 @@ mod tests {
                     ports: vec![],
                     owner: node::OwnerSlot::new(2),
                 },
-            ],
-            boundary: vec![
-                PortDecl {
-                    port: port("entry"),
-                    direction: node::PortDirection::Input,
-
-                    ty: Some(DataType::array(DataType::INT)),
-                    annotations: AnnotationTable::empty(),
-                },
-                PortDecl::untyped(port("feed"), node::PortDirection::Output),
             ],
             edges: vec![
                 Edge {
@@ -3814,7 +3838,6 @@ mod tests {
                 ports: vec![],
                 owner: node::OwnerSlot::new(1),
             }],
-            boundary: vec![],
             edges: vec![],
             app_schema: vec![],
             ext_schema: vec![],
@@ -4164,7 +4187,6 @@ mod tests {
             routes: vec![],
             owners: vec![root_owner()],
             nodes: vec![],
-            boundary: vec![],
             edges: vec![],
             app_schema: vec![],
             ext_schema: vec![],
@@ -4384,7 +4406,7 @@ mod tests {
             },
         ));
         spec.attributes.sort_by(|left, right| left.0.cmp(&right.0));
-        categorical.boundary.push(PortDecl {
+        categorical.owners[0].ports.push(PortDecl {
             port: port("deep"),
             direction: node::PortDirection::Input,
 
@@ -4421,7 +4443,6 @@ mod tests {
                 routes: vec![],
                 owners: vec![root_owner()],
                 nodes: vec![],
-                boundary: vec![],
                 edges: vec![],
                 app_schema: vec![],
                 ext_schema: vec![],
@@ -4490,15 +4511,16 @@ mod tests {
         let resolved_plan = ExecutionPlan {
             boundary_routes: Vec::new(),
             routes: vec![],
-            owners: vec![root_owner()],
-            nodes: vec![],
-            boundary: vec![PortDecl {
-                port: port("deep"),
-                direction: node::PortDirection::Input,
-
-                ty: Some(nested_type),
-                annotations: policy,
+            owners: vec![Owner {
+                ports: vec![PortDecl {
+                    port: port("deep"),
+                    direction: node::PortDirection::Input,
+                    ty: Some(nested_type),
+                    annotations: policy,
+                }],
+                ..root_owner()
             }],
+            nodes: vec![],
             edges: vec![],
             app_schema: vec![],
             ext_schema: vec![],

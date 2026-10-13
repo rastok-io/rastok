@@ -355,7 +355,6 @@ fn bare_operator_plan() -> ExecutionPlan {
             ports: vec![],
             owner: node::OwnerSlot::new(1),
         }],
-        boundary: vec![],
         edges: vec![],
         app_schema: vec![],
         ext_schema: vec![],
@@ -385,6 +384,48 @@ fn owner_slot(plan: &ExecutionPlan, node: &str) -> node::OwnerSlot {
         .find(|candidate| candidate.path.to_string() == node)
         .expect("the node exists")
         .owner
+}
+
+#[test]
+fn root_and_nested_graphs_own_their_declared_ports() {
+    let source = r#"
+graph app : App {
+  input in: text
+  output out: text
+  graph inner {
+    input in: text
+    output out: text
+    operator relay { on in { out = data } }
+    in -> relay -> out
+  }
+  in -> inner -> out
+}
+"#;
+    let compilation = compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
+    let plan = compilation.plan.plan();
+    let expected = vec![
+        plan::PortDecl {
+            port: Port::new("in").unwrap(),
+            direction: PortDirection::Input,
+            ty: Some(DataType::Text),
+            annotations: Default::default(),
+        },
+        plan::PortDecl {
+            port: Port::new("out").unwrap(),
+            direction: PortDirection::Output,
+            ty: Some(DataType::Text),
+            annotations: Default::default(),
+        },
+    ];
+    for (index, graph) in plan.owners.iter().enumerate() {
+        if graph.kind == plan::OwnerKind::Graph {
+            assert_eq!(graph.ports, expected, "Graph {} owns its ports", graph.path);
+            assert_eq!(
+                plan.graph_ports(node::OwnerSlot::new(index as u32)),
+                Some(graph.ports.as_slice())
+            );
+        }
+    }
 }
 
 #[test]
@@ -438,12 +479,12 @@ graph g : App {
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a same-direction redeclaration is a no-op");
-    assert_eq!(compilation.plan.plan().boundary.len(), 2);
+    assert_eq!(compilation.plan.plan().boundary().len(), 2);
     assert!(
         compilation
             .plan
             .plan()
-            .boundary
+            .boundary()
             .iter()
             .any(|port| port.port.name() == "in")
     );
@@ -470,7 +511,7 @@ graph g : App {
     .expect("an explicit conventional pin is supported");
     let raw = compilation.plan.plan();
     assert!(
-        raw.boundary.iter().any(|decl| {
+        raw.boundary().iter().any(|decl| {
             decl.port.name() == "in" && decl.ty.as_ref() == Some(&DataType::Variant)
         })
     );
@@ -1251,11 +1292,12 @@ fn a_boundary_input_cannot_be_an_edge_target() {
     // INPUT: the boundary convention inverts the node one, and the
     // checker refuses this shape — the type must too.
     let mut plan = raw_probe();
-    plan.boundary.push(plan::PortDecl::untyped(
+    plan.owners[0].ports.push(plan::PortDecl::untyped(
         port("request"),
         PortDirection::Input,
     ));
-    plan.boundary
+    plan.owners[0]
+        .ports
         .sort_by(|left, right| left.key().cmp(&right.key()));
     plan.edges.push(Edge {
         owner: node::OwnerSlot::new(0),
@@ -1287,11 +1329,12 @@ fn a_boundary_output_cannot_be_an_edge_source() {
     // `.response -> operator.in` with `response` declared as a graph
     // OUTPUT.
     let mut plan = raw_probe();
-    plan.boundary.push(plan::PortDecl::untyped(
+    plan.owners[0].ports.push(plan::PortDecl::untyped(
         port("response"),
         PortDirection::Output,
     ));
-    plan.boundary
+    plan.owners[0]
+        .ports
         .sort_by(|left, right| left.key().cmp(&right.key()));
     plan.edges.push(Edge {
         owner: node::OwnerSlot::new(0),
@@ -1404,7 +1447,7 @@ graph probe : App {
 #[test]
 fn an_unsorted_boundary_is_not_canonical() {
     let mut plan = raw_probe();
-    plan.boundary = vec![
+    plan.owners[0].ports = vec![
         plan::PortDecl::untyped(port("zeta"), PortDirection::Input),
         plan::PortDecl::untyped(port("alpha"), PortDirection::Input),
     ];
@@ -1419,7 +1462,7 @@ fn an_unsorted_boundary_is_not_canonical() {
 #[test]
 fn a_duplicated_boundary_port_refuses() {
     let mut plan = raw_probe();
-    plan.boundary = vec![
+    plan.owners[0].ports = vec![
         plan::PortDecl::untyped(port("request"), PortDirection::Input),
         plan::PortDecl::untyped(port("request"), PortDirection::Input),
     ];
@@ -1637,7 +1680,7 @@ fn a_non_adjacent_duplicate_wins_over_the_broken_order() {
     // a GLOBAL pass that runs first, so the dedicated variant names
     // the defect — never NonCanonicalOrder standing in front of it.
     let mut plan = raw_probe();
-    plan.boundary = vec![
+    plan.owners[0].ports = vec![
         plan::PortDecl::untyped(port("zeta"), PortDirection::Input),
         plan::PortDecl::untyped(port("alpha"), PortDirection::Input),
         plan::PortDecl::untyped(port("zeta"), PortDirection::Input),

@@ -1741,17 +1741,20 @@ fn annotations_well_formed(
         }
     }
     for owner in &plan.owners {
-        for port in &owner.ports {
-            let location = format!("Graph port `{}.{}`", owner.path, port.port);
-            match &port.ty {
-                Some(ty) => annotated_schema_at(ty, &port.annotations, location)?,
-                None if !port.annotations.is_empty() => {
-                    return Err(PlanValidationError::InvalidSchemaAnnotations {
-                        location,
-                        reason: SchemaAnnotationError::MissingLogicalType,
-                    });
+        // The root's annotations use the resolved boundary types checked above.
+        if !owner.path.is_root() {
+            for port in &owner.ports {
+                let location = format!("Graph port `{}.{}`", owner.path, port.port);
+                match &port.ty {
+                    Some(ty) => annotated_schema_at(ty, &port.annotations, location)?,
+                    None if !port.annotations.is_empty() => {
+                        return Err(PlanValidationError::InvalidSchemaAnnotations {
+                            location,
+                            reason: SchemaAnnotationError::MissingLogicalType,
+                        });
+                    }
+                    None => {}
                 }
-                None => {}
             }
         }
         for value in &owner.vals {
@@ -2223,15 +2226,15 @@ fn data_types_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
     for (field, ty) in &plan.ext_schema {
         data_type_at(ty, format!("meta.ext.{field}"))?;
     }
-    for decl in &plan.boundary {
-        if let Some(ty) = &decl.ty {
-            data_type_at(ty, format!("boundary port `{}`", decl.port))?;
-        }
-    }
     for owner in &plan.owners {
         for decl in &owner.ports {
             if let Some(ty) = &decl.ty {
-                data_type_at(ty, format!("Graph port `{}.{}`", owner.path, decl.port))?;
+                let location = if owner.path.is_root() {
+                    format!("boundary port `{}`", decl.port)
+                } else {
+                    format!("Graph port `{}.{}`", owner.path, decl.port)
+                };
+                data_type_at(ty, location)?;
             }
         }
         if let Some(key) = &owner.instance.key {
@@ -3039,15 +3042,8 @@ fn owners_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                 });
             }
         } else {
-            if owner.path.is_root() && !owner.ports.is_empty() {
-                return Err(PlanValidationError::InvalidGraphContract {
-                    owner: path.clone(),
-                    detail: "the root Graph boundary belongs only to the plan boundary table",
-                });
-            }
-            // `ExecutionPlan::boundary` remains the root Graph's one port
-            // table. Nested Graph owners have no other table and are
-            // validated here directly.
+            // App ports keep their boundary-specific diagnostics below.
+            // All Graph declarations have the same in-memory ownership.
             if !owner.path.is_root() {
                 let mut ports = BTreeSet::new();
                 for port in &owner.ports {
@@ -3358,14 +3354,14 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     }
     owners_well_formed(plan)?;
     let mut boundary_ports = BTreeSet::new();
-    for decl in &plan.boundary {
+    for decl in plan.boundary() {
         if !boundary_ports.insert(&decl.port) {
             return Err(PlanValidationError::DuplicateBoundaryPort {
                 port: decl.port.clone(),
             });
         }
     }
-    for pair in plan.boundary.windows(2) {
+    for pair in plan.boundary().windows(2) {
         if pair[0].key() >= pair[1].key() {
             return Err(PlanValidationError::NonCanonicalOrder {
                 collection: "boundary",
@@ -3377,7 +3373,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
         "out" | "err" => Some(node::PortDirection::Output),
         _ => None,
     };
-    if let Some((decl, expected)) = plan.boundary.iter().find_map(|decl| {
+    if let Some((decl, expected)) = plan.boundary().iter().find_map(|decl| {
         conventional_direction(&decl.port)
             .filter(|expected| decl.direction != *expected)
             .map(|expected| (decl, expected))
@@ -4049,7 +4045,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                         node::PortDirection::Input => node::PortDirection::Output,
                     };
                     let actual = plan
-                        .boundary
+                        .boundary()
                         .iter()
                         .find(|decl| decl.port == endpoint.port)
                         .map(|decl| decl.direction);
@@ -4136,7 +4132,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                     .and_then(|decl| decl.ty.clone())
             }
             None => plan
-                .boundary
+                .boundary()
                 .iter()
                 .find(|decl| decl.port == endpoint.port)
                 .and_then(|decl| decl.ty.clone()),

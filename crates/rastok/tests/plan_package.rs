@@ -615,6 +615,28 @@ fn reframe_body(
 }
 
 #[test]
+fn the_root_contract_has_one_serialized_authority() {
+    let (_, _, bytes) = packaged_example();
+    let forged = reframe_body(&bytes, |body| {
+        let ports = body[&2].clone();
+        let Cbor::Array(owners) = body.get_mut(&9).unwrap() else {
+            panic!("owner array")
+        };
+        let Cbor::Map(root) = &mut owners[0] else {
+            panic!("root owner map")
+        };
+        root.insert(6, ports);
+    });
+    assert_eq!(
+        plan::decode(&forged).unwrap_err(),
+        DecodeError::Invalid(plan::PlanValidationError::InvalidGraphContract {
+            owner: String::new(),
+            detail: "the root Graph boundary belongs only to the plan boundary table",
+        })
+    );
+}
+
+#[test]
 fn a_connector_cannot_acquire_a_dsl_handler_from_a_raw_plan() {
     let (plan, _, bytes) = packaged_example();
     let target = plan

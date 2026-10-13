@@ -1510,7 +1510,7 @@ fn an_unreachable_process_still_carries_one_valid_sheet() {
             .as_ref()
             .is_none_or(|to| to.node != Some(connector_slot))
     });
-    plan.boundary.retain(|port| port.port.name() != "in");
+    plan.owners[0].ports.retain(|port| port.port.name() != "in");
     for node in &mut plan.nodes {
         if let rastok::plan::NodeExecution::Connector(spec) = &mut node.execution {
             for (name, setting) in &mut spec.attributes {
@@ -1628,7 +1628,7 @@ fn the_global_binder_requires_callable_connectors_but_skips_pure_outbound_source
     );
     plan.edges
         .retain(|edge| edge.to.as_ref().is_none_or(|to| to.node != Some(slot)));
-    plan.boundary.retain(|port| port.port.name() != "in");
+    plan.owners[0].ports.retain(|port| port.port.name() != "in");
     let validated = rastok::plan::ValidatedExecutionPlan::try_from(plan)
         .expect("the foreign pure source remains structurally valid");
     assert!(

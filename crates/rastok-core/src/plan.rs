@@ -383,10 +383,6 @@ pub struct ExecutionPlan {
     pub owners: Vec<Owner>,
     /// The nodes, in canonical order; [`NodeIndex`]s index this table.
     pub nodes: Vec<Node>,
-    /// Boundary ports declared on the graph, in canonical order.
-    /// Conventional `in`, `out`, and `err` rows are omitted when
-    /// unannotated, but an explicit type constraint may restate them.
-    pub boundary: Vec<PortDecl>,
     /// The wiring, desugared to explicit pairs, in canonical order —
     /// the same order the semantic hash sees.
     pub edges: Vec<Edge>,
@@ -424,6 +420,14 @@ pub struct AssetBlob {
 }
 
 impl ExecutionPlan {
+    /// Declared ports of the root App Graph, in canonical order.
+    /// The root owns these declarations like any other Graph. Validation
+    /// requires its owner row before any plan can execute.
+    #[must_use]
+    pub fn boundary(&self) -> &[PortDecl] {
+        self.owners.first().map_or(&[], |root| &root.ports)
+    }
+
     /// Iterates over Operator handlers in Node and activation order.
     /// The owning Node is derived from containment, not stored in each handler.
     pub fn handlers(&self) -> impl Iterator<Item = (NodeIndex, &Handler)> {
@@ -537,21 +541,15 @@ impl ExecutionPlan {
 
     /// Complete boundary contract of one Graph owner.
     ///
-    /// The root Graph already owns [`Self::boundary`], so its owner row keeps
-    /// no duplicate claim. Nested Graphs carry their contract on the owner
-    /// row because composition removes their boundary endpoints from the
-    /// flattened edge table.
+    /// Every Graph, including the root App, owns its port declarations.
+    /// Composition does not erase them from the plan.
     #[must_use]
     pub fn graph_ports(&self, slot: node::OwnerSlot) -> Option<&[PortDecl]> {
         let owner = self.owner(slot)?;
         if owner.kind != OwnerKind::Graph {
             return None;
         }
-        if owner.path.is_root() {
-            Some(&self.boundary)
-        } else {
-            Some(&owner.ports)
-        }
+        Some(&owner.ports)
     }
 
     /// The instance policy owned by one executable Node.
@@ -687,10 +685,9 @@ pub struct Owner {
     pub parent: Option<node::OwnerSlot>,
     /// The declaration this row preserves after DAG flattening.
     pub kind: OwnerKind,
-    /// A nested Graph's complete boundary contract in canonical order. Node
-    /// owners and the root Graph carry an empty table: Node ports remain on
-    /// [`Node`], while the root contract has its existing single authority in
-    /// [`ExecutionPlan::boundary`].
+    /// A Graph's declared boundary contract in canonical order, including
+    /// the root App. Executor ports remain on [`Node`], so their owner rows
+    /// carry an empty table.
     pub ports: Vec<PortDecl>,
     /// Complete Extension specifications in canonical order.
     pub extensions: Vec<ExtensionSpec>,

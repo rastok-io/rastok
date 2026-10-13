@@ -1022,7 +1022,7 @@ fn has_policy_declaration(plan: &ExecutionPlan, resolved: &ResolvedPortTable) ->
 fn validate_definitions(plan: &ExecutionPlan) -> Result<(), ResolutionError> {
     let mut definitions = BTreeMap::new();
     let mut measures = BTreeMap::new();
-    for port in &plan.boundary {
+    for port in plan.boundary() {
         validate_table_definitions(&port.annotations, &mut definitions, &mut measures)?;
     }
     for node in &plan.nodes {
@@ -1036,8 +1036,10 @@ fn validate_definitions(plan: &ExecutionPlan) -> Result<(), ResolutionError> {
         }
     }
     for owner in &plan.owners {
-        for port in &owner.ports {
-            validate_table_definitions(&port.annotations, &mut definitions, &mut measures)?;
+        if !owner.path.is_root() {
+            for port in &owner.ports {
+                validate_table_definitions(&port.annotations, &mut definitions, &mut measures)?;
+            }
         }
     }
     for owner in &plan.owners {

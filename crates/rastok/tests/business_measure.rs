@@ -246,14 +246,14 @@ fn one_business_id_cannot_change_unit_in_a_plan_or_in_a_forged_package() {
     let mut extra = different
         .plan
         .plan()
-        .boundary
+        .boundary()
         .iter()
         .find(|port| port.port.name() == "out")
         .expect("measured boundary")
         .clone();
     extra.port = node::Port::new("z_contradiction").expect("port");
     extra.direction = node::PortDirection::Input;
-    forged.boundary.push(extra);
+    forged.owners[0].ports.push(extra);
     let error = plan::ValidatedExecutionPlan::try_new(forged)
         .expect_err("independent validator checks every declared site");
     assert!(error.to_string().contains("inconsistent units"), "{error}");

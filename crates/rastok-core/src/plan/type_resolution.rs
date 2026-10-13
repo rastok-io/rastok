@@ -240,7 +240,7 @@ impl<'plan> Solver<'plan> {
     }
 
     fn collect(mut self) -> Result<Self, PlanValidationError> {
-        for decl in &self.plan.boundary {
+        for decl in self.plan.boundary() {
             let index = self.ensure(None, &decl.port, decl.direction);
             self.states[index].annotations = decl.annotations.clone();
             if let Some(ty) = &decl.ty {
