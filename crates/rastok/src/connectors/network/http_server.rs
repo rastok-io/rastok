@@ -1755,7 +1755,7 @@ mod tests {
     use crate::contract::ContractCatalog;
     use crate::journal::{Journal, MemJournal};
     use crate::plan::GraphVersion;
-    use crate::runtime::vm::Vm;
+    use crate::runtime::execution::Execution;
     use crate::value::Value;
     use std::io::{Read, Write};
     use std::sync::mpsc::{Receiver, TryRecvError};
@@ -1921,7 +1921,7 @@ graph api : App {
 
     fn admit_and_close(
         server: &mut HttpServer<'_>,
-        vm: &mut Vm<'_>,
+        vm: &mut Execution<'_>,
         journal: &mut MemJournal,
         response: &Receiver<Result<ObservedResponse, String>>,
         expected_version: Version,
@@ -1963,7 +1963,7 @@ graph api : App {
             "the peer cannot observe 202 before causal admission"
         );
         let IngressAdmission::Accepted(accepted) = vm
-            .admit_ingress(journal, &proposal)
+            .accept_connector_output(journal, &proposal)
             .expect("the request reaches atomic admission")
         else {
             panic!("the valid request must be accepted")
@@ -2157,7 +2157,7 @@ graph api : App {
         let mut server = HttpServer::try_bind(&plan, &[node], HttpServerConfig::default())
             .expect("the hosted server binds before execution");
         let address = server.local_addresses()[0];
-        let mut vm = Vm::boot(&plan, GraphVersion(1));
+        let mut vm = Execution::boot(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
 
         let http1 = spawn_http1(address, "one");
@@ -2189,10 +2189,10 @@ graph api : App {
             .expect("the respond server binds before execution");
         let response = spawn_http1_with_body(server.local_addresses()[0], "request");
         let proposal = wait_for_proposal(&mut server);
-        let mut vm = Vm::boot(&plan, GraphVersion(1));
+        let mut vm = Execution::boot(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
         let IngressAdmission::Accepted(accepted) = vm
-            .admit_ingress(&mut journal, &proposal)
+            .accept_connector_output(&mut journal, &proposal)
             .expect("the request reaches causal admission")
         else {
             panic!("the request must be admitted")
@@ -2245,10 +2245,10 @@ graph api : App {
         .expect("the respond server binds before execution");
         let response = spawn_http1_with_body(server.local_addresses()[0], "request");
         let proposal = wait_for_proposal(&mut server);
-        let mut vm = Vm::boot(&plan, GraphVersion(1));
+        let mut vm = Execution::boot(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
         let IngressAdmission::Accepted(accepted) = vm
-            .admit_ingress(&mut journal, &proposal)
+            .accept_connector_output(&mut journal, &proposal)
             .expect("the request reaches causal admission")
         else {
             panic!("the request must be admitted")
@@ -2324,10 +2324,10 @@ graph api : App {
             let _ = sent.send(result);
         });
         let proposal = wait_for_proposal(&mut server);
-        let mut vm = Vm::boot(&plan, GraphVersion(1));
+        let mut vm = Execution::boot(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
         let IngressAdmission::Accepted(accepted) = vm
-            .admit_ingress(&mut journal, &proposal)
+            .accept_connector_output(&mut journal, &proposal)
             .expect("the HTTP/3 request reaches causal admission")
         else {
             panic!("the HTTP/3 request must be admitted")
@@ -2407,7 +2407,7 @@ graph api : App {
         let mut server =
             HttpServer::try_bind(&plan, &[node], config).expect("the bounded server binds");
         let address = server.local_addresses()[0];
-        let mut vm = Vm::boot(&plan, GraphVersion(1));
+        let mut vm = Execution::boot(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
 
         let first = spawn_http1(address, "one");
@@ -2417,7 +2417,7 @@ graph api : App {
         assert_eq!(second.try_recv(), Err(TryRecvError::Empty));
 
         let IngressAdmission::Accepted(accepted) = vm
-            .admit_ingress(&mut journal, &first_proposal)
+            .accept_connector_output(&mut journal, &first_proposal)
             .expect("the first request reaches admission")
         else {
             panic!("the first request must be admitted")
@@ -2483,10 +2483,10 @@ graph api : App {
         } else {
             (&second, &first)
         };
-        let mut vm = Vm::boot(&plan, GraphVersion(1));
+        let mut vm = Execution::boot(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
         let IngressAdmission::Accepted(accepted) = vm
-            .admit_ingress(&mut journal, &proposal)
+            .accept_connector_output(&mut journal, &proposal)
             .expect("the first retained request reaches admission")
         else {
             panic!("the first retained request must be accepted")

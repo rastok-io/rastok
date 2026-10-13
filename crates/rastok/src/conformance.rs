@@ -34,7 +34,7 @@ use crate::journal::{
 };
 use crate::node;
 use crate::plan::{GraphVersion, ValidatedExecutionPlan};
-use crate::runtime::vm::Vm;
+use crate::runtime::execution::Execution;
 use std::collections::BTreeSet;
 
 /// Graph source and input chosen to produce one declared Driver exit case.
@@ -212,7 +212,7 @@ pub fn verify(
     // reference can settle.
     {
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+        let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
         let mut bindings = match bind(&compilation.plan, drivers) {
             Ok(bindings) => bindings,
             Err(violation) => {
@@ -323,7 +323,7 @@ pub fn verify_event(profile: &EventTestFixture<'_>, drivers: &DriverRegistry) ->
         }
     };
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Vm::boot(profile.plan, GraphVersion(1));
+    let mut vm = Execution::boot(profile.plan, GraphVersion(1));
     let admission = match bindings.poll_inbound(&mut vm, &mut journal) {
         Ok(Some(admission)) => admission,
         Ok(None) => {
@@ -428,7 +428,7 @@ pub fn verify_session(profile: &SessionTestFixture<'_>, drivers: &DriverRegistry
         return report;
     }
     let slot = match u32::try_from(slot) {
-        Ok(slot) => crate::plan::Slot::new(slot),
+        Ok(slot) => crate::plan::NodeIndex::new(slot),
         Err(_) => {
             report
                 .violations
@@ -872,7 +872,7 @@ fn resolved_exit_cases(
         })
         .ok_or_else(|| format!("the probe instantiates no `{}` connector", contract.name))?;
     let slot = u32::try_from(index)
-        .map(crate::plan::Slot::new)
+        .map(crate::plan::NodeIndex::new)
         .map_err(|_| String::from("the probe has more nodes than the plan slot domain"))?;
     let exit = plan
         .resolved_ports()
@@ -923,12 +923,12 @@ fn submission(text: &str) -> IngressProposal {
 /// real. Any gate rejection is a violation: the Driver answered outside its
 /// resolved completion contract.
 fn drive(
-    vm: &mut Vm<'_>,
+    vm: &mut Execution<'_>,
     journal: &mut MemJournal,
     driver: &mut dyn OutboundConnectorBindings,
     input: &str,
 ) -> Result<(), String> {
-    vm.inject(journal, submission(input))
+    vm.accept_input(journal, submission(input))
         .map_err(|error| format!("the submission was refused: {error}"))?;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     loop {
@@ -1015,7 +1015,7 @@ fn run_provocation(
         )
     })?;
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
     let mut bindings = bind(&compilation.plan, drivers)?;
     drive(&mut vm, &mut journal, &mut bindings, provocation.input)
         .map_err(|violation| format!("the `{}` provocation: {violation}", provocation.exit_case))?;
@@ -1032,7 +1032,7 @@ fn run_provocation(
     }
 }
 
-fn source_exit_case(vm: &Vm<'_>) -> Option<String> {
+fn source_exit_case(vm: &Execution<'_>) -> Option<String> {
     let mut cases = vm.envelope_views().iter().filter_map(|observed| {
         if observed.node.is_none() || observed.port.name() != "exit" {
             return None;
@@ -1061,7 +1061,7 @@ fn mute_battery(
     let compilation = compile(&[source], registry)
         .map_err(|bag| format!("the mute probe does not compile: {:?}", bag.diagnostics()))?;
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
     let mut bindings = bind(&compilation.plan, drivers)?;
     drive(&mut vm, &mut journal, &mut bindings, "conformance")
         .map_err(|violation| format!("the mute battery: {violation}"))?;
@@ -1116,7 +1116,7 @@ fn interleave_battery(
         )
     })?;
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
     let mut bindings = bind(&compilation.plan, drivers)?;
     if probe.a == probe.b {
         return Err("the interleave payloads must differ, or a swap is invisible".into());
@@ -1166,7 +1166,7 @@ fn interleave_battery(
         sequence: IngressSequence::Next,
         session: None,
     };
-    vm.inject(&mut journal, paired)
+    vm.accept_input(&mut journal, paired)
         .map_err(|error| format!("the interleave submission was refused: {error}"))?;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     loop {

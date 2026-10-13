@@ -28,8 +28,8 @@ use crate::node;
 use crate::plan::{
     AttrSetting, ConnectorSpec, DelayPolicy, DispatchStep, Edge, EdgeEnd, EvaluationSite,
     ExecutionPlan, ExtensionSpec, FieldWrite, Handler, LoopSpec as PlanLoopSpec, Node,
-    NodeExecution, Owner, OwnerKind, OwnerValue, PlanConstant, SemanticHash, Slot, SymbolTable,
-    VarCell,
+    NodeExecution, NodeIndex, Owner, OwnerKind, OwnerValue, PlanConstant, SemanticHash,
+    SymbolTable, VarCell,
 };
 use crate::schema_annotation::{
     AnnotationTable, DataAnnotation, SchemaPathSegment, SensitivityLevel,
@@ -437,7 +437,7 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
         }
     }
     let slot_of = |path: &node::Path| {
-        Slot::new(
+        NodeIndex::new(
             u32::try_from(
                 nodes
                     .iter()
@@ -2305,7 +2305,7 @@ graph m0_probe : App {
         assert_eq!(boundary_in.origin(), crate::plan::TypeOrigin::Inferred);
         assert_eq!(
             resolved
-                .node(crate::plan::Slot::new(0))
+                .node(crate::plan::NodeIndex::new(0))
                 .expect("the operator row")
                 .iter()
                 .find(|port| port.port().name() == "out")
@@ -2345,7 +2345,7 @@ graph m0_probe : App {
             "the raw and independently derived resolved schemas agree"
         );
 
-        let mut vm = crate::runtime::vm::Vm::boot(&decoded, GraphVersion(1));
+        let mut vm = crate::runtime::execution::Execution::boot(&decoded, GraphVersion(1));
         let mut journal = crate::journal::MemJournal::new(GraphVersion(1));
         assert_eq!(vm.step(&mut journal), Ok(false));
         assert!(journal.records().is_empty());
@@ -2375,11 +2375,11 @@ graph m0_probe : App {
             .expect("categorical validation retains the defensive secret policy");
         let bytes = crate::plan::encode(&plan, &hash);
         let (decoded, _) = crate::plan::decode(&bytes).expect("the forged package decodes");
-        let mut vm = crate::runtime::vm::Vm::boot(&decoded, GraphVersion(1));
+        let mut vm = crate::runtime::execution::Execution::boot(&decoded, GraphVersion(1));
         let mut journal = crate::journal::MemJournal::new(GraphVersion(1));
         assert!(matches!(
             vm.step(&mut journal),
-            Err(crate::runtime::vm::VmFault::UnsupportedDataPolicy { .. })
+            Err(crate::runtime::execution::ExecutionFault::UnsupportedDataPolicy { .. })
         ));
         assert!(journal.records().is_empty());
     }
@@ -2496,7 +2496,7 @@ graph app : App {
             .nodes
             .iter()
             .position(|node| node.path.to_string() == "relay")
-            .map(|index| crate::plan::Slot::new(u32::try_from(index).expect("small plan")))
+            .map(|index| crate::plan::NodeIndex::new(u32::try_from(index).expect("small plan")))
             .expect("relay node");
         let relay_output = compilation
             .plan
@@ -2751,7 +2751,7 @@ graph app : App {
             &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect("sensitive policy is executable after A3");
-        let mut vm = crate::runtime::vm::Vm::boot(&compilation.plan, GraphVersion(1));
+        let mut vm = crate::runtime::execution::Execution::boot(&compilation.plan, GraphVersion(1));
         let mut journal = crate::journal::MemJournal::new(GraphVersion(1));
         let submission = crate::boundary::IngressProposal {
             provenance: crate::boundary::IngressProvenance::single(
@@ -2767,7 +2767,7 @@ graph app : App {
             sequence: crate::boundary::IngressSequence::Next,
             session: None,
         };
-        vm.inject(&mut journal, submission)
+        vm.accept_input(&mut journal, submission)
             .expect("the classified envelope is admitted");
         vm.run_ready(&mut journal)
             .expect("A3 executes a proved sensitive flow");
@@ -2795,14 +2795,14 @@ graph app : App {
             &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect("personal-data policy crosses source and categorical validation");
-        let mut vm = crate::runtime::vm::Vm::boot(&compilation.plan, GraphVersion(1));
+        let mut vm = crate::runtime::execution::Execution::boot(&compilation.plan, GraphVersion(1));
         let mut journal = crate::journal::MemJournal::new(GraphVersion(1));
         let error = vm
             .step(&mut journal)
             .expect_err("personal data requires an A4 privacy attestation");
         assert!(matches!(
             error,
-            crate::runtime::vm::VmFault::UnsupportedDataPolicy { .. }
+            crate::runtime::execution::ExecutionFault::UnsupportedDataPolicy { .. }
         ));
         assert!(
             error
@@ -2852,8 +2852,11 @@ graph app : App {
         let boot = crate::deployment::BootBindings::resolve(profile, &NoSecrets)
             .expect("a profile without secrets resolves");
 
-        let mut attested =
-            crate::runtime::vm::Vm::boot_with_deployment(&compilation.plan, GraphVersion(1), &boot);
+        let mut attested = crate::runtime::execution::Execution::boot_with_deployment(
+            &compilation.plan,
+            GraphVersion(1),
+            &boot,
+        );
         let mut attested_journal = crate::journal::MemJournal::new_with_deployment(
             GraphVersion(1),
             boot.attestation().clone(),
@@ -2877,19 +2880,22 @@ graph app : App {
             session: None,
         };
         attested
-            .inject(&mut attested_journal, submission)
+            .accept_input(&mut attested_journal, submission)
             .expect("the attested run-scoped journal admits personal data");
         assert_eq!(attested_journal.records().len(), 1);
 
-        let mut mismatched =
-            crate::runtime::vm::Vm::boot_with_deployment(&compilation.plan, GraphVersion(1), &boot);
+        let mut mismatched = crate::runtime::execution::Execution::boot_with_deployment(
+            &compilation.plan,
+            GraphVersion(1),
+            &boot,
+        );
         let mut unattested_journal = crate::journal::MemJournal::new(GraphVersion(1));
         let error = mismatched
             .step(&mut unattested_journal)
             .expect_err("the run header is an execution precondition");
         assert_eq!(
             error,
-            crate::runtime::vm::VmFault::DeploymentAttestationMismatch
+            crate::runtime::execution::ExecutionFault::DeploymentAttestationMismatch
         );
         assert!(unattested_journal.records().is_empty());
 
@@ -2898,15 +2904,18 @@ graph app : App {
             &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect("Article 9 and 10 flags compile together");
-        let mut missing_conditions =
-            crate::runtime::vm::Vm::boot_with_deployment(&regulated.plan, GraphVersion(1), &boot);
+        let mut missing_conditions = crate::runtime::execution::Execution::boot_with_deployment(
+            &regulated.plan,
+            GraphVersion(1),
+            &boot,
+        );
         let mut missing_conditions_journal = crate::journal::MemJournal::new_with_deployment(
             GraphVersion(1),
             boot.attestation().clone(),
         );
         assert!(matches!(
             missing_conditions.step(&mut missing_conditions_journal),
-            Err(crate::runtime::vm::VmFault::UnsupportedDataPolicy { .. })
+            Err(crate::runtime::execution::ExecutionFault::UnsupportedDataPolicy { .. })
         ));
         assert!(missing_conditions_journal.records().is_empty());
 
@@ -2932,7 +2941,7 @@ graph app : App {
         let regulated_boot =
             crate::deployment::BootBindings::resolve(regulated_profile, &NoSecrets)
                 .expect("a profile without secrets resolves");
-        let mut admitted = crate::runtime::vm::Vm::boot_with_deployment(
+        let mut admitted = crate::runtime::execution::Execution::boot_with_deployment(
             &regulated.plan,
             GraphVersion(1),
             &regulated_boot,
@@ -2963,15 +2972,18 @@ graph app : App {
             &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect("a personal-data disclosure compiles into policy");
-        let mut undeclared_recipient =
-            crate::runtime::vm::Vm::boot_with_deployment(&disclosed.plan, GraphVersion(1), &boot);
+        let mut undeclared_recipient = crate::runtime::execution::Execution::boot_with_deployment(
+            &disclosed.plan,
+            GraphVersion(1),
+            &boot,
+        );
         let mut undeclared_recipient_journal = crate::journal::MemJournal::new_with_deployment(
             GraphVersion(1),
             boot.attestation().clone(),
         );
         assert!(matches!(
             undeclared_recipient.step(&mut undeclared_recipient_journal),
-            Err(crate::runtime::vm::VmFault::UnsupportedDataPolicy { .. })
+            Err(crate::runtime::execution::ExecutionFault::UnsupportedDataPolicy { .. })
         ));
 
         let recipient_privacy = crate::deployment::PrivacyDeclaration::new(
@@ -2997,7 +3009,7 @@ graph app : App {
             &NoSecrets,
         )
         .expect("a profile without secrets resolves");
-        let mut disclosed_vm = crate::runtime::vm::Vm::boot_with_deployment(
+        let mut disclosed_vm = crate::runtime::execution::Execution::boot_with_deployment(
             &disclosed.plan,
             GraphVersion(1),
             &recipient_boot,
@@ -3053,11 +3065,11 @@ graph app : App {
         assert!(rendered.contains("providers/openai/token"));
         assert!(!rendered.contains("physical-secret"));
 
-        let mut unbound = crate::runtime::vm::Vm::boot(&decoded, GraphVersion(1));
+        let mut unbound = crate::runtime::execution::Execution::boot(&decoded, GraphVersion(1));
         let mut journal = crate::journal::MemJournal::new(GraphVersion(1));
         assert!(matches!(
             unbound.step(&mut journal),
-            Err(crate::runtime::vm::VmFault::MissingDeploymentBinding { .. })
+            Err(crate::runtime::execution::ExecutionFault::MissingDeploymentBinding { .. })
         ));
         assert!(journal.records().is_empty());
     }

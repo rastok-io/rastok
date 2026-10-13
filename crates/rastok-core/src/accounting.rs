@@ -16,7 +16,7 @@ use crate::envelope::{Id, Value};
 use crate::journal::{Record, observations_for_records_from, recorded_envelope};
 use crate::node;
 use crate::observation::{ExchangeCorrelation, RecordCorrelation, RecordObservation};
-use crate::plan::{OwnerKind, Slot, ValidatedExecutionPlan};
+use crate::plan::{NodeIndex, OwnerKind, ValidatedExecutionPlan};
 use crate::schema_annotation::{
     AnnotationTable, CurrencyCode, DataAnnotation, MeasureId, SchemaPath, SchemaPathSegment,
     is_iso_4217_currency,
@@ -566,7 +566,8 @@ fn inbound_schema<'a>(
             .enumerate()
             .find(|(_, candidate)| &candidate.path == connector)
             .ok_or(AccountingError::UnknownFlowSchema)?;
-        let slot = Slot::new(u32::try_from(index).map_err(|_| AccountingError::UnknownFlowSchema)?);
+        let slot =
+            NodeIndex::new(u32::try_from(index).map_err(|_| AccountingError::UnknownFlowSchema)?);
         let annotations = plan
             .resolved_ports()
             .node(slot)

@@ -5,15 +5,15 @@ use super::*;
 use crate::instance;
 use protocol::{Fact, OpeningAdmissionId, Phase};
 
-impl Vm<'_> {
+impl Execution<'_> {
     pub(super) fn check_node_manager(
         &mut self,
         journal: &dyn Journal,
         index: usize,
-        slot: Slot,
+        slot: NodeIndex,
         record: &TransactionRecord,
         resume_at: i64,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         let packet = record
             .loop_protocol()
             .ok_or_else(|| invalid(index, "a manager transition has no protocol"))?;

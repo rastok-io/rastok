@@ -9,7 +9,7 @@ use rastok_core::{
     journal::MemJournal,
     node::{Path, Port},
     plan::{GraphVersion, SemanticHash, ValidatedExecutionPlan},
-    runtime::vm::Vm,
+    runtime::execution::Execution,
 };
 
 struct World {
@@ -69,10 +69,10 @@ pub(super) fn run(plan: &ValidatedExecutionPlan, hash: SemanticHash) -> usize {
         frames,
         bytes,
     };
-    let mut vm = Vm::boot_program(plan, hash, GraphVersion(1), 0, None);
+    let mut vm = Execution::boot_program(plan, hash, GraphVersion(1), 0, None);
     let mut journal = MemJournal::new(GraphVersion(1));
     for _ in 0..operations {
-        vm.inject(
+        vm.accept_input(
             &mut journal,
             IngressProposal {
                 provenance: IngressProvenance::single(Path::new(["spike"]).unwrap()),
@@ -118,7 +118,7 @@ pub(super) fn run(plan: &ValidatedExecutionPlan, hash: SemanticHash) -> usize {
     );
     let records = journal.records().len();
     drop(vm);
-    let mut restored = Vm::boot_program(plan, hash, GraphVersion(1), now, None);
+    let mut restored = Execution::boot_program(plan, hash, GraphVersion(1), now, None);
     let starts = world.starts;
     restored
         .recover_with_bindings(&journal, &mut world)

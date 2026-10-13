@@ -289,19 +289,25 @@ named gates; the evaluator never reads the environment.
 One vocabulary note: the whitepaper's "the Rastok runtime" names the
 *whole* executing system — VM, boundary, connectors, journal; this
 module is that system's deterministic machinery, centered on
-`runtime::Vm`.
+`runtime::execution::Execution`.
 
-Deterministic by construction: no I/O, no clock reads, no randomness.
-Everything nondeterministic enters through the `boundary` traits (§3.5).
-The same engine runs `rastok run` and `rastok simulate`, through a
-debugger-shaped surface: `Vm::boot(&validated_plan, graph_version)`
-constructs the machine; `inject`, `step`, `drain`, `pump`, and `advance`
-receive the journal explicitly at each causal operation. Recovery is
-explicit: `Vm::recover_from_journal` and `recover_with_bindings` rebuild a
-candidate VM from retained records before replacing live state. They do not
+The host supplies logical time and external observations through the
+`boundary` interfaces (§3.5); the semantic core reads no ambient clock or
+random source. `Execution::boot(&validated_plan, graph_version)` creates
+live state for a validated plan. `accept_input` accepts an App input;
+`accept_connector_output` accepts a world-originated source-Connector
+proposal. These are alternative entry points, not successive phases.
+`step`, `run_ready`, `poll_drivers` and `advance` receive the journal
+explicitly. `poll_drivers` delegates physical I/O to the supplied Drivers.
+
+Admission follows **prepare → commit → apply**: check the proposal, commit
+the record and routes to the journal, then update instances, exchanges and
+mailboxes. Applying the decision is not a second transaction. Recovery is
+explicit: `Execution::recover_from_journal` and `recover_with_bindings` rebuild
+candidate state from recorded facts before replacing live state. They do not
 re-execute producers or perform physical I/O. “RecoveryFold” names the design
 responsibility, not a public Rust type. The Lab runner and visual debugger use
-the same VM surface; authored Lab crash/restart actions remain deferred.
+the same execution interface; authored Lab crash/restart actions remain deferred.
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
@@ -322,17 +328,17 @@ boundaries, and what crosses into causality is recorded — the journal's
 Drivers, the exchange conformance suite supplies Event/Session Drivers, and
 H5 supplies the generic inbound Call fold, H5.1 a live bounded H1/H2 ack
 Driver and H5.2 the generic graph-response handoff; direct
-scenarios may still inject drafts through `Vm::inject`, and virtual time
-advances through `Vm::advance`. Hosted code maps one civil origin plus a
+scenarios may still inject drafts through `Execution::accept_input`, and virtual time
+advances through `Execution::advance`. Hosted code maps one civil origin plus a
 monotonic timer to that explicit input; Lab and bare-metal callers may provide
 their own origin. The evaluator never reads either clock. `Supervisor` remains
 a declared host seam rather than an object the M1 VM consumes directly.
 
 | Interface | Owns | Real side | Lab side | Spec | Status |
 |---|---|---|---|---|---|
-| **`InboundConnectorDriver`** | a `RetainedProposal`: a Driver-local handle and an `IngressProposal` containing provenance, an `EnvelopeDraft` (port, data, external metadata), sequence selection and optional Session framing. The Driver keeps it until the runtime returns `Result<AdmittedIngress, IngressRejection>`; pending admission makes no callback and therefore applies bounded backpressure. Only the journal assigns root/exchange identities. Call bindings expose recorded acknowledgement/response; Session bindings correlate each admitted message to the committed logical `SessionId`. | live HttpServer and WebSocketServer over H1/H2/H3 | Contract-owned fake Drivers; direct scenario injection remains available through `Vm::inject` | [envelope.md §1.1, §2](../spec/envelope.md); [delivery-semantics.md §3, §4.4.1, §4.5, §6](../spec/delivery-semantics.md); [simulation-semantics.md](../spec/simulation-semantics.md) | M1.6 H1 generic protocol; H5 Calls; H6 Sessions |
+| **`InboundConnectorDriver`** | a `RetainedProposal`: a Driver-local handle and an `IngressProposal` containing provenance, an `EnvelopeDraft` (port, data, external metadata), sequence selection and optional Session framing. The Driver keeps it until the runtime returns `Result<AdmittedIngress, IngressRejection>`; pending admission makes no callback and therefore applies bounded backpressure. Only the journal assigns root/exchange identities. Call bindings expose recorded acknowledgement/response; Session bindings correlate each admitted message to the committed logical `SessionId`. | live HttpServer and WebSocketServer over H1/H2/H3 | Contract-owned fake Drivers; direct scenario injection remains available through `Execution::accept_input` | [envelope.md §1.1, §2](../spec/envelope.md); [delivery-semantics.md §3, §4.4.1, §4.5, §6](../spec/delivery-semantics.md); [simulation-semantics.md](../spec/simulation-semantics.md) | M1.6 H1 generic protocol; H5 Calls; H6 Sessions |
 | **`OutboundConnectorDriver`** | categorical exchange view: `CallConnectorDriver` launches journaled `CallOpen`s and answers by `CallId`; `SessionConnectorDriver` launches journaled open/write intents and reports by `SessionId`/`SessionWriteId`. Cancellation/timeout remain runtime policy and no Driver writes causal records. | Process/File/HttpClient Calls; WebSocketClient/Server Sessions | Contract-specific Call and Session mocks plus generic conformance batteries | [delivery-semantics.md §4](../spec/delivery-semantics.md); [execution-model.md §6.1, §6.6](../spec/execution-model.md); [M1.6 backlog](m1.6-http-websocket-backlog.md) | Call semantics M1.3 B7; role name M1.5 C0; live Sessions M1.6 H6 |
-| **Logical-time input** | `Vm::boot_at` fixes an origin and `Vm::advance(journal, driver, target)` advances one deterministic timeline. A hosted runner uses one wall-clock sample plus monotonic elapsed time; a microcontroller with no RTC may use zero or a supplied origin. `now()` observes the firing's fixed instant and seals it only when used. | hosted time source | scenario origin + `advance` | [execution-model.md §5, §8](../spec/execution-model.md); D-2026-08-28-5 | target-driven VM; handler observation current |
+| **Logical-time input** | `Execution::boot_at` fixes an origin and `Execution::advance(journal, driver, target)` advances one deterministic timeline. A hosted runner uses one wall-clock sample plus monotonic elapsed time; a microcontroller with no RTC may use zero or a supplied origin. `now()` observes the firing's fixed instant and seals it only when used. | hosted time source | scenario origin + `advance` | [execution-model.md §5, §8](../spec/execution-model.md); D-2026-08-28-5 | target-driven VM; handler observation current |
 | **`Supervisor`** | process lifecycle: boot, crash, restart; recovery must never require a clean shutdown | host lifecycle | not built; fault steps remain guarded | [delivery-semantics.md §4.4](../spec/delivery-semantics.md); [simulation-semantics.md §5.4](../spec/simulation-semantics.md) | declared seam; current wiring boots only |
 
 The **`DriverPoller`** (owned here) is the loop between the journal and
@@ -376,7 +382,7 @@ Ownership rules that the types must make unrepresentable:
 |---|---|---|---|---|
 | **`Journal`** | the typed logical records and their order plus retained typed `RecordObservation` correlation outside the causal seal; `MemJournal` in-memory first | **semantic operations**, not bare appends: `prepare_ingress` assigns the final root envelope identity without consuming its sequence; `commit_ingress` atomically advances that sequence with producer-sealed routes; `instance_generation_for_admission` folds lifecycle history; `commit(Transaction)` verifies firing/parent/route/closing generations; `open_egress` is journal-before-effect; `close_egress` and `abandon_egress` return `Won \| AlreadyClosed`; `retained_observations` feeds reports/export without exposing physical layout; individual annotated values are read without aggregation or a second ledger | [delivery-semantics.md §1, §4, §6](../spec/delivery-semantics.md); [observability.md §6–7](../spec/observability.md); [envelope.md §2, §5](../spec/envelope.md); [instances.md](../spec/instances.md) | M0 base; M1.4 R5 closing; M1.8 observation and accounting planes |
 | **Id derivation** | derived envelope and record ids — zero per-envelope randomness | recipe inputs → `envelope::Id` | [envelope.md §2–3](../spec/envelope.md) | M0 |
-| **Spatial/Loop recovery** | `runtime/vm/recovery` reconstructs generations, deltas, pending deliveries/cursors, Calls/Sessions, retained original deadlines and r2 runs/commands; physical effects are never replayed by reconstruction | journal prefix + optional pure Contract projections → recovered VM, or unchanged original VM on refusal | [delivery-semantics.md](../spec/delivery-semantics.md); [loop.md](../spec/loop.md) | R7–R9 executable; no disk backend |
+| **Spatial/Loop recovery** | `runtime/execution/recovery` reconstructs generations, deltas, pending deliveries/cursors, Calls/Sessions, retained original deadlines and r2 runs/commands; physical effects are never replayed by reconstruction | journal prefix + optional pure Contract projections → recovered VM, or unchanged original VM on refusal | [delivery-semantics.md](../spec/delivery-semantics.md); [loop.md](../spec/loop.md) | R7–R9 executable; no disk backend |
 | *(golden projection)* | moved to its own `golden` module as built — see §3.6b | | | |
 
 ### 3.6b The golden evidence (`golden`)
@@ -447,8 +453,8 @@ A Driver set plus the production machine — never a second engine.
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **`lab::run`** | driving the production `Vm` through each checked scenario: inject, advance, settle, expectation windows over the machine's observation log, the three quantifiers; every uncovered call, faulting predicate or guard, and unsettled machine is a named failure | `hir::Lab` + plan → `Vec<ScenarioRun { report, records }>` — the records feed the golden workflow | [simulation-semantics.md §2, §5–6](../spec/simulation-semantics.md) | M0 |
-| **The scripted world** | as built, leaner than sketched: the *fixture* IS the scenario's steps (injections through `Vm::inject` — no `Fixture` type); the *virtual timeline* IS `Vm::advance` (no separate time-source type); explicit mock factories bind by the same exact Contract id/roles and reuse each Contract's pure request protocol — replies only, the VM still writes every EGRESS; the fault injector stays `next` | the scripted external world | [simulation-semantics.md §2, §5](../spec/simulation-semantics.md) | M0; multi-Contract registry parity M1.5 C5 |
+| **`lab::run`** | driving the production `Execution` through each checked scenario: inject, advance, settle, expectation windows over the machine's observation log, the three quantifiers; every uncovered call, faulting predicate or guard, and unsettled machine is a named failure | `hir::Lab` + plan → `Vec<ScenarioRun { report, records }>` — the records feed the golden workflow | [simulation-semantics.md §2, §5–6](../spec/simulation-semantics.md) | M0 |
+| **The scripted world** | as built, leaner than sketched: the *fixture* IS the scenario's steps (injections through `Execution::accept_input` — no `Fixture` type); the *virtual timeline* IS `Execution::advance` (no separate time-source type); explicit mock factories bind by the same exact Contract id/roles and reuse each Contract's pure request protocol — replies only, the VM still writes every EGRESS; the fault injector stays `next` | the scripted external world | [simulation-semantics.md §2, §5](../spec/simulation-semantics.md) | M0; multi-Contract registry parity M1.5 C5 |
 | **Coverage** | the statically enumerable failure-space checklist | plan + scenarios → coverage report | [simulation-semantics.md §7](../spec/simulation-semantics.md) | later |
 | **Unsupported surfaces** | `integration`, `theorem`, `experiment`: parse, then refuse explicitly | reachable syntax → `unsupported` diagnostic | [simulation-semantics.md §10–11](../spec/simulation-semantics.md) | guarded |
 
@@ -611,9 +617,9 @@ The R3–R9 rework and v17 amendment add the current load-bearing components:
 
 - `plan::{Dispatch,RouteRule}` and independent scope/type/composition validators;
 - `runtime::TransactionPreparer` with one selected Dispatch leaf and ordered multi-emission;
-- `journal::loop_protocol` plus `runtime/vm/loop_manager`: distinct command
+- `journal::loop_protocol` plus `runtime/execution/loop_manager`: distinct command
   production/consumption, exact admission identity, quiescence, fuel and delay;
-- `runtime/vm/recovery`: spatial/exchange/deadline/Loop/Retry reconstruction from a prefix;
+- `runtime/execution/recovery`: spatial/exchange/deadline/Loop/Retry reconstruction from a prefix;
 - `LoopSpec::expired`: a resolved existing terminal and extended type, never a
   contributed port or a VM comparison of the spelling `err`;
 - hosted `ui`: recorded simulation transitions, source/decision/causal

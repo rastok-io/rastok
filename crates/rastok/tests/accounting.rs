@@ -16,7 +16,7 @@ use rastok::envelope::{Data, Namespace, Value};
 use rastok::journal::MemJournal;
 use rastok::node;
 use rastok::plan::GraphVersion;
-use rastok::runtime::vm::Vm;
+use rastok::runtime::execution::Execution;
 use rastok::schema_annotation::{CurrencyCode, MeasureId};
 
 struct NoSecrets;
@@ -55,8 +55,8 @@ graph accounting_probe : App {
     )
     .expect("the annotated probe compiles");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
-    vm.inject(
+    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+    vm.accept_input(
         &mut journal,
         IngressProposal {
             provenance: IngressProvenance::single(
@@ -210,9 +210,9 @@ graph priced_call : App {
     .expect("the secret-free deployment resolves");
     let version = GraphVersion(1);
     let mut journal = MemJournal::new_with_deployment(version, boot.attestation().clone());
-    let mut vm = Vm::boot_with_deployment(&compilation.plan, version, &boot);
+    let mut vm = Execution::boot_with_deployment(&compilation.plan, version, &boot);
     let mut world = rastok::connectors::Process::try_new(&compilation.plan).expect("Process binds");
-    vm.inject(
+    vm.accept_input(
         &mut journal,
         IngressProposal {
             provenance: IngressProvenance::single(

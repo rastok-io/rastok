@@ -9,7 +9,7 @@ use crate::journal::loop_protocol::{
 };
 use crate::node;
 
-impl Vm<'_> {
+impl Execution<'_> {
     /// A delayed run still owns its future command slot. Count retained runs
     /// plus opening deliveries not yet folded into Open; neither an empty
     /// host mailbox nor scheduling a delayed command releases that capacity.
@@ -52,7 +52,7 @@ impl Vm<'_> {
         &self,
         instance: &instance::Generation,
         record: &mut crate::journal::TransactionRecord,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         let Some(fold) = self.loop_manager.as_deref() else {
             return Ok(());
         };
@@ -77,9 +77,14 @@ impl Vm<'_> {
         Ok(())
     }
 
-    pub(super) fn refresh_loop_manager(&mut self, journal: &dyn Journal) -> Result<(), VmFault> {
+    pub(super) fn refresh_loop_manager(
+        &mut self,
+        journal: &dyn Journal,
+    ) -> Result<(), ExecutionFault> {
         if self.has_loops {
-            self.loop_manager = Some(Box::new(journal.loop_protocol().map_err(VmFault::Journal)?));
+            self.loop_manager = Some(Box::new(
+                journal.loop_protocol().map_err(ExecutionFault::Journal)?,
+            ));
         }
         Ok(())
     }
@@ -127,10 +132,10 @@ impl Vm<'_> {
     pub(super) fn open_loop_application(
         &mut self,
         journal: &mut dyn Journal,
-        slot: Slot,
+        slot: NodeIndex,
         instance: &instance::Generation,
         delivery: &envelope::Delivery,
-    ) -> Result<bool, VmFault> {
+    ) -> Result<bool, ExecutionFault> {
         let owner = &self.plan.owners[self.plan.nodes[slot.index()].owner.index()];
         let Some(spec) = owner.loop_spec() else {
             return Ok(false);
@@ -188,7 +193,7 @@ impl Vm<'_> {
                 ..LoopRecord::default()
             },
         );
-        journal.commit(record).map_err(VmFault::Journal)?;
+        journal.commit(record).map_err(ExecutionFault::Journal)?;
         self.refresh_loop_manager(journal)?;
         Ok(true)
     }
@@ -200,11 +205,11 @@ impl Vm<'_> {
     pub(super) fn admit_expiring_call_loop(
         &mut self,
         journal: &mut dyn Journal,
-        slot: Slot,
+        slot: NodeIndex,
         instance: &instance::Generation,
         edge: &str,
         envelope: Id,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         if !self.has_loops
             || self.plan.owners[self.plan.nodes[slot.index()].owner.index()]
                 .loop_spec()
@@ -241,16 +246,16 @@ impl Vm<'_> {
                 ..LoopRecord::default()
             },
         );
-        journal.commit(record).map_err(VmFault::Journal)?;
+        journal.commit(record).map_err(ExecutionFault::Journal)?;
         self.refresh_loop_manager(journal)?;
         Ok(())
     }
 
     pub(super) fn prepare_operator_loop_verdict(
         &self,
-        slot: Slot,
+        slot: NodeIndex,
         record: &mut crate::journal::TransactionRecord,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         let Some(packet) = record.loop_record.as_deref_mut() else {
             return Ok(());
         };
@@ -328,11 +333,11 @@ impl Vm<'_> {
 
     pub(super) fn prepare_call_completion(
         &self,
-        slot: Slot,
+        slot: NodeIndex,
         instance: &instance::Generation,
         delivery: &envelope::Delivery,
         record: &mut crate::journal::TransactionRecord,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         let terminal = self.validate_call_completion(slot, record)?;
         let Some((run, application)) = self.loop_application(instance, delivery) else {
             return Ok(());
@@ -353,7 +358,7 @@ impl Vm<'_> {
         let node = &self.plan.nodes[slot.index()];
         let terminal = terminal
             .ok_or_else(|| loop_error(instance, "the Call Loop lost its Contract profile"))?;
-        let violation = |reason| VmFault::ContractViolation {
+        let violation = |reason| ExecutionFault::ContractViolation {
             node: node.path.clone(),
             reason,
         };
@@ -384,7 +389,7 @@ impl Vm<'_> {
                         // Only a case decision demands DATA. An unconditional
                         // command carries the opaque envelope or its cause.
                         let value = crate::runtime::data_value(emission.envelope.data())
-                            .map_err(VmFault::Fault)?;
+                            .map_err(ExecutionFault::Fault)?;
                         rule.selection.selected(&value).ok_or_else(|| {
                             violation("a Call output has no selected route case")
                         })?
@@ -432,7 +437,7 @@ impl Vm<'_> {
         &mut self,
         journal: &mut dyn Journal,
         dated_admission: Option<Id>,
-    ) -> Result<bool, VmFault> {
+    ) -> Result<bool, ExecutionFault> {
         if let Some(fold) = self.loop_manager.as_deref() {
             let mut entry = None;
             for (run, state) in fold.runs() {
@@ -442,7 +447,7 @@ impl Vm<'_> {
                 }
             }
             if let Some(record) = entry {
-                journal.commit(record).map_err(VmFault::Journal)?;
+                journal.commit(record).map_err(ExecutionFault::Journal)?;
                 self.refresh_loop_manager(journal)?;
                 return Ok(true);
             }
@@ -498,7 +503,7 @@ impl Vm<'_> {
                     ..LoopRecord::default()
                 },
             );
-            journal.commit(record).map_err(VmFault::Journal)?;
+            journal.commit(record).map_err(ExecutionFault::Journal)?;
             self.refresh_loop_manager(journal)?;
             return Ok(true);
         }
@@ -568,7 +573,7 @@ impl Vm<'_> {
                     )?;
                 }
             }
-            journal.commit(record).map_err(VmFault::Journal)?;
+            journal.commit(record).map_err(ExecutionFault::Journal)?;
             if current.iteration > 0 {
                 self.scheduler
                     .mailboxes
@@ -586,7 +591,7 @@ impl Vm<'_> {
                             "a pre-reserved recurrence mailbox became full",
                         )
                     })?;
-                self.install_graph_contexts(if current.enclosing.is_empty() {
+                self.update_graph_loop_contexts(if current.enclosing.is_empty() {
                     vec![]
                 } else {
                     vec![protocol::RoutedContext {
@@ -703,7 +708,7 @@ impl Vm<'_> {
                                 String::from("last_state"),
                                 DataSlot::typed(state.data(), entry_type)
                                     .materialize()
-                                    .map_err(VmFault::Fault)?,
+                                    .map_err(ExecutionFault::Fault)?,
                             )],
                         },
                     ));
@@ -756,7 +761,9 @@ impl Vm<'_> {
                     due_at,
                 }],
             )
-            .map_err(|error| VmFault::Journal(crate::journal::Error::InvalidDeadlines(error)))?;
+            .map_err(|error| {
+                ExecutionFault::Journal(crate::journal::Error::InvalidDeadlines(error))
+            })?;
             record.deadlines = Some(Box::new(schedule));
         }
         let prepared = match slot {
@@ -766,7 +773,7 @@ impl Vm<'_> {
             None => self.prepare_graph_emissions(&&*journal, owner, &current.instance, &record)?,
         };
         self.retain_emission_routes(&mut record, &prepared)?;
-        journal.commit(record).map_err(VmFault::Journal)?;
+        journal.commit(record).map_err(ExecutionFault::Journal)?;
         match slot {
             Some(slot) => self.route_emissions(slot, &current.instance, prepared),
             None => self.route_graph_emissions(owner, &current.instance, prepared),
@@ -792,7 +799,7 @@ pub(super) fn entry_measure_budget(
     proof: &crate::loop_proof::Certificate,
     envelope: &Envelope,
     instance: &instance::Generation,
-) -> Result<u64, VmFault> {
+) -> Result<u64, ExecutionFault> {
     let invalid = || {
         loop_error(
             instance,
@@ -809,7 +816,7 @@ pub(super) fn entry_measure_budget(
         [root, ..] if root == "data" => &path[1..],
         _ => return Err(invalid()),
     };
-    let value = crate::runtime::data_value(envelope.data()).map_err(VmFault::Fault)?;
+    let value = crate::runtime::data_value(envelope.data()).map_err(ExecutionFault::Fault)?;
     let mut selected = &value;
     for field in path {
         let crate::value::Value::Struct(fields) = selected else {
@@ -835,7 +842,7 @@ pub(super) fn application_envelope(
     journal: &dyn Journal,
     graph_version: GraphVersion,
     current: &protocol::RunState,
-) -> Result<Envelope, VmFault> {
+) -> Result<Envelope, ExecutionFault> {
     let Some(cause) = current.reentry_cause else {
         return Ok(current.state.clone());
     };
@@ -857,8 +864,8 @@ pub(super) fn application_envelope(
     ))
 }
 
-fn loop_error(instance: &instance::Generation, reason: &'static str) -> VmFault {
-    VmFault::InvalidLoopDecision {
+fn loop_error(instance: &instance::Generation, reason: &'static str) -> ExecutionFault {
+    ExecutionFault::InvalidLoopDecision {
         owner: instance.address().owner().clone(),
         reason,
     }

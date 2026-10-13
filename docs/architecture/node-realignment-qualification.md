@@ -251,7 +251,7 @@ single delta replaces the two measurements. Both gates remain unchanged and
 are met. The increased Retry code use is recorded, not attributed to the
 future Node layout.
 
-## Checks executed at this checkpoint
+## Checks executed at the A-T4-4 checkpoint
 
 - `cargo fmt --all -- --check`: passed.
 - `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`:
@@ -280,3 +280,44 @@ ledgers and `decisions.md` are untouched. There is no push, tag or publication.
 routing indexes, indexed mailbox deliveries, package cutover and differential
 qualification are not delivered by this checkpoint. The experiments establish
 what to measure next; they do not substitute for those changes.
+
+## Execution interface naming checkpoint
+
+On 13 October, Yoann adds the execution-interface vocabulary to the rename
+lot. `Vm` and `runtime::vm` become `Execution` and `runtime::execution`,
+including the module files, fault and inspection types. `accept_input` and
+`accept_connector_output` are alternative admission entry points. The
+internal sequence is prepare, journal commit, then apply to live state;
+outbound Call results still settle through Driver polling. The comments
+describe these responsibilities without changing admission or recovery.
+
+The existing executable-table index is now `NodeIndex`. This is only its
+name: the owner and executor tables have not yet been merged, `OwnerSlot`
+still exists, and handlers remain in their existing table. The package
+format remains 20. There is no alias for the old public names.
+
+RustRover performed the symbol renames. Verified references missed by the
+IDE, including the spike outside the workspace, were updated separately;
+module and test files were moved to match their names. The two human-review
+registers receive only the naming addition authorized by Yoann; their
+earlier entries and `decisions.md` are unchanged.
+
+Checks after this naming addition:
+
+- Formatting, all-target/all-feature strict Clippy and workspace rustdoc:
+  passed, with no reported warning.
+- The `execution`, `contracts`, `gauge_fixture`, `jsonl_fixture`,
+  `plan_package` and `golden_trace` integration suites: **207 passed,
+  0 failed, 0 ignored**. Golden saving was disabled.
+- The three `no_std` targets listed above: passed.
+- RustRover build: successful, no reported problems.
+- Rustdoc citation lint: 213 Rust files, no relative Markdown links;
+  all four tests of the lint passed.
+- No package, trace, recording, fixture or example changed. Echo, JSONL
+  and gauge retain their checked package, semantic and causal witnesses.
+
+The complete workspace suite and the embedded execution/size measurements
+were **not rerun for this naming checkpoint**. Their preceding results
+above describe the A-T4-4 checkpoint, not new measurements. They remain
+required before qualifying the production Node representation. Cargo
+checks are run serially with the IDE build to avoid contention on `target`.

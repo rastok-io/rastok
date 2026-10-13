@@ -296,7 +296,7 @@ fn content_type_follows_the_payload_not_the_merge() {
     use rastok::envelope::{Data, MetaValue, Namespace, Scalar, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
-    use rastok::runtime::vm::Vm;
+    use rastok::runtime::execution::Execution;
 
     let run = |body: &str| {
         let source = format!(
@@ -308,13 +308,13 @@ fn content_type_follows_the_payload_not_the_merge() {
         )
         .expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+        let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
         let mut ext = Namespace::new();
         ext.insert(
             String::from("content_type"),
             MetaValue::Scalar(Scalar::Text(String::from("text/csv"))),
         );
-        vm.inject(
+        vm.accept_input(
             &mut journal,
             IngressProposal {
                 provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),

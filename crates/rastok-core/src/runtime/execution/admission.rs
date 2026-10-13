@@ -1,5 +1,5 @@
-//! Admission is prepared against an immutable VM and journal view. The one
-//! accepting commit precedes installation of exchanges, instances and routes.
+//! Prepare admission against immutable execution and journal state, commit
+//! its INGRESS record and routes, then apply the decision to live state.
 
 use super::*;
 use crate::journal::{CommittedIngress, PreparedIngress, SessionIngressRecord};
@@ -9,19 +9,19 @@ struct IngressEndpoint {
     exchange: Option<ConnectorExchange>,
 }
 
-/// The five source cases have different installation and routing obligations.
-/// In particular, opening a Session installs its source but routes no message;
+/// The five source cases have different instance and routing obligations.
+/// In particular, opening a Session creates its source but routes no message;
 /// a later message reuses that source without admitting it again.
 enum PreparedExchange {
     Boundary,
     Event,
     Call {
-        source: Slot,
+        source: NodeIndex,
         target: PreparedTarget,
         timeout: Option<i64>,
     },
     SessionOpen {
-        source: Slot,
+        source: NodeIndex,
         target: PreparedTarget,
         session: SessionId,
     },
@@ -56,13 +56,13 @@ struct PreparedAdmission {
     commands: Vec<crate::journal::instance_stop::Command>,
 }
 
-impl Vm<'_> {
+impl Execution<'_> {
     pub(super) fn admit_proposal(
         &mut self,
         journal: &mut dyn Journal,
         submission: IngressProposal,
         connector_path: Option<node::Path>,
-    ) -> Result<AdmittedIngress, VmFault> {
+    ) -> Result<AdmittedIngress, ExecutionFault> {
         let prepared = self.prepare_admission(journal, submission, connector_path)?;
         let recorded_routes = self.inbound_route_targets(&prepared.routes);
         let PreparedAdmission {
@@ -74,9 +74,9 @@ impl Vm<'_> {
         } = prepared;
         let committed = journal
             .commit_ingress(ingress, recorded_routes)
-            .map_err(VmFault::Journal)?;
+            .map_err(ExecutionFault::Journal)?;
         self.enqueue_instance_commands(commands);
-        self.install_inbound_exchange(&exchange, &candidates, &committed.envelope);
+        self.apply_exchange_admission(&exchange, &candidates, &committed.envelope);
         self.route_prepared(
             routes,
             &candidates,
@@ -91,7 +91,7 @@ impl Vm<'_> {
         journal: &dyn Journal,
         submission: IngressProposal,
         connector_path: Option<node::Path>,
-    ) -> Result<PreparedAdmission, VmFault> {
+    ) -> Result<PreparedAdmission, ExecutionFault> {
         self.preflight(journal)?;
         let endpoint = self.resolve_ingress_endpoint(&submission, connector_path.as_ref())?;
         self.judge_ingress_metadata(&submission)?;
@@ -104,7 +104,7 @@ impl Vm<'_> {
             Some(_) => journal.prepare_connector_ingress(submission),
             None => journal.prepare_ingress(submission),
         }
-        .map_err(VmFault::Journal)?;
+        .map_err(ExecutionFault::Journal)?;
         let mut candidates = BTreeMap::new();
         let (mut ingress, exchange) =
             self.prepare_inbound_exchange(journal, &endpoint, session, ingress, &mut candidates)?;
@@ -116,7 +116,7 @@ impl Vm<'_> {
             self.prepare_routes(
                 &journal,
                 &endpoint.from,
-                // Keep an installed Session's ancestor generation. No key is
+                // Keep an admitted Session's ancestor generation. No key is
                 // re-evaluated from the next message's external metadata.
                 matches!(session, Some(InboundSession::Message(_)))
                     .then(|| exchange.source_instance())
@@ -158,7 +158,7 @@ impl Vm<'_> {
         &self,
         submission: &IngressProposal,
         connector: Option<&node::Path>,
-    ) -> Result<IngressEndpoint, VmFault> {
+    ) -> Result<IngressEndpoint, ExecutionFault> {
         if let Some(connector) = connector {
             let source = self
                 .plan
@@ -174,12 +174,12 @@ impl Vm<'_> {
                     });
                     (spec.roles.has_inbound() && output).then_some((index, spec.exchange))
                 });
-            let unknown = || VmFault::UnknownInboundSource {
+            let unknown = || ExecutionFault::UnknownInboundSource {
                 connector: connector.clone(),
                 port: submission.draft.port.clone(),
             };
             let (source, exchange) = source.ok_or_else(unknown)?;
-            let source = Slot::new(u32::try_from(source).map_err(|_| unknown())?);
+            let source = NodeIndex::new(u32::try_from(source).map_err(|_| unknown())?);
             Ok(IngressEndpoint {
                 from: EdgeEnd {
                     node: Some(source),
@@ -191,7 +191,9 @@ impl Vm<'_> {
             if !self.plan.boundary.iter().any(|decl| {
                 decl.port == submission.draft.port && decl.direction == node::PortDirection::Input
             }) {
-                return Err(VmFault::UnknownIngress(submission.draft.port.clone()));
+                return Err(ExecutionFault::UnknownIngress(
+                    submission.draft.port.clone(),
+                ));
             }
             Ok(IngressEndpoint {
                 from: EdgeEnd {
@@ -203,7 +205,7 @@ impl Vm<'_> {
         }
     }
 
-    fn judge_ingress_metadata(&self, submission: &IngressProposal) -> Result<(), VmFault> {
+    fn judge_ingress_metadata(&self, submission: &IngressProposal) -> Result<(), ExecutionFault> {
         for (field, value) in &submission.draft.ext {
             // The journal derives Session correlation. Peer spelling is
             // replaced before routing or evaluating an instance key.
@@ -219,13 +221,13 @@ impl Vm<'_> {
                     .map(|(_, ty)| ty.clone())
             });
             let Some(ty) = ty else {
-                return Err(VmFault::IngressMetadataViolation {
+                return Err(ExecutionFault::IngressMetadataViolation {
                     field: field.clone(),
                     reason: String::from("the field is outside the declared schema"),
                 });
             };
             if !crate::runtime::meta_conforms(value, &ty) {
-                return Err(VmFault::IngressMetadataViolation {
+                return Err(ExecutionFault::IngressMetadataViolation {
                     field: field.clone(),
                     reason: alloc::format!("the field is declared {ty:?}; this value is not"),
                 });
@@ -238,13 +240,13 @@ impl Vm<'_> {
         &self,
         submission: &IngressProposal,
         from: &EdgeEnd,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         if let Data::Materialized(value) = &submission.draft.data {
-            value
-                .check_consistency()
-                .map_err(|error| VmFault::Fault(crate::runtime::Fault::InvalidValue(error)))?;
+            value.check_consistency().map_err(|error| {
+                ExecutionFault::Fault(crate::runtime::Fault::InvalidValue(error))
+            })?;
             crate::runtime::crossing_pins_hold(self.plan, from, value).map_err(|refused| {
-                VmFault::IngressPinViolation {
+                ExecutionFault::IngressPinViolation {
                     ingress: submission.draft.port.clone(),
                     rejected_at: refused.at,
                     violation: refused.violation,
@@ -255,29 +257,25 @@ impl Vm<'_> {
     }
 
     /// Select and bound the source instance once, for both a Call and a
-    /// Session opening. No candidate is installed until the ingress commits.
+    /// Session opening. No candidate becomes live until the ingress commits.
     fn reserve_source_instance(
         &self,
         journal: &dyn Journal,
         endpoint: &IngressEndpoint,
-        source: Slot,
+        source: NodeIndex,
         envelope: &Envelope,
         candidates: &mut BTreeMap<instance::Generation, InstanceCandidate>,
-    ) -> Result<PreparedTarget, VmFault> {
+    ) -> Result<PreparedTarget, ExecutionFault> {
         let owner = self.plan.nodes[source.index()].owner;
-        let scope =
-            self.owner_chain(owner)?
-                .first()
-                .copied()
-                .ok_or_else(|| VmFault::PlanInvariant {
-                    node: self.plan.nodes[source.index()].path.clone(),
-                    reason: match endpoint.exchange {
-                        Some(ConnectorExchange::Call) => {
-                            "an inbound Call source has no owner chain"
-                        }
-                        _ => "an inbound Session source has no owner chain",
-                    },
-                })?;
+        let scope = self.owner_chain(owner)?.first().copied().ok_or_else(|| {
+            ExecutionFault::PlanInvariant {
+                node: self.plan.nodes[source.index()].path.clone(),
+                reason: match endpoint.exchange {
+                    Some(ConnectorExchange::Call) => "an inbound Call source has no owner chain",
+                    _ => "an inbound Session source has no owner chain",
+                },
+            }
+        })?;
         let target =
             self.prepare_target(&journal, scope, None, &endpoint.from, envelope, candidates)?;
         let held = match endpoint.exchange {
@@ -293,7 +291,7 @@ impl Vm<'_> {
                 .count(),
         };
         if held >= WORKER_MAILBOX_CAPACITY {
-            return Err(VmFault::MailboxFull {
+            return Err(ExecutionFault::MailboxFull {
                 node: self.plan.nodes[source.index()].path.clone(),
             });
         }
@@ -307,7 +305,7 @@ impl Vm<'_> {
         session: Option<InboundSession>,
         mut ingress: PreparedIngress,
         candidates: &mut BTreeMap<instance::Generation, InstanceCandidate>,
-    ) -> Result<(PreparedIngress, PreparedExchange), VmFault> {
+    ) -> Result<(PreparedIngress, PreparedExchange), ExecutionFault> {
         let source = endpoint.from.node.zip(endpoint.exchange);
         // Preserve the existing admission order: Call selection and its
         // journal marker precede refusal of contradictory Session framing.
@@ -331,7 +329,7 @@ impl Vm<'_> {
                 .unwrap_or_default();
             ingress = ingress
                 .into_call(target.reference.clone(), deadline_ids)
-                .map_err(VmFault::Journal)?;
+                .map_err(ExecutionFault::Journal)?;
             PreparedExchange::Call {
                 source,
                 target,
@@ -347,7 +345,7 @@ impl Vm<'_> {
                     .and_then(|spec| session_opening(&spec.contract, spec.roles, spec.exchange))
                     != Some(SessionOpening::Peer)
                 {
-                    return Err(VmFault::PlanInvariant {
+                    return Err(ExecutionFault::PlanInvariant {
                         node: self.plan.nodes[source.index()].path.clone(),
                         reason: "this Contract does not admit peer Session openings",
                     });
@@ -360,7 +358,7 @@ impl Vm<'_> {
                     candidates,
                 )?;
                 let Some(SessionIngressRecord::Open(session)) = ingress.session() else {
-                    return Err(VmFault::PlanInvariant {
+                    return Err(ExecutionFault::PlanInvariant {
                         node: self.plan.nodes[source.index()].path.clone(),
                         reason: "a prepared Session opening lost its logical reference",
                     });
@@ -376,13 +374,13 @@ impl Vm<'_> {
                 Some(InboundSession::Message(session)),
             ) => {
                 let Some(pending) = self.sessions.get(&session) else {
-                    return Err(VmFault::PlanInvariant {
+                    return Err(ExecutionFault::PlanInvariant {
                         node: self.plan.nodes[source.index()].path.clone(),
                         reason: "an inbound Session message has no installed logical session",
                     });
                 };
                 if pending.slot != source || !pending.opened {
-                    return Err(VmFault::PlanInvariant {
+                    return Err(ExecutionFault::PlanInvariant {
                         node: self.plan.nodes[source.index()].path.clone(),
                         reason: "an inbound Session message crossed its bound source",
                     });
@@ -397,13 +395,13 @@ impl Vm<'_> {
                 }
             }
             (Some((source, ConnectorExchange::Session)), None) => {
-                return Err(VmFault::PlanInvariant {
+                return Err(ExecutionFault::PlanInvariant {
                     node: self.plan.nodes[source.index()].path.clone(),
                     reason: "a Session source arrived without Session framing",
                 });
             }
             (Some((source, ConnectorExchange::Event | ConnectorExchange::Call)), Some(_)) => {
-                return Err(VmFault::PlanInvariant {
+                return Err(ExecutionFault::PlanInvariant {
                     node: self.plan.nodes[source.index()].path.clone(),
                     reason: "Session framing reached a non-Session source",
                 });
@@ -420,7 +418,7 @@ impl Vm<'_> {
         exchange: &PreparedExchange,
         routes: &[PreparedEdge],
         candidates: &BTreeMap<instance::Generation, InstanceCandidate>,
-    ) -> Result<PreparedIngress, VmFault> {
+    ) -> Result<PreparedIngress, ExecutionFault> {
         let mut activity = BTreeMap::new();
         let mut deadlines = Vec::new();
         if let Some(target) = exchange.admitted_target() {
@@ -453,7 +451,9 @@ impl Vm<'_> {
         Ok(ingress)
     }
 
-    fn install_inbound_exchange(
+    /// Apply the exchange accepted by the INGRESS commit. The prepared
+    /// variant contains every value required here; no further check can refuse.
+    fn apply_exchange_admission(
         &mut self,
         exchange: &PreparedExchange,
         candidates: &BTreeMap<instance::Generation, InstanceCandidate>,
@@ -465,7 +465,7 @@ impl Vm<'_> {
                 target,
                 timeout,
             } => {
-                self.install_target(target, candidates, envelope);
+                self.apply_instance_admissions(target, candidates, envelope);
                 let call_id = InboundCallId::from_root(envelope.meta().sys().id());
                 if let Some(timeout) = timeout {
                     self.scheduler.schedule(
@@ -495,7 +495,7 @@ impl Vm<'_> {
                 target,
                 session,
             } => {
-                self.install_target(target, candidates, envelope);
+                self.apply_instance_admissions(target, candidates, envelope);
                 self.sessions.insert(
                     *session,
                     PendingSession {

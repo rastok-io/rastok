@@ -2,12 +2,12 @@
 
 use super::*;
 
-impl Vm<'_> {
+impl Execution<'_> {
     pub(super) fn validate_call_completion<'record>(
         &self,
-        slot: Slot,
+        slot: NodeIndex,
         record: &'record crate::journal::TransactionRecord,
-    ) -> Result<Option<&'record Emission>, VmFault> {
+    ) -> Result<Option<&'record Emission>, ExecutionFault> {
         let node = &self.plan.nodes[slot.index()];
         let Some(call) = node
             .connector()
@@ -15,7 +15,7 @@ impl Vm<'_> {
         else {
             return Ok(None);
         };
-        let violation = |reason| VmFault::ContractViolation {
+        let violation = |reason| ExecutionFault::ContractViolation {
             node: node.path.clone(),
             reason,
         };

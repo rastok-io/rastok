@@ -166,7 +166,7 @@ impl fmt::Display for OwnerPath {
     }
 }
 
-/// Compile-time resolved owner reference. Like [`crate::plan::Slot`], the freely
+/// Compile-time resolved owner reference. Like [`crate::plan::NodeIndex`], the freely
 /// constructible value carries no validity claim until it sits in a
 /// [`crate::plan::ValidatedExecutionPlan`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]

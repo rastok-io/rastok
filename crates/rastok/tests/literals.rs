@@ -13,7 +13,7 @@ fn emitted(body: &str) -> rastok::envelope::Data {
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
-    use rastok::runtime::vm::Vm;
+    use rastok::runtime::execution::Execution;
 
     let source = format!(
         "graph g : App {{\n  input in: variant\n  operator o {{\n    output out: variant\n    on in {{ out = {body} }}\n  }}\n  in -> o -> out\n}}\n"
@@ -24,8 +24,8 @@ fn emitted(body: &str) -> rastok::envelope::Data {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
-    vm.inject(
+    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+    vm.accept_input(
         &mut journal,
         IngressProposal {
             provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
@@ -109,7 +109,7 @@ fn base64_with_a_content_type_is_whole_payload() {
     use rastok::envelope::{Data, MetaValue, Namespace, Scalar, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
-    use rastok::runtime::vm::Vm;
+    use rastok::runtime::execution::Execution;
 
     let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = base64!(\"image/png\") { AAEC } }\n  }\n  in -> o -> out\n}\n";
     let compilation = compile(
@@ -123,8 +123,8 @@ fn base64_with_a_content_type_is_whole_payload() {
         "typing the frontend content type is one declared H4.1 identity move"
     );
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
-    vm.inject(
+    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+    vm.accept_input(
         &mut journal,
         IngressProposal {
             provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
@@ -380,7 +380,7 @@ fn an_asset_emission_runs_and_carries_its_type() {
     use rastok::envelope::{Data, MetaValue, Namespace, Scalar, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
-    use rastok::runtime::vm::Vm;
+    use rastok::runtime::execution::Execution;
     use std::io::Write;
 
     let root = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("asset-run");
@@ -396,8 +396,8 @@ fn an_asset_emission_runs_and_carries_its_type() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
-    vm.inject(
+    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+    vm.accept_input(
         &mut journal,
         IngressProposal {
             provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
@@ -547,7 +547,7 @@ fn the_carry_survives_a_dead_earlier_write() {
     use rastok::envelope::{Data, Encoding, MetaValue, Namespace, Scalar};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
-    use rastok::runtime::vm::Vm;
+    use rastok::runtime::execution::Execution;
 
     // `data = "temp"` then `data = data`: last-write-wins — the
     // final value is the input payload, so the representation and
@@ -559,7 +559,7 @@ fn the_carry_survives_a_dead_earlier_write() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
     let mut ext = Namespace::new();
     ext.insert(
         String::from("content_type"),
@@ -567,7 +567,7 @@ fn the_carry_survives_a_dead_earlier_write() {
             "application/vnd.apache.arrow.stream",
         ))),
     );
-    vm.inject(
+    vm.accept_input(
         &mut journal,
         IngressProposal {
             provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
@@ -606,7 +606,7 @@ fn inject_holds_the_ext_zone_to_the_schema() {
     use rastok::envelope::{Data, MetaValue, Namespace, Scalar, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
-    use rastok::runtime::vm::Vm;
+    use rastok::runtime::execution::Execution;
 
     let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = data }\n  }\n  in -> o -> out\n}\n";
     let compilation = compile(
@@ -615,13 +615,13 @@ fn inject_holds_the_ext_zone_to_the_schema() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
     let mut ext = Namespace::new();
     ext.insert(
         String::from("invented"),
         MetaValue::Scalar(Scalar::Text(String::from("x"))),
     );
-    let refused = vm.inject(
+    let refused = vm.accept_input(
         &mut journal,
         IngressProposal {
             provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
@@ -710,7 +710,7 @@ fn the_meta_type_grid_is_closed_end_to_end() {
     use rastok::envelope::{Data, MetaValue, Namespace, Scalar, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
-    use rastok::runtime::vm::Vm;
+    use rastok::runtime::execution::Execution;
     let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = data }\n  }\n  in -> o -> out\n}\n";
     let compilation = compile(
         &[source],
@@ -718,13 +718,13 @@ fn the_meta_type_grid_is_closed_end_to_end() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
     let mut ext = Namespace::new();
     ext.insert(
         String::from("content_type"),
         MetaValue::Scalar(Scalar::Int(7)),
     );
-    let refused = vm.inject(
+    let refused = vm.accept_input(
         &mut journal,
         IngressProposal {
             provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
@@ -1226,7 +1226,7 @@ fn a_decimal_meta_value_round_trips_through_a_copy() {
     use rastok::envelope::{Data, MetaValue, Namespace, Scalar, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
-    use rastok::runtime::vm::Vm;
+    use rastok::runtime::execution::Execution;
 
     let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in {\n      out = {\n        meta.app.price = data\n        data = data\n      }\n    }\n  }\n  in -> o -> out\n}\n";
     let compilation = compile(
@@ -1235,8 +1235,8 @@ fn a_decimal_meta_value_round_trips_through_a_copy() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
-    vm.inject(
+    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+    vm.accept_input(
         &mut journal,
         IngressProposal {
             provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),

@@ -7,7 +7,7 @@
 //! normative.
 
 // The kernel's modules re-export here so every existing path —
-// `rastok::envelope`, `rastok::runtime::vm` — keeps resolving; the
+// `rastok::envelope`, `rastok::runtime::execution` — keeps resolving; the
 // crate boundary is real, the surface is unchanged.
 pub use rastok_core::{
     accounting, boundary, canonical, canonical_cbor, connector, data_policy, datatype, deployment,

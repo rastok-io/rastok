@@ -5,18 +5,18 @@ use crate::envelope;
 use crate::instance;
 use crate::journal::{ConsumedPosition, InboundExchangeExitRecord, SessionRecord, SessionStatus};
 
-impl Vm<'_> {
+impl Execution<'_> {
     pub(super) fn restore_session(
         &mut self,
         index: usize,
         record: &SessionRecord,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         let slot = self
             .plan
             .nodes
             .iter()
             .position(|node| node.path == record.connector_path)
-            .map(|slot| Slot::new(slot as u32))
+            .map(|slot| NodeIndex::new(slot as u32))
             .ok_or_else(|| invalid(index, "a Session fact has no planned Connector"))?;
         let spec = self.plan.nodes[slot.index()]
             .connector()
@@ -180,9 +180,9 @@ impl Vm<'_> {
     fn retained_session_delivery(
         &self,
         index: usize,
-        slot: Slot,
+        slot: NodeIndex,
         id: crate::envelope::Id,
-    ) -> Result<(instance::Generation, envelope::Delivery), VmFault> {
+    ) -> Result<(instance::Generation, envelope::Delivery), ExecutionFault> {
         let mut matches = self.instances.iter().filter_map(|(instance, state)| {
             if state.owner != self.plan.nodes[slot.index()].owner
                 || self.lifecycle.iter().any(|work| {
@@ -210,9 +210,9 @@ impl Vm<'_> {
     pub(super) fn restore_exchange_exit(
         &mut self,
         index: usize,
-        slot: Slot,
+        slot: NodeIndex,
         record: &TransactionRecord,
-    ) -> Result<Vec<ConsumedPosition>, VmFault> {
+    ) -> Result<Vec<ConsumedPosition>, ExecutionFault> {
         let Some(exchange) = record.exchange_exit.as_deref() else {
             return Ok(Vec::new());
         };
@@ -356,7 +356,7 @@ impl Vm<'_> {
                 )
             }
         }
-        .map_err(VmFault::Fault)?
+        .map_err(ExecutionFault::Fault)?
         .record;
         if record.trigger != expected.trigger
             || record.cause != expected.cause
@@ -391,10 +391,10 @@ impl Vm<'_> {
     fn recovered_exchange_cursor(
         &self,
         index: usize,
-        slot: Slot,
+        slot: NodeIndex,
         instance: &instance::Generation,
         cursor: &ConsumedPosition,
-    ) -> Result<envelope::Delivery, VmFault> {
+    ) -> Result<envelope::Delivery, ExecutionFault> {
         self.scheduler
             .mailboxes
             .queued(slot, instance)
@@ -409,7 +409,7 @@ impl Vm<'_> {
             .ok_or_else(|| invalid(index, "an exchange terminal consumes no retained cursor"))
     }
 
-    pub(super) fn retain_recovered_responses(&mut self) -> Result<(), VmFault> {
+    pub(super) fn retain_recovered_responses(&mut self) -> Result<(), ExecutionFault> {
         // A retained response may have reached the peer before the crash.
         // No durable fact distinguishes not-started from started: hold it for
         // the original exchange's terminal event, never offer it a second time.

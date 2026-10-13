@@ -15,7 +15,7 @@ use crate::connector::{ConnectorDirection, ConnectorExchange, ContractId};
 use crate::envelope::{Data, Envelope};
 use crate::node;
 use crate::plan::ValidatedExecutionPlan;
-use crate::runtime::vm::{InboundCallPollReport, Vm, VmFault};
+use crate::runtime::execution::{Execution, ExecutionFault, InboundCallPollReport};
 use crate::{boundary::IngressAdmission, journal::Journal};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -232,7 +232,7 @@ pub enum InboundPollError {
     /// The bound Driver registry contradicted its retained routing state.
     Driver(DriverRouteError),
     /// The VM or journal raised a fail-stop integrity fault.
-    Machine(VmFault),
+    Machine(ExecutionFault),
 }
 
 /// One bounded pass offering already-journaled graph responses to inbound
@@ -618,14 +618,14 @@ impl<'plan> RuntimeBindings<'plan> {
     /// distinct.
     pub fn poll_inbound(
         &mut self,
-        vm: &mut Vm<'plan>,
+        vm: &mut Execution<'plan>,
         journal: &mut dyn Journal,
     ) -> Result<Option<IngressAdmission>, InboundPollError> {
         let Some(routed) = self.next_inbound().map_err(InboundPollError::Driver)? else {
             return Ok(None);
         };
         let admission = vm
-            .admit_ingress(journal, routed.proposal())
+            .accept_connector_output(journal, routed.proposal())
             .map_err(InboundPollError::Machine)?;
         match admission {
             IngressAdmission::Accepted(accepted) => self
@@ -649,7 +649,7 @@ impl<'plan> RuntimeBindings<'plan> {
     /// binding is an integrity fault.
     pub fn poll_inbound_call_responses(
         &mut self,
-        vm: &mut Vm<'plan>,
+        vm: &mut Execution<'plan>,
     ) -> Result<InboundCallResponsePollReport, DriverRouteError> {
         let mut report = InboundCallResponsePollReport::default();
         for response in vm.ready_inbound_call_responses() {
@@ -695,7 +695,7 @@ impl<'plan> RuntimeBindings<'plan> {
     /// Missing or crossed family ownership is a binding-integrity fault.
     pub fn poll_inbound_call_timeouts(
         &mut self,
-        vm: &mut Vm<'plan>,
+        vm: &mut Execution<'plan>,
     ) -> Result<InboundCallTimeoutPollReport, DriverRouteError> {
         let mut report = InboundCallTimeoutPollReport::default();
         for timeout in vm.ready_inbound_call_timeouts() {
@@ -742,7 +742,7 @@ impl<'plan> RuntimeBindings<'plan> {
     /// Call reference.
     pub fn poll_inbound_call_events(
         &mut self,
-        vm: &mut Vm<'plan>,
+        vm: &mut Execution<'plan>,
     ) -> Result<InboundCallPollReport, DriverRouteError> {
         let ids: Vec<_> = self
             .families
@@ -1335,7 +1335,7 @@ mod tests {
     use crate::journal::{Journal, MemJournal, ids};
     use crate::node;
     use crate::plan::{GraphVersion, ValidatedExecutionPlan};
-    use crate::runtime::vm::Vm;
+    use crate::runtime::execution::Execution;
     use std::collections::{BTreeMap, BTreeSet, VecDeque};
     use std::sync::{Arc, Mutex};
 
@@ -2380,14 +2380,14 @@ graph api : App {
             .iter()
             .position(|planned| planned.path.to_string() == "server")
             .and_then(|index| u32::try_from(index).ok())
-            .map(crate::plan::Slot::new)
+            .map(crate::plan::NodeIndex::new)
             .expect("the server slot is representable");
         let relay_slot = raw
             .nodes
             .iter()
             .position(|planned| planned.path.to_string() == "relay")
             .and_then(|index| u32::try_from(index).ok())
-            .map(crate::plan::Slot::new)
+            .map(crate::plan::NodeIndex::new)
             .expect("the relay slot is representable");
         let server = raw
             .nodes
@@ -2474,7 +2474,7 @@ graph api : App {
             }))
             .unwrap();
         let mut bindings = RuntimeBindings::try_new(&plan, &registry).unwrap();
-        let mut vm = Vm::boot(&plan, GraphVersion(1));
+        let mut vm = Execution::boot(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
 
         let Some(crate::boundary::IngressAdmission::Accepted(accepted)) = bindings
@@ -2607,7 +2607,7 @@ graph api : App {
             }))
             .unwrap();
         let mut bindings = RuntimeBindings::try_new(&plan, &registry).unwrap();
-        let mut vm = Vm::boot(&plan, GraphVersion(1));
+        let mut vm = Execution::boot(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
 
         let Some(crate::boundary::IngressAdmission::Accepted(accepted)) = bindings
@@ -2742,7 +2742,7 @@ graph api : App {
             }))
             .unwrap();
         let mut bindings = RuntimeBindings::try_new(&plan, &registry).unwrap();
-        let mut vm = Vm::boot(&plan, GraphVersion(1));
+        let mut vm = Execution::boot(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
 
         let Some(crate::boundary::IngressAdmission::Accepted(accepted)) = bindings
@@ -2810,7 +2810,7 @@ graph api : App {
             }))
             .unwrap();
         let mut bindings = RuntimeBindings::try_new(&plan, &registry).unwrap();
-        let mut vm = Vm::boot(&plan, GraphVersion(1));
+        let mut vm = Execution::boot(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
 
         for expected in 0..1024 {
@@ -2876,7 +2876,7 @@ graph api : App {
             }))
             .unwrap();
         let mut bindings = RuntimeBindings::try_new(&plan, &registry).unwrap();
-        let mut vm = Vm::boot(&plan, GraphVersion(1));
+        let mut vm = Execution::boot(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
         assert_eq!(
             bindings.poll_inbound(&mut vm, &mut journal).unwrap(),
@@ -3008,8 +3008,8 @@ graph api : App {
             .unwrap();
         let mut bindings = RuntimeBindings::try_new(&plan, &registry).unwrap();
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut vm = Vm::boot(&plan, GraphVersion(1));
-        vm.inject(
+        let mut vm = Execution::boot(&plan, GraphVersion(1));
+        vm.accept_input(
             &mut journal,
             IngressProposal {
                 provenance: IngressProvenance::single(node::Path::new(["test"]).unwrap()),

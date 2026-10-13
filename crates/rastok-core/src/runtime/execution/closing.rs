@@ -5,8 +5,11 @@
 use super::*;
 use crate::instance;
 
-impl Vm<'_> {
-    pub(super) fn pending_stop_receivers(&self, scope: &instance::Generation) -> BTreeSet<Slot> {
+impl Execution<'_> {
+    pub(super) fn pending_stop_receivers(
+        &self,
+        scope: &instance::Generation,
+    ) -> BTreeSet<NodeIndex> {
         let Some(scope_owner) = self.instances.get(scope).map(|instance| instance.owner) else {
             return BTreeSet::new();
         };

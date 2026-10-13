@@ -189,7 +189,7 @@ fn the_machine_verifies_the_ingress_port() {
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
-    use rastok::runtime::vm::{Vm, VmFault};
+    use rastok::runtime::execution::{Execution, ExecutionFault};
 
     let compilation = compile(
         &[MERGER_GRAPH],
@@ -197,7 +197,7 @@ fn the_machine_verifies_the_ingress_port() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
     let submission = |port: &str| IngressProposal {
         provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
         draft: EnvelopeDraft {
@@ -209,15 +209,15 @@ fn the_machine_verifies_the_ingress_port() {
         session: None,
     };
     assert!(matches!(
-        vm.inject(&mut journal, submission("out")).unwrap_err(),
-        VmFault::UnknownIngress(port) if port.name() == "out"
+        vm.accept_input(&mut journal, submission("out")).unwrap_err(),
+        ExecutionFault::UnknownIngress(port) if port.name() == "out"
     ));
     assert!(matches!(
-        vm.inject(&mut journal, submission("ghost")).unwrap_err(),
-        VmFault::UnknownIngress(port) if port.name() == "ghost"
+        vm.accept_input(&mut journal, submission("ghost")).unwrap_err(),
+        ExecutionFault::UnknownIngress(port) if port.name() == "ghost"
     ));
     // The declared input accepts.
-    vm.inject(&mut journal, submission("alpha"))
+    vm.accept_input(&mut journal, submission("alpha"))
         .expect("a declared input ingresses");
 }
 
@@ -773,7 +773,7 @@ fn the_braced_record_is_physically_a_struct() {
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
-    use rastok::runtime::vm::Vm;
+    use rastok::runtime::execution::Execution;
 
     let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in {\n      out = {\n        v = 7\n      }\n    }\n  }\n  in -> o -> out\n}\n";
     let compilation = compile(
@@ -782,8 +782,8 @@ fn the_braced_record_is_physically_a_struct() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
-    vm.inject(
+    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+    vm.accept_input(
         &mut journal,
         IngressProposal {
             provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
@@ -886,7 +886,7 @@ fn an_empty_brace_is_an_empty_record() {
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
-    use rastok::runtime::vm::Vm;
+    use rastok::runtime::execution::Execution;
 
     let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = {} }\n  }\n  in -> o -> out\n}\n";
     let compilation = compile(
@@ -895,8 +895,8 @@ fn an_empty_brace_is_an_empty_record() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
-    vm.inject(
+    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+    vm.accept_input(
         &mut journal,
         IngressProposal {
             provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
@@ -926,7 +926,7 @@ fn a_whole_data_write_is_the_payload_itself() {
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
-    use rastok::runtime::vm::Vm;
+    use rastok::runtime::execution::Execution;
 
     let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = {data = 1} }\n  }\n  in -> o -> out\n}\n";
     let compilation = compile(
@@ -935,8 +935,8 @@ fn a_whole_data_write_is_the_payload_itself() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
-    vm.inject(
+    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+    vm.accept_input(
         &mut journal,
         IngressProposal {
             provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
@@ -1031,7 +1031,7 @@ fn identity_re_emits_the_materialized_envelope_whole() {
     use rastok::envelope::{Data, MetaValue, Namespace, Scalar, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
-    use rastok::runtime::vm::Vm;
+    use rastok::runtime::execution::Execution;
 
     let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = . }\n  }\n  in -> o -> out\n}\n";
     let compilation = compile(
@@ -1040,7 +1040,7 @@ fn identity_re_emits_the_materialized_envelope_whole() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
     let mut app = Namespace::new();
     // The one ext field this plan's schema declares — the standard
     // `content_type` (inject validates the zone, D-2026-08-10-1).
@@ -1048,7 +1048,7 @@ fn identity_re_emits_the_materialized_envelope_whole() {
         String::from("content_type"),
         MetaValue::Scalar(Scalar::Text(String::from("text/x-probe"))),
     );
-    vm.inject(
+    vm.accept_input(
         &mut journal,
         IngressProposal {
             provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
@@ -1087,7 +1087,7 @@ fn an_empty_nested_record_is_a_value_not_an_absence() {
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
-    use rastok::runtime::vm::Vm;
+    use rastok::runtime::execution::Execution;
 
     let run = |body: &str| {
         let source = format!(
@@ -1099,8 +1099,8 @@ fn an_empty_nested_record_is_a_value_not_an_absence() {
         )
         .expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
-        vm.inject(
+        let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+        vm.accept_input(
             &mut journal,
             IngressProposal {
                 provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
@@ -1324,7 +1324,7 @@ fn boundary_outputs_carry_their_port() {
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
-    use rastok::runtime::vm::Vm;
+    use rastok::runtime::execution::Execution;
 
     let graph = &SORTER[..SORTER.find("lab ").expect("the lab block")];
     let compilation = compile(
@@ -1333,8 +1333,8 @@ fn boundary_outputs_carry_their_port() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
-    vm.inject(
+    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+    vm.accept_input(
         &mut journal,
         IngressProposal {
             provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
@@ -1378,7 +1378,7 @@ fn a_raw_ingress_holds_the_pin_before_any_append() {
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
-    use rastok::runtime::vm::Vm;
+    use rastok::runtime::execution::Execution;
 
     let source = "graph g : App {\n  input alpha : int\n\n  operator o {\n    on a { out = data }\n  }\n  alpha -> o.a\n  o -> out\n}\n";
     let compilation = compile(
@@ -1387,7 +1387,7 @@ fn a_raw_ingress_holds_the_pin_before_any_append() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
     let submission = IngressProposal {
         provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
         draft: EnvelopeDraft {
@@ -1398,7 +1398,7 @@ fn a_raw_ingress_holds_the_pin_before_any_append() {
         sequence: IngressSequence::Next,
         session: None,
     };
-    vm.inject(&mut journal, submission)
+    vm.accept_input(&mut journal, submission)
         .expect_err("a text draft cannot enter an int input");
     assert_eq!(journal.records().len(), 0, "refused BEFORE the append");
 }
@@ -1712,7 +1712,7 @@ graph g : App {
             compilation
                 .plan
                 .resolved_ports()
-                .node(rastok::plan::Slot::new(u32::try_from(index).ok()?))
+                .node(rastok::plan::NodeIndex::new(u32::try_from(index).ok()?))
         })
         .and_then(|ports| ports.iter().find(|port| port.port().name() == "err"))
         .expect("the wired ordinary port resolves");
@@ -1808,7 +1808,7 @@ fn the_bare_data_relay_preserves_the_logical_type() {
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
-    use rastok::runtime::vm::Vm;
+    use rastok::runtime::execution::Execution;
     use std::collections::BTreeMap;
 
     let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = data }\n  }\n  in -> o -> out\n}\n";
@@ -1819,8 +1819,8 @@ fn the_bare_data_relay_preserves_the_logical_type() {
     .expect("a valid plan");
     let relay = |data: Value| {
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
-        vm.inject(
+        let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+        vm.accept_input(
             &mut journal,
             IngressProposal {
                 provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
@@ -1861,7 +1861,7 @@ fn an_ingress_pin_violation_is_a_named_error() {
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
-    use rastok::runtime::vm::{Vm, VmFault};
+    use rastok::runtime::execution::{Execution, ExecutionFault};
 
     let source = "graph g : App {\n  input alpha : int\n\n  operator o {\n    on a { out = data }\n  }\n  alpha -> o.a\n  o -> out\n}\n";
     let compilation = compile(
@@ -1870,9 +1870,9 @@ fn an_ingress_pin_violation_is_a_named_error() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
     let error = vm
-        .inject(
+        .accept_input(
             &mut journal,
             IngressProposal {
                 provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
@@ -1892,7 +1892,7 @@ fn an_ingress_pin_violation_is_a_named_error() {
     // itself; a fan-out destination names itself instead).
     assert!(matches!(
         error,
-        VmFault::IngressPinViolation { ingress, rejected_at, .. }
+        ExecutionFault::IngressPinViolation { ingress, rejected_at, .. }
             if ingress.name() == "alpha"
                 && rejected_at.node.is_none()
                 && rejected_at.port.name() == "alpha"
@@ -1984,7 +1984,7 @@ fn the_validator_reads_the_table_and_gates_the_capability() {
     // referenced row absent from the table refuses by ignorance.
     use rastok::datatype::DataType;
     use rastok::node::PortDirection;
-    use rastok::plan::{Edge, EdgeEnd, PortDecl, Slot, ValidatedExecutionPlan};
+    use rastok::plan::{Edge, EdgeEnd, NodeIndex, PortDecl, ValidatedExecutionPlan};
     let source = "graph g : App {\n  input in: text\n  output out: text\n  connector probe : Process {\n    mode = job ; command = \"cat\"\n    codec = lines\n    idempotent = true; behavior = deterministic\n  }\n  in -> probe -> out\n  probe.err -> nothing\n  probe.exit -> nothing\n}\n";
     let mut plan = compile(
         &[source],
@@ -2016,7 +2016,7 @@ fn the_validator_reads_the_table_and_gates_the_capability() {
             port: rastok::node::Port::new("in").unwrap(),
         },
         to: Some(EdgeEnd {
-            node: Some(Slot::new(u32::try_from(probe_slot).unwrap())),
+            node: Some(NodeIndex::new(u32::try_from(probe_slot).unwrap())),
             port: rastok::node::Port::new("request").unwrap(),
         }),
     });
@@ -2064,7 +2064,7 @@ fn the_struct_witness_survives_every_equivalent_spelling() {
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
-    use rastok::runtime::vm::Vm;
+    use rastok::runtime::execution::Execution;
     use std::collections::BTreeMap;
 
     let relay = |body: &str, data: Value| {
@@ -2077,8 +2077,8 @@ fn the_struct_witness_survives_every_equivalent_spelling() {
         )
         .expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
-        vm.inject(
+        let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+        vm.accept_input(
             &mut journal,
             IngressProposal {
                 provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
@@ -2181,7 +2181,7 @@ fn an_encoded_bare_relay_passes_the_representation_through() {
     use rastok::envelope::{Data, Encoding};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
-    use rastok::runtime::vm::Vm;
+    use rastok::runtime::execution::Execution;
 
     let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = data }\n  }\n  in -> o -> out\n}\n";
     let compilation = compile(
@@ -2190,8 +2190,8 @@ fn an_encoded_bare_relay_passes_the_representation_through() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
-    vm.inject(
+    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+    vm.accept_input(
         &mut journal,
         IngressProposal {
             provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
@@ -2331,7 +2331,7 @@ fn data_materializes_only_on_demand() {
     use rastok::envelope::{Data, Encoding};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
-    use rastok::runtime::vm::Vm;
+    use rastok::runtime::execution::Execution;
 
     let run = |source: &str| {
         let compilation = compile(
@@ -2340,8 +2340,8 @@ fn data_materializes_only_on_demand() {
         )
         .expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
-        vm.inject(
+        let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+        vm.accept_input(
             &mut journal,
             IngressProposal {
                 provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
@@ -2416,7 +2416,7 @@ fn short_circuits_never_demand_the_data() {
     use rastok::envelope::{Data, Encoding, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
-    use rastok::runtime::vm::Vm;
+    use rastok::runtime::execution::Execution;
 
     let run = |source: &str| {
         let compilation = compile(
@@ -2425,8 +2425,8 @@ fn short_circuits_never_demand_the_data() {
         )
         .expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
-        vm.inject(
+        let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+        vm.accept_input(
             &mut journal,
             IngressProposal {
                 provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
@@ -2483,7 +2483,10 @@ fn short_circuits_never_demand_the_data() {
         "graph g : App {\n  input in: variant\n  operator o {\n    on in where true && (data as bool) { out = . }\n  }\n  in -> o -> out\n}\n",
     );
     assert!(
-        matches!(result, Err(rastok::runtime::vm::VmFault::Fault(_))),
+        matches!(
+            result,
+            Err(rastok::runtime::execution::ExecutionFault::Fault(_))
+        ),
         "a real read reaches supervision"
     );
     assert_eq!(
@@ -2503,7 +2506,7 @@ fn the_carry_is_as_lazy_as_the_name() {
     use rastok::envelope::{Data, Encoding, Namespace};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
-    use rastok::runtime::vm::Vm;
+    use rastok::runtime::execution::Execution;
 
     let run = |body: &str, encoding: Encoding, bytes: &'static [u8]| {
         let source = format!(
@@ -2515,8 +2518,8 @@ fn the_carry_is_as_lazy_as_the_name() {
         )
         .expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
-        vm.inject(
+        let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+        vm.accept_input(
             &mut journal,
             IngressProposal {
                 provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
@@ -2605,7 +2608,7 @@ fn an_inspection_then_identity_ships_the_filled_cell() {
     use rastok::envelope::{Data, Encoding, Namespace};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
-    use rastok::runtime::vm::Vm;
+    use rastok::runtime::execution::Execution;
 
     let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in where size(data) > 0 { out = . }\n  }\n  in -> o -> out\n}\n";
     let compilation = compile(
@@ -2614,8 +2617,8 @@ fn an_inspection_then_identity_ships_the_filled_cell() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
-    vm.inject(
+    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
+    vm.accept_input(
         &mut journal,
         IngressProposal {
             provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
@@ -2697,7 +2700,7 @@ fn a_duplicated_struct_field_refuses_at_the_door() {
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
-    use rastok::runtime::vm::Vm;
+    use rastok::runtime::execution::Execution;
 
     let source = "graph g : App {\n  input in: variant\n  operator o {\n    on in { out = . }\n  }\n  in -> o -> out\n}\n";
     let compilation = compile(
@@ -2706,9 +2709,9 @@ fn a_duplicated_struct_field_refuses_at_the_door() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
     let error = vm
-        .inject(
+        .accept_input(
             &mut journal,
             IngressProposal {
                 provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
@@ -2742,7 +2745,7 @@ fn the_conformance_judgement_is_matchable() {
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
-    use rastok::runtime::vm::{Vm, VmFault};
+    use rastok::runtime::execution::{Execution, ExecutionFault};
     use rastok_core::runtime::{ConformanceReason, ValueKind};
 
     let source = "graph g : App {\n  input alpha : int\n\n  operator o {\n    on a { out = data }\n  }\n  alpha -> o.a\n  o -> out\n}\n";
@@ -2752,7 +2755,7 @@ fn the_conformance_judgement_is_matchable() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+    let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
     let submission = |data: Value| IngressProposal {
         provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
         draft: EnvelopeDraft {
@@ -2765,21 +2768,21 @@ fn the_conformance_judgement_is_matchable() {
     };
     // A tool MATCHES the judgement — no message parsing.
     let error = vm
-        .inject(&mut journal, submission(Value::Text(String::from("wrong"))))
+        .accept_input(&mut journal, submission(Value::Text(String::from("wrong"))))
         .unwrap_err();
     assert!(matches!(
         error,
-        VmFault::IngressPinViolation { violation, .. }
+        ExecutionFault::IngressPinViolation { violation, .. }
             if violation.expected == rastok::datatype::DataType::INT
                 && violation.found == ValueKind::Text
                 && violation.reason == ConformanceReason::TypeMismatch
     ));
     let error = vm
-        .inject(&mut journal, submission(Value::Int(1 << 40)))
+        .accept_input(&mut journal, submission(Value::Int(1 << 40)))
         .unwrap_err();
     assert!(matches!(
         error,
-        VmFault::IngressPinViolation { violation, .. }
+        ExecutionFault::IngressPinViolation { violation, .. }
             if matches!(
                 violation.reason,
                 ConformanceReason::SignedIntegerOutOfRange { value, bits: 32 }

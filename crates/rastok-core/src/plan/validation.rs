@@ -14,7 +14,7 @@ use crate::expr;
 use crate::node;
 use crate::plan::{
     DispatchStep, EdgeEnd, EmitValue, EvaluationSite, ExecutionPlan, Node, NodeExecution,
-    OwnerKind, Slot,
+    NodeIndex, OwnerKind,
 };
 use crate::schema_annotation::{AnnotationTable, SchemaAnnotationError};
 
@@ -73,7 +73,7 @@ pub enum PlanValidationError {
     /// A Node and its owner row do not point to one another.
     OwnerNodeMismatch {
         /// The Node slot.
-        node: Slot,
+        node: NodeIndex,
         /// The claimed owner row.
         owner: node::OwnerSlot,
     },
@@ -148,7 +148,7 @@ pub enum PlanValidationError {
     /// A slot indexes past the node table.
     SlotOutOfBounds {
         /// The impossible reference.
-        slot: Slot,
+        slot: NodeIndex,
         /// The table it missed.
         node_count: usize,
     },
@@ -1720,7 +1720,7 @@ fn annotations_well_formed(
         )?;
     }
     for (index, node) in plan.nodes.iter().enumerate() {
-        let slot = Slot::new(u32::try_from(index).unwrap_or(u32::MAX));
+        let slot = NodeIndex::new(u32::try_from(index).unwrap_or(u32::MAX));
         if let Some(ports) = resolved.node(slot) {
             for port in ports {
                 annotated_schema_at(
@@ -2338,7 +2338,7 @@ fn data_types_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
 /// observes one root. A join deliberately mixes roots and inherits the
 /// trigger's origin, so walking the finite DAG backwards is the exact static
 /// proof that an explicit correlator is required.
-fn response_path_crosses_join(plan: &ExecutionPlan, target: Slot) -> bool {
+fn response_path_crosses_join(plan: &ExecutionPlan, target: NodeIndex) -> bool {
     let mut pending = vec![target];
     let mut visited = BTreeSet::new();
     while let Some(slot) = pending.pop() {
@@ -3229,9 +3229,9 @@ fn owners_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     }
     if owned_nodes.len() != plan.nodes.len() {
         let missing = (0..plan.nodes.len())
-            .map(|index| Slot::new(u32::try_from(index).unwrap_or(u32::MAX)))
+            .map(|index| NodeIndex::new(u32::try_from(index).unwrap_or(u32::MAX)))
             .find(|slot| !owned_nodes.contains(slot))
-            .unwrap_or_else(|| Slot::new(u32::MAX));
+            .unwrap_or_else(|| NodeIndex::new(u32::MAX));
         let owner = plan
             .nodes
             .get(missing.index())
@@ -3505,7 +3505,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             // spelling its own `codec` vocabulary is untouched.
             // The Contract roles distinguish an outgoing request from a
             // retained inbound Call response delivered on an input port.
-            let slot = crate::plan::Slot::new(u32::try_from(node_index).unwrap_or(u32::MAX));
+            let slot = crate::plan::NodeIndex::new(u32::try_from(node_index).unwrap_or(u32::MAX));
             let receives = plan
                 .edges
                 .iter()
@@ -4009,7 +4009,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             .iter()
             .any(|decl| &decl.port == port && decl.direction == direction)
     };
-    let node_at = |slot: Slot| {
+    let node_at = |slot: NodeIndex| {
         plan.nodes
             .get(slot.index())
             .ok_or(PlanValidationError::SlotOutOfBounds {
@@ -4396,7 +4396,7 @@ fn loop_control_holds(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
 
 fn operator_loop_control(
     plan: &ExecutionPlan,
-    slot: Slot,
+    slot: NodeIndex,
     owner_name: &str,
 ) -> Result<(), PlanValidationError> {
     let node = &plan.nodes[slot.index()];
@@ -4512,7 +4512,7 @@ enum WritableMetaRead {
 }
 
 type MetaPresence = BTreeSet<WritableMetaField>;
-type EndpointPresence = BTreeMap<(Option<Slot>, node::Port), MetaPresence>;
+type EndpointPresence = BTreeMap<(Option<NodeIndex>, node::Port), MetaPresence>;
 
 /// Proves the static half of CommonOrAbsent. A join is allowed to discard a
 /// conflicting field silently; only a later required read is illegal. The
@@ -4597,7 +4597,7 @@ fn join_metadata_presence_holds(plan: &ExecutionPlan) -> Result<(), PlanValidati
             if !matches!(planned.execution, NodeExecution::Connector(_)) {
                 continue;
             }
-            let slot = Slot::new(slot_index as u32);
+            let slot = NodeIndex::new(slot_index as u32);
             let inherited = node_input_presence(plan, slot, &inputs);
             for port in planned
                 .ports
@@ -4634,7 +4634,7 @@ fn join_metadata_presence_holds(plan: &ExecutionPlan) -> Result<(), PlanValidati
     }
 
     for (slot_index, planned) in plan.nodes.iter().enumerate() {
-        let slot = Slot::new(slot_index as u32);
+        let slot = NodeIndex::new(slot_index as u32);
         let base = node_input_presence(plan, slot, &inputs);
         if base.is_empty() {
             continue;
@@ -4667,7 +4667,7 @@ fn extend_presence(target: &mut MetaPresence, source: &MetaPresence) -> bool {
 
 fn node_input_presence(
     plan: &ExecutionPlan,
-    slot: Slot,
+    slot: NodeIndex,
     inputs: &EndpointPresence,
 ) -> MetaPresence {
     let mut presence = MetaPresence::new();

@@ -4,13 +4,13 @@ use super::*;
 use crate::instance;
 use crate::journal::{DeadlineKind, InboundExchangeRecord, IngressRecord, SessionIngressRecord};
 
-impl Vm<'_> {
+impl Execution<'_> {
     pub(super) fn restore_ingress(
         &mut self,
         admissions: &dyn InstanceAdmissions,
         index: usize,
         inbound: &IngressRecord,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         if inbound.envelope.meta().sys().graph_version() != self.graph_version.0 {
             return Err(invalid(
                 index,
@@ -33,7 +33,7 @@ impl Vm<'_> {
                                 port.port == inbound.port
                                     && port.direction == node::PortDirection::Output
                             }))
-                        .then_some((Slot::new(index as u32), spec.exchange))
+                        .then_some((NodeIndex::new(index as u32), spec.exchange))
                     })
                     .ok_or_else(|| {
                         invalid(
@@ -277,7 +277,7 @@ impl Vm<'_> {
         }
         if let Some((slot, target)) = &target {
             if !target.chain.is_empty() {
-                self.install_target(target, &candidates, &inbound.envelope);
+                self.apply_instance_admissions(target, &candidates, &inbound.envelope);
             }
             match exchange {
                 Some(InboundExchangeRecord::Call(call)) => {
@@ -337,11 +337,11 @@ impl Vm<'_> {
         &self,
         admissions: &dyn InstanceAdmissions,
         index: usize,
-        slot: Slot,
+        slot: NodeIndex,
         port: &node::Port,
         envelope: &Envelope,
         candidates: &mut BTreeMap<instance::Generation, InstanceCandidate>,
-    ) -> Result<PreparedTarget, VmFault> {
+    ) -> Result<PreparedTarget, ExecutionFault> {
         let scope = self
             .owner_chain(self.plan.nodes[slot.index()].owner)?
             .first()

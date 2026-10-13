@@ -283,7 +283,7 @@ fn signed_refunds_remain_distinct_original_samples() {
     use rastok::journal::MemJournal;
     use rastok::node;
     use rastok::plan::GraphVersion;
-    use rastok::runtime::vm::Vm;
+    use rastok::runtime::execution::Execution;
 
     for money_shaped in [false, true] {
         let ty = if money_shaped {
@@ -332,8 +332,8 @@ graph adjustments : App {{
             assert_eq!(hash, compiled.hash);
             let version = GraphVersion(1);
             let mut journal = MemJournal::new(version);
-            let mut vm = Vm::boot(&decoded, version);
-            vm.inject(
+            let mut vm = Execution::boot(&decoded, version);
+            vm.accept_input(
                 &mut journal,
                 IngressProposal {
                     provenance: IngressProvenance::single(

@@ -5,10 +5,10 @@ use crate::envelope::{Data, MetaValue, Namespace, Scalar, Value};
 use crate::instance;
 
 use crate::journal::{CallStatus, EgressRecord, Journal, MemJournal, Record, SessionStatus};
-use crate::plan::{NodeExecution, Slot, ValidatedExecutionPlan};
-use crate::runtime::vm::{
-    CallDirectionInspection, CallReferenceInspection, InstancePhaseInspection,
-    SessionDirectionInspection, Vm, VmInspection,
+use crate::plan::{NodeExecution, NodeIndex, ValidatedExecutionPlan};
+use crate::runtime::execution::{
+    CallDirectionInspection, CallReferenceInspection, Execution, ExecutionInspection,
+    InstancePhaseInspection, SessionDirectionInspection,
 };
 use crate::schema_annotation::{AnnotationTable, SchemaPath, SchemaPathSegment};
 use serde_json::{Map, Value as JsonValue, json};
@@ -236,7 +236,7 @@ pub struct SnapshotInput<'a> {
     /// enrich inspection only and never become execution authority.
     pub definitions: &'a [SourceDefinition],
     /// Read-only mutable-machine inspection source.
-    pub vm: &'a Vm<'a>,
+    pub execution: &'a Execution<'a>,
     /// Complete in-memory causal authority.
     pub journal: &'a MemJournal,
     /// Current redaction-safe fault, when execution refused.
@@ -264,7 +264,7 @@ pub fn snapshot(input: SnapshotInput<'_>) -> Result<UiSnapshot, serde_json::Erro
         state,
         plan,
         definitions,
-        vm,
+        execution: vm,
         journal,
         fault,
         activity,
@@ -407,7 +407,7 @@ fn record_activity_route(
 fn topology(
     plan: &ValidatedExecutionPlan,
     definitions: &[SourceDefinition],
-    inspection: &VmInspection,
+    inspection: &ExecutionInspection,
     journal: &MemJournal,
     active_instances: &BTreeSet<instance::Generation>,
     activity: Option<&ActivityView>,
@@ -515,7 +515,7 @@ fn topology(
                 .parent
                 .map(|owner| format!("owner:{}", owner.index()));
             let ports = resolved_ports
-                .node(crate::plan::Slot::new(
+                .node(crate::plan::NodeIndex::new(
                     u32::try_from(index).unwrap_or(u32::MAX),
                 ))
                 .unwrap_or_default()
@@ -774,7 +774,7 @@ fn loop_runs(plan: &ValidatedExecutionPlan, records: &[Record]) -> JsonValue {
 
 fn mailbox_contents(
     plan: &ValidatedExecutionPlan,
-    inspection: &VmInspection,
+    inspection: &ExecutionInspection,
 ) -> BTreeMap<String, Vec<JsonValue>> {
     let mut contents = BTreeMap::<String, Vec<JsonValue>>::new();
     for mailbox in &inspection.mailboxes {
@@ -844,7 +844,7 @@ pub fn scenario_definition_json(
         .any(|port| classified(port.annotations()))
         || plan.nodes.iter().enumerate().any(|(index, node)| {
             resolved
-                .node(Slot::new(u32::try_from(index).unwrap_or(u32::MAX)))
+                .node(NodeIndex::new(u32::try_from(index).unwrap_or(u32::MAX)))
                 .is_some_and(|ports| ports.iter().any(|port| classified(port.annotations())))
                 || node.vars.iter().any(|var| classified(&var.annotations))
         })
@@ -926,7 +926,7 @@ fn endpoint_json(endpoint: &crate::plan::EdgeEnd, source: bool) -> JsonValue {
     }
 }
 
-fn history(plan: &ValidatedExecutionPlan, vm: &Vm<'_>, journal: &MemJournal) -> JsonValue {
+fn history(plan: &ValidatedExecutionPlan, vm: &Execution<'_>, journal: &MemJournal) -> JsonValue {
     let observations = journal.retained_observations();
     let explanation = explanation::history(plan, journal.records());
     debug_assert_eq!(observations.len(), journal.records().len());
@@ -1147,7 +1147,7 @@ fn port_schema<'a>(
                 .iter()
                 .position(|node| &node.path == path)?;
             plan.resolved_ports()
-                .node(Slot::new(u32::try_from(index).ok()?))?
+                .node(NodeIndex::new(u32::try_from(index).ok()?))?
         }
         None => plan.resolved_ports().boundary(),
     };
@@ -1189,7 +1189,7 @@ fn node_port_annotations<'a>(
 
 fn instances(
     plan: &ValidatedExecutionPlan,
-    inspection: &VmInspection,
+    inspection: &ExecutionInspection,
     active_instances: &BTreeSet<instance::Generation>,
 ) -> JsonValue {
     let classified = explanation::classified(plan);
@@ -1231,7 +1231,7 @@ fn instances(
     )
 }
 
-fn exchanges(inspection: &VmInspection) -> JsonValue {
+fn exchanges(inspection: &ExecutionInspection) -> JsonValue {
     let calls = inspection
         .calls
         .iter()
@@ -1294,7 +1294,7 @@ fn instance_ref_json(reference: &instance::Generation) -> JsonValue {
 }
 
 fn instance_badge_json(
-    instance: &crate::runtime::vm::InstanceInspection,
+    instance: &crate::runtime::execution::InstanceInspection,
     active_instances: &BTreeSet<instance::Generation>,
 ) -> Option<JsonValue> {
     active_instances
@@ -1585,7 +1585,7 @@ mod tests {
     fn exchange_snapshots_name_recorded_completion_without_an_alias() {
         use crate::boundary::{CallId, SessionId};
         use crate::envelope::Id;
-        use crate::runtime::vm::{CallInspection, SessionInspection};
+        use crate::runtime::execution::{CallInspection, SessionInspection};
 
         let connector = crate::node::Path::new(["peer"]).unwrap();
         let generation = instance::Generation::new(
@@ -1593,7 +1593,7 @@ mod tests {
             0,
         );
         for completed in [false, true] {
-            let inspection = VmInspection {
+            let inspection = ExecutionInspection {
                 mailbox_capacity: 1024,
                 instances: vec![],
                 mailboxes: vec![],
@@ -1644,14 +1644,14 @@ mod tests {
             None,
         )
         .unwrap();
-        let view = |vm: &Vm<'_>, journal: &MemJournal, activity: Option<&ActivityView>| {
+        let view = |vm: &Execution<'_>, journal: &MemJournal, activity: Option<&ActivityView>| {
             let snapshot = snapshot(SnapshotInput {
                 revision: 0,
                 mode: "simulate",
                 state: ExecutionState::Paused,
                 plan: &compilation.plan,
                 definitions: &compilation.source_definitions,
-                vm,
+                execution: vm,
                 journal,
                 fault: None,
                 activity,
@@ -1662,7 +1662,7 @@ mod tests {
             .unwrap();
             serde_json::from_slice::<JsonValue>(&snapshot.json).unwrap()
         };
-        let mut frames = vec![(0, view(session.vm(), session.journal(), None))];
+        let mut frames = vec![(0, view(session.execution(), session.journal(), None))];
         let mut saw_held = false;
         let mut saw_wait = false;
         for _ in 0..128 {
@@ -1676,7 +1676,7 @@ mod tests {
                 session.step_transaction().unwrap();
             }
             let activity = ActivityView::journal_change(session.journal(), before, None);
-            let frame = view(session.vm(), session.journal(), activity.as_ref());
+            let frame = view(session.execution(), session.journal(), activity.as_ref());
             let operations = frame["retry_operations"]
                 .as_array()
                 .expect("Retry is inspectable");
@@ -1777,7 +1777,7 @@ mod tests {
         let recording = crate::recording::Recording::capture(
             &compilation,
             session.journal(),
-            session.vm().now(),
+            session.execution().now(),
         )
         .unwrap();
         let recording = crate::recording::Recording::decode(&recording.encode().unwrap()).unwrap();
@@ -1819,14 +1819,14 @@ mod tests {
         .expect("minimal graph");
         let version = crate::plan::GraphVersion(1);
         let journal = MemJournal::new(version);
-        let vm = Vm::boot(&compilation.plan, version);
+        let vm = Execution::boot(&compilation.plan, version);
         let view = snapshot(SnapshotInput {
             revision: 0,
             mode: "simulate",
             state: ExecutionState::Paused,
             plan: &compilation.plan,
             definitions: &compilation.source_definitions,
-            vm: &vm,
+            execution: &vm,
             journal: &journal,
             fault: None,
             activity: None,
@@ -1895,7 +1895,7 @@ graph inspected : App {
         )
         .expect("the inspection fixture compiles");
         let journal = MemJournal::new(crate::plan::GraphVersion(1));
-        let vm = Vm::boot(&compilation.plan, crate::plan::GraphVersion(1));
+        let vm = Execution::boot(&compilation.plan, crate::plan::GraphVersion(1));
         let inspection = vm.inspection();
         let active_instances = active_instance_lifecycles(&journal);
 
@@ -1975,7 +1975,7 @@ graph inspected : App {
         )
         .unwrap();
         let journal = MemJournal::new(crate::plan::GraphVersion(1));
-        let vm = Vm::boot(&compilation.plan, crate::plan::GraphVersion(1));
+        let vm = Execution::boot(&compilation.plan, crate::plan::GraphVersion(1));
         let value = topology(
             &compilation.plan,
             &compilation.source_definitions,
@@ -2016,7 +2016,7 @@ graph inspected : App {
         let value = topology(
             &compilation.plan,
             &compilation.source_definitions,
-            &session.vm().inspection(),
+            &session.execution().inspection(),
             session.journal(),
             &active_instance_lifecycles(session.journal()),
             None,
@@ -2311,7 +2311,7 @@ lab webhook { simulation requests on app { scenario classified {
         assert_eq!(rendered["data"]["redacted"], true);
 
         session.next_action().unwrap();
-        let rendered = history(&compilation.plan, session.vm(), session.journal());
+        let rendered = history(&compilation.plan, session.execution(), session.journal());
         assert!(
             !rendered["sources"]
                 .to_string()

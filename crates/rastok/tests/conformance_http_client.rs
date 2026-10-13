@@ -26,7 +26,7 @@ use rastok::envelope::{Data, Namespace, Value};
 use rastok::journal::MemJournal;
 use rastok::node;
 use rastok::plan::GraphVersion;
-use rastok::runtime::vm::Vm;
+use rastok::runtime::execution::Execution;
 use rastok::stdlib::HTTP_CLIENT;
 use std::collections::BTreeMap;
 use std::io::{Read as _, Write as _};
@@ -265,7 +265,7 @@ fn authenticated_boot(url: String) -> BootBindings {
     BootBindings::resolve(profile, &FixedSecretProvider).expect("all boot bindings resolve")
 }
 
-fn drive(vm: &mut Vm<'_>, journal: &mut MemJournal, world: &mut RuntimeBindings<'_>) {
+fn drive(vm: &mut Execution<'_>, journal: &mut MemJournal, world: &mut RuntimeBindings<'_>) {
     let mut settled = false;
     for _ in 0..250 {
         vm.run_ready_with_bindings(journal, world)
@@ -326,8 +326,8 @@ lab authenticated {
         .expect("the real Driver resolves its exact boot inputs");
     let version = GraphVersion(1);
     let mut journal = MemJournal::new_with_deployment(version, boot.attestation().clone());
-    let mut vm = Vm::boot_with_deployment(&compilation.plan, version, &boot);
-    vm.inject(
+    let mut vm = Execution::boot_with_deployment(&compilation.plan, version, &boot);
+    vm.accept_input(
         &mut journal,
         rastok::boundary::IngressProposal {
             provenance: rastok::boundary::IngressProvenance::single(
@@ -506,8 +506,8 @@ graph app : App {{
     let mut world = RuntimeBindings::try_new(&compilation.plan, &registry()).expect("HTTP binder");
     let version = GraphVersion(1);
     let mut journal = MemJournal::new(version);
-    let mut vm = Vm::boot_program(&compilation.plan, compilation.hash, version, 0, None);
-    vm.inject(
+    let mut vm = Execution::boot_program(&compilation.plan, compilation.hash, version, 0, None);
+    vm.accept_input(
         &mut journal,
         rastok::boundary::IngressProposal {
             provenance: rastok::boundary::IngressProvenance::single(

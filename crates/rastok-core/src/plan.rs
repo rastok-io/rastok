@@ -313,15 +313,15 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
 
-/// Compile-time resolved node reference. The claim is scoped: slots
-/// STORED in a [`ValidatedExecutionPlan`] are proven in bounds, but
-/// the type itself is freely constructible — so every public API
-/// that takes a caller's `Slot` next to a plan VERIFIES it and
-/// refuses typed, never indexes on faith.
+/// Index into an execution plan's Node table, not a persistent identity.
+///
+/// Validation proves that indices stored in a [`ValidatedExecutionPlan`] are
+/// in bounds. Callers can construct other indices; public APIs check them
+/// against the supplied plan before accessing a Node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Slot(u32);
+pub struct NodeIndex(u32);
 
-impl Slot {
+impl NodeIndex {
     /// Wraps a node index.
     #[must_use]
     pub const fn new(index: u32) -> Self {
@@ -381,7 +381,7 @@ pub struct ExecutionPlan {
     /// never erases this table: instance addressing, immutable bindings and
     /// future placement all attach here.
     pub owners: Vec<Owner>,
-    /// The nodes, in canonical order; [`Slot`]s index this table.
+    /// The nodes, in canonical order; [`NodeIndex`]s index this table.
     pub nodes: Vec<Node>,
     /// Boundary ports declared on the graph, in canonical order.
     /// Conventional `in`, `out`, and `err` rows are omitted when
@@ -542,7 +542,7 @@ impl ExecutionPlan {
 
     /// The instance policy owned by one executable Node.
     #[must_use]
-    pub fn node_instance(&self, slot: Slot) -> Option<&instance::InstanceSpec> {
+    pub fn node_instance(&self, slot: NodeIndex) -> Option<&instance::InstanceSpec> {
         let node = self.nodes.get(slot.index())?;
         self.owner(node.owner).map(|owner| &owner.instance)
     }
@@ -634,7 +634,7 @@ pub enum OwnerKind {
     /// A lexical Graph scope. The root App Graph is the unique parentless row.
     Graph,
     /// An executable Operator or Connector.
-    Node(Slot),
+    Node(NodeIndex),
 }
 
 /// One lexical lifecycle and instance owner.
@@ -936,9 +936,9 @@ pub struct VarCell {
 /// One Operator transition, with join admission separate from consumption.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Handler {
-    /// Operator slot that owns this application transition. Graph scopes
+    /// Operator index that owns this application transition. Graph scopes
     /// have no application handlers; Connector transitions follow a Contract.
-    pub owner: Slot,
+    pub owner: NodeIndex,
     /// The declared activation pattern — not the causal trigger a
     /// transaction records; see [`node::HandlerActivation`].
     pub activation: node::HandlerActivation,
@@ -964,7 +964,7 @@ pub struct Edge {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EdgeEnd {
     /// The node, or `None` for the graph's boundary.
-    pub node: Option<Slot>,
+    pub node: Option<NodeIndex>,
     /// The port.
     pub port: node::Port,
 }
@@ -973,7 +973,7 @@ pub struct EdgeEnd {
 /// identity material.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SymbolTable {
-    /// Slot index to node path text.
+    /// Node index to node path text.
     pub nodes: Vec<String>,
 }
 

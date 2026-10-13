@@ -14,7 +14,7 @@ pub(super) fn spec(owner: &crate::plan::Owner) -> JsonValue {
     }))
 }
 
-pub(super) fn operations(vm: &Vm<'_>, records: &[Record]) -> JsonValue {
+pub(super) fn operations(vm: &Execution<'_>, records: &[Record]) -> JsonValue {
     let operations = vm
         .retry_operations()
         .map(|(reference, operation)| {

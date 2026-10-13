@@ -31,8 +31,8 @@ use crate::node;
 use crate::plan::{
     AttrSetting, ConnectorSpec, DelayPolicy, DispatchStep, Edge, EdgeEnd, EmitValue,
     EvaluationSite, ExecutionPlan, ExtensionSpec, FieldWrite, Handler, LoopSpec, Node,
-    NodeExecution, Owner, OwnerKind, OwnerValue, PlanConstant, PlanValidationError, PortDecl,
-    SemanticHash, Slot, ValidatedExecutionPlan, VarCell,
+    NodeExecution, NodeIndex, Owner, OwnerKind, OwnerValue, PlanConstant, PlanValidationError,
+    PortDecl, SemanticHash, ValidatedExecutionPlan, VarCell,
 };
 use crate::schema_annotation::{
     AnnotationApplication, AnnotationBinding, AnnotationSet, AnnotationTable, DataAnnotation,
@@ -321,7 +321,7 @@ fn resolved_table_tree(table: &super::ResolvedPortTable) -> Cbor {
         row(table.boundary()),
         Cbor::Array(
             (0..)
-                .map(Slot::new)
+                .map(NodeIndex::new)
                 .map_while(|slot| table.node(slot))
                 .map(row)
                 .collect(),
@@ -1458,7 +1458,7 @@ pub(crate) fn deepest_level_with_resolved(
         max = max.max(4 + annotation_table_level(port.annotations()));
     }
     let mut slot = 0_u32;
-    while let Some(row) = resolved.node(Slot::new(slot)) {
+    while let Some(row) = resolved.node(NodeIndex::new(slot)) {
         max = max.max(3);
         for port in row {
             max = max.max(5 + data_type_level(port.ty()));
@@ -1764,7 +1764,7 @@ fn owner_from(tree: &Cbor) -> Result<Owner, DecodeError> {
     };
     let kind = match array_of(get(fields, 3, "owner kind")?, "owner kind")? {
         [Cbor::Uint(1)] => OwnerKind::Graph,
-        [Cbor::Uint(2), slot] => OwnerKind::Node(Slot::new(u32_from(slot, "owner node")?)),
+        [Cbor::Uint(2), slot] => OwnerKind::Node(NodeIndex::new(u32_from(slot, "owner node")?)),
         _ => return Err(err("owner kind")),
     };
     let instance = instance_from(get(fields, 4, "owner instance")?)?;
@@ -2170,9 +2170,9 @@ fn endpoint_from(tree: &Cbor) -> Result<EdgeEnd, DecodeError> {
         [slot, Cbor::Text(port)] => Ok(EdgeEnd {
             node: match slot {
                 Cbor::Null => None,
-                Cbor::Uint(index) => {
-                    Some(Slot::new(u32::try_from(*index).map_err(|_| err("slot"))?))
-                }
+                Cbor::Uint(index) => Some(NodeIndex::new(
+                    u32::try_from(*index).map_err(|_| err("slot"))?,
+                )),
                 _ => return Err(err("endpoint slot")),
             },
             port: node::Port::new(port.clone()).map_err(|_| err("endpoint port"))?,
@@ -2184,7 +2184,7 @@ fn endpoint_from(tree: &Cbor) -> Result<EdgeEnd, DecodeError> {
 fn handler_from(tree: &Cbor) -> Result<Handler, DecodeError> {
     let pairs = map_of(tree, "handler")?;
     let owner = match array_of(get(pairs, 1, "handler owner")?, "handler owner")? {
-        [Cbor::Uint(1), index] => Slot::new(u32_from(index, "handler node")?),
+        [Cbor::Uint(1), index] => NodeIndex::new(u32_from(index, "handler node")?),
         _ => return Err(err("handler owner")),
     };
     let activation = match array_of(get(pairs, 2, "activation")?, "activation")? {
@@ -2547,7 +2547,7 @@ mod tests {
     #[test]
     fn handler_owners_admit_only_executor_slots() {
         let handler = Handler {
-            owner: Slot::new(0),
+            owner: NodeIndex::new(0),
             activation: node::HandlerActivation::Port(node::Port::new("in").unwrap()),
             guard: None,
             dispatch: crate::plan::Dispatch::Linear(vec![]),
@@ -2615,7 +2615,7 @@ mod tests {
         Owner {
             path: node::OwnerPath::new([name]).unwrap(),
             parent: Some(node::OwnerSlot::new(0)),
-            kind: OwnerKind::Node(Slot::new(slot)),
+            kind: OwnerKind::Node(NodeIndex::new(slot)),
             ports: vec![],
             extensions: vec![],
             instance: instance::InstanceSpec {
@@ -3688,21 +3688,21 @@ mod tests {
                         port: port("in"),
                     },
                     to: Some(EdgeEnd {
-                        node: Some(Slot::new(0)),
+                        node: Some(NodeIndex::new(0)),
                         port: port("in"),
                     }),
                 },
                 Edge {
                     owner: node::OwnerSlot::new(0),
                     from: EdgeEnd {
-                        node: Some(Slot::new(0)),
+                        node: Some(NodeIndex::new(0)),
                         port: port("extra"),
                     },
                     to: None,
                 },
             ],
             handlers: vec![Handler {
-                owner: Slot::new(0),
+                owner: NodeIndex::new(0),
                 activation: node::HandlerActivation::Port(port("in")),
                 guard: Some(tree(expr.clone())),
                 dispatch: crate::plan::Dispatch::Linear(vec![
@@ -3777,7 +3777,7 @@ mod tests {
             boundary: vec![],
             edges: vec![],
             handlers: vec![Handler {
-                owner: Slot::new(0),
+                owner: NodeIndex::new(0),
                 activation: node::HandlerActivation::Port(port("in")),
                 guard: None,
                 dispatch: crate::plan::Dispatch::Linear(vec![DispatchStep::Let {

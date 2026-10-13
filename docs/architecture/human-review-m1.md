@@ -1696,6 +1696,36 @@ is needed.
 
 ## Parked remarks (outside the current theme)
 
+### Execution interface — decided 13 October (Yoann)
+
+During realignment lot 1, Yoann approves the following addition to the
+rename lot: `Vm` becomes `Execution`, `inject` becomes `accept_input`, and
+`admit_ingress` becomes `accept_connector_output`. Related public types
+follow (`ExecutionFault`, `ExecutionInspection`), as does the module name
+(`runtime::execution`). This supersedes the earlier decision to keep “VM”
+below; the hosted `Worker` remains separate.
+
+The two acceptance methods are alternative entry points, not successive
+stages. `accept_input` admits an App input; `accept_connector_output`
+admits a world-originated proposal from a source Connector. A correlated
+outbound Call result still settles its existing exchange through
+`poll_drivers`; it is not another root admission. Pending, rejection and
+commit-before-accept behavior are unchanged.
+
+The admission sequence is **prepare → commit → apply**. Preparation can
+refuse without changing live state. The journal commits the record and its
+routes. Applying that committed admission updates instances, exchanges and
+mailboxes; it is not a second transaction. `install` is replaced by `apply`
+where it names that post-commit update. Graph Loop context maintenance uses
+`update`, because it also removes contexts that are no longer live.
+Recovery reconstructs the same state if execution stops after commit and
+before application. No journal field, identity or execution rule changes.
+
+Status: implemented; the [naming checkpoint](node-realignment-qualification.md#execution-interface-naming-checkpoint)
+records the checks actually run. The full lot 1 qualification remains open.
+Other constructor, clock and readiness method names are outside this naming
+decision.
+
 - **The hosted Worker has no name and no type** (raised 2026-10-11, during
   T4, by Yoann: "le main paraît un peu monolithique"). execution-model.md
   names the Worker that takes one mailbox and processes one transaction

@@ -109,14 +109,16 @@ fn retry_roundtrips_without_any_command_port_or_expired_wrapper() {
     assert_eq!(plan::FORMAT_VERSION, 20);
     // This VM has no bound Call dispatcher: a valid policy cannot bypass
     // the execution gate or reach an unbound Driver.
-    let mut vm = rastok::runtime::vm::Vm::boot(&validated, plan::GraphVersion(1));
+    let mut vm = rastok::runtime::execution::Execution::boot(&validated, plan::GraphVersion(1));
     let mut journal = rastok::journal::MemJournal::new(plan::GraphVersion(1));
     assert!(matches!(
         vm.step(&mut journal),
-        Err(rastok::runtime::vm::VmFault::UnsupportedExtension {
-            extension: rastok::node::Extension::Retry,
-            ..
-        })
+        Err(
+            rastok::runtime::execution::ExecutionFault::UnsupportedExtension {
+                extension: rastok::node::Extension::Retry,
+                ..
+            }
+        )
     ));
     assert!(journal.records().is_empty());
 }

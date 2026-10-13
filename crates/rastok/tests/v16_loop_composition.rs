@@ -11,7 +11,7 @@ use rastok::journal::{
     loop_protocol::{LoopView, Phase},
 };
 use rastok::plan::{self, GraphVersion};
-use rastok::runtime::vm::Vm;
+use rastok::runtime::execution::Execution;
 
 #[test]
 fn boundary_only_graphs_have_manager_verdicts_without_synthetic_executors() {
@@ -48,8 +48,8 @@ graph app : App {{
             "a boundary-only Graph needs no synthetic Operator"
         );
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut vm = Vm::boot(&plan, GraphVersion(1));
-        vm.inject(
+        let mut vm = Execution::boot(&plan, GraphVersion(1));
+        vm.accept_input(
             &mut journal,
             IngressProposal {
                 provenance: IngressProvenance::single(rastok::node::Path::new(["test"]).unwrap()),
@@ -132,9 +132,9 @@ graph app : App {
     let compiled = compiler::compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
     let (plan, _) = plan::decode(&plan::encode(&compiled.plan, &compiled.hash)).unwrap();
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Vm::boot(&plan, GraphVersion(1));
+    let mut vm = Execution::boot(&plan, GraphVersion(1));
     for n in [1, 10] {
-        vm.inject(
+        vm.accept_input(
             &mut journal,
             IngressProposal {
                 provenance: IngressProvenance::single(rastok::node::Path::new(["test"]).unwrap()),
@@ -150,7 +150,7 @@ graph app : App {
         .unwrap();
     }
     for _ in 0..100 {
-        let mut restored = Vm::boot(&plan, GraphVersion(1));
+        let mut restored = Execution::boot(&plan, GraphVersion(1));
         restored.recover_from_journal(&journal).unwrap();
         assert_eq!(restored.inspection(), vm.inspection());
         vm = restored;
@@ -234,8 +234,8 @@ graph app : App {{
                 compiler::compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap();
             let (plan, _) = plan::decode(&plan::encode(&compiled.plan, &compiled.hash)).unwrap();
             let mut journal = MemJournal::new(GraphVersion(1));
-            let mut vm = Vm::boot(&plan, GraphVersion(1));
-            vm.inject(
+            let mut vm = Execution::boot(&plan, GraphVersion(1));
+            vm.accept_input(
                 &mut journal,
                 IngressProposal {
                     provenance: IngressProvenance::single(
@@ -252,7 +252,7 @@ graph app : App {{
             )
             .unwrap();
             for _ in 0..100 {
-                let mut restored = Vm::boot_at(&plan, GraphVersion(1), vm.now());
+                let mut restored = Execution::boot_at(&plan, GraphVersion(1), vm.now());
                 restored.recover_from_journal(&journal).unwrap();
                 assert_eq!(restored.inspection(), vm.inspection());
                 vm = restored;
@@ -311,8 +311,8 @@ graph app : App {{
     let compiled = compiler::compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap();
     let (plan, _) = plan::decode(&plan::encode(&compiled.plan, &compiled.hash)).unwrap();
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Vm::boot(&plan, GraphVersion(1));
-    vm.inject(
+    let mut vm = Execution::boot(&plan, GraphVersion(1));
+    vm.accept_input(
         &mut journal,
         IngressProposal {
             provenance: IngressProvenance::single(rastok::node::Path::new(["test"]).unwrap()),
@@ -327,7 +327,7 @@ graph app : App {{
     )
     .unwrap();
     for _ in 0..100 {
-        let mut restored = Vm::boot(&plan, GraphVersion(1));
+        let mut restored = Execution::boot(&plan, GraphVersion(1));
         restored.recover_from_journal(&journal).unwrap();
         assert_eq!(restored.inspection(), vm.inspection());
         vm = restored;
@@ -377,8 +377,8 @@ graph app : App {{
         let compiled = compiler::compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap();
         let (plan, _) = plan::decode(&plan::encode(&compiled.plan, &compiled.hash)).unwrap();
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut vm = Vm::boot(&plan, GraphVersion(1));
-        vm.inject(
+        let mut vm = Execution::boot(&plan, GraphVersion(1));
+        vm.accept_input(
             &mut journal,
             IngressProposal {
                 provenance: IngressProvenance::single(rastok::node::Path::new(["test"]).unwrap()),
@@ -393,7 +393,7 @@ graph app : App {{
         )
         .unwrap();
         for _ in 0..100 {
-            let mut restored = Vm::boot(&plan, GraphVersion(1));
+            let mut restored = Execution::boot(&plan, GraphVersion(1));
             restored.recover_from_journal(&journal).unwrap();
             assert_eq!(restored.inspection(), vm.inspection());
             vm = restored;

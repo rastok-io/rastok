@@ -1,5 +1,5 @@
 //! Reconstruct committed deliveries and private state without firing a
-//! handler. Unsupported physical obligations refuse before replacing the VM.
+//! handler. Unsupported physical obligations refuse before replacing live state.
 
 use super::*;
 use crate::envelope;
@@ -12,7 +12,7 @@ mod ingress;
 mod loops;
 mod retries;
 
-impl Vm<'_> {
+impl Execution<'_> {
     /// Restores Executor instances, exchanges, timed joins, lifetimes,
     /// Closing, mailboxes/cursors, and command Loops from the committed journal prefix. No
     /// producer executes and no new record is appended during reconstruction.
@@ -27,8 +27,8 @@ impl Vm<'_> {
     ///
     /// # Errors
     /// An unsupported recovery profile, an inconsistent committed prefix, or
-    /// a journal read failure. On every error the original VM is unchanged.
-    pub fn recover_from_journal(&mut self, journal: &dyn Journal) -> Result<(), VmFault> {
+    /// a journal read failure. On every error the original execution is unchanged.
+    pub fn recover_from_journal(&mut self, journal: &dyn Journal) -> Result<(), ExecutionFault> {
         self.recover_with_bindings(journal, &mut NoOutboundBindings)
     }
 
@@ -43,7 +43,7 @@ impl Vm<'_> {
         &mut self,
         journal: &dyn Journal,
         bindings: &mut dyn OutboundConnectorBindings,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         self.preflight(journal)?;
         let resume_at = self.now;
         let mut candidate = Self::boot_at(self.plan, self.graph_version, 0);
@@ -106,7 +106,9 @@ impl Vm<'_> {
                                 record,
                                 resume_at,
                             )
-                            .and_then(|()| admissions.apply(record).map_err(VmFault::Journal))
+                            .and_then(|()| {
+                                admissions.apply(record).map_err(ExecutionFault::Journal)
+                            })
                             .and_then(|()| candidate.promote_waiting(&admissions));
                         if result.is_ok() {
                             candidate.progress_closures();
@@ -115,10 +117,12 @@ impl Vm<'_> {
                 }
                 index += 1;
             })
-            .map_err(VmFault::Journal)?;
+            .map_err(ExecutionFault::Journal)?;
         result?;
         if candidate.instance_commands.is_some() {
-            let fold = admissions.instance_commands().map_err(VmFault::Journal)?;
+            let fold = admissions
+                .instance_commands()
+                .map_err(ExecutionFault::Journal)?;
             candidate.instance_commands = Some(
                 fold.commands()
                     .filter(|(_, state)| {
@@ -143,7 +147,7 @@ impl Vm<'_> {
         index: usize,
         record: &Record,
         resume_at: i64,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         if self.instance_commands.is_none()
             && match record {
                 Record::Ingress(record) => record.instance_commands.is_some(),
@@ -165,7 +169,9 @@ impl Vm<'_> {
                         .get_or_insert_with(|| Box::new(protocol::LoopView::default()))
                         .apply_transaction(transaction)
                         .map_err(|error| {
-                            VmFault::Journal(crate::journal::Error::InvalidLoopProtocol(error))
+                            ExecutionFault::Journal(crate::journal::Error::InvalidLoopProtocol(
+                                error,
+                            ))
                         })?;
                 }
                 Ok(())
@@ -186,7 +192,7 @@ impl Vm<'_> {
         index: usize,
         record: &TransactionRecord,
         resume_at: i64,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         crate::journal::retry_protocol::validate_transaction(record)
             .map_err(super::retry_manager::error)?;
         if record.trigger == node::Trigger::Lifecycle(node::Lifecycle::Retry) {
@@ -576,7 +582,7 @@ impl Vm<'_> {
                     envelope,
                 )
                 .map_err(|_| invalid(index, "a recurrent delivery exceeds its mailbox capacity"))?;
-            self.install_graph_contexts(expected_contexts);
+            self.update_graph_loop_contexts(expected_contexts);
         }
         if record.trigger == node::Trigger::Lifecycle(node::Lifecycle::Stop) {
             self.state
@@ -589,9 +595,9 @@ impl Vm<'_> {
     fn check_consumed_loop_context(
         &self,
         index: usize,
-        slot: Slot,
+        slot: NodeIndex,
         record: &TransactionRecord,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         if !self.has_loops {
             return Ok(());
         }
@@ -667,7 +673,7 @@ impl Vm<'_> {
         index: usize,
         record: &TransactionRecord,
         resume_at: i64,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         if record.trigger != node::Trigger::Lifecycle(node::Lifecycle::Stop) {
             return Ok(());
         }
@@ -722,7 +728,7 @@ impl Vm<'_> {
         index: usize,
         record: &TransactionRecord,
         consumed_cause: Option<Envelope>,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         let Some(scope) = record.close_scope.as_ref() else {
             return Ok(());
         };
@@ -760,7 +766,7 @@ impl Vm<'_> {
                 }
                 position += 1;
             })
-            .map_err(VmFault::Journal)?;
+            .map_err(ExecutionFault::Journal)?;
         let cause = cause
             .ok_or_else(|| invalid(index, "a close request has no earlier causal envelope"))?;
         let expected = self.closing_deadlines(scope);
@@ -793,7 +799,7 @@ impl Vm<'_> {
         index: usize,
         schedule: Option<&crate::journal::deadline::Deadlines>,
         expected: &[crate::journal::deadline::Deadline],
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         let retained: Vec<_> = schedule
             .into_iter()
             .flat_map(|schedule| schedule.items())
@@ -818,6 +824,6 @@ impl Vm<'_> {
     }
 }
 
-fn invalid(record: usize, reason: &'static str) -> VmFault {
-    VmFault::InvalidRecovery { record, reason }
+fn invalid(record: usize, reason: &'static str) -> ExecutionFault {
+    ExecutionFault::InvalidRecovery { record, reason }
 }

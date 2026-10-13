@@ -8,7 +8,7 @@
 //!
 //! [`execution-model.md`]: https://github.com/rastok-io/rastok/blob/main/docs/spec/execution-model.md
 
-pub mod vm;
+pub mod execution;
 
 use crate::boundary::{Completion, InboundCallId, SessionId};
 use crate::datatype::DataType;
@@ -18,7 +18,8 @@ use crate::instance;
 use crate::journal::{ConsumedPosition, Emission, TransactionRecord, ids};
 use crate::node;
 use crate::plan::{
-    DispatchStep, EmitValue, ExecutionPlan, GraphVersion, Handler, Slot, ValidatedExecutionPlan,
+    DispatchStep, EmitValue, ExecutionPlan, GraphVersion, Handler, NodeIndex,
+    ValidatedExecutionPlan,
 };
 use crate::value::{Value, ValueError};
 use alloc::boxed::Box;
@@ -65,11 +66,9 @@ pub enum Fault {
     InvalidUtf8(core::str::Utf8Error),
     /// A ccbor payload is not a canonical logical value.
     InvalidCanonicalData(crate::canonical_cbor::DecodeError),
-    /// A caller-supplied slot the plan does not know. `Slot` is
-    /// freely constructible; the validated plan proves only its OWN
-    /// references, so the public doors verify and refuse — never
-    /// index on faith.
-    UnknownSlot(Slot),
+    /// A caller-supplied Node index outside the plan's table. Plan validation
+    /// proves only its stored indices; public APIs also check caller inputs.
+    UnknownNodeIndex(NodeIndex),
 }
 
 impl fmt::Display for Fault {
@@ -84,7 +83,7 @@ impl fmt::Display for Fault {
             Self::Opaque(what) => write!(f, "the payload is opaque here: {what}"),
             Self::InvalidUtf8(error) => write!(f, "text payload is not valid UTF-8: {error}"),
             Self::InvalidCanonicalData(error) => error.fmt(f),
-            Self::UnknownSlot(slot) => {
+            Self::UnknownNodeIndex(slot) => {
                 write!(f, "the plan has no node at slot {}", slot.index())
             }
         }
@@ -95,10 +94,10 @@ impl core::error::Error for Fault {}
 
 /// State cells indexed by complete instance reference: successive
 /// generations at one logical address never share mutable state.
-/// Slot validation and lazy defaults come from the validated execution plan.
+/// Node index validation and lazy defaults come from the validated plan.
 #[derive(Debug, Default)]
 pub struct State {
-    cells: BTreeMap<(Slot, instance::Generation), BTreeMap<String, Value>>,
+    cells: BTreeMap<(NodeIndex, instance::Generation), BTreeMap<String, Value>>,
 }
 
 impl State {
@@ -116,15 +115,15 @@ impl State {
     ///
     /// # Errors
     ///
-    /// [`Fault::UnknownSlot`] when the plan has no such node.
+    /// [`Fault::UnknownNodeIndex`] when the plan has no such node.
     pub fn cell(
         &self,
         plan: &ValidatedExecutionPlan,
-        slot: Slot,
+        slot: NodeIndex,
         instance: &instance::Generation,
     ) -> Result<BTreeMap<String, Value>, Fault> {
         if plan.nodes.get(slot.index()).is_none() {
-            return Err(Fault::UnknownSlot(slot));
+            return Err(Fault::UnknownNodeIndex(slot));
         }
         Ok(self.cell_unchecked(plan.plan(), slot, instance))
     }
@@ -134,7 +133,7 @@ impl State {
     pub(crate) fn cell_unchecked(
         &self,
         plan: &ExecutionPlan,
-        slot: Slot,
+        slot: NodeIndex,
         instance: &instance::Generation,
     ) -> BTreeMap<String, Value> {
         if let Some(cell) = self.cells.get(&(slot, instance.clone())) {
@@ -154,16 +153,16 @@ impl State {
     ///
     /// # Errors
     ///
-    /// [`Fault::UnknownSlot`] when the plan has no such node.
+    /// [`Fault::UnknownNodeIndex`] when the plan has no such node.
     pub fn apply(
         &mut self,
         plan: &ValidatedExecutionPlan,
-        slot: Slot,
+        slot: NodeIndex,
         instance: &instance::Generation,
         delta: &[(String, Value)],
     ) -> Result<(), Fault> {
         if plan.nodes.get(slot.index()).is_none() {
-            return Err(Fault::UnknownSlot(slot));
+            return Err(Fault::UnknownNodeIndex(slot));
         }
         self.apply_unchecked(plan.plan(), slot, instance, delta);
         Ok(())
@@ -173,7 +172,7 @@ impl State {
     pub(crate) fn apply_unchecked(
         &mut self,
         plan: &ExecutionPlan,
-        slot: Slot,
+        slot: NodeIndex,
         instance: &instance::Generation,
         delta: &[(String, Value)],
     ) {
@@ -190,7 +189,7 @@ impl State {
     pub(crate) fn take_unchecked(
         &mut self,
         plan: &ExecutionPlan,
-        slot: Slot,
+        slot: NodeIndex,
         instance: &instance::Generation,
     ) -> BTreeMap<String, Value> {
         self.cells
@@ -207,8 +206,8 @@ impl State {
 #[derive(Debug)]
 pub struct Mailboxes {
     capacity: usize,
-    queues: BTreeMap<(Slot, instance::Generation), VecDeque<envelope::Delivery>>,
-    claimed: alloc::collections::BTreeSet<(Slot, instance::Generation)>,
+    queues: BTreeMap<(NodeIndex, instance::Generation), VecDeque<envelope::Delivery>>,
+    claimed: alloc::collections::BTreeSet<(NodeIndex, instance::Generation)>,
     edge_seq: BTreeMap<(String, instance::Generation), u64>,
 }
 
@@ -228,7 +227,12 @@ impl Mailboxes {
     /// `already` reservations against it — the pre-commit capacity
     /// check.
     #[must_use]
-    pub fn has_room(&self, slot: Slot, instance: &instance::Generation, already: usize) -> bool {
+    pub fn has_room(
+        &self,
+        slot: NodeIndex,
+        instance: &instance::Generation,
+        already: usize,
+    ) -> bool {
         let queued = self
             .queues
             .get(&(slot, instance.clone()))
@@ -245,7 +249,7 @@ impl Mailboxes {
     /// The delivery's envelope back, boxed, when the queue is full.
     pub fn deliver(
         &mut self,
-        slot: Slot,
+        slot: NodeIndex,
         instance: &instance::Generation,
         source_instance: &instance::Generation,
         port: node::Port,
@@ -274,7 +278,7 @@ impl Mailboxes {
     /// The first unclaimed non-empty mailbox and a copy of its head —
     /// the reservation: nothing is removed until [`Self::pop`].
     #[must_use]
-    pub fn peek_next(&self) -> Option<(Slot, instance::Generation, envelope::Delivery)> {
+    pub fn peek_next(&self) -> Option<(NodeIndex, instance::Generation, envelope::Delivery)> {
         self.peek_next_where(|_, _| true)
     }
 
@@ -285,8 +289,8 @@ impl Mailboxes {
     #[must_use]
     pub fn peek_next_where(
         &self,
-        ready: impl Fn(Slot, &instance::Generation) -> bool,
-    ) -> Option<(Slot, instance::Generation, envelope::Delivery)> {
+        ready: impl Fn(NodeIndex, &instance::Generation) -> bool,
+    ) -> Option<(NodeIndex, instance::Generation, envelope::Delivery)> {
         self.queues
             .iter()
             .find(|((slot, key), queue)| {
@@ -305,16 +309,18 @@ impl Mailboxes {
     /// every mailbox on the ordinary one-delivery hot path.
     pub(crate) fn next_runnable_key(
         &self,
-        after: Option<&(Slot, instance::Generation)>,
-        ready: impl Fn(Slot, &instance::Generation) -> bool,
-    ) -> Option<(Slot, instance::Generation, envelope::Delivery)> {
-        let accepted =
-            |(key, queue): (&(Slot, instance::Generation), &VecDeque<envelope::Delivery>)| {
-                let (slot, instance) = key;
-                !queue.is_empty()
-                    && !self.claimed.contains(&(*slot, instance.clone()))
-                    && ready(*slot, instance)
-            };
+        after: Option<&(NodeIndex, instance::Generation)>,
+        ready: impl Fn(NodeIndex, &instance::Generation) -> bool,
+    ) -> Option<(NodeIndex, instance::Generation, envelope::Delivery)> {
+        let accepted = |(key, queue): (
+            &(NodeIndex, instance::Generation),
+            &VecDeque<envelope::Delivery>,
+        )| {
+            let (slot, instance) = key;
+            !queue.is_empty()
+                && !self.claimed.contains(&(*slot, instance.clone()))
+                && ready(*slot, instance)
+        };
         let found = match after {
             Some(after) => self
                 .queues
@@ -336,7 +342,7 @@ impl Mailboxes {
     /// is only a reservation view; commit paths remove by full cursor/id.
     pub(crate) fn queued(
         &self,
-        slot: Slot,
+        slot: NodeIndex,
         instance: &instance::Generation,
     ) -> Option<&VecDeque<envelope::Delivery>> {
         self.queues.get(&(slot, instance.clone()))
@@ -349,7 +355,12 @@ impl Mailboxes {
     #[must_use]
     pub(crate) fn inspection(
         &self,
-    ) -> Vec<(Slot, instance::Generation, bool, Vec<envelope::Delivery>)> {
+    ) -> Vec<(
+        NodeIndex,
+        instance::Generation,
+        bool,
+        Vec<envelope::Delivery>,
+    )> {
         self.queues
             .iter()
             .filter(|(key, queue)| !queue.is_empty() || self.claimed.contains(*key))
@@ -371,7 +382,7 @@ impl Mailboxes {
     #[must_use]
     pub fn find_by_ref(
         &self,
-        slot: Slot,
+        slot: NodeIndex,
         instance: &instance::Generation,
         edge: &str,
         id: crate::envelope::Id,
@@ -389,7 +400,7 @@ impl Mailboxes {
     #[must_use]
     pub fn find_by_ref_any(
         &self,
-        slot: Slot,
+        slot: NodeIndex,
         edge: &str,
         id: crate::envelope::Id,
     ) -> Option<(instance::Generation, &envelope::Delivery)> {
@@ -411,7 +422,7 @@ impl Mailboxes {
     /// survivors holds.
     pub fn remove_by_ref(
         &mut self,
-        slot: Slot,
+        slot: NodeIndex,
         instance: &instance::Generation,
         edge: &str,
         id: crate::envelope::Id,
@@ -427,7 +438,7 @@ impl Mailboxes {
     /// the instance it occupied.
     pub fn remove_by_ref_any(
         &mut self,
-        slot: Slot,
+        slot: NodeIndex,
         edge: &str,
         id: crate::envelope::Id,
     ) -> Option<(instance::Generation, envelope::Delivery)> {
@@ -451,7 +462,7 @@ impl Mailboxes {
     /// that consumes it is committed.
     pub fn pop(
         &mut self,
-        slot: Slot,
+        slot: NodeIndex,
         instance: &instance::Generation,
     ) -> Option<envelope::Delivery> {
         self.queues
@@ -460,12 +471,12 @@ impl Mailboxes {
     }
 
     /// Claims a mailbox for the duration of an external call.
-    pub fn claim(&mut self, slot: Slot, instance: &instance::Generation) {
+    pub fn claim(&mut self, slot: NodeIndex, instance: &instance::Generation) {
         self.claimed.insert((slot, instance.clone()));
     }
 
     /// Releases a claim after the call settled.
-    pub fn release(&mut self, slot: Slot, instance: &instance::Generation) {
+    pub fn release(&mut self, slot: NodeIndex, instance: &instance::Generation) {
         self.claimed.remove(&(slot, instance.clone()));
     }
 
@@ -473,7 +484,7 @@ impl Mailboxes {
     /// Closing records these positions on `l:stop`; this is not a silent drop.
     pub fn take_all(
         &mut self,
-        slot: Slot,
+        slot: NodeIndex,
         instance: &instance::Generation,
     ) -> Vec<envelope::Delivery> {
         self.queues
@@ -495,7 +506,7 @@ impl Mailboxes {
 
     /// Whether this exact instance still owns queued or claimed work.
     #[must_use]
-    pub fn has_work(&self, slot: Slot, instance: &instance::Generation) -> bool {
+    pub fn has_work(&self, slot: NodeIndex, instance: &instance::Generation) -> bool {
         self.queues
             .get(&(slot, instance.clone()))
             .is_some_and(|queue| !queue.is_empty())
@@ -622,7 +633,7 @@ impl<'plan> TransactionPreparer<'plan> {
     /// A [`Fault`]; the transaction then changed nothing at all.
     pub fn fire(
         &self,
-        slot: Slot,
+        slot: NodeIndex,
         instance: &instance::Generation,
         delivery: &envelope::Delivery,
         state: &BTreeMap<String, Value>,
@@ -635,7 +646,7 @@ impl<'plan> TransactionPreparer<'plan> {
     /// useful low-level probe for plans without instance values.
     pub(crate) fn fire_with_bindings(
         &self,
-        slot: Slot,
+        slot: NodeIndex,
         instance: &instance::Generation,
         delivery: &envelope::Delivery,
         state: &BTreeMap<String, Value>,
@@ -672,7 +683,7 @@ impl<'plan> TransactionPreparer<'plan> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn fire_in_loop(
         &self,
-        slot: Slot,
+        slot: NodeIndex,
         instance: &instance::Generation,
         delivery: &envelope::Delivery,
         state: &BTreeMap<String, Value>,
@@ -709,7 +720,7 @@ impl<'plan> TransactionPreparer<'plan> {
     /// named-envelope bindings as the eventual firing.
     pub(crate) fn join_matches(
         &self,
-        slot: Slot,
+        slot: NodeIndex,
         candidate: JoinCandidate<'_>,
         state: &BTreeMap<String, Value>,
         instance_values: &BTreeMap<String, Value>,
@@ -768,7 +779,7 @@ impl<'plan> TransactionPreparer<'plan> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn fire_join(
         &self,
-        slot: Slot,
+        slot: NodeIndex,
         instance: &instance::Generation,
         candidate: JoinCandidate<'_>,
         state: &BTreeMap<String, Value>,
@@ -818,12 +829,12 @@ impl<'plan> TransactionPreparer<'plan> {
     /// port and consumes the candidate cursor atomically.
     pub(crate) fn join_expired(
         &self,
-        slot: Slot,
+        slot: NodeIndex,
         instance: &instance::Generation,
         delivery: &envelope::Delivery,
     ) -> Result<TransactionOutcome, Fault> {
         let Some(node) = self.plan.nodes.get(slot.index()) else {
-            return Err(Fault::UnknownSlot(slot));
+            return Err(Fault::UnknownNodeIndex(slot));
         };
         let port = node::Port::new("expired")
             .map_err(|error| Fault::Unrepresentable(error.to_string()))?;
@@ -885,7 +896,7 @@ impl<'plan> TransactionPreparer<'plan> {
     /// A [`Fault`]; the lifecycle transition then commits nothing.
     pub(crate) fn fire_lifecycle(
         &self,
-        slot: Slot,
+        slot: NodeIndex,
         lifecycle: node::Lifecycle,
         firing: LifecycleFiring<'_>,
         state: &BTreeMap<String, Value>,
@@ -913,7 +924,7 @@ impl<'plan> TransactionPreparer<'plan> {
     #[allow(clippy::too_many_arguments)]
     fn fire_activation(
         &self,
-        slot: Slot,
+        slot: NodeIndex,
         instance: &instance::Generation,
         activation: &node::HandlerActivation,
         trigger: &node::Trigger,
@@ -930,7 +941,7 @@ impl<'plan> TransactionPreparer<'plan> {
         // The validated plan proves its own references, not the caller's
         // slot — verified, refused typed.
         let Some(node) = self.plan.nodes.get(slot.index()) else {
-            return Err(Fault::UnknownSlot(slot));
+            return Err(Fault::UnknownNodeIndex(slot));
         };
         let handler = self
             .plan
@@ -1298,7 +1309,7 @@ impl<'plan> TransactionPreparer<'plan> {
     /// what the machine then creates, identically.
     fn created_deadline_ids(
         &self,
-        slot: Slot,
+        slot: NodeIndex,
         emissions: &[Emission],
     ) -> Result<Vec<(crate::journal::DeadlineKind, envelope::Id)>, Fault> {
         let mut deadline_ids = Vec::new();
@@ -1377,19 +1388,19 @@ impl<'plan> TransactionPreparer<'plan> {
     ///
     /// # Errors
     ///
-    /// [`Fault::UnknownSlot`] when the caller supplies a slot outside the
+    /// [`Fault::UnknownNodeIndex`] when the caller supplies a slot outside the
     /// validated plan. No handler lookup is involved: a connector completion
     /// is already the settled result of one delivered request.
     pub fn connector_completion(
         &self,
-        slot: Slot,
+        slot: NodeIndex,
         instance: &instance::Generation,
         delivery: &envelope::Delivery,
         trigger: &node::Trigger,
         completion: &Completion,
     ) -> Result<TransactionOutcome, Fault> {
         let Some(planned) = self.plan.nodes.get(slot.index()) else {
-            return Err(Fault::UnknownSlot(slot));
+            return Err(Fault::UnknownNodeIndex(slot));
         };
         let connector_path = &planned.path;
         let emissions =
@@ -1428,17 +1439,17 @@ impl<'plan> TransactionPreparer<'plan> {
     ///
     /// # Errors
     ///
-    /// [`Fault::UnknownSlot`] when `slot` is outside the validated plan.
+    /// [`Fault::UnknownNodeIndex`] when `slot` is outside the validated plan.
     pub fn inbound_call_completion(
         &self,
-        slot: Slot,
+        slot: NodeIndex,
         instance: &instance::Generation,
         request: &Envelope,
         call_id: InboundCallId,
         completion: &Completion,
     ) -> Result<TransactionOutcome, Fault> {
         let Some(planned) = self.plan.nodes.get(slot.index()) else {
-            return Err(Fault::UnknownSlot(slot));
+            return Err(Fault::UnknownNodeIndex(slot));
         };
         let trigger = node::Trigger::Lifecycle(node::Lifecycle::Reply);
         let emissions = self.completion_emissions(&planned.path, request, &trigger, completion);
@@ -1475,10 +1486,10 @@ impl<'plan> TransactionPreparer<'plan> {
     ///
     /// # Errors
     ///
-    /// [`Fault::UnknownSlot`] when `slot` is outside the validated plan.
+    /// [`Fault::UnknownNodeIndex`] when `slot` is outside the validated plan.
     pub fn inbound_call_response_completion(
         &self,
-        slot: Slot,
+        slot: NodeIndex,
         instance: &instance::Generation,
         request: &Envelope,
         response: &envelope::Delivery,
@@ -1503,11 +1514,11 @@ impl<'plan> TransactionPreparer<'plan> {
     ///
     /// # Errors
     ///
-    /// [`Fault::UnknownSlot`] when `slot` is outside the validated plan, or a
+    /// [`Fault::UnknownNodeIndex`] when `slot` is outside the validated plan, or a
     /// malformed completion contradicts the terminal barrier.
     pub fn session_completion(
         &self,
-        slot: Slot,
+        slot: NodeIndex,
         instance: &instance::Generation,
         opening: &Envelope,
         session_id: SessionId,
@@ -1515,7 +1526,7 @@ impl<'plan> TransactionPreparer<'plan> {
         consumed: &[&envelope::Delivery],
     ) -> Result<TransactionOutcome, Fault> {
         let Some(planned) = self.plan.nodes.get(slot.index()) else {
-            return Err(Fault::UnknownSlot(slot));
+            return Err(Fault::UnknownNodeIndex(slot));
         };
         let trigger = node::Trigger::Lifecycle(node::Lifecycle::Exit);
         let mut outputs = completion.outputs().to_vec();
@@ -1610,7 +1621,7 @@ impl<'plan> TransactionPreparer<'plan> {
     #[must_use]
     pub fn handler_for(
         &self,
-        slot: Slot,
+        slot: NodeIndex,
         activation: &node::HandlerActivation,
     ) -> Option<&'plan Handler> {
         self.plan
@@ -2129,7 +2140,7 @@ impl<'a> PayloadSlots<'a> {
         input: &'a Envelope,
         named: &'a [envelope::Delivery],
         plan: &'a ValidatedExecutionPlan,
-        slot: Slot,
+        slot: NodeIndex,
         trigger: &node::Trigger,
     ) -> Self {
         let payload = |data, port: &node::Port| {

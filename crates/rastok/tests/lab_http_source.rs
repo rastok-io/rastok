@@ -315,7 +315,7 @@ lab blocked {
 }
 "#;
     let mut compilation = compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
-    let capacity = rastok::runtime::vm::Vm::boot(&compilation.plan, GraphVersion(1))
+    let capacity = rastok::runtime::execution::Execution::boot(&compilation.plan, GraphVersion(1))
         .inspection()
         .mailbox_capacity;
     let scenario = &mut compilation.labs[0].simulations[0].scenarios[0];

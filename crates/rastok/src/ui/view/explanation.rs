@@ -13,7 +13,7 @@ use crate::plan::{
 };
 use crate::runtime::{DataSlot, LazyBindings, State};
 
-pub(super) fn future(inspection: &VmInspection, records: &[Record]) -> JsonValue {
+pub(super) fn future(inspection: &ExecutionInspection, records: &[Record]) -> JsonValue {
     let deadlines: BTreeMap<_, _> = records
         .iter()
         .filter_map(Record::deadlines)
@@ -265,7 +265,7 @@ pub(super) fn classified(plan: &ValidatedExecutionPlan) -> bool {
         .any(|port| sensitive(port.annotations()))
         || plan.nodes.iter().enumerate().any(|(index, node)| {
             plan.resolved_ports()
-                .node(Slot::new(index as u32))
+                .node(NodeIndex::new(index as u32))
                 .is_some_and(|ports| ports.iter().any(|port| sensitive(port.annotations())))
                 || node.vars.iter().any(|var| sensitive(&var.annotations))
         })
@@ -349,7 +349,7 @@ pub(super) fn history(plan: &ValidatedExecutionPlan, records: &[Record]) -> Hist
                     .nodes
                     .iter()
                     .position(|node| crate::node::OwnerPath::from(&node.path) == tx.owner_path)
-                    .map(|slot| Slot::new(slot as u32));
+                    .map(|slot| NodeIndex::new(slot as u32));
                 if let Some(slot) = slot {
                     extra["decision"] = if context_valid {
                         decision(plan, tx, slot, &inputs, &state, &fold, protected)
@@ -487,7 +487,7 @@ fn consumed_id(
 fn decision(
     plan: &ValidatedExecutionPlan,
     tx: &TransactionRecord,
-    slot: Slot,
+    slot: NodeIndex,
     inputs: &[&Envelope],
     state: &State,
     fold: &protocol::LoopView,
@@ -823,7 +823,7 @@ mod tests {
                 assert!(command.get("admitted").is_none());
             }
         }
-        let inspection = session.vm().inspection();
+        let inspection = session.execution().inspection();
         let labels: BTreeSet<_> = inspection
             .instances
             .iter()

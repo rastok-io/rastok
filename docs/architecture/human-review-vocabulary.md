@@ -757,6 +757,33 @@ placeholder "minted on admission" (`ui/view.rs`) and in test messages;
 `components.md` and `connector-drivers.md`. `mint_capability` (the UI
 authorization token) is another act and stays.
 
+### Execution interface — addition approved 13 October (Yoann)
+
+| Current name | Decided name | Meaning preserved |
+|---|---|---|
+| `Vm`, `runtime::vm` | `Execution`, `runtime::execution` | live execution state for one validated plan, driven by the hosted Worker |
+| `VmFault`, `VmInspection` | `ExecutionFault`, `ExecutionInspection` | fault and read-only inspection of that execution |
+| `Simulator::vm()`, `SnapshotInput::vm` | `Simulator::execution()`, `SnapshotInput::execution` | access to the same execution; snapshot JSON fields do not change |
+| `inject` | `accept_input` | accept an App input proposal |
+| `admit_ingress` | `accept_connector_output` | accept a world-originated source-Connector proposal; not settle an outbound Call |
+| `install_inbound_exchange` | `apply_exchange_admission` | update live Call or Session state after journal commit |
+| `install_target` | `apply_instance_admissions` | update or create the admitted instance chain after commit |
+| `install_graph_contexts` | `update_graph_loop_contexts` | discard obsolete contexts and add the committed ones |
+
+The shared sequence reads **prepare → commit → apply**. `commit` remains
+the journal operation; `apply` updates memory from the committed decision.
+These are not two transactions. No reader-visible acceptance or recovery
+behavior changes. The two public acceptance methods are alternatives, not
+two phases. The admission nouns, `admit_proposal`, `step`, `run_ready`,
+`poll_drivers` and the journal's `commit_ingress` keep their names. A complete
+post-commit helper, if needed by the decomposition, is `apply_admission`;
+this decision does not require adding a helper for its own sake.
+
+This addition supersedes only the corresponding “kept” entries of the
+12 October lot. Status: implemented; see the [naming checkpoint](node-realignment-qualification.md#execution-interface-naming-checkpoint)
+for its checks. The remaining Node representation changes belong to lot 1,
+not to this naming addition.
+
 ## What validation produces
 
 For each **⟂**: keep / rename / merge, with the chosen word. The answers

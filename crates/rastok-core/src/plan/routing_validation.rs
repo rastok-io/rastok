@@ -153,7 +153,7 @@ pub(super) fn validate_plan_routing(
     let physical = |endpoint: &Endpoint| -> Option<super::EdgeEnd> {
         let node = match &endpoint.owner {
             super::EndpointOwner::Graph(path) if path.is_root() => None,
-            super::EndpointOwner::Node(path) => Some(super::Slot::new(
+            super::EndpointOwner::Node(path) => Some(super::NodeIndex::new(
                 u32::try_from(plan.nodes.iter().position(|node| node.path == *path)?).ok()?,
             )),
             _ => return None,
@@ -290,7 +290,7 @@ pub(super) fn validate_plan_routing(
     for (index, _) in plan.nodes.iter().enumerate() {
         super::call_loop::validate(
             plan,
-            super::Slot::new(u32::try_from(index).unwrap_or(u32::MAX)),
+            super::NodeIndex::new(u32::try_from(index).unwrap_or(u32::MAX)),
             ports,
         )?;
     }

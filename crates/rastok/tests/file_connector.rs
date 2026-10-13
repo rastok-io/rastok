@@ -15,7 +15,7 @@ use rastok::envelope::{Data, Namespace, Value};
 use rastok::journal::{Journal, MemJournal, Record};
 use rastok::node;
 use rastok::plan::GraphVersion;
-use rastok::runtime::vm::Vm;
+use rastok::runtime::execution::Execution;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -107,7 +107,7 @@ fn registry(root: &Path) -> DriverRegistry {
         .expect("File is registered once")
 }
 
-fn drive(vm: &mut Vm<'_>, journal: &mut MemJournal, bindings: &mut RuntimeBindings<'_>) {
+fn drive(vm: &mut Execution<'_>, journal: &mut MemJournal, bindings: &mut RuntimeBindings<'_>) {
     for _ in 0..2_000 {
         vm.run_ready_with_bindings(journal, bindings)
             .expect("ready File work commits");
@@ -121,7 +121,7 @@ fn drive(vm: &mut Vm<'_>, journal: &mut MemJournal, bindings: &mut RuntimeBindin
     panic!("the File invocation did not become stable");
 }
 
-fn source_exit_cases(vm: &Vm<'_>) -> Vec<String> {
+fn source_exit_cases(vm: &Execution<'_>) -> Vec<String> {
     vm.envelope_views()
         .iter()
         .filter_map(|observed| {
@@ -136,7 +136,7 @@ fn source_exit_cases(vm: &Vm<'_>) -> Vec<String> {
         .collect()
 }
 
-fn source_bytes(vm: &Vm<'_>) -> Vec<Vec<u8>> {
+fn source_bytes(vm: &Execution<'_>) -> Vec<Vec<u8>> {
     vm.envelope_views()
         .iter()
         .filter_map(|observed| {
@@ -157,8 +157,8 @@ fn run_observed(root: &Path, source: &str, data: Data) -> (MemJournal, Vec<Strin
     let registry = registry(root);
     let mut bindings = RuntimeBindings::try_new(&plan, &registry).expect("File binds");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Vm::boot(&plan, GraphVersion(1));
-    vm.inject(&mut journal, submission(data))
+    let mut vm = Execution::boot(&plan, GraphVersion(1));
+    vm.accept_input(&mut journal, submission(data))
         .expect("the input is admitted");
     drive(&mut vm, &mut journal, &mut bindings);
     let exits = source_exit_cases(&vm);
@@ -306,8 +306,8 @@ fn filesystem_observation_begins_only_after_the_outbound_open() {
     let registry = registry(root.path());
     let mut bindings = RuntimeBindings::try_new(&plan, &registry).expect("File binds");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Vm::boot(&plan, GraphVersion(1));
-    vm.inject(&mut journal, submission(Data::materialized(Value::Null)))
+    let mut vm = Execution::boot(&plan, GraphVersion(1));
+    vm.accept_input(&mut journal, submission(Data::materialized(Value::Null)))
         .expect("the trigger is admitted");
 
     vm.run_ready_with_bindings(&mut journal, &mut bindings)
@@ -332,8 +332,8 @@ fn replay_of_an_open_replace_never_reexecutes_the_file_effect() {
     let plan = compile_file(&source("replace", "artifact.bin", None));
     let registry = registry(root.path());
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Vm::boot(&plan, GraphVersion(1));
-    vm.inject(
+    let mut vm = Execution::boot(&plan, GraphVersion(1));
+    vm.accept_input(
         &mut journal,
         submission(Data::materialized(Value::Bytes(b"sealed".to_vec()))),
     )

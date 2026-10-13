@@ -226,7 +226,7 @@ fn v16_retains_one_operator_loop_without_a_graph_handler_or_command_port() {
         "next" | "Loop.next" | "Loop.again" | "Loop.done"
     )));
     assert_eq!(compiled.handlers.len(), 1);
-    assert_eq!(compiled.handlers[0].owner, rastok::plan::Slot::new(0));
+    assert_eq!(compiled.handlers[0].owner, rastok::plan::NodeIndex::new(0));
 
     let (decoded, declared) = plan::decode(&bytes).expect("v16 revalidates Loop Registry-free");
     assert_eq!(decoded, compiled);
@@ -236,10 +236,10 @@ fn v16_retains_one_operator_loop_without_a_graph_handler_or_command_port() {
     use rastok::envelope::{Data, Namespace};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
-    use rastok::runtime::vm::Vm;
+    use rastok::runtime::execution::Execution;
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Vm::boot(&decoded, GraphVersion(1));
-    vm.inject(
+    let mut vm = Execution::boot(&decoded, GraphVersion(1));
+    vm.accept_input(
         &mut journal,
         IngressProposal {
             provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
@@ -428,7 +428,7 @@ graph g : App {
     let before = compilation
         .plan
         .plan()
-        .node_instance(rastok::plan::Slot::new(0))
+        .node_instance(rastok::plan::NodeIndex::new(0))
         .expect("the lowered node has an owner");
     assert_eq!(
         before.key.as_ref().expect("the node is keyed").ty,
@@ -806,9 +806,9 @@ fn run_boundary_probe(plan: &rastok::plan::ValidatedExecutionPlan) -> (Vec<Strin
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
-    use rastok::runtime::vm::Vm;
+    use rastok::runtime::execution::Execution;
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Vm::boot(plan, GraphVersion(1));
+    let mut vm = Execution::boot(plan, GraphVersion(1));
     let submission = IngressProposal {
         provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
         draft: EnvelopeDraft {
@@ -819,7 +819,7 @@ fn run_boundary_probe(plan: &rastok::plan::ValidatedExecutionPlan) -> (Vec<Strin
         sequence: IngressSequence::Next,
         session: None,
     };
-    vm.inject(&mut journal, submission)
+    vm.accept_input(&mut journal, submission)
         .expect("the injection lands");
     vm.run_ready(&mut journal).expect("the drain completes");
     let outputs = vm
@@ -840,16 +840,19 @@ fn run_boundary_probe(plan: &rastok::plan::ValidatedExecutionPlan) -> (Vec<Strin
 fn an_out_of_bounds_slot_cannot_become_a_validated_plan() {
     let (plan, _, _) = packaged_example();
     // A well-shaped plan naming impossible structure: the machine
-    // would index past the node table (the review's Slot(999)). The
+    // would index past the node table (the review's NodeIndex(999)). The
     // validity claim does not travel through into_inner — the raw
     // plan must re-earn the type, and cannot.
     let mut raw = plan.into_inner();
     raw.edges[0].to = Some(rastok::plan::EdgeEnd {
-        node: Some(rastok::plan::Slot::new(999)),
+        node: Some(rastok::plan::NodeIndex::new(999)),
         port: rastok::node::Port::new("in").unwrap(),
     });
     let refused = rastok::plan::ValidatedExecutionPlan::try_from(raw);
-    assert!(refused.is_err(), "Slot(999) never earns the validated type");
+    assert!(
+        refused.is_err(),
+        "NodeIndex(999) never earns the validated type"
+    );
     // And since `plan::encode` only accepts the validated type, the
     // property holds by construction: what encode accepts, decode
     // reads back — there is no way to package the invalid plan.

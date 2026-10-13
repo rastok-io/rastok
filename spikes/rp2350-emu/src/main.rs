@@ -28,7 +28,7 @@ use rastok_core::journal;
 use rastok_core::journal::{MemJournal, Record};
 use rastok_core::node::{Path, Port, Trigger};
 use rastok_core::plan::GraphVersion;
-use rastok_core::runtime::vm::Vm;
+use rastok_core::runtime::execution::Execution;
 
 #[cfg(feature = "retry-qualification")]
 mod retry;
@@ -193,7 +193,7 @@ fn main() -> ! {
     //    relay sample, so the journal actor/trigger identifies the measured
     //    turn instead of assuming that one `step` has one static role.
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Vm::boot(&plan, GraphVersion(1));
+    let mut vm = Execution::boot(&plan, GraphVersion(1));
     let relay_owner = node::OwnerPath::new(["relay"]).expect("the measured owner path is valid");
     let relay_trigger = Trigger::Port(Port::new("in").expect("the measured port is valid"));
     let mut tx_ticks_total: u64 = 0;
@@ -201,7 +201,7 @@ fn main() -> ! {
     let mut tx_max = 0u64;
     const ROUNDS: u32 = 32;
     for round in 0..ROUNDS {
-        vm.inject(&mut journal, submission("salut", round as u8))
+        vm.accept_input(&mut journal, submission("salut", round as u8))
             .expect("the submission lands");
         loop {
             let (t, stepped) = ticks.measure(|| vm.step(&mut journal));

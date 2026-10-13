@@ -1,21 +1,21 @@
-//! The engine — run and simulation alike.
+//! Live execution of a validated plan, for both real runs and simulation.
 //!
-//! The debugger-shaped surface of the blueprint: [`Vm::boot`] once,
-//! [`Vm::step`] for exactly one node transaction, [`Vm::run_ready`] to
-//! quiescence. No I/O, no clock, no randomness live here: the world
-//! enters through the journal and the boundary traits, and the same
-//! machine serves run and simulation.
+//! The host creates an [`Execution`], supplies inputs and logical time, and
+//! advances ready work with [`Execution::step`] or [`Execution::run_ready`].
+//! [`Execution::poll_drivers`] submits committed effect requests to the
+//! supplied Drivers and collects their observations. Real and simulated
+//! Drivers use the same interfaces; this module reads no ambient clock.
 //!
 //! # The delivery protocol
 //!
 //! A transaction is atomic in [`TransactionPreparer`]; this module
-//! keeps it atomic across the machine. Every step follows the same
+//! preserves that atomicity across routing. A transaction follows the same
 //! discipline: *reserve* the head of a mailbox without removing it,
 //! *evaluate* on isolated state, *reserve capacity* in every target
 //! mailbox, *commit* to the journal — and only then remove the
 //! delivery, apply the state, and route. A fault or refusal anywhere
-//! before the commit leaves the delivery exactly where it was; after
-//! the commit, nothing can fail.
+//! before commit leaves the delivery in its mailbox. Applying the committed
+//! transaction to live state introduces no further admission decision.
 
 use crate::boundary::{
     AdmittedIngress, BoundaryObservation, CallId, CallOpen, ClosingDeadline, Completion,
@@ -34,7 +34,7 @@ use crate::journal::admission::InstanceAdmissions;
 use crate::journal::{Emission, Journal, LoopRunId, RouteTarget, RoutedDelivery, ids};
 use crate::node;
 use crate::plan::{
-    AttrSetting, Edge, EdgeEnd, EvaluationSite, GraphVersion, NodeExecution, OwnerKind, Slot,
+    AttrSetting, Edge, EdgeEnd, EvaluationSite, GraphVersion, NodeExecution, NodeIndex, OwnerKind,
     ValidatedExecutionPlan,
 };
 use crate::runtime::{
@@ -61,13 +61,13 @@ mod retry_manager;
 mod timing;
 use core::fmt;
 
-/// Failure of a VM operation: invalid admission, transaction preparation,
+/// Failure of an execution operation: invalid admission, transaction preparation,
 /// journal access, Driver binding, recovery or an internal invariant.
 /// This is returned to the host, never emitted as a business payload.
 /// It does not by itself imply that the operation committed no record;
 /// the journal remains authoritative when determining what completed.
 #[derive(Debug, Clone, PartialEq)]
-pub enum VmFault {
+pub enum ExecutionFault {
     /// Recovery cannot reconstruct this profile from the retained facts.
     RecoveryUnavailable {
         /// Missing reconstruction obligation, never a guessed default.
@@ -256,7 +256,7 @@ fn expression_roots(expression: &crate::expr::Expr, roots: &mut Vec<String>) {
     }
 }
 
-impl fmt::Display for VmFault {
+impl fmt::Display for ExecutionFault {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::RecoveryUnavailable { reason } => write!(f, "recovery unavailable: {reason}"),
@@ -339,7 +339,7 @@ impl fmt::Display for VmFault {
     }
 }
 
-impl core::error::Error for VmFault {}
+impl core::error::Error for ExecutionFault {}
 
 /// Result of polling outbound Drivers: the number of settled Call completions
 /// queued for a Connector transaction, plus discarded, uncorrelated and rejected
@@ -399,7 +399,7 @@ impl PollReport {
 /// the delivery itself.
 #[derive(Debug, Clone, PartialEq)]
 struct PendingCall {
-    slot: Slot,
+    slot: NodeIndex,
     delivery: envelope::Delivery,
     instance: instance::Generation,
 }
@@ -409,7 +409,7 @@ struct PendingCall {
 /// itself opened this obligation.
 #[derive(Debug, Clone, PartialEq)]
 struct PendingInboundCall {
-    slot: Slot,
+    slot: NodeIndex,
     request: Envelope,
     instance: instance::Generation,
     response: Option<PendingInboundCallResponse>,
@@ -436,7 +436,7 @@ struct PendingInboundCallTimeout {
 /// One journaled logical Session owned by a Connector instance.
 #[derive(Debug, Clone, PartialEq)]
 struct PendingSession {
-    slot: Slot,
+    slot: NodeIndex,
     instance: instance::Generation,
     opening: Envelope,
     /// Present only for an outbound opening whose exact prepared bytes may
@@ -457,7 +457,7 @@ struct PendingSession {
 #[derive(Debug, Clone, PartialEq)]
 struct PendingSessionWrite {
     intent: SessionWrite,
-    slot: Slot,
+    slot: NodeIndex,
     instance: instance::Generation,
     delivery: envelope::Delivery,
     started: bool,
@@ -467,7 +467,7 @@ struct PendingSessionWrite {
 /// Keeping its three routing facts together prevents a write from being
 /// prepared for one instance and retained from another.
 struct SessionDispatch<'a> {
-    slot: Slot,
+    slot: NodeIndex,
     instance: &'a instance::Generation,
     delivery: &'a envelope::Delivery,
 }
@@ -662,7 +662,7 @@ impl crate::boundary::CompletionCheck for PlanCompletionCheck<'_> {
             return Err(format!("`{connector}` is not a connector"));
         };
         let slot =
-            Slot::new(u32::try_from(index).map_err(|_| {
+            NodeIndex::new(u32::try_from(index).map_err(|_| {
                 format!("the slot of `{connector}` is not representable by the plan")
             })?);
         for output in completion.outputs() {
@@ -881,12 +881,12 @@ pub struct SessionInspection {
     pub completion_recorded: bool,
 }
 
-/// Disposable read model over VM-owned mutable state.
+/// Read-only snapshot of the current execution state.
 ///
 /// It is deliberately a clone: a debugger can retain and format it without
 /// borrowing the scheduler or becoming an execution authority.
 #[derive(Debug, Clone, PartialEq)]
-pub struct VmInspection {
+pub struct ExecutionInspection {
     /// Capacity shared by all incoming routes of one instance mailbox.
     pub mailbox_capacity: usize,
     /// Live logical instances in canonical reference order.
@@ -958,10 +958,17 @@ impl Scheduler {
     }
 }
 
-/// The pure execution engine. One instance serves one booted plan;
-/// run and simulation drive it identically.
+/// Live instances, mailboxes, exchanges and obligations for one validated plan.
+///
+/// The caller owns the journal and supplies it to each operation. Preparation
+/// checks a proposed transition; the journal commits the decision; execution
+/// then applies it to memory. Recovery reconstructs that state from committed
+/// records without executing their producers again.
+///
+/// The host drives progress and supplies logical time and Driver bindings.
+/// This type does not own a background run loop or a physical clock.
 #[derive(Debug)]
-pub struct Vm<'plan> {
+pub struct Execution<'plan> {
     plan: &'plan ValidatedExecutionPlan,
     original_hash: Option<crate::plan::SemanticHash>,
     retry_manager: Option<Box<crate::journal::retry_protocol::RetryView>>,
@@ -1053,7 +1060,7 @@ fn first_annotation_location(
         }
     }
     for (index, planned) in plan.nodes.iter().enumerate() {
-        let slot = Slot::new(u32::try_from(index).unwrap_or(u32::MAX));
+        let slot = NodeIndex::new(u32::try_from(index).unwrap_or(u32::MAX));
         if let Some(ports) = plan.resolved_ports().node(slot) {
             for port in ports {
                 if contains(port.annotations()) {
@@ -1128,7 +1135,7 @@ fn personal_data_requirements(
         inspect(port.annotations());
     }
     for (index, planned) in plan.nodes.iter().enumerate() {
-        let slot = Slot::new(u32::try_from(index).unwrap_or(u32::MAX));
+        let slot = NodeIndex::new(u32::try_from(index).unwrap_or(u32::MAX));
         if let Some(ports) = plan.resolved_ports().node(slot) {
             for port in ports {
                 inspect(port.annotations());
@@ -1194,20 +1201,20 @@ fn first_missing_deployment_binding(
     None
 }
 
-impl<'plan> Vm<'plan> {
-    fn preflight(&self, journal: &dyn Journal) -> Result<(), VmFault> {
+impl<'plan> Execution<'plan> {
+    fn preflight(&self, journal: &dyn Journal) -> Result<(), ExecutionFault> {
         if let Some(error) = self.unsupported_feature() {
             return Err(error);
         }
         if self.requires_personal_retention
             && journal.privacy_retention() != Some(crate::deployment::PrivacyRetention::RunScoped)
         {
-            return Err(VmFault::UnsupportedDataPolicy {
+            return Err(ExecutionFault::UnsupportedDataPolicy {
                 location: String::from("personal-data journal retention capability"),
             });
         }
         if journal.deployment_attestation() != self.expected_deployment.as_ref() {
-            return Err(VmFault::DeploymentAttestationMismatch);
+            return Err(ExecutionFault::DeploymentAttestationMismatch);
         }
         Ok(())
     }
@@ -1216,10 +1223,10 @@ impl<'plan> Vm<'plan> {
         &self,
         owner: node::OwnerSlot,
         iteration: u64,
-    ) -> Result<Option<i64>, VmFault> {
+    ) -> Result<Option<i64>, ExecutionFault> {
         let path = self.plan.owners[owner.index()].path.clone();
         let Some(spec) = self.plan.owners[owner.index()].loop_spec() else {
-            return Err(VmFault::InvalidLoopDecision {
+            return Err(ExecutionFault::InvalidLoopDecision {
                 owner: path,
                 reason: "the Loop manager lost its validated Extension specification",
             });
@@ -1228,7 +1235,7 @@ impl<'plan> Vm<'plan> {
             return Ok(None);
         };
         let Some(duration) = delay.duration_after(iteration) else {
-            return Err(VmFault::InvalidLoopDecision {
+            return Err(ExecutionFault::InvalidLoopDecision {
                 owner: path,
                 reason: "the Loop delay contradicts its positive bounds or application ordinal",
             });
@@ -1236,27 +1243,27 @@ impl<'plan> Vm<'plan> {
         Ok(Some(duration))
     }
 
-    fn unsupported_feature(&self) -> Option<VmFault> {
+    fn unsupported_feature(&self) -> Option<ExecutionFault> {
         if let Some(location) = &self.missing_deployment_binding {
-            return Some(VmFault::MissingDeploymentBinding {
+            return Some(ExecutionFault::MissingDeploymentBinding {
                 location: location.clone(),
             });
         }
         if let Some(location) = &self.unsupported_data_policy {
-            return Some(VmFault::UnsupportedDataPolicy {
+            return Some(ExecutionFault::UnsupportedDataPolicy {
                 location: location.clone(),
             });
         }
         self.plan.owners.iter().find_map(|owner| {
             if owner.retry_spec().is_some() && self.original_hash.is_none() {
-                return Some(VmFault::UnsupportedExtension { owner: owner.path.clone(), extension: node::Extension::Retry });
+                return Some(ExecutionFault::UnsupportedExtension { owner: owner.path.clone(), extension: node::Extension::Retry });
             }
             let spec = owner.loop_spec()?;
             let supported = (owner.kind == OwnerKind::Graph || matches!(owner.kind, crate::plan::OwnerKind::Node(slot)
                     if matches!(self.plan.nodes[slot.index()].execution, NodeExecution::Operator)
                         || self.plan.nodes[slot.index()].connector().and_then(crate::plan::ConnectorSpec::call_semantics).is_some()))
                 && (spec.fuel.is_some() || spec.proof.is_some());
-            (!supported).then(|| VmFault::UnsupportedExtension {
+            (!supported).then(|| ExecutionFault::UnsupportedExtension {
                 owner: owner.path.clone(),
                 extension: node::Extension::Loop,
             })
@@ -1423,30 +1430,33 @@ impl<'plan> Vm<'plan> {
         }
     }
 
-    /// Accepts one submission — the journal's one accepting
-    /// transaction — and delivers the born envelope along the
-    /// the submission's boundary-input edges. Everything is verified
-    /// before the journal hears: a refused injection commits
-    /// nothing, and backpressure reaches the ingress instead of
-    /// stranding a committed birth.
+    /// Accepts an App input proposal and routes its identified envelope.
+    /// Types, instances and destination capacity are checked before the
+    /// journal commits the INGRESS record and its routes. Only then are
+    /// the admitted instances and mailbox deliveries applied to live state.
     ///
     /// # Errors
     ///
-    /// [`VmFault::UnknownIngress`] when the port is not a graph
-    /// input; [`VmFault::IngressPinViolation`] when a materialized
+    /// [`ExecutionFault::UnknownIngress`] when the port is not a graph
+    /// input; [`ExecutionFault::IngressPinViolation`] when a materialized
     /// draft violates the ingress pin or a destination's; journal
     /// refusals and full target mailboxes. Every refusal leaves the
     /// journal untouched by this call.
-    pub fn inject(
+    pub fn accept_input(
         &mut self,
         journal: &mut dyn Journal,
         submission: IngressProposal,
-    ) -> Result<Id, VmFault> {
+    ) -> Result<Id, ExecutionFault> {
         self.admit_proposal(journal, submission, None)
             .map(|accepted| accepted.envelope)
     }
 
-    /// Attempts one retained Driver proposal against bounded admission.
+    /// Accepts a world-originated proposal from a source Connector's output.
+    /// The Driver keeps ownership of a pending proposal. This is an
+    /// alternative to [`Self::accept_input`], not a second admission phase.
+    /// Results of outbound Calls settle their existing exchanges through
+    /// [`Self::poll_drivers`] instead of entering here as new roots.
+    ///
     /// `Accepted` is returned only after the INGRESS record and every route
     /// committed. `Pending` and `Rejected` leave the journal untouched.
     ///
@@ -1454,27 +1464,27 @@ impl<'plan> Vm<'plan> {
     ///
     /// Storage failures and machine-integrity faults remain fail-stop errors;
     /// portable peer/data refusals are represented by [`IngressAdmission`].
-    pub fn admit_ingress(
+    pub fn accept_connector_output(
         &mut self,
         journal: &mut dyn Journal,
         proposal: &RetainedProposal,
-    ) -> Result<IngressAdmission, VmFault> {
+    ) -> Result<IngressAdmission, ExecutionFault> {
         let connector_path = proposal.proposal.provenance.connector_path().clone();
         match self.admit_proposal(journal, proposal.proposal.clone(), Some(connector_path)) {
             Ok(accepted) => Ok(IngressAdmission::Accepted(accepted)),
-            Err(VmFault::MailboxFull { .. } | VmFault::InstanceClosing { .. }) => {
+            Err(ExecutionFault::MailboxFull { .. } | ExecutionFault::InstanceClosing { .. }) => {
                 Ok(IngressAdmission::Pending)
             }
-            Err(VmFault::UnknownIngress(_) | VmFault::UnknownInboundSource { .. }) => {
-                Ok(IngressAdmission::Rejected(IngressRejection::UnknownPort))
-            }
-            Err(VmFault::IngressPinViolation { .. }) => {
+            Err(
+                ExecutionFault::UnknownIngress(_) | ExecutionFault::UnknownInboundSource { .. },
+            ) => Ok(IngressAdmission::Rejected(IngressRejection::UnknownPort)),
+            Err(ExecutionFault::IngressPinViolation { .. }) => {
                 Ok(IngressAdmission::Rejected(IngressRejection::InvalidPayload))
             }
-            Err(VmFault::IngressMetadataViolation { .. }) => Ok(IngressAdmission::Rejected(
+            Err(ExecutionFault::IngressMetadataViolation { .. }) => Ok(IngressAdmission::Rejected(
                 IngressRejection::InvalidMetadata,
             )),
-            Err(VmFault::Journal(crate::journal::Error::UnknownSession)) => Ok(
+            Err(ExecutionFault::Journal(crate::journal::Error::UnknownSession)) => Ok(
                 IngressAdmission::Rejected(IngressRejection::SessionUnavailable),
             ),
             Err(error) => Err(error),
@@ -1617,15 +1627,17 @@ impl<'plan> Vm<'plan> {
 
     fn inbound_call_timeout(
         &self,
-        source: Slot,
+        source: NodeIndex,
         instance: &instance::Generation,
         candidates: &BTreeMap<instance::Generation, InstanceCandidate>,
-    ) -> Result<Option<i64>, VmFault> {
+    ) -> Result<Option<i64>, ExecutionFault> {
         let planned = &self.plan.nodes[source.index()];
-        let spec = planned.connector().ok_or_else(|| VmFault::PlanInvariant {
-            node: planned.path.clone(),
-            reason: "an inbound Call source lost its Contract",
-        })?;
+        let spec = planned
+            .connector()
+            .ok_or_else(|| ExecutionFault::PlanInvariant {
+                node: planned.path.clone(),
+                reason: "an inbound Call source lost its Contract",
+            })?;
         match spec.attribute("mode") {
             Some(AttrSetting::Word(mode)) if mode == "ack" => Ok(None),
             Some(AttrSetting::Word(mode)) if mode == "respond" => {
@@ -1654,32 +1666,33 @@ impl<'plan> Vm<'plan> {
                 resolved
                     .filter(|value| *value > 0)
                     .map(Some)
-                    .ok_or_else(|| VmFault::PlanInvariant {
+                    .ok_or_else(|| ExecutionFault::PlanInvariant {
                         node: planned.path.clone(),
                         reason: "a respond-mode inbound Call has no positive resolved timeout",
                     })
             }
-            _ => Err(VmFault::PlanInvariant {
+            _ => Err(ExecutionFault::PlanInvariant {
                 node: planned.path.clone(),
                 reason: "an inbound Call source has no executable mode",
             }),
         }
     }
 
-    /// Executes exactly one node transaction, if any work is ready:
-    /// settled closures first, then the first unclaimed mailbox.
-    /// Returns whether a transaction ran.
+    /// Advances ready work once without waiting for external input.
+    /// Work includes lifecycle and manager transitions, exchange settlements
+    /// and Executor transactions. Returns whether ready work progressed.
     ///
     /// # Errors
     ///
-    /// A fault leaves the machine exactly as it was — the failed step
-    /// committed nothing, and its work stays reserved for a retry.
-    pub fn step(&mut self, journal: &mut dyn Journal) -> Result<bool, VmFault> {
+    /// A refused prepared transition changes neither its input cursor nor
+    /// its private state. An operation may already have committed earlier
+    /// transitions; the journal determines which changes took effect.
+    pub fn step(&mut self, journal: &mut dyn Journal) -> Result<bool, ExecutionFault> {
         self.step_with_bindings(journal, &mut NoOutboundBindings)
     }
 
-    /// Executes one transaction with the verified outbound bindings available
-    /// for Connector request preparation.
+    /// Advances ready work with verified outbound bindings available for
+    /// Connector request preparation.
     ///
     /// # Errors
     ///
@@ -1688,7 +1701,7 @@ impl<'plan> Vm<'plan> {
         &mut self,
         journal: &mut dyn Journal,
         bindings: &mut dyn OutboundConnectorBindings,
-    ) -> Result<bool, VmFault> {
+    ) -> Result<bool, ExecutionFault> {
         self.preflight(journal)?;
         self.synchronize_retry_closures(journal)?;
         if self.step_instance_commands(journal)? {
@@ -1800,7 +1813,7 @@ impl<'plan> Vm<'plan> {
         &mut self,
         journal: &mut dyn Journal,
         bindings: &mut dyn OutboundConnectorBindings,
-    ) -> Result<bool, VmFault> {
+    ) -> Result<bool, ExecutionFault> {
         let mut after = None;
         while let Some((slot, instance, delivery)) =
             self.scheduler
@@ -1895,7 +1908,7 @@ impl<'plan> Vm<'plan> {
     ///
     /// The first faulting step; everything before it committed, and
     /// the faulting work stays reserved.
-    pub fn run_ready(&mut self, journal: &mut dyn Journal) -> Result<(), VmFault> {
+    pub fn run_ready(&mut self, journal: &mut dyn Journal) -> Result<(), ExecutionFault> {
         self.run_ready_with_bindings(journal, &mut NoOutboundBindings)
     }
 
@@ -1908,7 +1921,7 @@ impl<'plan> Vm<'plan> {
         &mut self,
         journal: &mut dyn Journal,
         bindings: &mut dyn OutboundConnectorBindings,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         while self.step_with_bindings(journal, bindings)? {}
         Ok(())
     }
@@ -1925,7 +1938,7 @@ impl<'plan> Vm<'plan> {
         &mut self,
         journal: &mut dyn Journal,
         bindings: &mut dyn OutboundConnectorBindings,
-    ) -> Result<PollReport, VmFault> {
+    ) -> Result<PollReport, ExecutionFault> {
         self.preflight(journal)?;
         let mut report = core::mem::take(&mut self.buffered_poll);
         report.append(self.poll_outbound_driver(journal, bindings)?);
@@ -1936,7 +1949,7 @@ impl<'plan> Vm<'plan> {
         &mut self,
         journal: &mut dyn Journal,
         bindings: &mut dyn OutboundConnectorBindings,
-    ) -> Result<PollReport, VmFault> {
+    ) -> Result<PollReport, ExecutionFault> {
         let gate = PlanCompletionCheck { plan: self.plan };
         let retry = self.retry_manager.as_deref();
         let now = self.now;
@@ -1949,7 +1962,7 @@ impl<'plan> Vm<'plan> {
                     )
                 })
             })
-            .map_err(VmFault::Dispatch)?;
+            .map_err(ExecutionFault::Dispatch)?;
         self.synchronize_retry_closures(journal)?;
         self.retry_session_actions(bindings)?;
         self.retry_session_closes(bindings)?;
@@ -1973,7 +1986,7 @@ impl<'plan> Vm<'plan> {
         let session_events = bindings
             .session_events()
             .map_err(crate::boundary::PollFault::Driver)
-            .map_err(VmFault::Dispatch)?;
+            .map_err(ExecutionFault::Dispatch)?;
         for event in session_events {
             match event.clone() {
                 SessionObservation::Opened(session_id) => {
@@ -1987,7 +2000,7 @@ impl<'plan> Vm<'plan> {
                     }
                     match journal
                         .confirm_session_open(&session_id)
-                        .map_err(VmFault::Journal)?
+                        .map_err(ExecutionFault::Journal)?
                     {
                         crate::journal::CloseVerdict::AlreadyClosed => {
                             report.discarded_sessions.push(event);
@@ -2024,7 +2037,7 @@ impl<'plan> Vm<'plan> {
                     let instance = pending.instance.clone();
                     match journal
                         .settle_session_write(&write, false)
-                        .map_err(VmFault::Journal)?
+                        .map_err(ExecutionFault::Journal)?
                     {
                         crate::journal::CloseVerdict::AlreadyClosed => {
                             report.discarded_sessions.push(event);
@@ -2068,7 +2081,7 @@ impl<'plan> Vm<'plan> {
                         )),
                     );
                     let completion = Completion::try_new(vec![exit]).map_err(|error| {
-                        VmFault::PlanInvariant {
+                        ExecutionFault::PlanInvariant {
                             node: self.plan.nodes[session.slot.index()].path.clone(),
                             reason: match error {
                                 crate::boundary::CompletionError::MissingExit => {
@@ -2098,7 +2111,7 @@ impl<'plan> Vm<'plan> {
                     for write in writes {
                         match journal
                             .settle_session_write(&write, true)
-                            .map_err(VmFault::Journal)?
+                            .map_err(ExecutionFault::Journal)?
                         {
                             crate::journal::CloseVerdict::Won
                             | crate::journal::CloseVerdict::AlreadyClosed => {
@@ -2125,7 +2138,7 @@ impl<'plan> Vm<'plan> {
     fn retry_session_actions(
         &mut self,
         bindings: &mut dyn OutboundConnectorBindings,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         let openings = self
             .sessions
             .iter()
@@ -2153,26 +2166,25 @@ impl<'plan> Vm<'plan> {
             })
             .collect::<Vec<_>>();
         for reference in openings {
-            let session =
-                self.sessions
-                    .get(&reference)
-                    .cloned()
-                    .ok_or_else(|| VmFault::PlanInvariant {
-                        node: node::Path::new(["session"])
-                            .unwrap_or_else(|_| unreachable!("a literal path is valid")),
-                        reason: "a pending Session opening disappeared before retry",
+            let session = self.sessions.get(&reference).cloned().ok_or_else(|| {
+                ExecutionFault::PlanInvariant {
+                    node: node::Path::new(["session"])
+                        .unwrap_or_else(|_| unreachable!("a literal path is valid")),
+                    reason: "a pending Session opening disappeared before retry",
+                }
+            })?;
+            let intent =
+                session
+                    .open_intent
+                    .as_ref()
+                    .ok_or_else(|| ExecutionFault::PlanInvariant {
+                        node: self.plan.nodes[session.slot.index()].path.clone(),
+                        reason: "a retryable Session opening lost its sealed intent",
                     })?;
-            let intent = session
-                .open_intent
-                .as_ref()
-                .ok_or_else(|| VmFault::PlanInvariant {
-                    node: self.plan.nodes[session.slot.index()].path.clone(),
-                    reason: "a retryable Session opening lost its sealed intent",
-                })?;
             if bindings
                 .open_session(intent, &session.opening)
                 .map_err(crate::boundary::PollFault::Driver)
-                .map_err(VmFault::Dispatch)?
+                .map_err(ExecutionFault::Dispatch)?
                 == SessionStart::Started
                 && let Some(session) = self.sessions.get_mut(&reference)
             {
@@ -2203,7 +2215,7 @@ impl<'plan> Vm<'plan> {
                 .session_writes
                 .get(&reference)
                 .cloned()
-                .ok_or_else(|| VmFault::PlanInvariant {
+                .ok_or_else(|| ExecutionFault::PlanInvariant {
                     node: node::Path::new(["session"])
                         .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                     reason: "a pending Session write disappeared before retry",
@@ -2211,7 +2223,7 @@ impl<'plan> Vm<'plan> {
             if bindings
                 .write_session(&write.intent, &write.delivery.envelope)
                 .map_err(crate::boundary::PollFault::Driver)
-                .map_err(VmFault::Dispatch)?
+                .map_err(ExecutionFault::Dispatch)?
                 == SessionStart::Started
                 && let Some(write) = self.session_writes.get_mut(&reference)
             {
@@ -2224,7 +2236,7 @@ impl<'plan> Vm<'plan> {
     fn retry_session_closes(
         &mut self,
         bindings: &mut dyn OutboundConnectorBindings,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         let pending: Vec<SessionId> = self
             .sessions
             .iter()
@@ -2246,20 +2258,18 @@ impl<'plan> Vm<'plan> {
             .map(|(reference, _)| *reference)
             .collect();
         for reference in pending {
-            let session =
-                self.sessions
-                    .get(&reference)
-                    .cloned()
-                    .ok_or_else(|| VmFault::PlanInvariant {
-                        node: node::Path::new(["session"])
-                            .unwrap_or_else(|_| unreachable!("a literal path is valid")),
-                        reason: "a pending Session close lost its logical session",
-                    })?;
+            let session = self.sessions.get(&reference).cloned().ok_or_else(|| {
+                ExecutionFault::PlanInvariant {
+                    node: node::Path::new(["session"])
+                        .unwrap_or_else(|_| unreachable!("a literal path is valid")),
+                    reason: "a pending Session close lost its logical session",
+                }
+            })?;
             let connector = self.plan.nodes[session.slot.index()].path.clone();
             if bindings
                 .close_session(&connector, reference)
                 .map_err(crate::boundary::PollFault::Driver)
-                .map_err(VmFault::Dispatch)?
+                .map_err(ExecutionFault::Dispatch)?
                 == SessionStart::Started
                 && let Some(session) = self.sessions.get_mut(&reference)
             {
@@ -2289,7 +2299,7 @@ impl<'plan> Vm<'plan> {
         journal: &mut dyn Journal,
         bindings: &mut dyn OutboundConnectorBindings,
         target: i64,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         let mut advance = TimeAdvance::new(target);
         while advance.advance_once(self, journal, bindings)? {}
         Ok(())
@@ -2310,7 +2320,7 @@ impl<'plan> Vm<'plan> {
         journal: &mut dyn Journal,
         bindings: &mut dyn OutboundConnectorBindings,
         payload: Obligation,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         let (connector, edge, delivery, instance) = match payload {
             Obligation::DeliveryBudget {
                 connector,
@@ -2333,7 +2343,7 @@ impl<'plan> Vm<'plan> {
                     return Ok(());
                 }
                 let Some(timeout) = &mut pending.timeout else {
-                    return Err(VmFault::PlanInvariant {
+                    return Err(ExecutionFault::PlanInvariant {
                         node: self.plan.nodes[pending.slot.index()].path.clone(),
                         reason: "an ack-only inbound Call carried a request deadline",
                     });
@@ -2417,7 +2427,7 @@ impl<'plan> Vm<'plan> {
                         closed = true;
                     }
                 })
-                .map_err(VmFault::Journal)?;
+                .map_err(ExecutionFault::Journal)?;
             if closed {
                 return Ok(());
             }
@@ -2427,17 +2437,17 @@ impl<'plan> Vm<'plan> {
             let completion = bindings
                 .scheduler_completion(&connector, SchedulerCompletion::TimeoutExpired)
                 .map_err(crate::boundary::PollFault::Driver)
-                .map_err(VmFault::Dispatch)?;
+                .map_err(ExecutionFault::Dispatch)?;
             // Cancellation is a fallible Driver boundary. Prove it before
             // close-once so a refusal leaves both the call and its deadline
             // replayable; no terminal fact can strand a claimed mailbox.
             bindings
                 .cancel(&connector, &call_id)
                 .map_err(crate::boundary::PollFault::Driver)
-                .map_err(VmFault::Dispatch)?;
+                .map_err(ExecutionFault::Dispatch)?;
             let intent = journal
                 .find_call(&call_id)
-                .ok_or(VmFault::MissingPending(call_id))?;
+                .ok_or(ExecutionFault::MissingPending(call_id))?;
             let schedule = retry_manager::closure_schedule(
                 self.retry_manager.as_deref(),
                 &intent,
@@ -2452,7 +2462,7 @@ impl<'plan> Vm<'plan> {
                     self.now,
                     schedule,
                 )
-                .map_err(VmFault::Journal)?
+                .map_err(ExecutionFault::Journal)?
             {
                 crate::journal::CloseVerdict::AlreadyClosed => return Ok(()),
                 crate::journal::CloseVerdict::Won => {}
@@ -2493,7 +2503,7 @@ impl<'plan> Vm<'plan> {
                 unreachable!("budgets apply to connectors only")
             };
             if !spec.roles.has_outbound() || spec.exchange != ConnectorExchange::Call {
-                return Err(VmFault::PlanInvariant {
+                return Err(ExecutionFault::PlanInvariant {
                     node: planned.path.clone(),
                     reason: "a request requires an outbound Call Contract",
                 });
@@ -2510,7 +2520,7 @@ impl<'plan> Vm<'plan> {
                 match bindings
                     .prepare_request(&planned.path, queued.envelope.data(), &resolved_settings)
                     .map_err(crate::boundary::PollFault::Driver)
-                    .map_err(VmFault::Dispatch)?
+                    .map_err(ExecutionFault::Dispatch)?
                 {
                     RequestPreparation::Rejected(completion) => Err(completion),
                     RequestPreparation::Prepared(prepared) => {
@@ -2552,7 +2562,7 @@ impl<'plan> Vm<'plan> {
                     let trigger = node::Trigger::Port(queued.port.clone());
                     let mut outcome = executor
                         .connector_completion(slot, &instance, queued, &trigger, &completion)
-                        .map_err(VmFault::Fault)?;
+                        .map_err(ExecutionFault::Fault)?;
                     self.prepare_call_completion(slot, &instance, queued, &mut outcome.record)?;
                     outcome
                 };
@@ -2565,7 +2575,7 @@ impl<'plan> Vm<'plan> {
                 self.retain_emission_routes(&mut outcome.record, &prepared)?;
                 journal
                     .commit(outcome.record.clone())
-                    .map_err(VmFault::Journal)?;
+                    .map_err(ExecutionFault::Journal)?;
                 if outcome.record.loop_protocol().is_some() {
                     self.refresh_loop_manager(journal)?;
                 }
@@ -2574,7 +2584,7 @@ impl<'plan> Vm<'plan> {
                     .mailboxes
                     .remove_by_ref(slot, &instance, &edge, delivery)
                 else {
-                    return Err(VmFault::PlanInvariant {
+                    return Err(ExecutionFault::PlanInvariant {
                         node: self.plan.nodes[slot.index()].path.clone(),
                         reason: "a reserved timeout delivery disappeared after commit",
                     });
@@ -2588,7 +2598,7 @@ impl<'plan> Vm<'plan> {
                 let completion = bindings
                     .scheduler_completion(&connector, SchedulerCompletion::TimeoutExpired)
                     .map_err(crate::boundary::PollFault::Driver)
-                    .map_err(VmFault::Dispatch)?;
+                    .map_err(ExecutionFault::Dispatch)?;
                 self.admit_expiring_call_loop(journal, slot, &instance, &edge, delivery)?;
                 let queued = self
                     .scheduler
@@ -2613,7 +2623,7 @@ impl<'plan> Vm<'plan> {
                     }
                     journal
                         .open_egress(intent.clone(), attempt)
-                        .map_err(VmFault::Journal)?;
+                        .map_err(ExecutionFault::Journal)?;
                     self.retry_manager = next;
                 }
                 let schedule = retry_manager::closure_schedule(
@@ -2630,7 +2640,7 @@ impl<'plan> Vm<'plan> {
                         self.now,
                         schedule,
                     )
-                    .map_err(VmFault::Journal)?
+                    .map_err(ExecutionFault::Journal)?
                 {
                     crate::journal::CloseVerdict::Won => {}
                     // A replay can find its own earlier closure.
@@ -2644,7 +2654,7 @@ impl<'plan> Vm<'plan> {
                     .mailboxes
                     .remove_by_ref(slot, &instance, &edge, delivery)
                 else {
-                    return Err(VmFault::PlanInvariant {
+                    return Err(ExecutionFault::PlanInvariant {
                         node: self.plan.nodes[slot.index()].path.clone(),
                         reason: "a reserved timeout delivery disappeared before settlement",
                     });
@@ -2675,11 +2685,11 @@ impl<'plan> Vm<'plan> {
         &mut self,
         journal: &mut dyn Journal,
         bindings: &mut dyn OutboundConnectorBindings,
-        slot: Slot,
+        slot: NodeIndex,
         instance: instance::Generation,
         edge: &str,
         delivery: Id,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         let connector = self.plan.nodes[slot.index()].path.clone();
         if let Some(session_id) = self
             .sessions
@@ -2691,14 +2701,12 @@ impl<'plan> Vm<'plan> {
             })
             .map(|(reference, _)| *reference)
         {
-            let session =
-                self.sessions
-                    .get(&session_id)
-                    .cloned()
-                    .ok_or_else(|| VmFault::PlanInvariant {
-                        node: connector.clone(),
-                        reason: "a due Session handshake lost its logical session",
-                    })?;
+            let session = self.sessions.get(&session_id).cloned().ok_or_else(|| {
+                ExecutionFault::PlanInvariant {
+                    node: connector.clone(),
+                    reason: "a due Session handshake lost its logical session",
+                }
+            })?;
             if session.opened
                 || self
                     .settled_sessions
@@ -2710,18 +2718,18 @@ impl<'plan> Vm<'plan> {
             let completion = bindings
                 .scheduler_session_completion(&connector, SchedulerCompletion::TimeoutExpired)
                 .map_err(crate::boundary::PollFault::Driver)
-                .map_err(VmFault::Dispatch)?;
+                .map_err(ExecutionFault::Dispatch)?;
             if session.opening_started {
                 let _ = bindings
                     .close_session(&connector, session_id)
                     .map_err(crate::boundary::PollFault::Driver)
-                    .map_err(VmFault::Dispatch)?;
+                    .map_err(ExecutionFault::Dispatch)?;
             } else if !session.opening_claimed {
                 let retained = self
                     .scheduler
                     .mailboxes
                     .remove_by_ref(slot, &instance, edge, delivery)
-                    .ok_or_else(|| VmFault::PlanInvariant {
+                    .ok_or_else(|| ExecutionFault::PlanInvariant {
                         node: connector.clone(),
                         reason: "a due pending Session opening lost its mailbox delivery",
                     })?;
@@ -2756,19 +2764,18 @@ impl<'plan> Vm<'plan> {
         else {
             return Ok(());
         };
-        let spec =
-            self.plan.nodes[slot.index()]
-                .connector()
-                .ok_or_else(|| VmFault::PlanInvariant {
-                    node: connector.clone(),
-                    reason: "a Session handshake deadline names a non-connector",
-                })?;
+        let spec = self.plan.nodes[slot.index()].connector().ok_or_else(|| {
+            ExecutionFault::PlanInvariant {
+                node: connector.clone(),
+                reason: "a Session handshake deadline names a non-connector",
+            }
+        })?;
         let settings =
             self.resolve_invocation_settings(&instance, spec, &connector, &queued.envelope)?;
         let preparation = bindings
             .prepare_session_open(&connector, queued.envelope.data(), &settings)
             .map_err(crate::boundary::PollFault::Driver)
-            .map_err(VmFault::Dispatch)?;
+            .map_err(ExecutionFault::Dispatch)?;
         let prepared = match preparation {
             RequestPreparation::Rejected(completion) => {
                 return self.commit_pre_session_refusal(
@@ -2794,12 +2801,12 @@ impl<'plan> Vm<'plan> {
         };
         journal
             .open_outbound_session(intent)
-            .map_err(VmFault::Journal)?;
+            .map_err(ExecutionFault::Journal)?;
         let retained = self
             .scheduler
             .mailboxes
             .remove_by_ref(slot, &instance, edge, delivery)
-            .ok_or_else(|| VmFault::PlanInvariant {
+            .ok_or_else(|| ExecutionFault::PlanInvariant {
                 node: connector.clone(),
                 reason: "a due queued Session opening disappeared after its WAL fact",
             })?;
@@ -2820,7 +2827,7 @@ impl<'plan> Vm<'plan> {
         let completion = bindings
             .scheduler_session_completion(&connector, SchedulerCompletion::TimeoutExpired)
             .map_err(crate::boundary::PollFault::Driver)
-            .map_err(VmFault::Dispatch)?;
+            .map_err(ExecutionFault::Dispatch)?;
         self.settled_sessions.push_back(SettledSession {
             session: session_id,
             completion,
@@ -2839,7 +2846,7 @@ impl<'plan> Vm<'plan> {
         reference: instance::Generation,
         cause: Id,
         deadline: InstanceDeadline,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         let current = self.instances.get(&reference).filter(|instance| {
             instance.owner == owner
                 && matches!(instance.phase, instance::Phase::Open)
@@ -2914,7 +2921,7 @@ impl<'plan> Vm<'plan> {
 
     /// Clones one read-only debugger view without changing scheduler state.
     #[must_use]
-    pub fn inspection(&self) -> VmInspection {
+    pub fn inspection(&self) -> ExecutionInspection {
         let instances = self
             .instances
             .iter()
@@ -3011,7 +3018,7 @@ impl<'plan> Vm<'plan> {
                 deliveries,
             })
             .collect();
-        VmInspection {
+        ExecutionInspection {
             mailbox_capacity: self.scheduler.mailboxes.capacity,
             instances,
             mailboxes,
@@ -3358,7 +3365,7 @@ impl<'plan> Vm<'plan> {
         reference: &instance::Generation,
         cause: Envelope,
         command: Option<Id>,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         if !self
             .instances
             .get(reference)
@@ -3393,7 +3400,7 @@ impl<'plan> Vm<'plan> {
             deadline_ids: self.closing_deadline_ids(reference),
         };
         self.retain_deadlines(&mut record, self.closing_deadlines(reference))?;
-        journal.commit(record).map_err(VmFault::Journal)?;
+        journal.commit(record).map_err(ExecutionFault::Journal)?;
         self.activate_close(reference, cause.clone());
         self.schedule_closing_deadlines(reference, cause.meta().sys().id());
         Ok(())
@@ -3508,7 +3515,7 @@ impl<'plan> Vm<'plan> {
     }
 
     fn residualize_scope(&mut self, scope: &instance::Generation) {
-        let targets: Vec<(Slot, instance::Generation)> = self
+        let targets: Vec<(NodeIndex, instance::Generation)> = self
             .instances
             .iter()
             .filter(|(reference, _)| self.is_within_instance(reference, scope))
@@ -3551,7 +3558,7 @@ impl<'plan> Vm<'plan> {
         reference: &instance::Generation,
         cause: Id,
         deadline: ClosingDeadline,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         let current = self
             .instances
             .get(reference)
@@ -3581,12 +3588,12 @@ impl<'plan> Vm<'plan> {
                     let pending = self
                         .pending
                         .get(&call_id)
-                        .ok_or(VmFault::MissingPending(call_id))?;
+                        .ok_or(ExecutionFault::MissingPending(call_id))?;
                     let connector = &self.plan.nodes[pending.slot.index()].path;
                     bindings
                         .cancel(connector, &call_id)
                         .map_err(crate::boundary::PollFault::Driver)
-                        .map_err(VmFault::Dispatch)?;
+                        .map_err(ExecutionFault::Dispatch)?;
                 }
                 // Session closure is requested in canonical logical-reference
                 // order. A bounded Driver may defer the handoff; the next
@@ -3599,7 +3606,7 @@ impl<'plan> Vm<'plan> {
                     .collect();
                 for session_id in sessions {
                     let session = self.sessions.get(&session_id).cloned().ok_or_else(|| {
-                        VmFault::PlanInvariant {
+                        ExecutionFault::PlanInvariant {
                             node: node::Path::new(["session"])
                                 .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                             reason: "a Closing Session vanished before close handoff",
@@ -3609,7 +3616,7 @@ impl<'plan> Vm<'plan> {
                     if bindings
                         .close_session(&connector, session_id)
                         .map_err(crate::boundary::PollFault::Driver)
-                        .map_err(VmFault::Dispatch)?
+                        .map_err(ExecutionFault::Dispatch)?
                         == SessionStart::Started
                         && let Some(session) = self.sessions.get_mut(&session_id)
                     {
@@ -3629,15 +3636,15 @@ impl<'plan> Vm<'plan> {
                     let pending = self
                         .pending
                         .get(&call_id)
-                        .ok_or(VmFault::MissingPending(call_id))?;
+                        .ok_or(ExecutionFault::MissingPending(call_id))?;
                     let connector = self.plan.nodes[pending.slot.index()].path.clone();
                     let completion = bindings
                         .scheduler_completion(&connector, SchedulerCompletion::OutcomeUnknown)
                         .map_err(crate::boundary::PollFault::Driver)
-                        .map_err(VmFault::Dispatch)?;
+                        .map_err(ExecutionFault::Dispatch)?;
                     match journal
                         .abandon_egress(&call_id, self.now)
-                        .map_err(VmFault::Journal)?
+                        .map_err(ExecutionFault::Journal)?
                     {
                         crate::journal::CloseVerdict::AlreadyClosed => {}
                         crate::journal::CloseVerdict::Won => {
@@ -3662,7 +3669,7 @@ impl<'plan> Vm<'plan> {
                 for write in writes {
                     match journal
                         .settle_session_write(&write, true)
-                        .map_err(VmFault::Journal)?
+                        .map_err(ExecutionFault::Journal)?
                     {
                         crate::journal::CloseVerdict::AlreadyClosed => {}
                         crate::journal::CloseVerdict::Won => {
@@ -3684,14 +3691,13 @@ impl<'plan> Vm<'plan> {
                     {
                         continue;
                     }
-                    let session =
-                        self.sessions
-                            .get(&session_id)
-                            .ok_or_else(|| VmFault::PlanInvariant {
-                                node: node::Path::new(["session"])
-                                    .unwrap_or_else(|_| unreachable!("a literal path is valid")),
-                                reason: "a settling Session lost its logical record",
-                            })?;
+                    let session = self.sessions.get(&session_id).ok_or_else(|| {
+                        ExecutionFault::PlanInvariant {
+                            node: node::Path::new(["session"])
+                                .unwrap_or_else(|_| unreachable!("a literal path is valid")),
+                            reason: "a settling Session lost its logical record",
+                        }
+                    })?;
                     let connector = self.plan.nodes[session.slot.index()].path.clone();
                     let completion = bindings
                         .scheduler_session_completion(
@@ -3699,14 +3705,14 @@ impl<'plan> Vm<'plan> {
                             SchedulerCompletion::OutcomeUnknown,
                         )
                         .map_err(crate::boundary::PollFault::Driver)
-                        .map_err(VmFault::Dispatch)?;
+                        .map_err(ExecutionFault::Dispatch)?;
                     // The committed Closing request sealed this deadline.
                     // Forced cleanup must not wait for exit-route capacity or
                     // terminal storage; it proves no successful outcome.
                     bindings
                         .abort_session(&connector, session_id)
                         .map_err(crate::boundary::PollFault::Driver)
-                        .map_err(VmFault::Dispatch)?;
+                        .map_err(ExecutionFault::Dispatch)?;
                     self.settled_sessions.push_back(SettledSession {
                         session: session_id,
                         completion,
@@ -3743,7 +3749,7 @@ impl<'plan> Vm<'plan> {
         });
     }
 
-    fn fire_lifecycle_next(&mut self, journal: &mut dyn Journal) -> Result<(), VmFault> {
+    fn fire_lifecycle_next(&mut self, journal: &mut dyn Journal) -> Result<(), ExecutionFault> {
         let Some(work) = self.lifecycle.front().cloned() else {
             return Ok(());
         };
@@ -3777,13 +3783,12 @@ impl<'plan> Vm<'plan> {
                 None,
             ),
             OwnerKind::Node(slot) => {
-                let bundle =
-                    self.instances
-                        .get(&work.instance)
-                        .ok_or_else(|| VmFault::PlanInvariant {
-                            node: self.plan.nodes[slot.index()].path.clone(),
-                            reason: "lifecycle work lost its installed instance bundle",
-                        })?;
+                let bundle = self.instances.get(&work.instance).ok_or_else(|| {
+                    ExecutionFault::PlanInvariant {
+                        node: self.plan.nodes[slot.index()].path.clone(),
+                        reason: "lifecycle work lost its installed instance bundle",
+                    }
+                })?;
                 let state = self
                     .state
                     .cell_unchecked(self.plan.plan(), slot, &work.instance);
@@ -3800,7 +3805,7 @@ impl<'plan> Vm<'plan> {
                         &state,
                         &bundle.values,
                     )
-                    .map_err(VmFault::Fault)?;
+                    .map_err(ExecutionFault::Fault)?;
                 let prepared = self.validate_and_prepare_emissions(
                     &&*journal,
                     slot,
@@ -3835,7 +3840,9 @@ impl<'plan> Vm<'plan> {
                 .extend(self.graph_stop_cursors(&work.instance));
             self.close_instance_loops(&work.instance, &mut record)?;
         }
-        journal.commit(record.clone()).map_err(VmFault::Journal)?;
+        journal
+            .commit(record.clone())
+            .map_err(ExecutionFault::Journal)?;
         if record.loop_protocol().is_some() {
             self.refresh_loop_manager(journal)?;
         }
@@ -3869,7 +3876,7 @@ impl<'plan> Vm<'plan> {
         Ok(())
     }
 
-    fn promote_waiting(&mut self, journal: &dyn InstanceAdmissions) -> Result<(), VmFault> {
+    fn promote_waiting(&mut self, journal: &dyn InstanceAdmissions) -> Result<(), ExecutionFault> {
         loop {
             let mut ready = Vec::new();
             for (reference, waiting) in &self.waiting {
@@ -3887,7 +3894,7 @@ impl<'plan> Vm<'plan> {
                 }
                 let expected = journal
                     .instance_generation_for_admission(reference.address())
-                    .map_err(VmFault::Journal)?;
+                    .map_err(ExecutionFault::Journal)?;
                 if expected == *reference {
                     ready.push((
                         self.plan.owners[waiting.candidate.owner.index()]
@@ -3933,7 +3940,11 @@ impl<'plan> Vm<'plan> {
     /// One won closure becomes the connector's completion transaction.
     /// The event leaves the queue only after its commit; every
     /// integrity check happens before.
-    fn settle_next(&mut self, journal: &mut dyn Journal, index: usize) -> Result<(), VmFault> {
+    fn settle_next(
+        &mut self,
+        journal: &mut dyn Journal,
+        index: usize,
+    ) -> Result<(), ExecutionFault> {
         let SettledEntry { event, trigger } = self
             .settled
             .get(index)
@@ -3941,7 +3952,7 @@ impl<'plan> Vm<'plan> {
             .unwrap_or_else(|| unreachable!("guarded by the caller"));
         let slot = self.slot_of(&event.connector_path);
         let Some(request) = self.pending.get(&event.call_id).cloned() else {
-            return Err(VmFault::MissingPending(event.call_id));
+            return Err(ExecutionFault::MissingPending(event.call_id));
         };
         let executor = TransactionPreparer::at(self.plan, self.graph_version, self.now);
         // The completion check validated every materialized draft before the
@@ -3957,7 +3968,7 @@ impl<'plan> Vm<'plan> {
             };
             crate::runtime::crossing_pins_hold(self.plan, &from, value)
                 .map_err(crate::runtime::PinViolation::into_fault)
-                .map_err(VmFault::Fault)?;
+                .map_err(ExecutionFault::Fault)?;
         }
         let mut outcome = executor
             .connector_completion(
@@ -3967,7 +3978,7 @@ impl<'plan> Vm<'plan> {
                 &trigger,
                 &event.completion,
             )
-            .map_err(VmFault::Fault)?;
+            .map_err(ExecutionFault::Fault)?;
         self.validate_call_completion(slot, &outcome.record)?;
         let retry = self.prepare_retry_completion(
             &request.instance,
@@ -4002,7 +4013,9 @@ impl<'plan> Vm<'plan> {
         };
         self.retain_emission_routes(&mut outcome.record, &prepared)?;
         let has_loop_context = outcome.record.loop_protocol().is_some();
-        journal.commit(outcome.record).map_err(VmFault::Journal)?;
+        journal
+            .commit(outcome.record)
+            .map_err(ExecutionFault::Journal)?;
         if let Some((fold, _)) = retry {
             self.retry_manager = Some(fold);
         }
@@ -4033,7 +4046,7 @@ impl<'plan> Vm<'plan> {
         index: usize,
         event: InboundCallObservation,
         pending: PendingInboundCall,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         let executor = TransactionPreparer::at(self.plan, self.graph_version, self.now);
         let mut outcome = match pending.response.as_ref() {
             Some(response) => executor.inbound_call_response_completion(
@@ -4052,7 +4065,7 @@ impl<'plan> Vm<'plan> {
                 &event.completion,
             ),
         }
-        .map_err(VmFault::Fault)?;
+        .map_err(ExecutionFault::Fault)?;
         let prepared = self.validate_and_prepare_emissions(
             &&*journal,
             pending.slot,
@@ -4060,7 +4073,9 @@ impl<'plan> Vm<'plan> {
             &outcome.record,
         )?;
         self.retain_emission_routes(&mut outcome.record, &prepared)?;
-        journal.commit(outcome.record).map_err(VmFault::Journal)?;
+        journal
+            .commit(outcome.record)
+            .map_err(ExecutionFault::Journal)?;
         self.settled_inbound_calls.remove(index);
         self.inbound_calls.remove(&event.call_id);
         if pending.response.is_some() {
@@ -4082,14 +4097,14 @@ impl<'plan> Vm<'plan> {
         journal: &mut dyn Journal,
         bindings: &mut dyn OutboundConnectorBindings,
         index: usize,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         let settled = self
             .settled_sessions
             .get(index)
             .cloned()
             .unwrap_or_else(|| unreachable!("guarded by the caller"));
         let Some(session) = self.sessions.get(&settled.session).cloned() else {
-            return Err(VmFault::PlanInvariant {
+            return Err(ExecutionFault::PlanInvariant {
                 node: node::Path::new(["session"])
                     .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                 reason: "a terminal Session observation lost its logical session",
@@ -4110,7 +4125,7 @@ impl<'plan> Vm<'plan> {
                 &settled.completion,
                 &consumed,
             )
-            .map_err(VmFault::Fault)?;
+            .map_err(ExecutionFault::Fault)?;
         let prepared = self.validate_and_prepare_emissions(
             &&*journal,
             session.slot,
@@ -4118,7 +4133,9 @@ impl<'plan> Vm<'plan> {
             &outcome.record,
         )?;
         self.retain_emission_routes(&mut outcome.record, &prepared)?;
-        journal.commit(outcome.record).map_err(VmFault::Journal)?;
+        journal
+            .commit(outcome.record)
+            .map_err(ExecutionFault::Journal)?;
         self.settled_sessions.remove(index);
         self.sessions.remove(&settled.session);
         self.scheduler
@@ -4131,7 +4148,7 @@ impl<'plan> Vm<'plan> {
         bindings
             .forget_session(settled.session)
             .map_err(crate::boundary::PollFault::Driver)
-            .map_err(VmFault::Dispatch)?;
+            .map_err(ExecutionFault::Dispatch)?;
         Ok(())
     }
 
@@ -4141,9 +4158,9 @@ impl<'plan> Vm<'plan> {
     /// runnable, never by map or handler declaration order.
     fn operator_work(
         &self,
-        slot: Slot,
+        slot: NodeIndex,
         instance: &instance::Generation,
-    ) -> Result<Option<OperatorWork>, VmFault> {
+    ) -> Result<Option<OperatorWork>, ExecutionFault> {
         let Some(queue) = self.scheduler.mailboxes.queued(slot, instance) else {
             return Ok(None);
         };
@@ -4182,7 +4199,7 @@ impl<'plan> Vm<'plan> {
             .instances
             .get(instance)
             .map(|bundle| &bundle.values)
-            .ok_or_else(|| VmFault::PlanInvariant {
+            .ok_or_else(|| ExecutionFault::PlanInvariant {
                 node: self.plan.nodes[slot.index()].path.clone(),
                 reason: "a mailbox references an instance without a bundle",
             })?;
@@ -4261,7 +4278,7 @@ impl<'plan> Vm<'plan> {
                             &state,
                             values,
                         )
-                        .map_err(VmFault::Fault)?
+                        .map_err(ExecutionFault::Fault)?
                     {
                         consider_operator_work(
                             &mut best,
@@ -4302,17 +4319,17 @@ impl<'plan> Vm<'plan> {
     fn fire_operator(
         &mut self,
         journal: &mut dyn Journal,
-        slot: Slot,
+        slot: NodeIndex,
         instance: &instance::Generation,
         delivery: &envelope::Delivery,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         let executor = TransactionPreparer::at(self.plan, self.graph_version, self.now);
         let state = self.state.cell_unchecked(self.plan.plan(), slot, instance);
         let values = self
             .instances
             .get(instance)
             .map(|bundle| &bundle.values)
-            .ok_or_else(|| VmFault::PlanInvariant {
+            .ok_or_else(|| ExecutionFault::PlanInvariant {
                 node: self.plan.nodes[slot.index()].path.clone(),
                 reason: "a mailbox references an instance without a bundle",
             })?;
@@ -4336,7 +4353,7 @@ impl<'plan> Vm<'plan> {
                 },
             ),
         }
-        .map_err(VmFault::Fault)?;
+        .map_err(ExecutionFault::Fault)?;
         if self.plan.owners[self.plan.nodes[slot.index()].owner.index()]
             .loop_spec()
             .is_some()
@@ -4366,7 +4383,9 @@ impl<'plan> Vm<'plan> {
         // small delta the in-memory state fold still needs; cloning the whole
         // record would duplicate every emitted envelope on the relay hot path.
         let state_delta = outcome.record.state_delta.clone();
-        journal.commit(outcome.record).map_err(VmFault::Journal)?;
+        journal
+            .commit(outcome.record)
+            .map_err(ExecutionFault::Journal)?;
         if application.is_some() {
             self.refresh_loop_manager(journal)?;
         }
@@ -4389,13 +4408,13 @@ impl<'plan> Vm<'plan> {
         &mut self,
         journal: &mut dyn Journal,
         bindings: &mut dyn OutboundConnectorBindings,
-        slot: Slot,
+        slot: NodeIndex,
         instance: &instance::Generation,
         delivery: &envelope::Delivery,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         let planned = &self.plan.nodes[slot.index()];
         let NodeExecution::Connector(spec) = &planned.execution else {
-            return Err(VmFault::PlanInvariant {
+            return Err(ExecutionFault::PlanInvariant {
                 node: planned.path.clone(),
                 reason: "connector dispatch reached a non-connector node",
             });
@@ -4410,28 +4429,30 @@ impl<'plan> Vm<'plan> {
             ConnectorExchange::Session => {
                 self.progress_session(journal, bindings, slot, instance, delivery)
             }
-            ConnectorExchange::Event | ConnectorExchange::Call => Err(VmFault::PlanInvariant {
-                node: planned.path.clone(),
-                reason: "a delivery reached a Connector without a compatible world role",
-            }),
+            ConnectorExchange::Event | ConnectorExchange::Call => {
+                Err(ExecutionFault::PlanInvariant {
+                    node: planned.path.clone(),
+                    reason: "a delivery reached a Connector without a compatible world role",
+                })
+            }
         }
     }
 
     fn fire_join_operator(
         &mut self,
         journal: &mut dyn Journal,
-        slot: Slot,
+        slot: NodeIndex,
         instance: &instance::Generation,
         activation: &node::HandlerActivation,
         trigger: &envelope::Delivery,
         inputs: &[envelope::Delivery],
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         let context = self.graph_context(trigger);
         if inputs
             .iter()
             .any(|input| self.graph_context(input) != context)
         {
-            return Err(VmFault::InvalidLoopDecision {
+            return Err(ExecutionFault::InvalidLoopDecision {
                 owner: instance.address().owner().clone(),
                 reason: "E-LOOP-CONTEXT: join candidates belong to different applications",
             });
@@ -4443,7 +4464,7 @@ impl<'plan> Vm<'plan> {
             .instances
             .get(instance)
             .map(|bundle| &bundle.values)
-            .ok_or_else(|| VmFault::PlanInvariant {
+            .ok_or_else(|| ExecutionFault::PlanInvariant {
                 node: self.plan.nodes[slot.index()].path.clone(),
                 reason: "a join mailbox references an instance without a bundle",
             })?;
@@ -4464,7 +4485,7 @@ impl<'plan> Vm<'plan> {
                     state: &state.state,
                 }),
             )
-            .map_err(VmFault::Fault)?;
+            .map_err(ExecutionFault::Fault)?;
         if let Some(packet) = outcome.record.loop_record.as_deref_mut() {
             packet.context = context.to_vec();
         }
@@ -4481,7 +4502,7 @@ impl<'plan> Vm<'plan> {
         self.retain_emission_routes(&mut outcome.record, &prepared)?;
         journal
             .commit(outcome.record.clone())
-            .map_err(VmFault::Journal)?;
+            .map_err(ExecutionFault::Journal)?;
         if application.is_some() {
             self.refresh_loop_manager(journal)?;
         }
@@ -4497,7 +4518,7 @@ impl<'plan> Vm<'plan> {
                 )
                 .is_none()
             {
-                return Err(VmFault::PlanInvariant {
+                return Err(ExecutionFault::PlanInvariant {
                     node: self.plan.nodes[slot.index()].path.clone(),
                     reason: "a committed join input disappeared before cursor removal",
                 });
@@ -4521,20 +4542,20 @@ impl<'plan> Vm<'plan> {
     fn evict_join_delivery(
         &mut self,
         journal: &mut dyn Journal,
-        slot: Slot,
+        slot: NodeIndex,
         instance: &instance::Generation,
         delivery: &envelope::Delivery,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         let executor = TransactionPreparer::at(self.plan, self.graph_version, self.now);
         let mut outcome = executor
             .join_expired(slot, instance, delivery)
-            .map_err(VmFault::Fault)?;
+            .map_err(ExecutionFault::Fault)?;
         let prepared =
             self.validate_and_prepare_emissions(&&*journal, slot, instance, &outcome.record)?;
         self.retain_emission_routes(&mut outcome.record, &prepared)?;
         journal
             .commit(outcome.record.clone())
-            .map_err(VmFault::Journal)?;
+            .map_err(ExecutionFault::Journal)?;
         if self
             .scheduler
             .mailboxes
@@ -4546,7 +4567,7 @@ impl<'plan> Vm<'plan> {
             )
             .is_none()
         {
-            return Err(VmFault::PlanInvariant {
+            return Err(ExecutionFault::PlanInvariant {
                 node: self.plan.nodes[slot.index()].path.clone(),
                 reason: "a committed join eviction lost its buffered delivery",
             });
@@ -4564,13 +4585,13 @@ impl<'plan> Vm<'plan> {
     fn open_inbound_call_response(
         &mut self,
         journal: &mut dyn Journal,
-        slot: Slot,
+        slot: NodeIndex,
         instance: &instance::Generation,
         delivery: &envelope::Delivery,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         let planned = &self.plan.nodes[slot.index()];
         let NodeExecution::Connector(spec) = &planned.execution else {
-            return Err(VmFault::PlanInvariant {
+            return Err(ExecutionFault::PlanInvariant {
                 node: planned.path.clone(),
                 reason: "an inbound-Call response was routed to a non-connector",
             });
@@ -4579,7 +4600,7 @@ impl<'plan> Vm<'plan> {
             || spec.roles.has_outbound()
             || spec.exchange != ConnectorExchange::Call
         {
-            return Err(VmFault::PlanInvariant {
+            return Err(ExecutionFault::PlanInvariant {
                 node: planned.path.clone(),
                 reason: "a delivery reached a connector with neither an outbound Call nor an inbound-Call response role",
             });
@@ -4604,12 +4625,12 @@ impl<'plan> Vm<'plan> {
             .scheduler
             .mailboxes
             .pop(slot, instance)
-            .ok_or_else(|| VmFault::PlanInvariant {
+            .ok_or_else(|| ExecutionFault::PlanInvariant {
                 node: planned.path.clone(),
                 reason: "an inbound-Call response disappeared before reservation",
             })?;
         let Some(call) = self.inbound_calls.get_mut(&call_id) else {
-            return Err(VmFault::PlanInvariant {
+            return Err(ExecutionFault::PlanInvariant {
                 node: planned.path.clone(),
                 reason: "an inbound-Call response lost its admitted request",
             });
@@ -4628,10 +4649,10 @@ impl<'plan> Vm<'plan> {
     fn discard_inbound_call_response(
         &mut self,
         journal: &mut dyn Journal,
-        slot: Slot,
+        slot: NodeIndex,
         instance: &instance::Generation,
         delivery: &envelope::Delivery,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         let planned = &self.plan.nodes[slot.index()];
         let record = crate::journal::TransactionRecord {
             owner_path: node::OwnerPath::from(&planned.path),
@@ -4657,9 +4678,9 @@ impl<'plan> Vm<'plan> {
             routes: vec![],
             deadline_ids: vec![],
         };
-        journal.commit(record).map_err(VmFault::Journal)?;
+        journal.commit(record).map_err(ExecutionFault::Journal)?;
         if self.scheduler.mailboxes.pop(slot, instance).is_none() {
-            return Err(VmFault::PlanInvariant {
+            return Err(ExecutionFault::PlanInvariant {
                 node: planned.path.clone(),
                 reason: "a committed orphan response lost its mailbox delivery",
             });
@@ -4677,26 +4698,26 @@ impl<'plan> Vm<'plan> {
         &mut self,
         journal: &mut dyn Journal,
         bindings: &mut dyn OutboundConnectorBindings,
-        slot: Slot,
+        slot: NodeIndex,
         instance: &instance::Generation,
         delivery: &envelope::Delivery,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         let planned = &self.plan.nodes[slot.index()];
         let NodeExecution::Connector(spec) = &planned.execution else {
-            return Err(VmFault::PlanInvariant {
+            return Err(ExecutionFault::PlanInvariant {
                 node: planned.path.clone(),
                 reason: "Session dispatch reached a non-connector",
             });
         };
         if spec.exchange != ConnectorExchange::Session || !spec.roles.has_outbound() {
-            return Err(VmFault::PlanInvariant {
+            return Err(ExecutionFault::PlanInvariant {
                 node: planned.path.clone(),
                 reason: "a Session delivery reached a Connector without an outbound Session role",
             });
         }
         let opening =
             session_opening(&spec.contract, spec.roles, spec.exchange).ok_or_else(|| {
-                VmFault::PlanInvariant {
+                ExecutionFault::PlanInvariant {
                     node: planned.path.clone(),
                     reason: "the Contract has no Session opening rule",
                 }
@@ -4759,13 +4780,13 @@ impl<'plan> Vm<'plan> {
                         &settings,
                     )
                 } else {
-                    Err(VmFault::PlanInvariant {
+                    Err(ExecutionFault::PlanInvariant {
                         node: planned.path.clone(),
                         reason: "a client Session opening lost its claimed mailbox",
                     })
                 }
             }
-            _ => Err(VmFault::PlanInvariant {
+            _ => Err(ExecutionFault::PlanInvariant {
                 node: planned.path.clone(),
                 reason: "a client Connector owns more than one live Session in one instance",
             }),
@@ -4777,7 +4798,7 @@ impl<'plan> Vm<'plan> {
         spec: &crate::plan::ConnectorSpec,
         envelope: &Envelope,
         settings: &BTreeMap<String, crate::value::Value>,
-    ) -> Result<Option<SessionId>, VmFault> {
+    ) -> Result<Option<SessionId>, ExecutionFault> {
         // The resident child belongs to this exact Node instance. An upstream
         // socket's session_id is provenance, not an address for this resource.
         if spec.contract.as_str() == crate::connector::PROCESS_SERVICE_CONNECTOR_ID {
@@ -4785,7 +4806,7 @@ impl<'plan> Vm<'plan> {
         }
         if spec.attribute("correlate").is_some() {
             let Some(crate::value::Value::Text(value)) = settings.get("correlate") else {
-                return Err(VmFault::PlanInvariant {
+                return Err(ExecutionFault::PlanInvariant {
                     node: node::Path::new(["session"])
                         .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                     reason: "a Session correlator did not resolve to text",
@@ -4817,16 +4838,16 @@ impl<'plan> Vm<'plan> {
         &mut self,
         journal: &mut dyn Journal,
         bindings: &mut dyn OutboundConnectorBindings,
-        slot: Slot,
+        slot: NodeIndex,
         instance: &instance::Generation,
         delivery: &envelope::Delivery,
         settings: &BTreeMap<String, crate::value::Value>,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         let planned = &self.plan.nodes[slot.index()];
         let preparation = bindings
             .prepare_session_open(&planned.path, delivery.envelope.data(), settings)
             .map_err(crate::boundary::PollFault::Driver)
-            .map_err(VmFault::Dispatch)?;
+            .map_err(ExecutionFault::Dispatch)?;
         let prepared = match preparation {
             RequestPreparation::Prepared(prepared) => prepared,
             RequestPreparation::Rejected(completion) => {
@@ -4854,12 +4875,12 @@ impl<'plan> Vm<'plan> {
         {
             journal
                 .open_outbound_session(intent.clone())
-                .map_err(VmFault::Journal)?;
+                .map_err(ExecutionFault::Journal)?;
             let retained = self
                 .scheduler
                 .mailboxes
                 .pop(slot, instance)
-                .ok_or_else(|| VmFault::PlanInvariant {
+                .ok_or_else(|| ExecutionFault::PlanInvariant {
                     node: planned.path.clone(),
                     reason: "a journaled Session opening lost its mailbox delivery",
                 })?;
@@ -4879,17 +4900,16 @@ impl<'plan> Vm<'plan> {
         match bindings
             .open_session(&intent, &delivery.envelope)
             .map_err(crate::boundary::PollFault::Driver)
-            .map_err(VmFault::Dispatch)?
+            .map_err(ExecutionFault::Dispatch)?
         {
             SessionStart::Pending => Ok(()),
             SessionStart::Started => {
-                let session =
-                    self.sessions
-                        .get_mut(&session_id)
-                        .ok_or_else(|| VmFault::PlanInvariant {
-                            node: planned.path.clone(),
-                            reason: "a started Session opening lost its logical record",
-                        })?;
+                let session = self.sessions.get_mut(&session_id).ok_or_else(|| {
+                    ExecutionFault::PlanInvariant {
+                        node: planned.path.clone(),
+                        reason: "a started Session opening lost its logical record",
+                    }
+                })?;
                 session.opening_started = true;
                 Ok(())
             }
@@ -4903,7 +4923,7 @@ impl<'plan> Vm<'plan> {
         dispatch: SessionDispatch<'_>,
         session_id: SessionId,
         settings: &BTreeMap<String, crate::value::Value>,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         let SessionDispatch {
             slot,
             instance,
@@ -4918,7 +4938,7 @@ impl<'plan> Vm<'plan> {
                 settings,
             )
             .map_err(crate::boundary::PollFault::Driver)
-            .map_err(VmFault::Dispatch)?;
+            .map_err(ExecutionFault::Dispatch)?;
         let prepared = match preparation {
             RequestPreparation::Prepared(prepared) => prepared,
             RequestPreparation::Rejected(completion) => {
@@ -4926,7 +4946,7 @@ impl<'plan> Vm<'plan> {
                     .scheduler
                     .mailboxes
                     .pop(slot, instance)
-                    .ok_or_else(|| VmFault::PlanInvariant {
+                    .ok_or_else(|| ExecutionFault::PlanInvariant {
                         node: planned.path.clone(),
                         reason: "a rejected Session write lost its mailbox delivery",
                     })?;
@@ -4956,12 +4976,12 @@ impl<'plan> Vm<'plan> {
         {
             journal
                 .open_session_write(intent.clone())
-                .map_err(VmFault::Journal)?;
+                .map_err(ExecutionFault::Journal)?;
             let retained = self
                 .scheduler
                 .mailboxes
                 .pop(slot, instance)
-                .ok_or_else(|| VmFault::PlanInvariant {
+                .ok_or_else(|| ExecutionFault::PlanInvariant {
                     node: planned.path.clone(),
                     reason: "a journaled Session write lost its mailbox delivery",
                 })?;
@@ -4988,12 +5008,12 @@ impl<'plan> Vm<'plan> {
         match bindings
             .write_session(&intent, &delivery.envelope)
             .map_err(crate::boundary::PollFault::Driver)
-            .map_err(VmFault::Dispatch)?
+            .map_err(ExecutionFault::Dispatch)?
         {
             SessionStart::Pending => Ok(()),
             SessionStart::Started => {
                 let write = self.session_writes.get_mut(&write_ref).ok_or_else(|| {
-                    VmFault::PlanInvariant {
+                    ExecutionFault::PlanInvariant {
                         node: planned.path.clone(),
                         reason: "a started Session write lost its journaled intent",
                     }
@@ -5007,20 +5027,22 @@ impl<'plan> Vm<'plan> {
     fn commit_pre_session_refusal(
         &mut self,
         journal: &mut dyn Journal,
-        slot: Slot,
+        slot: NodeIndex,
         instance: &instance::Generation,
         delivery: &envelope::Delivery,
         completion: &Completion,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         let executor = TransactionPreparer::at(self.plan, self.graph_version, self.now);
         let trigger = node::Trigger::Port(delivery.port.clone());
         let mut outcome = executor
             .connector_completion(slot, instance, delivery, &trigger, completion)
-            .map_err(VmFault::Fault)?;
+            .map_err(ExecutionFault::Fault)?;
         let prepared =
             self.validate_and_prepare_emissions(&&*journal, slot, instance, &outcome.record)?;
         self.retain_emission_routes(&mut outcome.record, &prepared)?;
-        journal.commit(outcome.record).map_err(VmFault::Journal)?;
+        journal
+            .commit(outcome.record)
+            .map_err(ExecutionFault::Journal)?;
         self.scheduler.mailboxes.pop(slot, instance);
         self.route_emissions(slot, instance, prepared);
         self.progress_closures();
@@ -5030,10 +5052,10 @@ impl<'plan> Vm<'plan> {
     fn discard_session_write(
         &mut self,
         journal: &mut dyn Journal,
-        slot: Slot,
+        slot: NodeIndex,
         instance: &instance::Generation,
         delivery: &envelope::Delivery,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         self.discard_inbound_call_response(journal, slot, instance, delivery)
     }
 
@@ -5046,10 +5068,10 @@ impl<'plan> Vm<'plan> {
         &mut self,
         journal: &mut dyn Journal,
         bindings: &mut dyn OutboundConnectorBindings,
-        slot: Slot,
+        slot: NodeIndex,
         instance: &instance::Generation,
         delivery: &envelope::Delivery,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         // A recovered mailbox can be ready after its retained budget is
         // already due. Settle that exact delivery before handing any intent
         // to the Driver, even when the caller drains before `advance`.
@@ -5070,7 +5092,7 @@ impl<'plan> Vm<'plan> {
             unreachable!("routed here by kind");
         };
         if !spec.roles.has_outbound() || spec.exchange != ConnectorExchange::Call {
-            return Err(VmFault::PlanInvariant {
+            return Err(ExecutionFault::PlanInvariant {
                 node: planned.path.clone(),
                 reason: "a request requires an outbound Call Contract",
             });
@@ -5086,7 +5108,7 @@ impl<'plan> Vm<'plan> {
         let prepared = match bindings
             .prepare_request(&planned.path, delivery.envelope.data(), &resolved_settings)
             .map_err(crate::boundary::PollFault::Driver)
-            .map_err(VmFault::Dispatch)?
+            .map_err(ExecutionFault::Dispatch)?
         {
             RequestPreparation::Prepared(prepared) => prepared,
             RequestPreparation::Rejected(completion) => {
@@ -5094,7 +5116,7 @@ impl<'plan> Vm<'plan> {
                 let trigger = node::Trigger::Port(delivery.port.clone());
                 let mut outcome = executor
                     .connector_completion(slot, instance, delivery, &trigger, &completion)
-                    .map_err(VmFault::Fault)?;
+                    .map_err(ExecutionFault::Fault)?;
                 self.prepare_call_completion(slot, instance, delivery, &mut outcome.record)?;
                 let prepared = self.validate_and_prepare_emissions(
                     &&*journal,
@@ -5105,7 +5127,7 @@ impl<'plan> Vm<'plan> {
                 self.retain_emission_routes(&mut outcome.record, &prepared)?;
                 journal
                     .commit(outcome.record.clone())
-                    .map_err(VmFault::Journal)?;
+                    .map_err(ExecutionFault::Journal)?;
                 if outcome.record.loop_protocol().is_some() {
                     self.refresh_loop_manager(journal)?;
                 }
@@ -5140,11 +5162,11 @@ impl<'plan> Vm<'plan> {
     fn retain_call_open(
         &mut self,
         journal: &mut dyn Journal,
-        slot: Slot,
+        slot: NodeIndex,
         instance: &instance::Generation,
         delivery: &envelope::Delivery,
         intent: CallOpen,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         let attempt = self.retry_attempt(instance, delivery);
         let mut retry = self.retry_manager.clone();
         if let (Some(attempt), Some(fold)) = (attempt, retry.as_deref_mut()) {
@@ -5154,7 +5176,7 @@ impl<'plan> Vm<'plan> {
         let call_id = intent.call_id;
         journal
             .open_egress(intent, attempt)
-            .map_err(VmFault::Journal)?;
+            .map_err(ExecutionFault::Journal)?;
         self.retry_manager = retry;
         let delivery = self
             .scheduler
@@ -5173,8 +5195,8 @@ impl<'plan> Vm<'plan> {
         Ok(())
     }
 
-    fn slot_of(&self, path: &node::Path) -> Slot {
-        Slot::new(
+    fn slot_of(&self, path: &node::Path) -> NodeIndex {
+        NodeIndex::new(
             u32::try_from(
                 self.plan
                     .nodes
@@ -5199,10 +5221,10 @@ impl<'plan> Vm<'plan> {
     fn validate_and_prepare_emissions(
         &self,
         journal: &dyn InstanceAdmissions,
-        slot: Slot,
+        slot: NodeIndex,
         source_instance: &instance::Generation,
         record: &crate::runtime::TransactionRecord,
-    ) -> Result<PreparedEmissions, VmFault> {
+    ) -> Result<PreparedEmissions, ExecutionFault> {
         let mut prepared = Vec::with_capacity(record.emissions.len());
         let mut commands = Vec::new();
         // One producer transaction is one admission linearization point. If
@@ -5212,15 +5234,15 @@ impl<'plan> Vm<'plan> {
         let mut candidates = BTreeMap::new();
         for emission in &record.emissions {
             if let Data::Materialized(value) = emission.envelope.data() {
-                value
-                    .check_consistency()
-                    .map_err(|error| VmFault::Fault(crate::runtime::Fault::InvalidValue(error)))?;
+                value.check_consistency().map_err(|error| {
+                    ExecutionFault::Fault(crate::runtime::Fault::InvalidValue(error))
+                })?;
                 let from = EdgeEnd {
                     node: Some(slot),
                     port: emission.port.clone(),
                 };
                 crate::runtime::crossing_pins_hold(self.plan, &from, value)
-                    .map_err(|violation| VmFault::Fault(violation.into_fault()))?;
+                    .map_err(|violation| ExecutionFault::Fault(violation.into_fault()))?;
             }
             let from = EdgeEnd {
                 node: Some(slot),
@@ -5268,7 +5290,7 @@ impl<'plan> Vm<'plan> {
         source_instance: Option<&instance::Generation>,
         envelope: &Envelope,
         candidates: &mut BTreeMap<instance::Generation, InstanceCandidate>,
-    ) -> Result<Vec<PreparedEdge>, VmFault> {
+    ) -> Result<Vec<PreparedEdge>, ExecutionFault> {
         if self.graph_loops.is_some() {
             return self.prepare_graph_routes(
                 journal,
@@ -5285,10 +5307,10 @@ impl<'plan> Vm<'plan> {
             .has_case_routes(from)
             .then(|| DataSlot::new(envelope.data()).materialize())
             .transpose()
-            .map_err(VmFault::Fault)?;
+            .map_err(ExecutionFault::Fault)?;
         if let Some(value) = &selected_value {
             crate::runtime::crossing_pins_hold(self.plan, from, value)
-                .map_err(|violation| VmFault::Fault(violation.into_fault()))?;
+                .map_err(|violation| ExecutionFault::Fault(violation.into_fault()))?;
         }
         for edge in self
             .plan
@@ -5316,10 +5338,12 @@ impl<'plan> Vm<'plan> {
                             journal,
                             edge.owner,
                             source_instance,
-                            edge.to.as_ref().ok_or_else(|| VmFault::PlanInvariant {
-                                node: self.plan.nodes[target.index()].path.clone(),
-                                reason: "a node route has no destination port",
-                            })?,
+                            edge.to
+                                .as_ref()
+                                .ok_or_else(|| ExecutionFault::PlanInvariant {
+                                    node: self.plan.nodes[target.index()].path.clone(),
+                                    reason: "a node route has no destination port",
+                                })?,
                             envelope,
                             candidates,
                         )?
@@ -5345,9 +5369,9 @@ impl<'plan> Vm<'plan> {
         &self,
         edge_scope: node::OwnerSlot,
         source_instance: Option<&instance::Generation>,
-        target: Slot,
+        target: NodeIndex,
         envelope: &Envelope,
-    ) -> Result<Option<PreparedTarget>, VmFault> {
+    ) -> Result<Option<PreparedTarget>, ExecutionFault> {
         let Some(spec) = self.plan.nodes[target.index()].connector() else {
             return Ok(None);
         };
@@ -5376,7 +5400,7 @@ impl<'plan> Vm<'plan> {
 
         let owner_chain = self.owner_chain(self.plan.nodes[target.index()].owner)?;
         let Some(scope_index) = owner_chain.iter().position(|owner| *owner == edge_scope) else {
-            return Err(VmFault::PlanInvariant {
+            return Err(ExecutionFault::PlanInvariant {
                 node: self.plan.nodes[target.index()].path.clone(),
                 reason: "the response edge scope is not an ancestor of its inbound Call target",
             });
@@ -5387,7 +5411,7 @@ impl<'plan> Vm<'plan> {
             let instance =
                 self.instances
                     .get(&reference)
-                    .ok_or_else(|| VmFault::PlanInvariant {
+                    .ok_or_else(|| ExecutionFault::PlanInvariant {
                         node: self.plan.nodes[target.index()].path.clone(),
                         reason: "an open inbound Call lost its installed instance chain",
                     })?;
@@ -5401,7 +5425,7 @@ impl<'plan> Vm<'plan> {
                 .zip(owner_chain)
                 .any(|((actual, _), expected)| actual != expected)
         {
-            return Err(VmFault::PlanInvariant {
+            return Err(ExecutionFault::PlanInvariant {
                 node: self.plan.nodes[target.index()].path.clone(),
                 reason: "an open inbound Call has an instance chain inconsistent with its owner",
             });
@@ -5413,17 +5437,18 @@ impl<'plan> Vm<'plan> {
         let reference = chain
             .last()
             .cloned()
-            .ok_or_else(|| VmFault::PlanInvariant {
+            .ok_or_else(|| ExecutionFault::PlanInvariant {
                 node: self.plan.nodes[target.index()].path.clone(),
                 reason: "an inbound Call target has no instance",
             })?;
-        let scope = chain
-            .get(scope_index)
-            .cloned()
-            .ok_or_else(|| VmFault::PlanInvariant {
-                node: self.plan.nodes[target.index()].path.clone(),
-                reason: "the direct response route lost its edge scope instance",
-            })?;
+        let scope =
+            chain
+                .get(scope_index)
+                .cloned()
+                .ok_or_else(|| ExecutionFault::PlanInvariant {
+                    node: self.plan.nodes[target.index()].path.clone(),
+                    reason: "the direct response route lost its edge scope instance",
+                })?;
         let Some(source_scope) = self.source_instance_for_owner(source_instance, edge_scope)?
         else {
             return Ok(None);
@@ -5446,10 +5471,10 @@ impl<'plan> Vm<'plan> {
     /// reference carried by the application through a root-mixing path.
     fn select_inbound_call_ref(
         &self,
-        slot: Slot,
+        slot: NodeIndex,
         spec: &crate::plan::ConnectorSpec,
         envelope: &Envelope,
-    ) -> Result<Option<InboundCallId>, VmFault> {
+    ) -> Result<Option<InboundCallId>, ExecutionFault> {
         let Some(setting) = spec.attribute("correlate") else {
             return Ok(Some(InboundCallId::from_root(
                 envelope.meta().sys().origin_id(),
@@ -5460,7 +5485,7 @@ impl<'plan> Vm<'plan> {
             expr,
         } = setting
         else {
-            return Err(VmFault::PlanInvariant {
+            return Err(ExecutionFault::PlanInvariant {
                 node: node::Path::new(["inbound-call"])
                     .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                 reason: "an inbound Call correlator is not one invocation expression",
@@ -5481,12 +5506,12 @@ impl<'plan> Vm<'plan> {
             ..DataSlot::new(envelope.data())
         };
         let selected = resolve_payload(
-            eval_lazy(expr, &bindings, &data, &self.plan.assets).map_err(VmFault::Fault)?,
+            eval_lazy(expr, &bindings, &data, &self.plan.assets).map_err(ExecutionFault::Fault)?,
             &data,
         )
-        .map_err(VmFault::Fault)?;
+        .map_err(ExecutionFault::Fault)?;
         let crate::value::Value::Text(selected) = selected else {
-            return Err(VmFault::PlanInvariant {
+            return Err(ExecutionFault::PlanInvariant {
                 node: node::Path::new(["inbound-call"])
                     .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                 reason: "an inbound Call correlator did not yield text",
@@ -5539,8 +5564,8 @@ impl<'plan> Vm<'plan> {
         target: &EdgeEnd,
         envelope: &Envelope,
         candidates: &mut BTreeMap<instance::Generation, InstanceCandidate>,
-    ) -> Result<PreparedTarget, VmFault> {
-        let slot = target.node.ok_or_else(|| VmFault::PlanInvariant {
+    ) -> Result<PreparedTarget, ExecutionFault> {
+        let slot = target.node.ok_or_else(|| ExecutionFault::PlanInvariant {
             node: node::Path::new(["admission"])
                 .unwrap_or_else(|_| unreachable!("a literal path is valid")),
             reason: "an Executor admission has no node",
@@ -5571,13 +5596,13 @@ impl<'plan> Vm<'plan> {
         envelope: &Envelope,
         data: &DataSlot<'_>,
         candidates: &mut BTreeMap<instance::Generation, InstanceCandidate>,
-    ) -> Result<PreparedTarget, VmFault> {
+    ) -> Result<PreparedTarget, ExecutionFault> {
         let refusal = |reason| match self.plan.owners[target_owner.index()].kind {
-            OwnerKind::Node(slot) => VmFault::PlanInvariant {
+            OwnerKind::Node(slot) => ExecutionFault::PlanInvariant {
                 node: self.plan.nodes[slot.index()].path.clone(),
                 reason,
             },
-            OwnerKind::Graph => VmFault::InvalidLoopDecision {
+            OwnerKind::Graph => ExecutionFault::InvalidLoopDecision {
                 owner: self.plan.owners[target_owner.index()].path.clone(),
                 reason,
             },
@@ -5627,11 +5652,11 @@ impl<'plan> Vm<'plan> {
         })
     }
 
-    fn owner_chain(&self, owner: node::OwnerSlot) -> Result<&[node::OwnerSlot], VmFault> {
+    fn owner_chain(&self, owner: node::OwnerSlot) -> Result<&[node::OwnerSlot], ExecutionFault> {
         self.owner_chains
             .get(owner.index())
             .and_then(Option::as_deref)
-            .ok_or_else(|| VmFault::PlanInvariant {
+            .ok_or_else(|| ExecutionFault::PlanInvariant {
                 node: node::Path::new(["owner"])
                     .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                 reason: "an owner reference escaped the validated owner table",
@@ -5642,11 +5667,11 @@ impl<'plan> Vm<'plan> {
         &self,
         source: Option<&instance::Generation>,
         owner: node::OwnerSlot,
-    ) -> Result<Option<instance::Generation>, VmFault> {
+    ) -> Result<Option<instance::Generation>, ExecutionFault> {
         let mut cursor = source.cloned();
         while let Some(reference) = cursor {
             let Some(instance) = self.instances.get(&reference) else {
-                return Err(VmFault::PlanInvariant {
+                return Err(ExecutionFault::PlanInvariant {
                     node: node::Path::new(["instance"])
                         .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                     reason: "a routed source instance has no installed bundle",
@@ -5691,11 +5716,11 @@ impl<'plan> Vm<'plan> {
         envelope: &Envelope,
         data: &DataSlot<'_>,
         candidates: &mut BTreeMap<instance::Generation, InstanceCandidate>,
-    ) -> Result<instance::Generation, VmFault> {
+    ) -> Result<instance::Generation, ExecutionFault> {
         let owner = self
             .plan
             .owner(owner_slot)
-            .ok_or_else(|| VmFault::PlanInvariant {
+            .ok_or_else(|| ExecutionFault::PlanInvariant {
                 node: node::Path::new(["owner"])
                     .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                 reason: "an owner reference escaped the validated owner table",
@@ -5735,7 +5760,7 @@ impl<'plan> Vm<'plan> {
                 if matches!(owner.instance.lifetime, instance::Lifetime::SinglePass)
                     && waiting.candidate.single_pass_root != Some(envelope.meta().sys().id())
                 {
-                    return Err(VmFault::InstanceClosing {
+                    return Err(ExecutionFault::InstanceClosing {
                         owner: owner.path.clone(),
                     });
                 }
@@ -5747,7 +5772,7 @@ impl<'plan> Vm<'plan> {
                 if matches!(owner.instance.lifetime, instance::Lifetime::SinglePass)
                     && candidate.single_pass_root != Some(envelope.meta().sys().id())
                 {
-                    return Err(VmFault::InstanceClosing {
+                    return Err(ExecutionFault::InstanceClosing {
                         owner: owner.path.clone(),
                     });
                 }
@@ -5767,7 +5792,7 @@ impl<'plan> Vm<'plan> {
                 } else if let Some(candidate) = candidates.get(reference) {
                     (candidate.values.clone(), candidate.frames.clone())
                 } else {
-                    return Err(VmFault::PlanInvariant {
+                    return Err(ExecutionFault::PlanInvariant {
                         node: node::Path::new(["owner"])
                             .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                         reason: "a selected parent has no live or candidate instance bundle",
@@ -5784,10 +5809,11 @@ impl<'plan> Vm<'plan> {
                     crate::expr::EvalValue::from(meta_value(envelope.meta())),
                 );
                 let value = resolve_payload(
-                    eval_lazy(key, &bindings, data, &self.plan.assets).map_err(VmFault::Fault)?,
+                    eval_lazy(key, &bindings, data, &self.plan.assets)
+                        .map_err(ExecutionFault::Fault)?,
                     data,
                 )
-                .map_err(VmFault::Fault)?;
+                .map_err(ExecutionFault::Fault)?;
                 frames.push(instance::Segment::SelectedKey {
                     scope: owner.path.clone(),
                     ty: key.ty.clone(),
@@ -5802,7 +5828,7 @@ impl<'plan> Vm<'plan> {
                     .now
                     .div_euclid(every)
                     .checked_mul(every)
-                    .ok_or_else(|| VmFault::PlanInvariant {
+                    .ok_or_else(|| ExecutionFault::PlanInvariant {
                         node: node::Path::new(["instance"])
                             .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                         reason: "a validated tumbling duration overflowed its epoch box",
@@ -5816,7 +5842,7 @@ impl<'plan> Vm<'plan> {
             _ => None,
         };
         let address = instance::InstanceAddress::new(&owner.path, &frames)
-            .map_err(|error| VmFault::Fault(Fault::Unrepresentable(error.to_string())))?;
+            .map_err(|error| ExecutionFault::Fault(Fault::Unrepresentable(error.to_string())))?;
         // The journal normally selects the current generation. Only Closing
         // is different: external traffic belongs to the reserved successor,
         // while work already admitted inside the closing scope must retain
@@ -5829,11 +5855,11 @@ impl<'plan> Vm<'plan> {
         }
         let reference = journal
             .instance_generation_for_admission(&address)
-            .map_err(VmFault::Journal)?;
+            .map_err(ExecutionFault::Journal)?;
         if let Some(start_ns) = time_box_start
             && reference.generation() != 0
         {
-            return Err(VmFault::ClosedTimeBox {
+            return Err(ExecutionFault::ClosedTimeBox {
                 owner: owner.path.clone(),
                 start_ns,
             });
@@ -5852,7 +5878,7 @@ impl<'plan> Vm<'plan> {
             if accepts {
                 return Ok(reference);
             }
-            return Err(VmFault::InstanceClosing {
+            return Err(ExecutionFault::InstanceClosing {
                 owner: owner.path.clone(),
             });
         }
@@ -5860,7 +5886,7 @@ impl<'plan> Vm<'plan> {
             if matches!(owner.instance.lifetime, instance::Lifetime::SinglePass)
                 && waiting.candidate.single_pass_root != Some(envelope.meta().sys().id())
             {
-                return Err(VmFault::InstanceClosing {
+                return Err(ExecutionFault::InstanceClosing {
                     owner: owner.path.clone(),
                 });
             }
@@ -5870,7 +5896,7 @@ impl<'plan> Vm<'plan> {
             if matches!(owner.instance.lifetime, instance::Lifetime::SinglePass)
                 && candidate.single_pass_root != Some(envelope.meta().sys().id())
             {
-                return Err(VmFault::InstanceClosing {
+                return Err(ExecutionFault::InstanceClosing {
                     owner: owner.path.clone(),
                 });
             }
@@ -5903,11 +5929,11 @@ impl<'plan> Vm<'plan> {
         inherited: &BTreeMap<String, crate::value::Value>,
         selected_key: Option<&crate::value::Value>,
         data: &DataSlot<'_>,
-    ) -> Result<BTreeMap<String, crate::value::Value>, VmFault> {
+    ) -> Result<BTreeMap<String, crate::value::Value>, ExecutionFault> {
         let owner = self
             .plan
             .owner(owner_slot)
-            .ok_or_else(|| VmFault::PlanInvariant {
+            .ok_or_else(|| ExecutionFault::PlanInvariant {
                 node: node::Path::new(["owner"])
                     .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                 reason: "an owner reference escaped the validated owner table",
@@ -5932,7 +5958,7 @@ impl<'plan> Vm<'plan> {
         }
         let mut values = inherited.clone();
         for (declared, value) in owner.vals.iter().zip(resolved) {
-            let value = value.ok_or_else(|| VmFault::PlanInvariant {
+            let value = value.ok_or_else(|| ExecutionFault::PlanInvariant {
                 node: node::Path::new(["owner"])
                     .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                 reason: "a validated immutable binding did not resolve",
@@ -5953,12 +5979,12 @@ impl<'plan> Vm<'plan> {
         local: &BTreeMap<&str, usize>,
         resolved: &mut [Option<crate::value::Value>],
         visiting: &mut [bool],
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         if resolved[index].is_some() {
             return Ok(());
         }
         if visiting[index] {
-            return Err(VmFault::PlanInvariant {
+            return Err(ExecutionFault::PlanInvariant {
                 node: node::Path::new(["owner"])
                     .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                 reason: "a validated immutable-binding cycle reached evaluation",
@@ -5968,7 +5994,7 @@ impl<'plan> Vm<'plan> {
         let owner = self
             .plan
             .owner(owner_slot)
-            .ok_or_else(|| VmFault::PlanInvariant {
+            .ok_or_else(|| ExecutionFault::PlanInvariant {
                 node: node::Path::new(["owner"])
                     .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                 reason: "an owner reference escaped the validated owner table",
@@ -5993,7 +6019,7 @@ impl<'plan> Vm<'plan> {
         let value = match (&declared.site, &declared.resolved) {
             (EvaluationSite::Plan, Some(value)) => value.clone(),
             (EvaluationSite::Plan, None) | (EvaluationSite::Invocation, _) => {
-                return Err(VmFault::PlanInvariant {
+                return Err(ExecutionFault::PlanInvariant {
                     node: node::Path::new(["owner"])
                         .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                     reason: "a validated immutable binding carries an impossible site",
@@ -6017,14 +6043,14 @@ impl<'plan> Vm<'plan> {
                 }
                 resolve_payload(
                     eval_lazy(&declared.expr, &bindings, data, &self.plan.assets)
-                        .map_err(VmFault::Fault)?,
+                        .map_err(ExecutionFault::Fault)?,
                     data,
                 )
-                .map_err(VmFault::Fault)?
+                .map_err(ExecutionFault::Fault)?
             }
         };
         if let Err(violation) = declared.expr.ty.check_value_type(&declared.name, &value) {
-            return Err(VmFault::Fault(Fault::Unrepresentable(
+            return Err(ExecutionFault::Fault(Fault::Unrepresentable(
                 violation.to_string(),
             )));
         }
@@ -6039,9 +6065,9 @@ impl<'plan> Vm<'plan> {
         values: &BTreeMap<String, crate::value::Value>,
         selected_key: Option<&crate::value::Value>,
         data: &DataSlot<'_>,
-    ) -> Result<BTreeMap<String, crate::value::Value>, VmFault> {
+    ) -> Result<BTreeMap<String, crate::value::Value>, ExecutionFault> {
         let Some(owner) = self.plan.owner(owner_slot) else {
-            return Err(VmFault::PlanInvariant {
+            return Err(ExecutionFault::PlanInvariant {
                 node: node::Path::new(["owner"])
                     .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                 reason: "an owner reference escaped the validated owner table",
@@ -6069,7 +6095,7 @@ impl<'plan> Vm<'plan> {
         spec: &crate::plan::ConnectorSpec,
         node: &node::Path,
         envelope: &Envelope,
-    ) -> Result<BTreeMap<String, crate::value::Value>, VmFault> {
+    ) -> Result<BTreeMap<String, crate::value::Value>, ExecutionFault> {
         let (values, mut settings) = self
             .instances
             .get(instance)
@@ -6082,7 +6108,7 @@ impl<'plan> Vm<'plan> {
                     )
                 })
             })
-            .ok_or_else(|| VmFault::PlanInvariant {
+            .ok_or_else(|| ExecutionFault::PlanInvariant {
                 node: node.clone(),
                 reason: "an opening call lost its selected instance bundle",
             })?;
@@ -6107,7 +6133,11 @@ impl<'plan> Vm<'plan> {
             .nodes
             .iter()
             .position(|entry| entry.path == *node)
-            .and_then(|index| self.plan.resolved_ports().node(Slot::new(index as u32)))
+            .and_then(|index| {
+                self.plan
+                    .resolved_ports()
+                    .node(NodeIndex::new(index as u32))
+            })
             .and_then(|ports| {
                 ports
                     .iter()
@@ -6133,7 +6163,7 @@ impl<'plan> Vm<'plan> {
         target_site: EvaluationSite,
         bindings: &BTreeMap<String, crate::expr::EvalValue>,
         data: &DataSlot<'_>,
-    ) -> Result<BTreeMap<String, crate::value::Value>, VmFault> {
+    ) -> Result<BTreeMap<String, crate::value::Value>, ExecutionFault> {
         let mut settings = BTreeMap::new();
         for (name, setting) in &spec.attributes {
             let AttrSetting::Expr { site, expr } = setting else {
@@ -6150,12 +6180,13 @@ impl<'plan> Vm<'plan> {
                 continue;
             }
             let value = resolve_payload(
-                eval_lazy(expr, bindings, data, &self.plan.assets).map_err(VmFault::Fault)?,
+                eval_lazy(expr, bindings, data, &self.plan.assets)
+                    .map_err(ExecutionFault::Fault)?,
                 data,
             )
-            .map_err(VmFault::Fault)?;
+            .map_err(ExecutionFault::Fault)?;
             if let Err(violation) = expr.ty.check_value_type(name, &value) {
-                return Err(VmFault::Fault(Fault::Unrepresentable(
+                return Err(ExecutionFault::Fault(Fault::Unrepresentable(
                     violation.to_string(),
                 )));
             }
@@ -6167,11 +6198,11 @@ impl<'plan> Vm<'plan> {
     fn check_room_for_routes<'a>(
         &self,
         routes: impl IntoIterator<Item = &'a [PreparedEdge]>,
-    ) -> Result<(), VmFault>
+    ) -> Result<(), ExecutionFault>
     where
         PreparedEdge: 'a,
     {
-        let mut needed: BTreeMap<(Slot, instance::Generation), usize> = BTreeMap::new();
+        let mut needed: BTreeMap<(NodeIndex, instance::Generation), usize> = BTreeMap::new();
         let mut loop_admissions = 0usize;
         let mut loop_owner = None;
         for routes in routes {
@@ -6204,7 +6235,7 @@ impl<'plan> Vm<'plan> {
                     .target
                     .as_ref()
                     .map(|target| target.reference.clone())
-                    .ok_or_else(|| VmFault::PlanInvariant {
+                    .ok_or_else(|| ExecutionFault::PlanInvariant {
                         node: self.plan.nodes[target.index()].path.clone(),
                         reason: "a node route has no selected target instance",
                     })?;
@@ -6220,7 +6251,7 @@ impl<'plan> Vm<'plan> {
                 .mailboxes
                 .has_room(*target, key, count.saturating_sub(1))
             {
-                return Err(VmFault::MailboxFull {
+                return Err(ExecutionFault::MailboxFull {
                     node: self.plan.nodes[target.index()].path.clone(),
                 });
             }
@@ -6231,7 +6262,7 @@ impl<'plan> Vm<'plan> {
                 .saturating_add(loop_admissions)
                 > WORKER_MAILBOX_CAPACITY
         {
-            return Err(VmFault::RecurrenceQueueFull {
+            return Err(ExecutionFault::RecurrenceQueueFull {
                 owner: self.plan.owners[owner.index()].path.clone(),
             });
         }
@@ -6242,7 +6273,7 @@ impl<'plan> Vm<'plan> {
     /// and every target key were reserved before the commit.
     fn route_emissions(
         &mut self,
-        slot: Slot,
+        slot: NodeIndex,
         source_instance: &instance::Generation,
         prepared: PreparedEmissions,
     ) {
@@ -6269,7 +6300,7 @@ impl<'plan> Vm<'plan> {
             );
         }
         if self.graph_loops.is_some() {
-            self.install_graph_contexts(contexts);
+            self.update_graph_loop_contexts(contexts);
         }
     }
 
@@ -6307,7 +6338,7 @@ impl<'plan> Vm<'plan> {
                             .as_ref()
                             .unwrap_or_else(|| unreachable!("a node route has a target bundle"));
                         let source = source_instance.unwrap_or(&prepared.scope).clone();
-                        self.install_target(prepared, candidates, envelope);
+                        self.apply_instance_admissions(prepared, candidates, envelope);
                         self.scheduler
                             .mailboxes
                             .deliver(
@@ -6338,7 +6369,9 @@ impl<'plan> Vm<'plan> {
         claimed
     }
 
-    fn install_target(
+    /// Apply a committed target's instance chain, including lifecycle work
+    /// and deadlines. Instance selection and capacity checks already ran.
+    fn apply_instance_admissions(
         &mut self,
         target: &PreparedTarget,
         candidates: &BTreeMap<instance::Generation, InstanceCandidate>,

@@ -273,7 +273,7 @@ pub fn explain_diff(
     let classified = crate::data_policy::requires_redaction;
     let redact = plan.resolved_ports().boundary().iter().any(|p| classified(p.annotations()))
         || plan.nodes.iter().enumerate().any(|(index, node)| {
-            plan.resolved_ports().node(crate::plan::Slot::new(index as u32))
+            plan.resolved_ports().node(crate::plan::NodeIndex::new(index as u32))
                 .is_some_and(|ports| ports.iter().any(|p| classified(p.annotations())))
                 || node.vars.iter().any(|v| classified(&v.annotations))
         })

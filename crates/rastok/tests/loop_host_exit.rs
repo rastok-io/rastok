@@ -186,7 +186,7 @@ fn expiry_and_pending_commands_recover_on_the_resolved_host_terminal() {
         loop_protocol::{LoopView, Phase},
     };
     use rastok::plan::GraphVersion;
-    use rastok::runtime::vm::Vm;
+    use rastok::runtime::execution::Execution;
 
     for source in [
         OPERATOR.to_string(),
@@ -199,9 +199,9 @@ fn expiry_and_pending_commands_recover_on_the_resolved_host_terminal() {
             .replace("count.err -> err", "count.failed -> failed"),
     ] {
         let compiled = compiler::compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap();
-        let mut vm = Vm::boot(&compiled.plan, GraphVersion(1));
+        let mut vm = Execution::boot(&compiled.plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
-        vm.inject(
+        vm.accept_input(
             &mut journal,
             IngressProposal {
                 provenance: IngressProvenance::single(rastok::node::Path::new(["test"]).unwrap()),
@@ -216,7 +216,7 @@ fn expiry_and_pending_commands_recover_on_the_resolved_host_terminal() {
         )
         .unwrap();
         for _ in 0..30 {
-            let mut restored = Vm::boot(&compiled.plan, GraphVersion(1));
+            let mut restored = Execution::boot(&compiled.plan, GraphVersion(1));
             restored.recover_from_journal(&journal).unwrap();
             assert_eq!(restored.inspection(), vm.inspection());
             vm = restored;

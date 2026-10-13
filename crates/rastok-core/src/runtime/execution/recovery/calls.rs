@@ -4,21 +4,21 @@
 use super::*;
 use crate::journal::{CallRecord, CallStatus, Closure, ConsumedPosition};
 
-impl Vm<'_> {
+impl Execution<'_> {
     pub(super) fn restore_call(
         &mut self,
         journal: &dyn Journal,
         bindings: &mut dyn OutboundConnectorBindings,
         index: usize,
         record: &CallRecord,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         let intent = &record.intent;
         let slot = self
             .plan
             .nodes
             .iter()
             .position(|node| node.path == intent.connector_path)
-            .map(|index| Slot::new(index as u32))
+            .map(|index| NodeIndex::new(index as u32))
             .ok_or_else(|| invalid(index, "a retained Call has no planned Connector"))?;
         let spec = self.plan.nodes[slot.index()]
             .connector()
@@ -149,7 +149,7 @@ impl Vm<'_> {
                 let completion = bindings
                     .scheduler_completion(&intent.connector_path, terminal)
                     .map_err(crate::boundary::PollFault::Driver)
-                    .map_err(VmFault::Dispatch)?;
+                    .map_err(ExecutionFault::Dispatch)?;
                 (
                     completion,
                     node::Trigger::Lifecycle(if record.status == CallStatus::Abandoned {
@@ -190,10 +190,10 @@ impl Vm<'_> {
         &mut self,
         admissions: &dyn InstanceAdmissions,
         index: usize,
-        slot: Slot,
+        slot: NodeIndex,
         record: &TransactionRecord,
         consumed: &ConsumedPosition,
-    ) -> Result<bool, VmFault> {
+    ) -> Result<bool, ExecutionFault> {
         let Some((call, pending)) = self
             .pending
             .iter()
@@ -222,7 +222,7 @@ impl Vm<'_> {
                 &entry.trigger,
                 &entry.event.completion,
             )
-            .map_err(VmFault::Fault)?;
+            .map_err(ExecutionFault::Fault)?;
         if record.trigger != entry.trigger
             || record.consumed != expected.record.consumed
             || record.emissions != expected.record.emissions

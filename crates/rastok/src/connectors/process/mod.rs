@@ -1167,7 +1167,7 @@ mod tests {
     use crate::envelope::Namespace;
     use crate::journal::{CallStatus, MemJournal, Record};
     use crate::plan::GraphVersion;
-    use crate::runtime::vm::{EnvelopeView, Vm};
+    use crate::runtime::execution::{EnvelopeView, Execution};
 
     const CAT_PROBE: &str = r#"
 graph real : App {
@@ -1224,9 +1224,9 @@ graph real : App {
         )
         .expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+        let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
         let mut world = Process::try_new(&compilation.plan).expect("the plan binds");
-        vm.inject(&mut journal, submission).unwrap();
+        vm.accept_input(&mut journal, submission).unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         loop {
             vm.run_ready_with_bindings(&mut journal, &mut world)
@@ -1797,9 +1797,9 @@ graph unframeable : App {
         )
         .expect("the route resolves to text");
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+        let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
         assert!(
-            vm.inject(&mut journal, submission("salut")).is_err(),
+            vm.accept_input(&mut journal, submission("salut")).is_err(),
             "a struct cannot enter a text route"
         );
         assert!(journal.records().is_empty(), "nothing was journaled");

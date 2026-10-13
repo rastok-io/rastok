@@ -251,7 +251,7 @@ fn malformed_native_or_undeserialized_data_cannot_enter_the_outbound_journal() {
         journal::MemJournal,
         node,
         plan::GraphVersion,
-        runtime::vm::Vm,
+        runtime::execution::Execution,
     };
     use std::collections::BTreeMap;
     struct Driver {
@@ -298,9 +298,9 @@ fn malformed_native_or_undeserialized_data_cannot_enter_the_outbound_journal() {
             data,
             responses: Vec::new(),
         };
-        let mut vm = Vm::boot(&compilation.plan, GraphVersion(1));
+        let mut vm = Execution::boot(&compilation.plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
-        vm.inject(
+        vm.accept_input(
             &mut journal,
             IngressProposal {
                 provenance: IngressProvenance::single(node::Path::new(["probe"]).expect("path")),

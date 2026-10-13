@@ -869,7 +869,7 @@ graph inferred_instance : App {
         assert_eq!(
             compilation
                 .plan
-                .node_instance(crate::plan::Slot::new(0))
+                .node_instance(crate::plan::NodeIndex::new(0))
                 .expect("the node has an owner")
                 .key
                 .as_ref()
@@ -928,7 +928,7 @@ graph inferred_composite : App {
         .expect("the resolved input closes every composite-key leaf");
         let key = compilation
             .plan
-            .node_instance(crate::plan::Slot::new(0))
+            .node_instance(crate::plan::NodeIndex::new(0))
             .expect("the node has an owner")
             .key
             .as_ref()
@@ -971,7 +971,7 @@ graph finite_singleton : App {
         assert_eq!(
             compilation
                 .plan
-                .node_instance(crate::plan::Slot::new(0))
+                .node_instance(crate::plan::NodeIndex::new(0))
                 .expect("relay has one owner")
                 .lifetime,
             crate::instance::Lifetime::Fixed(30_000_000_000)
@@ -1040,10 +1040,10 @@ graph conflicting_instance : App {
         use crate::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
         use crate::envelope::{Data, Namespace};
         use crate::journal::{MemJournal, Record, loop_protocol::Fact};
-        use crate::runtime::vm::Vm;
+        use crate::runtime::execution::Execution;
         use crate::value::Value;
 
-        fn run(witness: &str) -> (Vm<'static>, MemJournal) {
+        fn run(witness: &str) -> (Execution<'static>, MemJournal) {
             let source = format!(
                 r#"
 graph app : App {{
@@ -1072,8 +1072,8 @@ graph app : App {{
             .expect("the finite countdown is a valid Loop");
             let plan = Box::leak(Box::new(compilation.plan));
             let mut journal = MemJournal::new(crate::plan::GraphVersion(1));
-            let mut vm = Vm::boot(plan, crate::plan::GraphVersion(1));
-            vm.inject(
+            let mut vm = Execution::boot(plan, crate::plan::GraphVersion(1));
+            vm.accept_input(
                 &mut journal,
                 IngressProposal {
                     provenance: IngressProvenance::single(
@@ -1193,7 +1193,7 @@ graph app : App {{
         use crate::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
         use crate::envelope::{Data, Namespace};
         use crate::journal::{MemJournal, Record, loop_protocol::Fact};
-        use crate::runtime::vm::Vm;
+        use crate::runtime::execution::Execution;
         use crate::value::Value;
 
         let compilation = compile(
@@ -1221,9 +1221,9 @@ graph app : App {
         .expect("the finite countdown is a valid Loop");
         let plan = Box::leak(Box::new(compilation.plan));
         let mut journal = MemJournal::new(crate::plan::GraphVersion(1));
-        let mut before_crash = Vm::boot(plan, crate::plan::GraphVersion(1));
+        let mut before_crash = Execution::boot(plan, crate::plan::GraphVersion(1));
         before_crash
-            .inject(
+            .accept_input(
                 &mut journal,
                 IngressProposal {
                     provenance: IngressProvenance::single(
@@ -1253,7 +1253,7 @@ graph app : App {
         }
         drop(before_crash);
 
-        let mut recovered = Vm::boot(plan, crate::plan::GraphVersion(1));
+        let mut recovered = Execution::boot(plan, crate::plan::GraphVersion(1));
         recovered
             .recover_from_journal(&journal)
             .expect("the open run is reconstructed from journal facts");
@@ -1304,7 +1304,7 @@ graph app : App {
             MemJournal, Record,
             loop_protocol::{Fact, LoopView, Phase},
         };
-        use crate::runtime::vm::Vm;
+        use crate::runtime::execution::Execution;
         use crate::value::Value;
 
         let compilation = compile(
@@ -1331,9 +1331,9 @@ graph app : App {
         .expect("the finite countdown is a valid Loop");
         let plan = Box::leak(Box::new(compilation.plan));
         let mut journal = MemJournal::new(crate::plan::GraphVersion(1));
-        let mut vm = Vm::boot(plan, crate::plan::GraphVersion(1));
+        let mut vm = Execution::boot(plan, crate::plan::GraphVersion(1));
         for value in [2, 1] {
-            vm.inject(
+            vm.accept_input(
                 &mut journal,
                 IngressProposal {
                     provenance: IngressProvenance::single(

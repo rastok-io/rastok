@@ -6,12 +6,12 @@ use super::*;
 use crate::journal::deadline::Deadline;
 use crate::journal::retry_protocol::{self as retry, Fact};
 
-impl Vm<'_> {
+impl Execution<'_> {
     pub(super) fn restore_retry_manager(
         &mut self,
         index: usize,
         record: &TransactionRecord,
-    ) -> Result<(), VmFault> {
+    ) -> Result<(), ExecutionFault> {
         let instance = self
             .instances
             .get(&record.instance)
@@ -220,7 +220,7 @@ impl Vm<'_> {
                 );
             }
             if let Some(packet) = expected_loop {
-                self.install_graph_contexts(packet.routes);
+                self.update_graph_loop_contexts(packet.routes);
             }
         }
         self.retry_manager = Some(next);

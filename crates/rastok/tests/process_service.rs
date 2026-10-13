@@ -234,7 +234,7 @@ mod real {
         envelope::*,
         journal::{EgressRecord, MemJournal, Record, SessionStatus},
         plan::GraphVersion,
-        runtime::vm::Vm,
+        runtime::execution::Execution,
     };
 
     fn input(port: &str, text: &str) -> IngressProposal {
@@ -250,10 +250,10 @@ mod real {
         }
     }
     fn until<'a>(
-        vm: &mut Vm<'a>,
+        vm: &mut Execution<'a>,
         journal: &mut MemJournal,
         world: &mut RuntimeBindings<'a>,
-        predicate: impl Fn(&Vm<'a>, &MemJournal) -> bool,
+        predicate: impl Fn(&Execution<'a>, &MemJournal) -> bool,
     ) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
         loop {
@@ -281,7 +281,7 @@ mod real {
     fn unix_service_reuses_a_child_then_observes_quit_and_opens_fresh() {
         let source = SERVICE.replace("command = \"cat\"", r#"command = "/bin/sh"; args = ["-c", "while IFS= read -r line; do if [ \"$line\" = quit ]; then exit 0; fi; printf '%s\\n' \"$line\"; done"]"#);
         let compiled = compile(&[source.as_str()], &ContractCatalog::try_m0().unwrap()).unwrap();
-        let mut vm = Vm::boot(&compiled.plan, GraphVersion(1));
+        let mut vm = Execution::boot(&compiled.plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
         let registry = hosted_registry(None).unwrap();
         let mut world = RuntimeBindings::try_new(&compiled.plan, &registry).unwrap();
@@ -296,7 +296,7 @@ mod real {
                 "session_id".into(),
                 MetaValue::Scalar(Scalar::Text("00000000000000000000000000000001".into())),
             );
-            vm.inject(&mut journal, submission).unwrap();
+            vm.accept_input(&mut journal, submission).unwrap();
             until(&mut vm, &mut journal, &mut world, |vm, _| {
                 vm.outputs().len() == i + 1
             });
@@ -327,13 +327,13 @@ mod real {
                 compile(&[source.as_str()], &ContractCatalog::try_m0().unwrap()).unwrap();
             let registry = hosted_registry(None).unwrap();
             let mut world = RuntimeBindings::try_new(&compiled.plan, &registry).unwrap();
-            let mut vm = Vm::boot(&compiled.plan, GraphVersion(1));
+            let mut vm = Execution::boot(&compiled.plan, GraphVersion(1));
             let mut journal = MemJournal::new(GraphVersion(1));
-            vm.inject(&mut journal, input("in", "ready")).unwrap();
+            vm.accept_input(&mut journal, input("in", "ready")).unwrap();
             until(&mut vm, &mut journal, &mut world, |vm, _| {
                 vm.outputs().len() == 1
             });
-            vm.inject(&mut journal, input("close", "close this generation"))
+            vm.accept_input(&mut journal, input("close", "close this generation"))
                 .unwrap();
             vm.run_ready_with_bindings(&mut journal, &mut world)
                 .unwrap();
@@ -372,9 +372,9 @@ mod real {
         let compiled = compile(&[graph], &ContractCatalog::try_m0().unwrap()).unwrap();
         let registry = hosted_registry(None).unwrap();
         let mut world = RuntimeBindings::try_new(&compiled.plan, &registry).unwrap();
-        let mut vm = Vm::boot(&compiled.plan, GraphVersion(1));
+        let mut vm = Execution::boot(&compiled.plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
-        vm.inject(&mut journal, input("in", "start")).unwrap();
+        vm.accept_input(&mut journal, input("in", "start")).unwrap();
         until(&mut vm, &mut journal, &mut world, |vm, _| {
             vm.outputs().len() == 2
         });

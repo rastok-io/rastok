@@ -1494,7 +1494,7 @@ fn the_plan_gate_rechecks_optional_process_settings() {
 fn an_unreachable_process_still_carries_one_valid_sheet() {
     let compilation = compile_one(&process_graph(FULL)).expect("valid");
     let mut plan: rastok::plan::ExecutionPlan = (*compilation.plan).clone();
-    let connector_slot = rastok::plan::Slot::new(
+    let connector_slot = rastok::plan::NodeIndex::new(
         u32::try_from(
             plan.nodes
                 .iter()
@@ -1615,7 +1615,7 @@ fn the_global_binder_requires_callable_connectors_but_skips_pure_outbound_source
     // Sever every edge DELIVERING to the connector: a pure source.
     // The slot is DERIVED from the node, never hard-coded to the
     // lowering order.
-    let slot = rastok::plan::Slot::new(
+    let slot = rastok::plan::NodeIndex::new(
         u32::try_from(
             plan.nodes
                 .iter()

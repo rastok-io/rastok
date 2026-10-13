@@ -2,7 +2,7 @@
 //!
 //! A scenario is the world's half of a journal, written in advance:
 //! injections play the ingress, mocks play the outbound drivers, `advance`
-//! plays time. Everything runs on the same [`Vm`] a production run
+//! plays time. Everything runs on the same [`Execution`] a production run
 //! uses — the mock replaces the driver, never the bookkeeping — so
 //! a green scenario is a statement about the machine, not about a
 //! test double.
@@ -27,7 +27,7 @@ use crate::connectors::{
 use crate::envelope::{Data, Envelope, Namespace, Value, WriteTarget};
 use crate::journal::{MemJournal, Record};
 use crate::plan::{GraphVersion, SemanticHash, ValidatedExecutionPlan};
-use crate::runtime::vm::{EnvelopeView, TimeAdvance, Vm};
+use crate::runtime::execution::{EnvelopeView, Execution, TimeAdvance};
 use crate::{expr, node, runtime};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -146,7 +146,7 @@ pub struct Simulator<'plan, 'scenario> {
     plan: &'plan ValidatedExecutionPlan,
     simulation: String,
     scenario: &'scenario Scenario,
-    vm: Vm<'plan>,
+    execution: Execution<'plan>,
     journal: MemJournal,
     driver: RuntimeBindings<'plan>,
     source_input: Rc<RefCell<HttpServerLabInput>>,
@@ -253,20 +253,20 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
             || MemJournal::new(graph_version),
             |boot| MemJournal::new_with_deployment(graph_version, boot.attestation().clone()),
         );
-        let vm = hash.map_or_else(
+        let execution = hash.map_or_else(
             || {
                 boot.map_or_else(
-                    || Vm::boot(plan, graph_version),
-                    |boot| Vm::boot_with_deployment(plan, graph_version, boot),
+                    || Execution::boot(plan, graph_version),
+                    |boot| Execution::boot_with_deployment(plan, graph_version, boot),
                 )
             },
-            |hash| Vm::boot_program(plan, hash, graph_version, 0, boot),
+            |hash| Execution::boot_program(plan, hash, graph_version, 0, boot),
         );
         Ok(Self {
             plan,
             simulation: String::from(simulation),
             scenario,
-            vm,
+            execution,
             journal,
             driver,
             source_input,
@@ -341,8 +341,8 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
         else {
             return None;
         };
-        let window = &self.vm.envelope_views()[self.window_start..];
-        let outputs = &self.vm.outputs()[self.output_window_start..];
+        let window = &self.execution.envelope_views()[self.window_start..];
+        let outputs = &self.execution.outputs()[self.output_window_start..];
         let envelopes = expectation_envelopes(
             expectation,
             window,
@@ -458,10 +458,10 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
         }
     }
 
-    /// Read-only machine for journal-derived debugger projection.
+    /// Current execution, borrowed without granting mutation to the debugger.
     #[must_use]
-    pub const fn vm(&self) -> &Vm<'plan> {
-        &self.vm
+    pub const fn execution(&self) -> &Execution<'plan> {
+        &self.execution
     }
 
     /// Read-only causal journal.
@@ -497,8 +497,8 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
         };
         let kind = match step {
             ScenarioStep::Inject { target, value, seq } => {
-                self.window_start = self.vm.envelope_views().len();
-                self.output_window_start = self.vm.outputs().len();
+                self.window_start = self.execution.envelope_views().len();
+                self.output_window_start = self.execution.outputs().len();
                 self.record_window_start = self.journal.records().len();
                 let candidate = self
                     .next_injection_override
@@ -529,7 +529,7 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
                             if let Err(error) = offered.and_then(|()| {
                                 poll_inbound_world(
                                     &mut self.driver,
-                                    &mut self.vm,
+                                    &mut self.execution,
                                     &mut self.journal,
                                 )
                                 .map(|_| ())
@@ -537,7 +537,9 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
                                 self.failures
                                     .push(format!("the source injection was refused: {error}"));
                             }
-                        } else if let Err(error) = self.vm.inject(&mut self.journal, submission) {
+                        } else if let Err(error) =
+                            self.execution.accept_input(&mut self.journal, submission)
+                        {
                             self.failures
                                 .push(format!("the injection was refused: {error}"));
                         }
@@ -548,10 +550,10 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
                 ScenarioActionKind::Inject
             }
             ScenarioStep::Advance { nanos } => {
-                self.window_start = self.vm.envelope_views().len();
-                self.output_window_start = self.vm.outputs().len();
+                self.window_start = self.execution.envelope_views().len();
+                self.output_window_start = self.execution.outputs().len();
                 self.record_window_start = self.journal.records().len();
-                let target = self.vm.now().saturating_add(*nanos);
+                let target = self.execution.now().saturating_add(*nanos);
                 self.advance = Some(TimeAdvance::new(target));
                 self.quiescent = false;
                 ScenarioActionKind::Advance
@@ -559,8 +561,8 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
             ScenarioStep::Expect(expectation) => {
                 let envelopes = expectation_envelopes(
                     expectation,
-                    &self.vm.envelope_views()[self.window_start..],
-                    &self.vm.outputs()[self.output_window_start..],
+                    &self.execution.envelope_views()[self.window_start..],
+                    &self.execution.outputs()[self.output_window_start..],
                     &self.journal.records()[self.record_window_start..],
                 );
                 if let Some(message) = check_expectation(self.plan, expectation, &envelopes) {
@@ -585,7 +587,7 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
     pub fn step_transaction(&mut self) -> Result<bool, ScenarioStepError> {
         if let Some(advance) = &mut self.advance {
             let progressed = advance
-                .advance_once(&mut self.vm, &mut self.journal, &mut self.driver)
+                .advance_once(&mut self.execution, &mut self.journal, &mut self.driver)
                 .map_err(|error| {
                     // A deadline can retain a closure before a Driver refuses.
                     // Do not advertise transaction rollback for this wider seam.
@@ -600,10 +602,10 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
             }
         }
         let ran = self
-            .vm
+            .execution
             .step_with_bindings(&mut self.journal, &mut self.driver)
             .map_err(|error| ScenarioStepError::Transaction(format!("a step faulted: {error}")))?;
-        let progressed = if self.vm.has_ready_transaction() {
+        let progressed = if self.execution.has_ready_transaction() {
             false
         } else {
             self.poll_driver().map_err(ScenarioStepError::Boundary)?
@@ -611,7 +613,7 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
         // A retained opening or write acknowledgement can make the next
         // scripted frame admissible without queuing an Executor transaction.
         // Confirm that the world is also at rest before advancing the script.
-        self.quiescent = !progressed && !self.vm.has_ready_transaction();
+        self.quiescent = !progressed && !self.execution.has_ready_transaction();
         Ok(ran)
     }
 
@@ -624,7 +626,7 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
             return Ok(false);
         }
         let progressed = self.poll_driver()?;
-        self.quiescent = !progressed && !self.vm.has_ready_transaction();
+        self.quiescent = !progressed && !self.execution.has_ready_transaction();
         Ok(progressed)
     }
 
@@ -632,7 +634,8 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
     pub fn settle_current_action(&mut self) {
         if let Some(mut advance) = self.advance.take() {
             loop {
-                match advance.advance_once(&mut self.vm, &mut self.journal, &mut self.driver) {
+                match advance.advance_once(&mut self.execution, &mut self.journal, &mut self.driver)
+                {
                     Ok(true) => {}
                     Ok(false) => break,
                     Err(error) => {
@@ -643,7 +646,7 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
             }
         }
         settle(
-            &mut self.vm,
+            &mut self.execution,
             &mut self.journal,
             &mut self.driver,
             &self.faults,
@@ -692,13 +695,13 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
 
     fn poll_driver(&mut self) -> Result<bool, String> {
         let report = self
-            .vm
+            .execution
             .poll_drivers(&mut self.journal, &mut self.driver)
             .map_err(|error| format!("the boundary round faulted: {error}"))?;
         // Finish the preceding batch round before offering the next inbound
         // frame. In particular WriteSettled must not move behind that frame
         // merely because the caller selected the interactive stepping path.
-        let inbound = poll_inbound_world(&mut self.driver, &mut self.vm, &mut self.journal)?;
+        let inbound = poll_inbound_world(&mut self.driver, &mut self.execution, &mut self.journal)?;
         self.collect_driver_faults();
         for (response, reason) in &report.rejected {
             self.failures.push(format!(
@@ -708,7 +711,7 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
         }
         let progressed = inbound || report.settled > 0 || !report.rejected.is_empty();
         if !progressed
-            && !self.vm.has_ready_transaction()
+            && !self.execution.has_ready_transaction()
             && self.source_input.borrow().is_pending()
         {
             return Err(String::from(
@@ -824,7 +827,7 @@ fn run_scenario(
 /// mocks answer, drain again — until nothing settles. Uncovered
 /// calls and mock faults surface as failures.
 fn settle<'plan>(
-    vm: &mut Vm<'plan>,
+    vm: &mut Execution<'plan>,
     journal: &mut MemJournal,
     driver: &mut RuntimeBindings<'plan>,
     faults: &MockFaults,
@@ -878,7 +881,7 @@ fn settle<'plan>(
 /// as a hosted source. This performs no graph transaction and assigns no ids.
 fn poll_inbound_world<'plan>(
     driver: &mut RuntimeBindings<'plan>,
-    vm: &mut Vm<'plan>,
+    vm: &mut Execution<'plan>,
     journal: &mut MemJournal,
 ) -> Result<bool, String> {
     let admitted = match driver
@@ -935,7 +938,7 @@ fn injection_port<'plan>(
                     "the injection `{path}.{port}` requires the HttpServer ack Lab ingress model"
                 ));
             }
-            let slot = crate::plan::Slot::new(
+            let slot = crate::plan::NodeIndex::new(
                 u32::try_from(index).map_err(|_| String::from("source slot exceeds u32"))?,
             );
             (
@@ -955,7 +958,7 @@ fn injection_port<'plan>(
 fn expectation_envelopes<'a>(
     expectation: &Expectation,
     window: &'a [EnvelopeView],
-    boundary: &'a [crate::runtime::vm::BoundaryOutput],
+    boundary: &'a [crate::runtime::execution::BoundaryOutput],
     records: &'a [Record],
 ) -> Vec<&'a Envelope> {
     match &expectation.target {
@@ -1005,7 +1008,7 @@ fn check_expectation(
             .position(|node| node.path == *path)
             .and_then(|index| {
                 plan.resolved_ports()
-                    .node_port_type(crate::plan::Slot::new(index as u32), port)
+                    .node_port_type(crate::plan::NodeIndex::new(index as u32), port)
             }),
     };
     let name = expectation
@@ -1300,7 +1303,7 @@ impl MockOutboundConnectorDriver<'_> {
             .and_then(|index| {
                 self.plan
                     .resolved_ports()
-                    .node(crate::plan::Slot::new(index as u32))
+                    .node(crate::plan::NodeIndex::new(index as u32))
             })
             .and_then(|ports| {
                 ports
@@ -1962,7 +1965,7 @@ lab m0_probe {
         );
         assert_eq!(session.next_action(), Ok(Some(ScenarioActionKind::Inject)));
         assert!(matches!(
-            session.vm().envelope_views().first().map(|observed| observed.envelope.data()),
+            session.execution().envelope_views().first().map(|observed| observed.envelope.data()),
             Some(Data::Materialized(Value::Struct(fields)))
                 if fields == &vec![(String::from("text"), Value::Text(String::from("edited")))]
         ));

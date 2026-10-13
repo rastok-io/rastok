@@ -8,7 +8,7 @@ use crate::connector::{CallCommandError, FrameProduction};
 
 pub(super) fn validate(
     plan: &ExecutionPlan,
-    slot: Slot,
+    slot: NodeIndex,
     ports: &ResolvedPortTable,
 ) -> Result<(), PlanValidationError> {
     let node = &plan.nodes[slot.index()];

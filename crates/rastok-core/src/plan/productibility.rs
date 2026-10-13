@@ -13,7 +13,7 @@ pub(super) fn validate(
         if !live[node.owner.index()] {
             continue;
         }
-        let slot = Slot::new(u32::try_from(index).unwrap_or(u32::MAX));
+        let slot = NodeIndex::new(u32::try_from(index).unwrap_or(u32::MAX));
         for decl in ports.node(slot).into_iter().flatten() {
             if decl.direction() != node::PortDirection::Output
                 || !may_produce(plan, slot, decl.port())
@@ -43,7 +43,7 @@ pub(super) fn validate(
     Ok(())
 }
 
-pub(super) fn may_produce(plan: &ExecutionPlan, slot: Slot, port: &node::Port) -> bool {
+pub(super) fn may_produce(plan: &ExecutionPlan, slot: NodeIndex, port: &node::Port) -> bool {
     let node = &plan.nodes[slot.index()];
     if plan.owners[node.owner.index()]
         .loop_spec()

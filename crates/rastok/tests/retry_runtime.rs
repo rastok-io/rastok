@@ -11,7 +11,7 @@ use rastok::{
     journal::{EgressRecord, MemJournal, Record},
     node,
     plan::{self, GraphVersion},
-    runtime::vm::Vm,
+    runtime::execution::Execution,
 };
 use std::collections::BTreeMap;
 
@@ -87,8 +87,8 @@ impl CallConnectorDriver for World {
     }
 }
 
-fn inject(vm: &mut Vm<'_>, journal: &mut MemJournal) {
-    vm.inject(
+fn inject(vm: &mut Execution<'_>, journal: &mut MemJournal) {
+    vm.accept_input(
         journal,
         IngressProposal {
             provenance: IngressProvenance::single(node::Path::new(["test"]).unwrap()),
@@ -125,7 +125,7 @@ fn reply(world: &mut World, failure: bool) {
 #[test]
 fn only_the_final_batch_is_routed_and_preparation_runs_once() {
     let (plan, hash) = program("");
-    let mut vm = Vm::boot_program(&plan, hash, GraphVersion(1), 0, None);
+    let mut vm = Execution::boot_program(&plan, hash, GraphVersion(1), 0, None);
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut world = World::default();
     inject(&mut vm, &mut journal);
@@ -225,7 +225,7 @@ fn only_the_final_batch_is_routed_and_preparation_runs_once() {
 #[test]
 fn success_publishes_once_without_waiting_for_the_retry_bound() {
     let (plan, hash) = program("");
-    let mut vm = Vm::boot_program(&plan, hash, GraphVersion(1), 0, None);
+    let mut vm = Execution::boot_program(&plan, hash, GraphVersion(1), 0, None);
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut world = World::default();
     inject(&mut vm, &mut journal);
@@ -247,7 +247,7 @@ fn success_publishes_once_without_waiting_for_the_retry_bound() {
 #[test]
 fn real_timeout_retains_its_original_backoff_and_queue_time() {
     let (plan, hash) = program("");
-    let mut vm = Vm::boot_program(&plan, hash, GraphVersion(1), 0, None);
+    let mut vm = Execution::boot_program(&plan, hash, GraphVersion(1), 0, None);
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut world = World::default();
     inject(&mut vm, &mut journal);
@@ -298,7 +298,7 @@ fn closing_in_backoff_does_not_publish_a_held_failure() {
         let (plan, hash) = program(&format!(
             "lifetime = {{ kind = fixed; after = duration(\"{lifetime_ms}ms\") }} closing = {{ drain_for = duration(\"100ms\"); settle_for = duration(\"100ms\") }}",
         ));
-        let mut vm = Vm::boot_program(&plan, hash, GraphVersion(1), 0, None);
+        let mut vm = Execution::boot_program(&plan, hash, GraphVersion(1), 0, None);
         let mut journal = MemJournal::new(GraphVersion(1));
         let mut world = World::default();
         inject(&mut vm, &mut journal);
@@ -345,7 +345,7 @@ graph app : App {{
 "#
         );
         let (plan, hash, _) = checked(&source);
-        let mut vm = Vm::boot_program(&plan, hash, GraphVersion(1), 0, None);
+        let mut vm = Execution::boot_program(&plan, hash, GraphVersion(1), 0, None);
         let mut journal = MemJournal::new(GraphVersion(1));
         let mut world = World::default();
         inject(&mut vm, &mut journal);
@@ -361,7 +361,7 @@ graph app : App {{
         }
         assert!(world.starts.is_empty());
         if lifetime == "persistent" {
-            vm.inject(
+            vm.accept_input(
                 &mut journal,
                 IngressProposal {
                     provenance: IngressProvenance::single(node::Path::new(["test"]).unwrap()),
@@ -409,7 +409,8 @@ graph app : App {{
         for cut in 0..=journal.records().len() {
             let prefix =
                 MemJournal::from_records(GraphVersion(1), None, &journal.records()[..cut]).unwrap();
-            let mut restored = Vm::boot_program(&plan, hash, GraphVersion(1), 3_000_000_000, None);
+            let mut restored =
+                Execution::boot_program(&plan, hash, GraphVersion(1), 3_000_000_000, None);
             let mut world = World::default();
             let result = restored.recover_with_bindings(&prefix, &mut world);
             assert!(result.is_ok(), "{lifetime}, prefix {cut}: {result:?}");
@@ -427,7 +428,7 @@ fn single_pass_drain_never_transfers_an_operation_into_the_successor_generation(
     let (plan, hash) = program(
         "lifetime = { kind = single_pass } closing = { drain_for = duration(\"2s\"); settle_for = duration(\"1s\") }",
     );
-    let mut vm = Vm::boot_program(&plan, hash, GraphVersion(1), 0, None);
+    let mut vm = Execution::boot_program(&plan, hash, GraphVersion(1), 0, None);
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut world = World::default();
     inject(&mut vm, &mut journal);
@@ -484,7 +485,8 @@ fn single_pass_drain_never_transfers_an_operation_into_the_successor_generation(
     for cut in 0..=journal.records().len() {
         let prefix =
             MemJournal::from_records(GraphVersion(1), None, &journal.records()[..cut]).unwrap();
-        let mut restored = Vm::boot_program(&plan, hash, GraphVersion(1), 3_000_000_000, None);
+        let mut restored =
+            Execution::boot_program(&plan, hash, GraphVersion(1), 3_000_000_000, None);
         let mut world = World::default();
         let result = restored.recover_with_bindings(&prefix, &mut world);
         assert!(result.is_ok(), "prefix {cut}: {result:?}");
@@ -496,7 +498,7 @@ fn single_pass_drain_never_transfers_an_operation_into_the_successor_generation(
 #[test]
 fn recovery_cannot_bypass_retry_without_the_exact_retained_closing() {
     let (plan, hash) = program("");
-    let mut vm = Vm::boot_program(&plan, hash, GraphVersion(1), 0, None);
+    let mut vm = Execution::boot_program(&plan, hash, GraphVersion(1), 0, None);
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut world = World::default();
     inject(&mut vm, &mut journal);
@@ -516,7 +518,7 @@ fn recovery_cannot_bypass_retry_without_the_exact_retained_closing() {
         })
         .collect();
     let forged = MemJournal::from_records(GraphVersion(1), None, &forged).unwrap();
-    let mut restored = Vm::boot_program(&plan, hash, GraphVersion(1), 0, None);
+    let mut restored = Execution::boot_program(&plan, hash, GraphVersion(1), 0, None);
     let mut world = World::default();
     let error = restored
         .recover_with_bindings(&forged, &mut world)
@@ -535,7 +537,7 @@ fn recovery_cannot_bypass_retry_without_the_exact_retained_closing() {
 #[test]
 fn every_retained_prefix_recovers_without_preparing_or_starting_an_effect() {
     let (plan, hash) = program("");
-    let mut vm = Vm::boot_program(&plan, hash, GraphVersion(1), 0, None);
+    let mut vm = Execution::boot_program(&plan, hash, GraphVersion(1), 0, None);
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut world = World::default();
     inject(&mut vm, &mut journal);
@@ -554,7 +556,7 @@ fn every_retained_prefix_recovers_without_preparing_or_starting_an_effect() {
         let retained =
             MemJournal::from_records(GraphVersion(1), None, &journal.records()[..cut]).unwrap();
         let mut recovery_world = World::default();
-        let mut restored = Vm::boot_program(&plan, hash, GraphVersion(1), 250_000_000, None);
+        let mut restored = Execution::boot_program(&plan, hash, GraphVersion(1), 250_000_000, None);
         let result = restored.recover_with_bindings(&retained, &mut recovery_world);
         assert!(
             result.is_ok(),
@@ -574,7 +576,7 @@ fn every_retained_prefix_recovers_without_preparing_or_starting_an_effect() {
 #[test]
 fn recovery_after_held_consumes_once_and_does_not_renew_the_backoff() {
     let (plan, hash) = program("");
-    let mut vm = Vm::boot_program(&plan, hash, GraphVersion(1), 0, None);
+    let mut vm = Execution::boot_program(&plan, hash, GraphVersion(1), 0, None);
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut world = World::default();
     inject(&mut vm, &mut journal);
@@ -588,7 +590,7 @@ fn recovery_after_held_consumes_once_and_does_not_renew_the_backoff() {
         matches!(journal.records().last(), Some(Record::Transaction(r))
         if r.retry_record.as_ref().is_some_and(|packet| matches!(packet.facts.as_slice(), [Fact::Held(_)])))
     );
-    let mut restored = Vm::boot_program(&plan, hash, GraphVersion(1), 250_000_000, None);
+    let mut restored = Execution::boot_program(&plan, hash, GraphVersion(1), 250_000_000, None);
     let mut world_after = World::default();
     restored
         .recover_with_bindings(&journal, &mut world_after)
@@ -656,7 +658,7 @@ lab app {
     assert_eq!(runs.len(), 1);
     assert!(runs[0].report.passed(), "{:?}", runs[0].report);
     let first = MemJournal::from_records(GraphVersion(1), None, &runs[0].records).unwrap();
-    let mut restored = Vm::boot_program(&plan, hash, GraphVersion(1), 1_100_000_000, None);
+    let mut restored = Execution::boot_program(&plan, hash, GraphVersion(1), 1_100_000_000, None);
     restored
         .recover_with_bindings(&first, &mut World::default())
         .unwrap();
@@ -688,7 +690,7 @@ graph app : App + Loop {
 }
 "#,
     );
-    let mut vm = Vm::boot_program(&plan, hash, GraphVersion(1), 0, None);
+    let mut vm = Execution::boot_program(&plan, hash, GraphVersion(1), 0, None);
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut world = World::default();
     inject(&mut vm, &mut journal);
@@ -712,7 +714,7 @@ graph app : App + Loop {
     for cut in 0..=journal.records().len() {
         let prefix =
             MemJournal::from_records(GraphVersion(1), None, &journal.records()[..cut]).unwrap();
-        let mut restored = Vm::boot_program(&plan, hash, GraphVersion(1), 100_000_000, None);
+        let mut restored = Execution::boot_program(&plan, hash, GraphVersion(1), 100_000_000, None);
         let result = restored.recover_with_bindings(&prefix, &mut World::default());
         assert!(
             result.is_ok(),
@@ -745,7 +747,7 @@ graph app : App {
 "#,
     );
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Vm::boot_program(&plan, hash, GraphVersion(1), 0, None);
+    let mut vm = Execution::boot_program(&plan, hash, GraphVersion(1), 0, None);
     let mut world = World::default();
     inject(&mut vm, &mut journal);
     vm.run_ready_with_bindings(&mut journal, &mut world)
@@ -783,7 +785,7 @@ graph app : App {
         .collect();
     operator.retry_record = Some(packet);
     let forged = MemJournal::from_records(GraphVersion(1), None, &records).unwrap();
-    let mut restored = Vm::boot_program(&plan, hash, GraphVersion(1), 0, None);
+    let mut restored = Execution::boot_program(&plan, hash, GraphVersion(1), 0, None);
     assert!(
         restored
             .recover_with_bindings(&forged, &mut World::default())
@@ -799,7 +801,7 @@ graph app : App {
 #[test]
 fn a_retry_recording_restores_held_batches_at_every_selected_prefix() {
     let (plan, hash) = program("");
-    let mut vm = Vm::boot_program(&plan, hash, GraphVersion(1), 0, None);
+    let mut vm = Execution::boot_program(&plan, hash, GraphVersion(1), 0, None);
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut world = World::default();
     inject(&mut vm, &mut journal);
@@ -845,7 +847,7 @@ fn a_retry_recording_restores_held_batches_at_every_selected_prefix() {
             assert_eq!(inspected.outputs(), vm.outputs());
         }
     }
-    let mut wrong_program = Vm::boot_program(
+    let mut wrong_program = Execution::boot_program(
         &plan,
         plan::SemanticHash::from_bytes([0; 32]),
         GraphVersion(1),
@@ -882,7 +884,7 @@ graph app : App {
 }
 "#,
     );
-    let mut vm = Vm::boot_program(&plan, hash, GraphVersion(1), 0, None);
+    let mut vm = Execution::boot_program(&plan, hash, GraphVersion(1), 0, None);
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut world = World::default();
     inject(&mut vm, &mut journal);
@@ -986,11 +988,11 @@ graph app : App {
         ["timeout", "retry", "iterate"],
         ["timeout", "iterate", "retry"],
     ] {
-        let mut vm = Vm::boot_program(&plan, hash, GraphVersion(1), 0, None);
+        let mut vm = Execution::boot_program(&plan, hash, GraphVersion(1), 0, None);
         let mut journal = MemJournal::new(GraphVersion(1));
         let mut world = World::default();
         for port in order {
-            vm.inject(
+            vm.accept_input(
                 &mut journal,
                 IngressProposal {
                     provenance: IngressProvenance::single(node::Path::new(["test"]).unwrap()),
@@ -1055,7 +1057,8 @@ graph app : App {
         {
             let mut retained =
                 MemJournal::from_records(GraphVersion(1), None, &journal.records()[..cut]).unwrap();
-            let mut restored = Vm::boot_program(&plan, hash, GraphVersion(1), resume_at, None);
+            let mut restored =
+                Execution::boot_program(&plan, hash, GraphVersion(1), resume_at, None);
             let mut resumed_world = World::default();
             let already_closed = retained.records().iter().any(|record| {
                 matches!(record, Record::Egress(EgressRecord::Call(call))
@@ -1143,11 +1146,11 @@ graph app : App {
             ["window", "retry", "waiting"],
             ["window", "waiting", "retry"],
         ] {
-            let mut vm = Vm::boot_program(&plan, hash, GraphVersion(1), 0, None);
+            let mut vm = Execution::boot_program(&plan, hash, GraphVersion(1), 0, None);
             let mut journal = MemJournal::new(GraphVersion(1));
             let mut world = World::default();
             for port in order {
-                vm.inject(
+                vm.accept_input(
                     &mut journal,
                     IngressProposal {
                         provenance: IngressProvenance::single(node::Path::new(["test"]).unwrap()),
@@ -1199,7 +1202,8 @@ graph app : App {
                 let mut retained =
                     MemJournal::from_records(GraphVersion(1), None, &journal.records()[..cut])
                         .unwrap();
-                let mut restored = Vm::boot_program(&plan, hash, GraphVersion(1), resume_at, None);
+                let mut restored =
+                    Execution::boot_program(&plan, hash, GraphVersion(1), resume_at, None);
                 let mut resumed_world = World::default();
                 restored
                     .recover_with_bindings(&retained, &mut resumed_world)
@@ -1252,11 +1256,11 @@ graph app : App {{
 "#,
         ));
         for order in [["retry", "stopping"], ["stopping", "retry"]] {
-            let mut vm = Vm::boot_program(&plan, hash, GraphVersion(1), 0, None);
+            let mut vm = Execution::boot_program(&plan, hash, GraphVersion(1), 0, None);
             let mut journal = MemJournal::new(GraphVersion(1));
             let mut world = World::default();
             for port in order {
-                vm.inject(
+                vm.accept_input(
                     &mut journal,
                     IngressProposal {
                         provenance: IngressProvenance::single(node::Path::new(["test"]).unwrap()),
@@ -1277,7 +1281,7 @@ graph app : App {{
                     reply(&mut world, true);
                     vm.poll_drivers(&mut journal, &mut world).unwrap();
                 } else {
-                    vm.inject(
+                    vm.accept_input(
                         &mut journal,
                         IngressProposal {
                             provenance: IngressProvenance::single(
@@ -1317,7 +1321,8 @@ graph app : App {{
                 let mut retained =
                     MemJournal::from_records(GraphVersion(1), None, &journal.records()[..cut])
                         .unwrap();
-                let mut restored = Vm::boot_program(&plan, hash, GraphVersion(1), resume_at, None);
+                let mut restored =
+                    Execution::boot_program(&plan, hash, GraphVersion(1), resume_at, None);
                 let mut resumed_world = World::default();
                 restored
                     .recover_with_bindings(&retained, &mut resumed_world)
@@ -1365,11 +1370,11 @@ graph app : App {
 }
 "#,
     );
-    let capacity = Vm::boot_program(&plan, hash, GraphVersion(1), 0, None)
+    let capacity = Execution::boot_program(&plan, hash, GraphVersion(1), 0, None)
         .inspection()
         .mailbox_capacity;
     for frames in [capacity, capacity + 1] {
-        let mut vm = Vm::boot_program(&plan, hash, GraphVersion(1), 0, None);
+        let mut vm = Execution::boot_program(&plan, hash, GraphVersion(1), 0, None);
         let mut journal = MemJournal::new(GraphVersion(1));
         let mut world = World::default();
         inject(&mut vm, &mut journal);
@@ -1427,7 +1432,7 @@ graph app : App {
             assert!(
                 matches!(
                     result,
-                    Err(rastok::runtime::vm::VmFault::MailboxFull { .. })
+                    Err(rastok::runtime::execution::ExecutionFault::MailboxFull { .. })
                 ),
                 "{result:?}"
             );
@@ -1436,7 +1441,7 @@ graph app : App {
             assert_eq!(vm.envelope_views(), observations);
             assert!(matches!(
                 vm.step_with_bindings(&mut journal, &mut world),
-                Err(rastok::runtime::vm::VmFault::MailboxFull { .. })
+                Err(rastok::runtime::execution::ExecutionFault::MailboxFull { .. })
             ));
             assert_eq!(
                 journal.records(),
@@ -1446,7 +1451,7 @@ graph app : App {
         }
 
         let mut retained = MemJournal::from_records(GraphVersion(1), None, &before).unwrap();
-        let mut restored = Vm::boot_program(&plan, hash, GraphVersion(1), vm.now(), None);
+        let mut restored = Execution::boot_program(&plan, hash, GraphVersion(1), vm.now(), None);
         let mut resumed_world = World::default();
         restored
             .recover_with_bindings(&retained, &mut resumed_world)
@@ -1457,7 +1462,7 @@ graph app : App {
         } else {
             assert!(matches!(
                 result,
-                Err(rastok::runtime::vm::VmFault::MailboxFull { .. })
+                Err(rastok::runtime::execution::ExecutionFault::MailboxFull { .. })
             ));
         }
         assert_eq!(retained.records(), journal.records());
@@ -1493,11 +1498,11 @@ graph app : App {
 }
 "#,
     );
-    let mut vm = Vm::boot_program(&plan, hash, GraphVersion(1), 0, None);
+    let mut vm = Execution::boot_program(&plan, hash, GraphVersion(1), 0, None);
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut world = World::default();
     for key in ["alice", "bob"] {
-        vm.inject(
+        vm.accept_input(
             &mut journal,
             IngressProposal {
                 provenance: IngressProvenance::single(node::Path::new(["test"]).unwrap()),
@@ -1604,7 +1609,7 @@ graph app : App {
     for cut in 0..=journal.records().len() {
         let retained =
             MemJournal::from_records(GraphVersion(1), None, &journal.records()[..cut]).unwrap();
-        let mut restored = Vm::boot_program(&plan, hash, GraphVersion(1), vm.now(), None);
+        let mut restored = Execution::boot_program(&plan, hash, GraphVersion(1), vm.now(), None);
         let mut resumed_world = World::default();
         restored
             .recover_with_bindings(&retained, &mut resumed_world)
@@ -1661,7 +1666,7 @@ graph app : App {
 "#,
     );
     for steps_after_closure in 0..=2 {
-        let mut vm = Vm::boot_program(&plan, hash, GraphVersion(1), 0, None);
+        let mut vm = Execution::boot_program(&plan, hash, GraphVersion(1), 0, None);
         let mut journal = MemJournal::new(GraphVersion(1));
         let mut world = World::default();
         inject(&mut vm, &mut journal);
@@ -1686,7 +1691,7 @@ graph app : App {
             }
             _ => panic!("the probe must stop at closure, Held or Consumed"),
         }
-        vm.inject(
+        vm.accept_input(
             &mut journal,
             IngressProposal {
                 provenance: IngressProvenance::single(node::Path::new(["test"]).unwrap()),
@@ -1745,7 +1750,7 @@ graph app : App {
         for cut in before_close..=journal.records().len() {
             let mut retained =
                 MemJournal::from_records(GraphVersion(1), None, &journal.records()[..cut]).unwrap();
-            let mut restored = Vm::boot_program(&plan, hash, GraphVersion(1), 0, None);
+            let mut restored = Execution::boot_program(&plan, hash, GraphVersion(1), 0, None);
             let mut resumed_world = World::default();
             restored
                 .recover_with_bindings(&retained, &mut resumed_world)
@@ -1832,7 +1837,7 @@ lab app {
     for cut in 0..=runs[0].records.len() {
         let prefix =
             MemJournal::from_records(GraphVersion(1), None, &runs[0].records[..cut]).unwrap();
-        let mut restored = Vm::boot_program(&plan, hash, GraphVersion(1), 100_000_000, None);
+        let mut restored = Execution::boot_program(&plan, hash, GraphVersion(1), 100_000_000, None);
         let mut world = World::default();
         restored.recover_with_bindings(&prefix, &mut world).unwrap();
         assert_eq!(world.preparations, 0);
@@ -1901,7 +1906,8 @@ lab app {{
         for cut in 0..=runs[0].records.len() {
             let prefix =
                 MemJournal::from_records(GraphVersion(1), None, &runs[0].records[..cut]).unwrap();
-            let mut restored = Vm::boot_program(&plan, hash, GraphVersion(1), 100_000_000, None);
+            let mut restored =
+                Execution::boot_program(&plan, hash, GraphVersion(1), 100_000_000, None);
             let mut world = World::default();
             let result = restored.recover_with_bindings(&prefix, &mut world);
             assert!(result.is_ok(), "{mode}, prefix {cut}: {result:?}");
@@ -2252,7 +2258,7 @@ fn assert_original_attempt_measurements(
     for cut in 0..=records.len() {
         let prefix =
             MemJournal::from_records(GraphVersion(1), None, &decoded.records()[..cut]).unwrap();
-        let mut restored = Vm::boot_program(plan, hash, GraphVersion(1), 100_000_000, None);
+        let mut restored = Execution::boot_program(plan, hash, GraphVersion(1), 100_000_000, None);
         let mut world = World::default();
         restored.recover_with_bindings(&prefix, &mut world).unwrap();
         assert_eq!(world.preparations, 0);

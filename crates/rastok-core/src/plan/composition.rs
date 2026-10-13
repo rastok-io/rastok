@@ -10,8 +10,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use super::{
-    EdgeEnd, Endpoint, EndpointOwner, ExecutionPlan, OwnerKind, ResolvedPortTable, RouteArm,
-    RouteDestination, RouteErrorKind, RouteRule, RouteSelection, RouteValidationError, Slot,
+    EdgeEnd, Endpoint, EndpointOwner, ExecutionPlan, NodeIndex, OwnerKind, ResolvedPortTable,
+    RouteArm, RouteDestination, RouteErrorKind, RouteRule, RouteSelection, RouteValidationError,
 };
 use crate::datatype::DataType;
 use crate::node::PortDirection;
@@ -215,7 +215,11 @@ pub(super) fn validate(
                 return Err(failure("boundary_routes", RouteErrorKind::UnknownEndpoint).into());
             };
             if !live[node.owner.index()]
-                || !super::productibility::may_produce(plan, Slot::new(index as u32), &source.port)
+                || !super::productibility::may_produce(
+                    plan,
+                    NodeIndex::new(index as u32),
+                    &source.port,
+                )
             {
                 continue;
             }
@@ -266,7 +270,7 @@ fn port<'a>(
         EndpointOwner::Node(path) => {
             let index = plan.nodes.iter().position(|node| node.path == *path)?;
             ports
-                .node(Slot::new(u32::try_from(index).ok()?))?
+                .node(NodeIndex::new(u32::try_from(index).ok()?))?
                 .iter()
                 .find(|port| port.port() == &endpoint.port)
                 .map(|port| (port.direction(), Some(port.ty())))

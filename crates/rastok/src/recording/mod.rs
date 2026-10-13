@@ -18,7 +18,7 @@ use crate::compiler::{Compilation, SourceDefinition};
 use crate::deployment::{BootBindings, DeploymentAttestation};
 use crate::journal::{Journal, MemJournal, Record};
 use crate::plan::{self, GraphVersion, SemanticHash, ValidatedExecutionPlan};
-use crate::runtime::vm::{Vm, VmFault};
+use crate::runtime::execution::{Execution, ExecutionFault};
 use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{Read as _, Write as _};
@@ -51,7 +51,7 @@ pub enum Error {
     /// Retained journal acceptance refusal.
     Journal(crate::journal::Error),
     /// Retained-state reconstruction refusal.
-    Recovery(VmFault),
+    Recovery(ExecutionFault),
     /// Pure Contract projection could not bind.
     Contract(String),
     /// Physical debugger startup or projection failure.
@@ -121,7 +121,7 @@ fn validate_capture(
     let personal = crate::data_policy::contains_personal;
     if plan.resolved_ports().boundary().iter().any(|port| personal(port.annotations()))
         || plan.nodes.iter().enumerate().any(|(index, node)| {
-            plan.resolved_ports().node(plan::Slot::new(index as u32)).is_some_and(|ports| ports.iter().any(|port| personal(port.annotations())))
+            plan.resolved_ports().node(plan::NodeIndex::new(index as u32)).is_some_and(|ports| ports.iter().any(|port| personal(port.annotations())))
                 || node.vars.iter().any(|var| personal(&var.annotations))
         })
         || plan.owners.iter().any(|owner| owner.ports.iter().any(|port| personal(&port.annotations)) || owner.vals.iter().any(|value| personal(&value.annotations)))
@@ -329,7 +329,7 @@ impl Recording {
     ///
     /// # Errors
     /// A prefix outside the retained run or a failed journal/VM validation.
-    pub fn inspect(&self, through: usize) -> Result<(MemJournal, Vm<'_>), Error> {
+    pub fn inspect(&self, through: usize) -> Result<(MemJournal, Execution<'_>), Error> {
         let prefix = self
             .records
             .get(..through)
@@ -357,7 +357,7 @@ impl Recording {
                 .ok_or(Error::Invalid("missing prefix observation"))?
         };
         let empty = BootBindings::empty();
-        let mut vm = Vm::boot_program(
+        let mut vm = Execution::boot_program(
             &self.plan,
             self.hash,
             self.version,

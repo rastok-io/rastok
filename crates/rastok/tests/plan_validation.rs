@@ -15,7 +15,7 @@ use rastok::expr;
 use rastok::instance;
 use rastok::node::{self, Port, PortDirection};
 use rastok::plan::{
-    self, DispatchStep, Edge, EdgeEnd, ExecutionPlan, PlanValidationError, Slot,
+    self, DispatchStep, Edge, EdgeEnd, ExecutionPlan, NodeIndex, PlanValidationError,
     ValidatedExecutionPlan,
 };
 
@@ -68,7 +68,7 @@ fn a_connector_cannot_acquire_a_dsl_handler_from_a_raw_plan() {
         .unwrap();
     let node = raw.nodes[target].path.clone();
     raw.handlers.push(plan::Handler {
-        owner: Slot::new(u32::try_from(target).unwrap()),
+        owner: NodeIndex::new(u32::try_from(target).unwrap()),
         activation: node::HandlerActivation::Port(Port::new("in").unwrap()),
         guard: None,
         dispatch: plan::Dispatch::Linear(vec![]),
@@ -83,11 +83,11 @@ fn a_connector_cannot_acquire_a_dsl_handler_from_a_raw_plan() {
 fn a_handler_owner_is_bounds_checked_before_any_signature_is_derived() {
     let mut raw = raw_probe();
     let node_count = raw.nodes.len();
-    raw.handlers[0].owner = Slot::new(u32::MAX);
+    raw.handlers[0].owner = NodeIndex::new(u32::MAX);
     assert_eq!(
         ValidatedExecutionPlan::try_new(raw).unwrap_err(),
         PlanValidationError::SlotOutOfBounds {
-            slot: Slot::new(u32::MAX),
+            slot: NodeIndex::new(u32::MAX),
             node_count,
         }
     );
@@ -362,7 +362,7 @@ fn bare_operator_plan() -> ExecutionPlan {
             plan::Owner {
                 path: node::OwnerPath::new(["worker"]).unwrap(),
                 parent: Some(node::OwnerSlot::new(0)),
-                kind: plan::OwnerKind::Node(Slot::new(0)),
+                kind: plan::OwnerKind::Node(NodeIndex::new(0)),
                 ports: vec![],
                 extensions: vec![],
                 instance: instance::InstanceSpec {
@@ -543,7 +543,7 @@ fn an_operator_without_err_has_no_hidden_producer_pin() {
         .iter()
         .position(|node| node.path.to_string() == "relay")
         .expect("the relay operator exists");
-    let slot = Slot::new(u32::try_from(relay).expect("the test plan is small"));
+    let slot = NodeIndex::new(u32::try_from(relay).expect("the test plan is small"));
     let ports = compilation
         .plan
         .resolved_ports()
@@ -777,7 +777,7 @@ fn closing_budgets_and_stop_recursion_are_registry_free_invariants() {
         annotations: Default::default(),
     });
     recursive.handlers.push(plan::Handler {
-        owner: Slot::new(0),
+        owner: NodeIndex::new(0),
         activation: rastok::node::HandlerActivation::Lifecycle(rastok::node::Lifecycle::Stop),
         guard: None,
         dispatch: rastok_core::plan::Dispatch::Linear(vec![DispatchStep::Stop]),
@@ -798,7 +798,7 @@ fn a_raw_node_and_owner_must_point_to_each_other() {
         .iter()
         .position(|node| node.path.to_string() == "relay")
         .expect("the relay slot");
-    let relay_slot = Slot::new(u32::try_from(relay_index).expect("the plan is small"));
+    let relay_slot = NodeIndex::new(u32::try_from(relay_index).expect("the plan is small"));
     raw.nodes[relay_index].owner = node::OwnerSlot::new(0);
 
     assert_eq!(
@@ -1287,7 +1287,7 @@ fn a_boundary_input_cannot_be_an_edge_target() {
     plan.edges.push(Edge {
         owner: node::OwnerSlot::new(0),
         from: EdgeEnd {
-            node: Some(Slot::new(0)),
+            node: Some(NodeIndex::new(0)),
             port: port("out"),
         },
         to: Some(EdgeEnd {
@@ -1327,7 +1327,7 @@ fn a_boundary_output_cannot_be_an_edge_source() {
             port: port("response"),
         },
         to: Some(EdgeEnd {
-            node: Some(Slot::new(0)),
+            node: Some(NodeIndex::new(0)),
             port: port("in"),
         }),
     });
@@ -1353,7 +1353,7 @@ fn conventional_ports_hold_their_directions() {
     plan.edges.push(Edge {
         owner: node::OwnerSlot::new(0),
         from: EdgeEnd {
-            node: Some(Slot::new(0)),
+            node: Some(NodeIndex::new(0)),
             port: port("out"),
         },
         to: Some(EdgeEnd {
@@ -1383,7 +1383,7 @@ fn conventional_ports_hold_their_directions() {
             port: port("out"),
         },
         to: Some(EdgeEnd {
-            node: Some(Slot::new(0)),
+            node: Some(NodeIndex::new(0)),
             port: port("in"),
         }),
     });
@@ -1618,7 +1618,7 @@ fn an_edge_to_an_unknown_port_refuses() {
     plan.edges.push(Edge {
         owner: node::OwnerSlot::new(0),
         from: EdgeEnd {
-            node: Some(Slot::new(0)),
+            node: Some(NodeIndex::new(0)),
             port: port("ghost"),
         },
         to: None,
@@ -1806,13 +1806,13 @@ fn a_forged_executable_cycle_never_earns_the_validated_type() {
         .nodes
         .iter()
         .position(|node| node.path.to_string() == "relay")
-        .map(|index| Slot::new(u32::try_from(index).unwrap()))
+        .map(|index| NodeIndex::new(u32::try_from(index).unwrap()))
         .expect("the fixture has relay");
     let shell = plan
         .nodes
         .iter()
         .position(|node| node.path.to_string() == "shell")
-        .map(|index| Slot::new(u32::try_from(index).unwrap()))
+        .map(|index| NodeIndex::new(u32::try_from(index).unwrap()))
         .expect("the fixture has shell");
     let back_edge = plan
         .edges

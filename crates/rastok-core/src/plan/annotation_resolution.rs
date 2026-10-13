@@ -20,7 +20,7 @@ use crate::schema_annotation::{
 use super::type_resolution::ResolvedPortTable;
 use super::{
     DispatchStep, EdgeEnd, EmitValue, Endpoint, EndpointOwner, ExecutionPlan, Handler, LoopCommand,
-    LoopCommandKind, OwnerKind, RouteDestination, RouteSelection, Slot,
+    LoopCommandKind, NodeIndex, OwnerKind, RouteDestination, RouteSelection,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,7 +32,7 @@ pub(super) struct ResolutionError {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum PortKey {
     Boundary(node::Port),
-    Node(Slot, node::Port),
+    Node(NodeIndex, node::Port),
     Graph(node::OwnerSlot, node::Port),
 }
 
@@ -47,7 +47,7 @@ struct PortState {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct VarKey {
-    node: Slot,
+    node: NodeIndex,
     name: String,
 }
 
@@ -102,7 +102,7 @@ impl<'a> Solver<'a> {
             );
         }
         for index in 0..plan.nodes.len() {
-            let slot = Slot::new(u32::try_from(index).unwrap_or(u32::MAX));
+            let slot = NodeIndex::new(u32::try_from(index).unwrap_or(u32::MAX));
             if let Some(row) = resolved.node(slot) {
                 for port in row {
                     let key = PortKey::Node(slot, port.port().clone());
@@ -143,7 +143,7 @@ impl<'a> Solver<'a> {
         }
         let mut vars = BTreeMap::new();
         for (index, node) in plan.nodes.iter().enumerate() {
-            let slot = Slot::new(u32::try_from(index).unwrap_or(u32::MAX));
+            let slot = NodeIndex::new(u32::try_from(index).unwrap_or(u32::MAX));
             for var in &node.vars {
                 let key = VarKey {
                     node: slot,
@@ -843,7 +843,11 @@ impl<'a> Solver<'a> {
         Ok(Some(result))
     }
 
-    fn handler_output(&self, owner: Slot, port: &node::Port) -> Result<PortKey, ResolutionError> {
+    fn handler_output(
+        &self,
+        owner: NodeIndex,
+        port: &node::Port,
+    ) -> Result<PortKey, ResolutionError> {
         let key = PortKey::Node(owner, port.clone());
         self.port(&key)?;
         Ok(key)
@@ -993,7 +997,7 @@ fn has_policy_declaration(plan: &ExecutionPlan, resolved: &ResolvedPortTable) ->
         .iter()
         .any(|port| !port.annotations().is_empty())
         || plan.nodes.iter().enumerate().any(|(index, node)| {
-            let slot = Slot::new(u32::try_from(index).unwrap_or(u32::MAX));
+            let slot = NodeIndex::new(u32::try_from(index).unwrap_or(u32::MAX));
             resolved
                 .node(slot)
                 .is_some_and(|ports| ports.iter().any(|port| !port.annotations().is_empty()))

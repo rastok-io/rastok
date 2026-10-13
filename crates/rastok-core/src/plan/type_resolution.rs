@@ -15,7 +15,7 @@ use crate::envelope::WriteTarget;
 use crate::expr;
 use crate::node;
 use crate::plan::{
-    Dispatch, DispatchStep, EdgeEnd, EmitValue, ExecutionPlan, PlanValidationError, Slot,
+    Dispatch, DispatchStep, EdgeEnd, EmitValue, ExecutionPlan, NodeIndex, PlanValidationError,
 };
 use crate::schema_annotation::AnnotationTable;
 
@@ -71,7 +71,7 @@ impl ResolvedPort {
 }
 
 /// Complete effective port tables, parallel to the plan's boundary and node
-/// tables. Node rows are indexed by [`Slot`].
+/// tables. Node rows are indexed by [`NodeIndex`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedPortTable {
     boundary: Vec<ResolvedPort>,
@@ -87,7 +87,7 @@ impl ResolvedPortTable {
 
     /// Effective ports of one plan-derived node slot.
     #[must_use]
-    pub fn node(&self, slot: Slot) -> Option<&[ResolvedPort]> {
+    pub fn node(&self, slot: NodeIndex) -> Option<&[ResolvedPort]> {
         self.nodes.get(slot.index()).map(Vec::as_slice)
     }
 
@@ -105,7 +105,7 @@ impl ResolvedPortTable {
 
     /// Effective node-port type by slot and name.
     #[must_use]
-    pub fn node_port_type(&self, slot: Slot, port: &node::Port) -> Option<&DataType> {
+    pub fn node_port_type(&self, slot: NodeIndex, port: &node::Port) -> Option<&DataType> {
         self.node(slot)?
             .iter()
             .find(|resolved| &resolved.port == port)
@@ -114,7 +114,7 @@ impl ResolvedPortTable {
 
     pub(super) fn set_annotations(
         &mut self,
-        node: Option<Slot>,
+        node: Option<NodeIndex>,
         port: &node::Port,
         annotations: AnnotationTable,
     ) -> bool {
@@ -222,7 +222,11 @@ impl<'plan> Solver<'plan> {
     }
 
     fn endpoint(&mut self, endpoint: &EdgeEnd, direction: node::PortDirection) -> usize {
-        self.ensure(endpoint.node.map(Slot::index), &endpoint.port, direction)
+        self.ensure(
+            endpoint.node.map(NodeIndex::index),
+            &endpoint.port,
+            direction,
+        )
     }
 
     fn declare(&mut self, index: usize, ty: DataType) -> Result<(), PlanValidationError> {

@@ -631,7 +631,7 @@ fn input_handler<'a>(plan: &'a ExecutionPlan, input: &Endpoint) -> Option<&'a Ha
     let EndpointOwner::Node(path) = &input.owner else {
         return None;
     };
-    let slot = Slot::new(plan.nodes.iter().position(|node| node.path == *path)? as u32);
+    let slot = NodeIndex::new(plan.nodes.iter().position(|node| node.path == *path)? as u32);
     plan.handlers.iter().find(|handler| {
         handler.owner == slot
             && match &handler.activation {

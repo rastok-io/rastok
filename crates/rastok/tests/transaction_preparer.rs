@@ -13,7 +13,7 @@ use rastok::instance;
 use rastok::node;
 
 use rastok::journal::ids;
-use rastok::plan::{GraphVersion, Slot, ValidatedExecutionPlan};
+use rastok::plan::{GraphVersion, NodeIndex, ValidatedExecutionPlan};
 use rastok::runtime::{Fault, Mailboxes, State, TransactionPreparer, meta_value};
 use std::collections::BTreeMap;
 
@@ -44,13 +44,13 @@ on in where data.text != "" {
 }
 "#;
 
-fn probe() -> (ValidatedExecutionPlan, Slot) {
+fn probe() -> (ValidatedExecutionPlan, NodeIndex) {
     let compilation = compile(
         &[M0_PROBE],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
-    let slot = Slot::new(
+    let slot = NodeIndex::new(
         u32::try_from(
             compilation
                 .symbols
@@ -118,7 +118,7 @@ fn an_identity_emission_inherits_everything_but_its_sys_fields() {
     )
     .expect("a valid plan");
     let executor = TransactionPreparer::new(&compilation.plan, GraphVersion(1));
-    let slot = Slot::new(0);
+    let slot = NodeIndex::new(0);
     let state = State::new()
         .cell(&compilation.plan, slot, &singleton())
         .unwrap();
@@ -294,7 +294,7 @@ fn metadata_writes_land_where_the_spec_says() {
     )
     .expect("a valid plan");
     let executor = TransactionPreparer::new(&compilation.plan, GraphVersion(1));
-    let slot = Slot::new(0);
+    let slot = NodeIndex::new(0);
     let state = State::new()
         .cell(&compilation.plan, slot, &singleton())
         .unwrap();
@@ -640,7 +640,7 @@ fn the_connector_completion_matches_the_reference_trace() {
     let executor = TransactionPreparer::new(&plan, GraphVersion(1));
     let request = input("salut");
     let connector_path = node::Path::new(["echo"]).unwrap();
-    let connector_slot = Slot::new(
+    let connector_slot = NodeIndex::new(
         u32::try_from(
             plan.nodes
                 .iter()
@@ -726,7 +726,7 @@ fn a_connector_output_overlays_only_its_external_observations() {
         request.envelope.data().clone(),
     );
     let connector_path = node::Path::new(["echo"]).unwrap();
-    let connector_slot = Slot::new(
+    let connector_slot = NodeIndex::new(
         u32::try_from(
             plan.nodes
                 .iter()
@@ -779,26 +779,26 @@ fn a_connector_output_overlays_only_its_external_observations() {
 
 #[test]
 fn a_caller_supplied_slot_is_verified_not_trusted() {
-    // Slot is freely constructible; the validated plan proves only
+    // NodeIndex is freely constructible; the validated plan proves only
     // its OWN references. The reviewer's one-liner panicked here —
     // every public door now verifies and refuses typed.
     let (plan, _) = probe();
-    let ghost = Slot::new(999);
+    let ghost = NodeIndex::new(999);
     assert_eq!(
         State::new().cell(&plan, ghost, &singleton()).unwrap_err(),
-        Fault::UnknownSlot(ghost)
+        Fault::UnknownNodeIndex(ghost)
     );
     assert_eq!(
         State::new()
             .apply(&plan, ghost, &singleton(), &[])
             .unwrap_err(),
-        Fault::UnknownSlot(ghost)
+        Fault::UnknownNodeIndex(ghost)
     );
     let executor = TransactionPreparer::new(&plan, GraphVersion(1));
     assert_eq!(
         executor
             .fire(ghost, &singleton(), &input("salut"), &BTreeMap::new())
             .unwrap_err(),
-        Fault::UnknownSlot(ghost)
+        Fault::UnknownNodeIndex(ghost)
     );
 }

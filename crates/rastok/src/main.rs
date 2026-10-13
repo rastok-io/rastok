@@ -18,7 +18,7 @@ use rastok::envelope::{Data, Namespace, Value};
 use rastok::journal::MemJournal;
 use rastok::plan::GraphVersion;
 use rastok::render::{Sources, render_all};
-use rastok::runtime::vm::Vm;
+use rastok::runtime::execution::Execution;
 use rastok::{connectors, lab, node};
 use std::io::{BufRead, Write as _};
 use std::process::ExitCode;
@@ -493,7 +493,7 @@ fn run(
             return ExitCode::FAILURE;
         }
     };
-    let mut vm = Vm::boot_program(
+    let mut vm = Execution::boot_program(
         &compilation.plan,
         compilation.hash,
         version,
@@ -543,7 +543,7 @@ fn run(
                 }
             };
             let submission = cli_submission(&inbound_path, line);
-            if let Err(error) = vm.inject(&mut journal, submission) {
+            if let Err(error) = vm.accept_input(&mut journal, submission) {
                 eprintln!("error: the submission was refused: {error}");
                 return ExitCode::FAILURE;
             }
@@ -680,7 +680,7 @@ fn replay(arguments: &[String]) -> ExitCode {
 }
 
 fn drive_boundary<'plan>(
-    vm: &mut Vm<'plan>,
+    vm: &mut Execution<'plan>,
     journal: &mut MemJournal,
     world: &mut connectors::RuntimeBindings<'plan>,
 ) -> Result<bool, String> {
@@ -768,7 +768,7 @@ fn cli_submission(inbound_path: &node::Path, line: String) -> IngressProposal {
     }
 }
 
-fn print_new_outputs(vm: &Vm<'_>, printed_outputs: &mut usize) {
+fn print_new_outputs(vm: &Execution<'_>, printed_outputs: &mut usize) {
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
     for output in &vm.outputs()[*printed_outputs..] {
@@ -899,7 +899,7 @@ fn simulate_with_ui(
         state,
         plan: &compilation.plan,
         definitions: &compilation.source_definitions,
-        vm: session.vm(),
+        execution: session.execution(),
         journal: session.journal(),
         fault: None,
         activity: None,
@@ -931,7 +931,7 @@ fn simulate_with_ui(
     let mut golden_failures = Vec::new();
     loop {
         let records_before = session.journal().records().len();
-        let observations_before = session.vm().envelope_views().len();
+        let observations_before = session.execution().envelope_views().len();
         let failures_before = session.failures().len();
         let mut dirty = false;
         let mut activity_decided = false;
@@ -959,7 +959,7 @@ fn simulate_with_ui(
                 }
                 UiCommand::Pause if state == ExecutionState::Running => {
                     state = if session.is_advancing_time()
-                        || session.vm().awaiting_outbound_calls() == 0
+                        || session.execution().awaiting_outbound_calls() == 0
                     {
                         ExecutionState::Paused
                     } else {
@@ -1193,7 +1193,7 @@ fn simulate_with_ui(
                 }
             }
             if state == ExecutionState::PauseRequested
-                && session.vm().awaiting_outbound_calls() == 0
+                && session.execution().awaiting_outbound_calls() == 0
             {
                 state = ExecutionState::Paused;
                 dirty = true;
@@ -1295,7 +1295,7 @@ fn simulate_with_ui(
             dirty = true;
         }
         dirty |= records_before != session.journal().records().len()
-            || observations_before != session.vm().envelope_views().len()
+            || observations_before != session.execution().envelope_views().len()
             || failures_before != session.failures().len();
         if records_before != session.journal().records().len() && !activity_decided {
             boundary_ordinal = boundary_ordinal.saturating_add(1);
@@ -1313,7 +1313,7 @@ fn simulate_with_ui(
                 state,
                 plan: &compilation.plan,
                 definitions: &compilation.source_definitions,
-                vm: session.vm(),
+                execution: session.execution(),
                 journal: session.journal(),
                 fault: fault.as_ref(),
                 activity: activity.as_ref(),

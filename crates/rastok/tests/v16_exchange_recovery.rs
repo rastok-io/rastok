@@ -13,7 +13,7 @@ use rastok::envelope::{Data, Namespace, Value};
 use rastok::journal::MemJournal;
 use rastok::node;
 use rastok::plan::{self, GraphVersion};
-use rastok::runtime::vm::Vm;
+use rastok::runtime::execution::Execution;
 
 fn compile(source: &str) -> plan::ValidatedExecutionPlan {
     let compiled = compiler::compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
@@ -38,7 +38,7 @@ fn proposal(reference: u64, text: &str) -> RetainedProposal {
     }
 }
 
-fn recover(vm: &mut Vm<'_>, journal: &MemJournal) {
+fn recover(vm: &mut Execution<'_>, journal: &MemJournal) {
     let retained = journal.records().to_vec();
     vm.recover_from_journal(journal).unwrap();
     assert_eq!(
@@ -76,12 +76,12 @@ graph app : App {{
             if respond { "{ out; server.in }" } else { "out" }
         );
         let plan = compile(&source);
-        let mut vm = Vm::boot(&plan, GraphVersion(1));
+        let mut vm = Execution::boot(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
         let mut calls = Vec::new();
         for (reference, text) in [(1, "alice"), (2, "bob")] {
             let IngressAdmission::Accepted(accepted) = vm
-                .admit_ingress(&mut journal, &proposal(reference, text))
+                .accept_connector_output(&mut journal, &proposal(reference, text))
                 .unwrap()
             else {
                 panic!("uncongested ingress");

@@ -11,7 +11,7 @@ use rastok::contract::ContractCatalog;
 use rastok::envelope::{Data, Namespace, Value};
 use rastok::journal::MemJournal;
 use rastok::plan::{self, GraphVersion};
-use rastok::runtime::vm::Vm;
+use rastok::runtime::execution::Execution;
 use rastok::{diagnostics::Bag, node};
 
 fn checked(ty: &str, arguments: &str, body: &str) -> Result<Compilation, Bag> {
@@ -38,8 +38,8 @@ graph adjustments : App {{
 fn execute(compiled: &Compilation) -> MemJournal {
     let version = GraphVersion(1);
     let mut journal = MemJournal::new(version);
-    let mut vm = Vm::boot(&compiled.plan, version);
-    vm.inject(
+    let mut vm = Execution::boot(&compiled.plan, version);
+    vm.accept_input(
         &mut journal,
         IngressProposal {
             provenance: IngressProvenance::single(

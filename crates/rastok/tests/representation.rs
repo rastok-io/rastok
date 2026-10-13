@@ -6,7 +6,7 @@ use rastok::contract::ContractCatalog;
 use rastok::envelope::{Data, Delivery, Encoding, Envelope, Id, Meta, MetaSys, Value};
 use rastok::instance;
 use rastok::node::{OwnerPath, Port};
-use rastok::plan::{GraphVersion, Slot};
+use rastok::plan::{GraphVersion, NodeIndex};
 use rastok::runtime::{Fault, TransactionPreparer};
 use std::collections::BTreeMap;
 
@@ -27,7 +27,7 @@ fn count(ty: &str, data: Data) -> Result<Value, Fault> {
         envelope: Envelope::new(Meta::new(MetaSys::root(Id::from_bytes([1; 16]), 1)), data),
     };
     let result = TransactionPreparer::new(&compiled.plan, GraphVersion(1)).fire(
-        Slot::new(0),
+        NodeIndex::new(0),
         &generation,
         &delivery,
         &BTreeMap::new(),
@@ -123,7 +123,7 @@ fn raw_text_selects_the_same_key_and_handler_value_inside_a_graph() {
     use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
     use rastok::journal::{MemJournal, Record};
     use rastok::node::{Lifecycle, Path, Trigger};
-    use rastok::runtime::vm::Vm;
+    use rastok::runtime::execution::Execution;
     let source = r#"
 graph g : App {
   input in: text
@@ -144,8 +144,8 @@ graph g : App {
 "#;
     let compiled = compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Vm::boot(&compiled.plan, GraphVersion(1));
-    vm.inject(
+    let mut vm = Execution::boot(&compiled.plan, GraphVersion(1));
+    vm.accept_input(
         &mut journal,
         IngressProposal {
             provenance: IngressProvenance::single(Path::new(["cli"]).unwrap()),
@@ -186,7 +186,7 @@ fn loop_expiry_materializes_last_state_by_the_host_entry_type() {
     use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
     use rastok::journal::MemJournal;
     use rastok::node::Path;
-    use rastok::runtime::vm::Vm;
+    use rastok::runtime::execution::Execution;
 
     for ty in ["text", "bytes"] {
         for host in ["operator", "graph"] {
@@ -209,8 +209,8 @@ fn loop_expiry_materializes_last_state_by_the_host_entry_type() {
             );
             let compiled = compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap();
             let mut journal = MemJournal::new(GraphVersion(1));
-            let mut vm = Vm::boot(&compiled.plan, GraphVersion(1));
-            vm.inject(
+            let mut vm = Execution::boot(&compiled.plan, GraphVersion(1));
+            vm.accept_input(
                 &mut journal,
                 IngressProposal {
                     provenance: IngressProvenance::single(Path::new(["cli"]).unwrap()),
@@ -239,7 +239,7 @@ fn loop_expiry_materializes_last_state_by_the_host_entry_type() {
             };
             assert_eq!(output.payload, [("last_state".into(), expected)]);
             MemJournal::from_records(GraphVersion(1), None, journal.records()).unwrap();
-            let mut recovered = Vm::boot(&compiled.plan, GraphVersion(1));
+            let mut recovered = Execution::boot(&compiled.plan, GraphVersion(1));
             recovered.recover_from_journal(&journal).unwrap();
             assert_eq!(recovered.outputs(), vm.outputs());
 
@@ -279,7 +279,7 @@ fn loop_expiry_materializes_last_state_by_the_host_entry_type() {
             }
             assert_eq!(changed, 1);
             let forged = MemJournal::from_records(GraphVersion(1), None, &forged).unwrap();
-            let mut recovery = Vm::boot(&compiled.plan, GraphVersion(1));
+            let mut recovery = Execution::boot(&compiled.plan, GraphVersion(1));
             assert!(recovery.recover_from_journal(&forged).is_err());
         }
     }

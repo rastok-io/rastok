@@ -10,7 +10,7 @@ fn recovered_graph_outputs_and_expiry_are_redacted_before_logging() {
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::{Journal, MemJournal};
     use rastok::plan::GraphVersion;
-    use rastok::runtime::vm::Vm;
+    use rastok::runtime::execution::Execution;
     let source = r#"
 type State = struct { n: int, private: text @sensitive(level = restricted) }
 graph app : App {
@@ -43,8 +43,8 @@ graph app : App {
     let (plan, _) = plan::decode(&plan::encode(&compiled.plan, &compiled.hash)).unwrap();
     for n in [1, 4] {
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut vm = Vm::boot(&plan, GraphVersion(1));
-        vm.inject(
+        let mut vm = Execution::boot(&plan, GraphVersion(1));
+        vm.accept_input(
             &mut journal,
             IngressProposal {
                 provenance: IngressProvenance::single(rastok::node::Path::new(["policy"]).unwrap()),
@@ -65,7 +65,7 @@ graph app : App {
         )
         .unwrap();
         for _ in 0..100 {
-            let mut restored = Vm::boot(&plan, GraphVersion(1));
+            let mut restored = Execution::boot(&plan, GraphVersion(1));
             restored.recover_from_journal(&journal).unwrap();
             assert_eq!(restored.inspection(), vm.inspection());
             vm = restored;

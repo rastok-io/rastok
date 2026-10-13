@@ -5,7 +5,7 @@
 use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
 use rastok::envelope::{Data, Namespace, Value};
 use rastok::journal::{MemJournal, Record};
-use rastok::runtime::vm::Vm;
+use rastok::runtime::execution::Execution;
 use rastok::{
     compiler,
     contract::ContractCatalog,
@@ -270,9 +270,9 @@ graph app : App {
         .unwrap()
         .0;
     for value in [false, true] {
-        let mut vm = Vm::boot(&decoded, plan::GraphVersion(1));
+        let mut vm = Execution::boot(&decoded, plan::GraphVersion(1));
         let mut journal = MemJournal::new(plan::GraphVersion(1));
-        vm.inject(
+        vm.accept_input(
             &mut journal,
             submission(Data::materialized(Value::Bool(value))),
         )
@@ -391,9 +391,9 @@ graph app : App {
     let compilation = compiler::compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
     let encoded = plan::encode(&compilation.plan, &compilation.hash);
     let decoded = plan::decode(&encoded).unwrap().0;
-    let mut vm = Vm::boot(&decoded, plan::GraphVersion(1));
+    let mut vm = Execution::boot(&decoded, plan::GraphVersion(1));
     let mut journal = MemJournal::new(plan::GraphVersion(1));
-    vm.inject(&mut journal, submission(Data::materialized(Value::Int(2))))
+    vm.accept_input(&mut journal, submission(Data::materialized(Value::Int(2))))
         .unwrap();
     vm.run_ready(&mut journal).unwrap();
     assert!(vm.is_stable());
@@ -433,9 +433,9 @@ graph app : App {
     let compilation = compiler::compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
     let package = plan::encode(&compilation.plan, &compilation.hash);
     let decoded = plan::decode(&package).unwrap().0;
-    let mut vm = Vm::boot_at(&decoded, plan::GraphVersion(1), 17);
+    let mut vm = Execution::boot_at(&decoded, plan::GraphVersion(1), 17);
     let mut journal = MemJournal::new(plan::GraphVersion(1));
-    vm.inject(
+    vm.accept_input(
         &mut journal,
         submission(Data::encoded(
             rastok::envelope::Encoding::ArrowIpc,
@@ -473,13 +473,13 @@ graph app : App {
 }
 "#;
     let compilation = compiler::compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
-    let mut vm = Vm::boot(&compilation.plan, plan::GraphVersion(1));
+    let mut vm = Execution::boot(&compilation.plan, plan::GraphVersion(1));
     let mut journal = MemJournal::new(plan::GraphVersion(1));
-    vm.inject(&mut journal, submission(Data::materialized(Value::Int(0))))
+    vm.accept_input(&mut journal, submission(Data::materialized(Value::Int(0))))
         .unwrap();
     assert!(matches!(
         vm.run_ready(&mut journal),
-        Err(rastok::runtime::vm::VmFault::Fault(_))
+        Err(rastok::runtime::execution::ExecutionFault::Fault(_))
     ));
     assert!(vm.outputs().is_empty());
     assert!(!vm.is_stable(), "the failed input stays pending");
