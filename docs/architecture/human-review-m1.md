@@ -1020,6 +1020,14 @@ Block 1, `inject_submission`, was read on 11 October: see the second pass
 above; blocks 2–7 remain. **12 October:** suspended here by Yoann's
 decision, so that the realignment, A-T4-4 and the rename lot start; blocks
 2–7 are read on the realigned code.
+**13 October:** the rename lot is applied by Astra (ten commits, `32bc654`
+to `5bc7f0a`, branch `realign/node-ontology` from `4b4a4a4`) and reviewed by
+Fable: every decided name in place, no witness moved, the four completion
+checks and the rp2350 spike check green (1 572 passed in 61 groups, 0 failed, 0 ignored). The review, one
+correction (bless is the specification's word, `--bless`) and the missed
+derivatives are in the ledger's *Applied — 13 October*. `inject_submission`
+now reads `admit_proposal`; A-T4-4 keeps its decomposition. Realignment
+lot 1 starts on this base.
 
 ## Realignment on the Node ontology — decided 2026-10-11
 

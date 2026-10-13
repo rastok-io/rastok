@@ -704,6 +704,59 @@ the Lab, a Driver's in conformance; the three time words at the head of
 InstanceCommand views rebuilt from the journal, `EnvelopeView` the
 debugger's live log (both Astra).
 
+### Applied — 13 October (Astra), reviewed by Fable
+
+Astra applied the lot in ten commits on `realign/node-ontology`, `32bc654` to
+`5bc7f0a`, from `4b4a4a4`: one commit per family, the two specification
+sentences in their own commit (`008cbb4`), the file renames last (`fold.rs`
+→ `loop_view.rs` / `retry_view.rs`, `hydration.rs` → `deserialization.rs`,
+`emission.rs` → `emit_value.rs`, test `machine_executor.rs` →
+`transaction_preparer.rs`). Fable's review, 13 October:
+
+- Every decided name is declared and used; the old names survive only in
+  `decisions.md` (immutable), the historical reports and this ledger.
+- No witness moved: no identity literal changed in Rust, no fixture, golden,
+  package, trace or recording touched; `Draft` and `PortOutput` are one
+  `EnvelopeDraft`; `IngressDecision` is a `Result`; `IngressAdmission` keeps
+  its explicit `Pending`.
+- Checks run by Fable on `5bc7f0a`: `cargo fmt --check`, `cargo clippy
+  --workspace --all-targets --all-features -D warnings`, `cargo test
+  --workspace --all-features` (1 572 passed in 61 groups, 0 failed, 0 ignored), `cargo doc --workspace --no-deps`,
+  and `cargo check` of the rp2350 spike on `thumbv8m.main-none-eabihf`.
+  The one test above the brief's 1 571 was already on `review/t2-t4`.
+- The docs to write once are written. The three time words sit at the head of
+  `journal/deadline.rs`, where the `Deadline` type lives, not `timing.rs`:
+  the line above is corrected, the placement is the right one.
+- `inject_submission` already reads `admit_proposal`; its decomposition stays
+  A-T4-4 in realignment lot 1. Astra also corrected the `VmFault` doc, which
+  claimed that a failing operation committed nothing: the journal decides.
+
+**Correction under rule 1 — bless (to Yoann).** The specification names the
+act: simulation-semantics writes "reviewed **`--bless`**", the CLI flag
+`--bless` and `RASTOK_BLESS=1` carry it, `golden.rs` implements it. The
+11 October line "bless → approve" was written without that check and
+conflicts with rule 1; Astra applied it faithfully to 19 prose lines
+(README, ROADMAP, the golden and fixture test module docs), which now say
+"approval" for what the flag calls bless. Fable proposes to withdraw the
+"approve" line and restore "bless" in those 19 lines; the flag never moved.
+
+**Derivatives the table missed (follow-up, mechanical, to Yoann).**
+`PrivacyProfileName` → `PrivacyDeclarationName`; `CostProfileAttestation`
+→ `PriceBookAttestation`, with `DeploymentProfile::with_cost_profile` and
+the field `DeploymentAttestation.cost_profile` — the deployment JSON key
+`cost_profile` is user-facing and stays. `hir::LoopDelay`, shared by
+`hir::LoopSpec.delay` and `hir::RetrySpec.delay`, is the plan's collision
+again; HIR names were kept as a block, so Astra was right not to touch it —
+Yoann decides whether it follows `DelayPolicy`. `journal::admission::Fold`
+(crate-private, the lifecycle projection used by admission) was not among the
+three folds listed. Residual words: "packet" in
+`retry_protocol/encoding.rs::packet_tree`, `instance_stop::Error::PacketShape`,
+a few doc comments and the test enum `Retained::Packet`; "mint" in the UI
+placeholder "minted on admission" (`ui/view.rs`) and in test messages;
+"dispatcher" in the label of `04-app-lab-effect-cycle.puml`; "unprovable" in
+`components.md` and `connector-drivers.md`. `mint_capability` (the UI
+authorization token) is another act and stays.
+
 ## What validation produces
 
 For each **⟂**: keep / rename / merge, with the chosen word. The answers
