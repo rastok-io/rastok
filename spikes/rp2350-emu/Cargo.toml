@@ -11,6 +11,7 @@ publish = false
 
 [features]
 retry-qualification = []
+node-layout-probe = []
 
 [dependencies]
 rastok-core = { path = "../../crates/rastok-core" }

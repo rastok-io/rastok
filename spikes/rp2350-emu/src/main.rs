@@ -32,6 +32,8 @@ use rastok_core::runtime::vm::Vm;
 
 #[cfg(feature = "retry-qualification")]
 mod retry;
+#[cfg(feature = "node-layout-probe")]
+mod node_layout;
 
 /// The allocator, wrapped to record a true high-water mark: the
 /// peak is updated inside every successful allocation, so no
@@ -165,12 +167,19 @@ fn main() -> ! {
     hprintln!("semantic_hash: {}", hash);
     hprintln!("heap_after_open: {} bytes", HEAP.inner.used());
     hprintln!(
+        "heap_peak_after_open: {} bytes",
+        HEAP.peak.load(core::sync::atomic::Ordering::Relaxed)
+    );
+    hprintln!(
         "record_layout: record {} / inbound {} / transaction {} / outbound {} bytes",
         core::mem::size_of::<Record>(),
         core::mem::size_of::<journal::IngressRecord>(),
         core::mem::size_of::<journal::TransactionRecord>(),
         core::mem::size_of::<journal::EgressRecord>()
     );
+
+    #[cfg(feature = "node-layout-probe")]
+    node_layout::compare(plan.plan());
 
     #[cfg(feature = "retry-qualification")]
     if plan.owners.iter().any(|owner| owner.retry_spec().is_some()) {
