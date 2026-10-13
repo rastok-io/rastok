@@ -4010,6 +4010,104 @@ graph app : App {{
 }
 
 #[test]
+fn a_refused_ingress_commit_installs_no_exchange_and_keeps_the_same_identity() {
+    for (contract, settings, framing) in [
+        ("HttpServer", "codec = text", None),
+        (
+            "WebSocketServer",
+            "codec = text; handshake_timeout = duration(\"5s\")",
+            Some(InboundSession::Open),
+        ),
+    ] {
+        let source = format!(
+            r#"
+graph app : App {{
+  input in: text
+  output out: text
+  connector socket : {contract} {{
+    listen = "127.0.0.1:0"; {settings}
+  }}
+  in -> nothing
+  socket.out -> out
+  socket.exit -> nothing
+}}
+"#
+        );
+        let compiled = compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap();
+        let mut proposal = websocket_proposal(1, "request", InboundSession::Open);
+        proposal.proposal.session = framing;
+
+        let mut reference = Vm::boot(&compiled.plan, GraphVersion(1));
+        let mut reference_journal = MemJournal::new(GraphVersion(1));
+        let expected = reference
+            .admit_ingress(&mut reference_journal, &proposal)
+            .unwrap();
+
+        let mut vm = Vm::boot(&compiled.plan, GraphVersion(1));
+        let mut journal = FlakyJournal::healthy(GraphVersion(1));
+        let before = vm.inspection();
+        journal.refuse_ingress = true;
+        assert!(matches!(
+            vm.admit_ingress(&mut journal, &proposal),
+            Err(VmFault::Journal(rastok::journal::Error::Storage(_)))
+        ));
+        assert_eq!(
+            vm.inspection(),
+            before,
+            "{contract}: no partial installation"
+        );
+        assert!(journal.inner.records().is_empty());
+        assert!(journal.open_inbound_calls().is_empty());
+        assert!(journal.live_sessions().is_empty());
+
+        journal.refuse_ingress = false;
+        assert_eq!(vm.admit_ingress(&mut journal, &proposal).unwrap(), expected);
+        assert_eq!(journal.inner.records(), reference_journal.records());
+        assert_eq!(vm.inspection(), reference.inspection());
+        assert_eq!(
+            vm.outputs().len(),
+            usize::from(framing.is_none()),
+            "a Call request is routed; a Session opening is not a peer message"
+        );
+    }
+}
+
+#[test]
+fn a_session_opening_requires_its_journal_identity_before_commit() {
+    let source = r#"
+graph app : App {
+  input in: text
+  connector socket : WebSocketServer {
+    listen = "127.0.0.1:0"; codec = text; handshake_timeout = duration("5s")
+  }
+  in -> nothing
+  socket.out -> nothing
+  socket.exit -> nothing
+}
+"#;
+    let compiled = compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
+    let mut vm = Vm::boot(&compiled.plan, GraphVersion(1));
+    let mut journal = FlakyJournal::healthy(GraphVersion(1));
+    journal.omit_prepared_session = true;
+    let before = vm.inspection();
+    assert!(matches!(
+        vm.admit_ingress(
+            &mut journal,
+            &websocket_proposal(1, "", InboundSession::Open),
+        ),
+        Err(VmFault::PlanInvariant {
+            reason: "a prepared Session opening lost its logical reference",
+            ..
+        })
+    ));
+    assert!(
+        journal.inner.records().is_empty(),
+        "refuse before the accepting commit"
+    );
+    assert_eq!(vm.inspection(), before);
+}
+
+#[test]
 fn server_orphan_writes_cannot_open_or_guess_a_session_after_recovery() {
     let source = r#"
 graph app : App {
@@ -4435,6 +4533,8 @@ on in {
 /// failure, scripted.
 struct FlakyJournal {
     inner: MemJournal,
+    refuse_ingress: bool,
+    omit_prepared_session: bool,
     refuse_commits: bool,
     refuse_opens: bool,
     refuse_closes: bool,
@@ -4447,6 +4547,8 @@ impl FlakyJournal {
     fn healthy(version: GraphVersion) -> Self {
         Self {
             inner: MemJournal::new(version),
+            refuse_ingress: false,
+            omit_prepared_session: false,
             refuse_commits: false,
             refuse_opens: false,
             refuse_closes: false,
@@ -4488,8 +4590,11 @@ impl Journal for FlakyJournal {
     }
     fn prepare_connector_ingress(
         &self,
-        submission: IngressProposal,
+        mut submission: IngressProposal,
     ) -> Result<rastok::journal::PreparedIngress, rastok::journal::Error> {
+        if self.omit_prepared_session {
+            submission.session = None;
+        }
         self.inner.prepare_connector_ingress(submission)
     }
     fn commit_ingress(
@@ -4497,6 +4602,9 @@ impl Journal for FlakyJournal {
         prepared: rastok::journal::PreparedIngress,
         routes: Vec<rastok::journal::RouteTarget>,
     ) -> Result<rastok::journal::CommittedIngress, rastok::journal::Error> {
+        if self.refuse_ingress {
+            return Err(rastok::journal::Error::Storage(String::from("scripted")));
+        }
         self.inner.commit_ingress(prepared, routes)
     }
     fn instance_generation_for_admission(
