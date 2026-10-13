@@ -6,7 +6,7 @@ graph: examples/keyed-retry.rkg
 golden: crates/rastok/tests/golden/gallery/two-tenants/ui_tour.two_tenants.trace
 command: rastok simulate examples/keyed-retry.rkg
 expected: Two scenarios pass; Bob completes in one attempt, Alice in two, and idle expiry opens a fresh generation.
-break_it: 'Change Retry.attempts = 2 to Retry.attempts = 1, then rerun without --bless.'
+break_it: 'Change Retry.attempts = 2 to Retry.attempts = 1, then rerun without --save.'
 limits:
   - An instance key isolates state; it does not deduplicate requests.
   - The Lab substitutes Process responses; no model or real agent is called.
@@ -65,7 +65,7 @@ expecting Alice's answer fails. Bob still finishes once. There is no new
 
 ## Read the golden difference
 
-Add `--golden crates/rastok/tests/golden/gallery/two-tenants` to compare every
+Add `--compare crates/rastok/tests/golden/gallery/two-tenants` to compare every
 record. The unedited example matches. After your edit, the CLI names the first
 difference and recorded context, which can precede the final missing answer.
 Restore the attempt bound afterward.

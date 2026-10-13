@@ -61,8 +61,8 @@ The [consolidated human-review ledger](docs/architecture/human-review-m1.md)
 owns the three lots: vocabulary without changed bytes, structure without
 changed bytes, then the single v20 identity cutover. Vocabulary stops for
 Fable's review; the cutover needs Fable's review and Yoann's approval before
-blessing. Pre-public registries compact once; the public extend-only contract
-starts after that bless. Keep the chantier numbered v20 for now, and record
+reference update. Pre-public registries compact once; the public extend-only contract
+starts after that reference update. Keep the chantier numbered v20 for now, and record
 the switch to public format 1 as a pre-publication TODO. The approved cutover
 now uses package 20 and recording 4; no publication is authorized here.
 
@@ -70,7 +70,7 @@ now uses package 20 and recording 4; no publication is authorized here.
 
 The checkout uses **v20 / diagnostic recording v4**. The
 [human-review identity inventory](docs/architecture/human-review-v20-identity.md)
-owns the reviewed single blessing and current qualification. The
+owns the reviewed single reference update and current qualification. The
 [C4 ledger](docs/architecture/retry-c4-qualification.md) is dated evidence
 for the preceding native-Retry base. The executable scope includes native Retry,
 typed Responses deserialization and generic `@measure(id, unit)` samples retained
@@ -103,7 +103,7 @@ approved by D-2026-09-14-3, with no package-version or journal change.
 The Loop / Retry / Saga separation was then approved by D-2026-09-14-4:
 one recurrence engine, distinct state-iteration and protected-Call protocols,
 and no global Saga effect classification for ordinary Calls. At that checkpoint,
-`rework/retry` carried the unblessed v19/recording-v3 candidate; v18 was the
+`rework/retry` carried the not-yet-approved v19/recording-v3 candidate; v18 was the
 last qualified baseline.
 Its [contract and staged gates](docs/architecture/retry-extension-refactor.md)
 required an identity inventory before any executable format cutover.
@@ -138,13 +138,13 @@ The stdlib schema became executable; its identity migration and subsequent
 qualification are recorded in the annotation ledger.
 D-2026-09-16-7 removed reports, automatic pricing and generic subset arithmetic
 from M1; it did not remove retention or Retry qualification, close A4 or
-bless candidate v19.
+save reference traces for candidate v19.
 D-2026-09-16-1 bound `output out: Response` on HttpClient's JSON
 profile, with exact field deserialization and runtime `DecodeFailed` on incompatible
 bodies; other codec refinements remained unsupported. The existing annotations
 could therefore observe both held and published typed attempts. That deserialization
 change allocated no format field; descriptive applications added only the
-inventoried candidate annotation tuple. No golden was blessed at this step. Its
+inventoried candidate annotation tuple. No golden was updated at this step. Its
 Retry image remained at 130,560 B peak heap. After named monetary binding and
 the simplified definition-table walk, it used 1,048,344 B of code, leaving
 only 232 B under 1 MiB. This fixed unannotated workload measures decoder and
@@ -156,15 +156,15 @@ fan-out publication, keyed same-origin operations and stop-at-held-batch cuts.
 It corrected recovered lifecycle work overtaking the unfinished dated frontier.
 The unchanged Retry/full-recovery workload then measured 1,048,368 B of code,
 leaving **208 B**, and the same 130,560 B peak heap. Source opening, migration
-and the reviewed v19/v3 blessing were still separate gates. That full run had
-1,509 passing tests and the same nine unblessed candidate failures; two earlier
+and the reviewed v19/v3 reference update were still separate gates. That full run had
+1,509 passing tests and the same nine not-yet-approved candidate failures; two earlier
 cold-start incidents and their passing reruns remain recorded in the report.
 The [C4 inspection checkpoint](docs/architecture/retry-c4-inspection.md) opened
 the qualified Call profile through public compilation, with source refusals
 preserved for unsupported profiles. Runtime tests stopped bypassing that gate.
 The debugger began projecting exact operations/attempts, held/final dispositions
 and deadlines; a held batch no longer animated a fictitious delivery to App.
-Gallery and annotation migration, the one v19/v3 blessing and browser/release
+Gallery and annotation migration, the one v19/v3 reference update and browser/release
 qualification were not closed by that source opening.
 The [projected JSON follow-up](docs/architecture/openai-responses-hydration.md)
 implemented the approved nullable/additional-member profile without changing
@@ -181,7 +181,7 @@ tag by name. Quantity ids no longer carried unit, carrier or subset authority:
 units became explicit and observations retained their exact signed values.
 The same embedded Retry package used **1,046,556 B** of code, recovering
 1,964 B and leaving **2,020 B** of margin; heap remained **130,560 B**.
-Final stdlib integration, A4 and the common blessing were still open then;
+Final stdlib integration, A4 and the common reference update were still open then;
 the 18 September [C4 ledger](docs/architecture/retry-c4-qualification.md) records
 their closure. Other semantics stayed frozen. The current remaining work is
 listed only in the [opening ledger](docs/architecture/opening-showcase.md).

@@ -4,9 +4,9 @@ description: Isolate hysteresis state by sensor, detect a missed heartbeat with 
 teaches: Private state, instance keys, hysteresis, timed joins, JoinExpired, explicit logical time
 graph: examples/sensor-alarm.rkg
 golden: crates/rastok/tests/golden/gallery/sensor-alarm/sensors.virtual_day.trace
-command: rastok simulate examples/sensor-alarm.rkg --golden crates/rastok/tests/golden/gallery/sensor-alarm
+command: rastok simulate examples/sensor-alarm.rkg --compare crates/rastok/tests/golden/gallery/sensor-alarm
 expected: Three scenarios pass; pump-a trips and clears, pump-b stays isolated, and one unanswered probe expires.
-break_it: 'Change data.value > 120 to data.value > 130, then rerun without --bless.'
+break_it: 'Change data.value > 120 to data.value > 130, then rerun without --save.'
 limits:
   - The Lab authors probes and heartbeats; there is no live sensor or periodic Driver here.
   - JoinExpired means an unmatched rendezvous; an unsolicited unmatched heartbeat can expire too.
@@ -23,7 +23,7 @@ to your scenario.
 ## Run
 
 ```sh
-rastok simulate examples/sensor-alarm.rkg --golden crates/rastok/tests/golden/gallery/sensor-alarm
+rastok simulate examples/sensor-alarm.rkg --compare crates/rastok/tests/golden/gallery/sensor-alarm
 ```
 
 ## Read the graph

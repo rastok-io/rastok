@@ -310,6 +310,18 @@ and makes no share-safe-export claim. See the
 [recording contract](docs/architecture/diagnostic-recording.md) for the exact
 format, read-only UI and limits.
 
+Compare a simulation with its reviewed causal reference traces, without
+changing them:
+
+```sh
+rastok simulate examples/echo.rkg --compare crates/rastok/tests/golden/gallery/echo
+```
+
+To intentionally create or replace references, use `--save <dir>` instead
+of `--compare <dir>` and review the resulting diff before committing it.
+The options are mutually exclusive. With neither option, simulation checks
+the Lab expectations without reading or writing reference traces.
+
 See [ui.md](docs/spec/ui.md) and the
 [M1.9 backlog](docs/architecture/m1.9-ui-backlog.md) for the presentation and
 external visual-qualification boundary.

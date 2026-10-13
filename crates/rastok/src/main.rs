@@ -23,7 +23,13 @@ use rastok::{connectors, lab, node};
 use std::io::{BufRead, Write as _};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: rastok new <name>\n       rastok check <file.rkg>...\n       rastok run <file.rkg>... [--file-root <dir>] [--deployment <profile.json>] [--json-logs] [--record <file.rkrec>]\n       rastok replay <file.rkrec> [--ui [--ui-port <port>]]\n       rastok simulate <file.rkg>... [--deployment <profile.json>] [--golden <dir>] [--bless] [--ui [--ui-port <port>]]\n       rastok --resolve-open-api <project-dir> [--check]";
+const USAGE: &str = "usage: rastok new <name>\n       rastok check <file.rkg>...\n       rastok run <file.rkg>... [--file-root <dir>] [--deployment <profile.json>] [--json-logs] [--record <file.rkrec>]\n       rastok replay <file.rkrec> [--ui [--ui-port <port>]]\n       rastok simulate <file.rkg>... [--deployment <profile.json>] [--compare <dir> | --save <dir>] [--ui [--ui-port <port>]]\n       rastok --resolve-open-api <project-dir> [--check]";
+
+/// Comparing is read-only; saving explicitly creates or replaces reference traces.
+enum GoldenAction {
+    Compare(std::path::PathBuf),
+    Save(std::path::PathBuf),
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct UiOptions {
@@ -159,21 +165,32 @@ fn main() -> ExitCode {
         }
         "simulate" => {
             let mut files = Vec::new();
-            let mut golden_dir: Option<std::path::PathBuf> = None;
-            let mut bless = false;
+            let mut golden = None;
             let mut deployment: Option<std::path::PathBuf> = None;
             let mut ui = UiOptions::default();
             let mut rest = paths.iter();
             while let Some(argument) = rest.next() {
                 match argument.as_str() {
-                    "--golden" => match rest.next() {
-                        Some(dir) => golden_dir = Some(std::path::PathBuf::from(dir)),
-                        None => {
-                            eprintln!("{USAGE}");
+                    "--compare" | "--save" => {
+                        if golden.is_some() {
+                            eprintln!(
+                                "error: choose exactly one of --compare <dir> or --save <dir>"
+                            );
                             return ExitCode::from(2);
                         }
-                    },
-                    "--bless" => bless = true,
+                        let Some(dir) = rest
+                            .next()
+                            .filter(|dir| !dir.is_empty() && !dir.starts_with('-'))
+                        else {
+                            eprintln!("error: {argument} requires a directory\n{USAGE}");
+                            return ExitCode::from(2);
+                        };
+                        golden = Some(if argument == "--compare" {
+                            GoldenAction::Compare(dir.into())
+                        } else {
+                            GoldenAction::Save(dir.into())
+                        });
+                    }
                     "--deployment" => match rest.next() {
                         Some(path) if deployment.is_none() => {
                             deployment = Some(std::path::PathBuf::from(path));
@@ -195,12 +212,12 @@ fn main() -> ExitCode {
                             return ExitCode::from(2);
                         }
                     }
+                    option if option.starts_with('-') => {
+                        eprintln!("error: unknown simulate option `{option}`\n{USAGE}");
+                        return ExitCode::from(2);
+                    }
                     _ => files.push(argument.clone()),
                 }
-            }
-            if bless && golden_dir.is_none() {
-                eprintln!("error: --bless requires --golden <dir>");
-                return ExitCode::from(2);
             }
             let boot = match deployment.as_deref().map(rastok::deployment_config::load) {
                 Some(Ok(boot)) => Some(boot),
@@ -217,7 +234,7 @@ fn main() -> ExitCode {
                     return ExitCode::from(2);
                 }
             };
-            simulate(&files, golden_dir.as_deref(), bless, boot.as_ref(), ui)
+            simulate(&files, golden.as_ref(), boot.as_ref(), ui)
         }
         _ => {
             eprintln!("{USAGE}");
@@ -772,8 +789,7 @@ fn print_new_outputs(vm: &Vm<'_>, printed_outputs: &mut usize) {
 /// on any red.
 fn simulate(
     paths: &[String],
-    golden_dir: Option<&std::path::Path>,
-    bless: bool,
+    golden: Option<&GoldenAction>,
     boot: Option<&rastok::deployment::BootBindings>,
     ui: UiOptions,
 ) -> ExitCode {
@@ -786,7 +802,7 @@ fn simulate(
     }
     #[cfg(feature = "hosted-ui")]
     if ui.enabled {
-        return simulate_with_ui(&compilation, golden_dir, bless, boot, ui);
+        return simulate_with_ui(&compilation, golden, boot, ui);
     }
     #[cfg(not(feature = "hosted-ui"))]
     let _ = ui;
@@ -804,7 +820,7 @@ fn simulate(
             let report = &run.report;
             total += 1;
             let golden_failures =
-                check_or_bless_golden(report, &run.records, golden_dir, bless, &compilation.plan);
+                compare_or_save_golden(report, &run.records, golden, &compilation.plan);
             let passed = report.passed() && golden_failures.is_empty();
             let verdict = if passed { "PASS" } else { "FAIL" };
             match &report.label {
@@ -835,8 +851,7 @@ fn simulate(
 #[cfg(feature = "hosted-ui")]
 fn simulate_with_ui(
     compilation: &Compilation,
-    golden_dir: Option<&std::path::Path>,
-    bless: bool,
+    golden: Option<&GoldenAction>,
     boot: Option<&rastok::deployment::BootBindings>,
     options: UiOptions,
 ) -> ExitCode {
@@ -1267,11 +1282,10 @@ fn simulate_with_ui(
 
         if state == ExecutionState::Completed && !reported {
             let report = session.report();
-            golden_failures = check_or_bless_golden(
+            golden_failures = compare_or_save_golden(
                 &report,
                 session.journal().records(),
-                golden_dir,
-                bless,
+                golden,
                 &compilation.plan,
             );
             let passed = report.passed() && golden_failures.is_empty();
@@ -1403,29 +1417,31 @@ const fn scenario_action_name(action: lab::ScenarioActionKind) -> &'static str {
     }
 }
 
-fn check_or_bless_golden(
+fn compare_or_save_golden(
     report: &lab::ScenarioReport,
     records: &[rastok::journal::Record],
-    golden_dir: Option<&std::path::Path>,
-    bless: bool,
+    golden: Option<&GoldenAction>,
     plan: &rastok::plan::ValidatedExecutionPlan,
 ) -> Vec<String> {
-    let Some(dir) = golden_dir else {
+    let Some(action) = golden else {
         return Vec::new();
+    };
+    let dir = match action {
+        GoldenAction::Compare(dir) | GoldenAction::Save(dir) => dir,
     };
     let trace = rastok::golden::project(records);
     let rendered = render_trace(&trace);
     let path = dir.join(format!("{}.{}.trace", report.simulation, report.scenario));
-    if bless {
+    if matches!(action, GoldenAction::Save(_)) {
         return std::fs::create_dir_all(dir)
             .and_then(|()| std::fs::write(&path, &rendered))
             .err()
-            .map(|error| vec![format!("cannot bless `{}`: {error}", path.display())])
+            .map(|error| vec![format!("cannot save `{}`: {error}", path.display())])
             .unwrap_or_default();
     }
     match std::fs::read_to_string(&path) {
         Err(_) => vec![format!(
-            "no golden at `{}`; bless with --bless",
+            "no golden at `{}`; save references with --save <dir>",
             path.display()
         )],
         Ok(stored) if stored != rendered => {

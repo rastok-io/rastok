@@ -2,7 +2,7 @@
 // guard the core modules, not the evidence.
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
 //! The golden seal of the M0 probe: the canonical projection of a
-//! full run, pinned byte for byte. `RASTOK_BLESS=1 cargo test` writes
+//! full run, pinned byte for byte. `RASTOK_SAVE_GOLDENS=1 cargo test` writes
 //! a new golden after an intentional behavior change — the diff in
 //! the failure message names what moved, so approval is a reviewed
 //! decision, never a reflex.
@@ -283,13 +283,13 @@ fn the_m0_probe_trace_matches_its_golden() {
     let records = run(M0_PROBE);
     let rendered = render(&records);
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/m0-probe.trace");
-    if std::env::var("RASTOK_BLESS").is_ok() {
+    if std::env::var("RASTOK_SAVE_GOLDENS").is_ok() {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, &rendered).unwrap();
         return;
     }
     let golden = std::fs::read_to_string(&path)
-        .expect("no golden trace; run once with RASTOK_BLESS=1 to bless");
+        .expect("no golden trace; run once with RASTOK_SAVE_GOLDENS=1 to save");
     if golden != rendered {
         // Explain before failing: the first semantic divergence
         // against the STORED golden, by record and key path — never
@@ -301,7 +301,7 @@ fn the_m0_probe_trace_matches_its_golden() {
             "the trace diverged from its golden.\n\
              {divergence:?}\n\
              records {} -> {}; seal {} -> {}\n\
-             if the change is intentional, bless: RASTOK_BLESS=1 cargo test",
+             if the change is intentional, save: RASTOK_SAVE_GOLDENS=1 cargo test",
             stored.len(),
             proposed.len(),
             stored.seal_hex(),
@@ -337,18 +337,18 @@ fn the_lab_scenario_matches_its_stored_golden() {
     );
     let rendered = render(&roundtrip.records);
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/echo-roundtrip.trace");
-    if std::env::var("RASTOK_BLESS").is_ok() {
+    if std::env::var("RASTOK_SAVE_GOLDENS").is_ok() {
         std::fs::write(&path, &rendered).expect("a writable golden dir");
         return;
     }
     let golden = std::fs::read_to_string(&path)
-        .expect("no golden trace; run once with RASTOK_BLESS=1 to bless");
+        .expect("no golden trace; run once with RASTOK_SAVE_GOLDENS=1 to save");
     if golden != rendered {
         let divergence = diff(&project(&roundtrip.records), &stored_trace(&golden));
         panic!(
             "the lab trace diverged from its golden.\n\
              {divergence:?}\n\
-             if the change is intentional, bless: RASTOK_BLESS=1 cargo test"
+             if the change is intentional, save: RASTOK_SAVE_GOLDENS=1 cargo test"
         );
     }
 }

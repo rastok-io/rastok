@@ -10,7 +10,7 @@
 ## Verification
 
 <!-- Exact commands and results. Say which checks were not run and why.
-     Explain every golden or identity change; never bless only to make tests pass. -->
+     Explain every golden or identity change; never update a reference only to make tests pass. -->
 
 ## Assistance and human review
 

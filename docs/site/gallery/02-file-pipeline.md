@@ -4,9 +4,9 @@ description: Read a bounded file, reject an empty input, count its bytes and ato
 teaches: File Contract, explicit deployment root, bounded read, atomic replacement, named refusal, recorded replay
 graph: examples/file-pipeline.rkg
 golden: crates/rastok/tests/golden/gallery/file-pipeline/files.copy.trace
-command: rastok simulate examples/file-pipeline.rkg --golden crates/rastok/tests/golden/gallery/file-pipeline
+command: rastok simulate examples/file-pipeline.rkg --compare crates/rastok/tests/golden/gallery/file-pipeline
 expected: Four scenarios pass; eleven ASCII bytes or three UTF-8 bytes reach the writer, while empty inputs and directory refusals never do.
-break_it: 'Change size(data) > 0 to size(data) > 20, then rerun the command without --bless.'
+break_it: 'Change size(data) > 0 to size(data) > 20, then rerun the command without --save.'
 limits:
   - This counts bytes and checks emptiness; it is not a CSV parser.
   - Replacement is atomic for one file, not a transaction over multiple files.
@@ -22,7 +22,7 @@ refusals visible before the flow runs?
 ## Run
 
 ```sh
-rastok simulate examples/file-pipeline.rkg --golden crates/rastok/tests/golden/gallery/file-pipeline
+rastok simulate examples/file-pipeline.rkg --compare crates/rastok/tests/golden/gallery/file-pipeline
 ```
 
 ## Read the graph
@@ -59,7 +59,7 @@ either file. It does not restore the disk to its earlier contents. Use
 ## Break it
 
 Change `size(data) > 0` to `size(data) > 20`. The eleven-byte example is now
-rejected and the writer receives nothing. Rerun without `--bless`.
+rejected and the writer receives nothing. Rerun without `--save`.
 
 ## Read the golden difference
 

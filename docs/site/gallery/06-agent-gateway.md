@@ -6,7 +6,7 @@ graph: examples/agent-gateway.rkg
 golden: crates/rastok/tests/golden/gallery/agent-gateway/app_server.two_conversations.trace
 command: rastok simulate examples/agent-gateway.rkg --ui
 expected: Two scenarios pass; Alice and Bob use separate children, streamed replies keep their socket address, and Bob continues after Alice closes.
-break_it: 'Change the scripted delta "Hello from the simulated agent." to "A different answer." and rerun with the gallery golden directory without --bless.'
+break_it: 'Change the scripted delta "Hello from the simulated agent." to "A different answer." and rerun with the gallery golden directory without --save.'
 limits:
   - The Lab uses explicit peer inputs, not a simulated WebSocket handshake; real socket composition is a separate local integration test.
   - Replies are scripted app-server examples, not a paid model invocation or complete protocol qualification.
@@ -33,7 +33,7 @@ The debugger starts paused. Follow one input, then inspect the instance and
 Session tables. For the reproducible CLI check:
 
 ```sh
-rastok simulate examples/agent-gateway.rkg --golden crates/rastok/tests/golden/gallery/agent-gateway
+rastok simulate examples/agent-gateway.rkg --compare crates/rastok/tests/golden/gallery/agent-gateway
 ```
 
 ## Read the graph
@@ -158,10 +158,10 @@ idempotence guarantee for an inference that could be charged twice.
 The Lab supplies typed outcomes; separate tests exercise complete wire JSON
 and a real local HTTP server. No live OpenAI invocation was performed for this
 qualification. To compare all six scenarios, use the same command without
-`--ui` and add `--golden crates/rastok/tests/golden/gallery/agent-http`.
+`--ui` and add `--compare crates/rastok/tests/golden/gallery/agent-http`.
 Change `Hello from the simulated model.` to `A different model answer.`
 in that example's mock: its count assertions still pass, but the golden
-names the changed record. Restore the reply afterward; do not use `--bless`.
+names the changed record. Restore the reply afterward; do not use `--save`.
 
 ## Break it
 
@@ -174,7 +174,7 @@ changed answer nevertheless differs in the recorded evidence.
 
 The diff names the first changed record, expected and actual data, and the
 recorded cause. Here the changed evidence is an inbound service frame, not
-an invented per-turn Call completion. Do not use `--bless` to hide the change.
+an invented per-turn Call completion. Do not use `--save` to hide the change.
 Restore the answer before continuing.
 
 ## Carry forward

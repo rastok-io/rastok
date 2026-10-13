@@ -1,8 +1,8 @@
 # The plan package — the transportable, verifiable ExecutionPlan
 
-> **Candidate package format 20, diagnostic recording 4.**
+> **Current package format 20, diagnostic recording 4.**
 > This is the only readable format. The [v20 identity inventory](human-review-v20-identity.md)
-> records the pre-public compaction and the witnesses awaiting review and blessing.
+> records the pre-public compaction and the reviewed reference updates.
 > There is no compatibility reader or converter. Publication freezes this registry
 > as extend-only; changing the public version label remains a pre-publication task.
 
@@ -480,7 +480,7 @@ The surrounding `type` in the expression/state/schema context supplies width,
 precision, units, fixed sizes and timezone rather than duplicating those
 parameters in every materialized value.
 
-From the public blessing onward, discriminants and keys are extend-only:
+From the public reference approval onward, discriminants and keys are extend-only:
 append, never renumber.
 Anything a future plan carries that these tables cannot express is a
 format-version bump, not a creative reuse.
@@ -502,8 +502,8 @@ and the package codec.
   re-derive it — the round trip checks equality of plan and of
   declared hash, under a checksum-protected association. No party
   proves the hash *belongs* to the plan; the producer declares it.)
-- **Blessed fixture**: the example's package is pinned like a golden
-  trace and re-blessed only deliberately.
+- **Reviewed fixture**: the example's package is pinned like a golden
+  trace and updated only deliberately, with its reason reviewed.
 - **Semantic round trip**: beyond structural equality, the decoded
   plan must EXECUTE identically — the boundary-value matrix
   (`i32::MAX`, `i32::MAX + 1`, `i64::MAX`, negatives) runs on both

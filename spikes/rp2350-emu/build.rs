@@ -1,5 +1,5 @@
 fn main() {
-    // A categorical-package candidate can be measured before blessing the
+    // A categorical-package candidate can be measured before updating the
     // tracked fixture. CI without the override still embeds the tracked plan.
     println!("cargo:rerun-if-env-changed=RASTOK_SPIKE_PACKAGE");
     for parameter in [

@@ -4,9 +4,9 @@ description: Run one graph with a real cat process or scripted Lab responses, th
 teaches: Operator, Connector, Graph, Lab, causal golden, diagnostic replay
 graph: examples/echo.rkg
 golden: crates/rastok/tests/golden/gallery/echo/smoke.roundtrip.trace
-command: rastok simulate examples/echo.rkg --golden crates/rastok/tests/golden/gallery/echo
+command: rastok simulate examples/echo.rkg --compare crates/rastok/tests/golden/gallery/echo
 expected: Three scenarios pass, including a filtered empty line and a timed-out silent process.
-break_it: 'Change the mock line out = . to out = "changed", then rerun the command without --bless.'
+break_it: 'Change the mock line out = . to out = "changed", then rerun the command without --save.'
 limits:
   - Equal causal facts require equal inputs, responses and observable logical time.
   - Diagnostic replay reconstructs recorded facts; it does not execute a Lab scenario.
@@ -24,7 +24,7 @@ what the outside world does, then keeps both success and silence as scenarios.
 From the checkout, with `rastok` installed:
 
 ```sh
-rastok simulate examples/echo.rkg --golden crates/rastok/tests/golden/gallery/echo
+rastok simulate examples/echo.rkg --compare crates/rastok/tests/golden/gallery/echo
 ```
 
 ## Read the graph
@@ -62,7 +62,7 @@ compare the Lab's output separately; it does not erase provenance to force a mat
 ## Break it
 
 In `mock shell`, change `out = .` to `out = "changed"`. Rerun the first
-command **without** `--bless`. The output assertion and golden should fail.
+command **without** `--save`. The output assertion and golden should fail.
 
 ## Read the golden difference
 

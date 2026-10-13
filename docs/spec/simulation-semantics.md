@@ -453,8 +453,17 @@ index leave no fingerprint.
    reproduce them byte-for-byte. This gives the specification executable
    teeth. Regulatory corollary : the trace is
    auditable evidence, and every intended behavior change is an explicit,
-reviewed **`--bless`** (regenerate + commit ; the git diff is a behavior
-diff). Never a silent regeneration.
+   reviewed reference update (**`--save <dir>`**, then commit; the git diff is
+   a behavior diff). Never a silent regeneration.
+
+`rastok simulate <file.rkg> --compare <dir>` compares the causal traces of
+the Lab scenarios with the stored references, without modifying them.
+`--save <dir>` instead creates or replaces those references. The two options
+are mutually exclusive; without either, simulation checks the scenario's
+expectations only. Neither option supplies the Lab's responses. Each scenario
+has its own `<simulation>.<scenario>.trace` in the selected directory. These
+reference traces are not the complete diagnostic recordings used by
+`run --record` and `replay`.
 
 The M1 opening CLI labels the two sides as **expected** (stored) and **got**
 (current), then prints the retained record kind, input sequence or transaction/

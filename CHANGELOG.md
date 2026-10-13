@@ -8,7 +8,7 @@ This is not a released tag. Public release and crate publication await
 The current checkout uses **format 20 / diagnostic recording 4**, to be
 labelled public format 1 at publication. The
 [identity inventory](docs/architecture/human-review-v20-identity.md) records the
-single witness blessing, preserved causal witnesses and verification.
+single witness update, preserved causal witnesses and verification.
 External opening gates remain open; these capabilities are not a release claim.
 
 - Typed Graph scopes, Operator/Connector execution, explicit destinations,
@@ -21,6 +21,9 @@ External opening gates remain open; these capabilities are not a release claim.
   disposition and exact-prefix recovery. Only the final attempt is published.
 - Deterministic Lab scenarios, record-level golden comparison and a read-only
   simulation debugger with mailbox, instance, Retry and causal inspection.
+- Explicit simulation reference modes: `--compare <dir>` reads existing
+  traces without changing them; `--save <dir>` creates or replaces them.
+  The modes are mutually exclusive, and neither supplies the Lab responses.
 - Process, bounded File and hosted HTTP/WebSocket Contracts; secret bindings,
   data-policy annotations and individual measurement inspection. M1 has no
   measurement report, automatic pricing or subset arithmetic.

@@ -554,12 +554,12 @@ fn the_example_package_matches_its_golden() {
     let (_, _, bytes) = packaged_example();
     let rendered: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/echo.rkp");
-    if std::env::var("RASTOK_BLESS").is_ok() {
+    if std::env::var("RASTOK_SAVE_GOLDENS").is_ok() {
         std::fs::write(&path, format!("{rendered}\n")).expect("a writable golden dir");
         return;
     }
     let golden = std::fs::read_to_string(&path)
-        .expect("no package golden; run once with RASTOK_BLESS=1 to bless");
+        .expect("no package golden; run once with RASTOK_SAVE_GOLDENS=1 to save");
     assert_eq!(golden.trim(), rendered, "the packaged bytes are pinned");
 }
 

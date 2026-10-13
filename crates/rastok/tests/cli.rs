@@ -1381,37 +1381,37 @@ fn simulate_fails_loudly_on_a_broken_expectation() {
 }
 
 #[test]
-fn simulate_blesses_then_verifies_a_golden_directory() {
-    let dir = std::env::temp_dir().join("rastok-cli-golden");
+fn simulate_saves_then_compares_reference_traces() {
+    let dir = std::env::temp_dir().join(format!("rastok-cli-golden-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    // Bless…
+    // Save the new reference traces, then compare without writing.
     let output = rastok()
         .args(["simulate"])
         .arg(example())
-        .args(["--golden"])
+        .args(["--save"])
         .arg(&dir)
-        .args(["--bless"])
         .output()
         .expect("the binary runs");
     assert!(output.status.success(), "{output:?}");
     assert!(dir.join("smoke.roundtrip.trace").exists());
-    // …verify…
+    let path = dir.join("smoke.roundtrip.trace");
+    let stored = std::fs::read_to_string(&path).expect("the saved trace");
     let output = rastok()
         .args(["simulate"])
         .arg(example())
-        .args(["--golden"])
+        .args(["--compare"])
         .arg(&dir)
         .output()
         .expect("the binary runs");
     assert!(output.status.success(), "{output:?}");
-    // …and a staled golden is named, not hex-dumped.
-    let path = dir.join("smoke.roundtrip.trace");
-    let stored = std::fs::read_to_string(&path).expect("the blessed trace");
-    std::fs::write(&path, stored.replace("73616c7574", "6175747265")).expect("the alteration");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), stored);
+    // A changed reference is named, not hex-dumped or overwritten.
+    let changed = stored.replace("73616c7574", "6175747265");
+    std::fs::write(&path, &changed).expect("the alteration");
     let output = rastok()
         .args(["simulate"])
         .arg(example())
-        .args(["--golden"])
+        .args(["--compare"])
         .arg(&dir)
         .output()
         .expect("the binary runs");
@@ -1425,6 +1425,7 @@ fn simulate_blesses_then_verifies_a_golden_directory() {
     );
     assert!(stdout.contains("cause: INGRESS"), "{stdout}");
     assert!(stdout.contains("sequence 0"), "{stdout}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), changed);
     assert!(
         stdout.contains("data(5)"),
         "the diff names the key: {stdout}"
@@ -1434,7 +1435,7 @@ fn simulate_blesses_then_verifies_a_golden_directory() {
         let output = rastok()
             .arg("simulate")
             .arg(example())
-            .arg("--golden")
+            .arg("--compare")
             .arg(&dir)
             .output()
             .expect("the binary runs");
@@ -1444,20 +1445,85 @@ fn simulate_blesses_then_verifies_a_golden_directory() {
                 .contains("the stored golden is unreadable by this build"),
             "malformed hexadecimal refuses without a parsing panic: {output:?}"
         );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), malformed);
+    }
+    let saved_again = rastok()
+        .arg("simulate")
+        .arg(example())
+        .arg("--save")
+        .arg(&dir)
+        .output()
+        .expect("the binary runs");
+    assert!(saved_again.status.success(), "{saved_again:?}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), stored);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn golden_options_require_a_directory_and_are_exclusive() {
+    for (options, message) in [
+        (vec!["--compare"], "--compare requires a directory"),
+        (vec!["--save"], "--save requires a directory"),
+        (vec!["--compare", "--ui"], "--compare requires a directory"),
+        (vec!["--save", "--ui"], "--save requires a directory"),
+        (vec!["--compare", ""], "--compare requires a directory"),
+        (vec!["--save", ""], "--save requires a directory"),
+        (vec!["--compare", "a", "--save", "b"], "choose exactly one"),
+        (vec!["--save", "a", "--compare", "b"], "choose exactly one"),
+        (
+            vec!["--compare", "a", "--compare", "b"],
+            "choose exactly one",
+        ),
+        (vec!["--save", "a", "--save", "b"], "choose exactly one"),
+    ] {
+        let output = rastok()
+            .arg("simulate")
+            .arg(example())
+            .args(&options)
+            .output()
+            .expect("the binary runs");
+        assert_eq!(output.status.code(), Some(2), "{options:?}: {output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(message), "{options:?}: {stderr}");
+        assert!(output.stdout.is_empty(), "no scenario runs: {output:?}");
     }
 }
 
 #[test]
-fn bless_without_golden_is_a_usage_error() {
+fn comparing_missing_references_does_not_create_them() {
+    let dir = std::env::temp_dir().join(format!("rastok-missing-golden-{}", std::process::id()));
+    assert!(!dir.exists());
     let output = rastok()
-        .args(["simulate"])
+        .arg("simulate")
         .arg(example())
-        .args(["--bless"])
+        .arg("--compare")
+        .arg(&dir)
         .output()
         .expect("the binary runs");
-    assert_eq!(output.status.code(), Some(2));
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("--bless requires --golden"), "{stderr}");
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("save references with --save"), "{stdout}");
+    assert!(!dir.exists());
+}
+
+#[test]
+fn simulation_rejects_removed_golden_options_without_running() {
+    for option in ["--golden", "--bless"] {
+        let output = rastok()
+            .arg("simulate")
+            .arg(example())
+            .arg(option)
+            .output()
+            .expect("the binary runs");
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("unknown simulate option"), "{stderr}");
+        assert!(
+            stderr.contains("--compare <dir> | --save <dir>"),
+            "{stderr}"
+        );
+        assert!(output.stdout.is_empty(), "{output:?}");
+    }
 }
 
 #[test]

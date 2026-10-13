@@ -56,7 +56,7 @@ Every page in `gallery/` additionally has:
 References never use absolute paths, `..`, external URLs or symlinks outside
 the checkout. The site reads the graph and golden from these fields; do not
 paste a whole graph or trace into the Markdown body. `golden` identifies the
-representative scenario; `--golden` takes its directory and checks **all**
+representative scenario; `--compare` takes its directory and checks **all**
 scenario files named `<simulation>.<scenario>.trace`.
 
 No additional field has been introduced. Any extension is documented here

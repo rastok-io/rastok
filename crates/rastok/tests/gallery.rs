@@ -25,7 +25,7 @@ fn opening_examples_match_versioned_scenario_goldens() {
         command.current_dir(&root).args([
             "simulate",
             &format!("examples/{graph}.rkg"),
-            "--golden",
+            "--compare",
             &format!("crates/rastok/tests/golden/gallery/{directory}"),
         ]);
         if graph == "webhook-to-partner" {
@@ -53,7 +53,7 @@ fn opening_examples_match_versioned_scenario_goldens() {
 }
 
 #[test]
-fn each_gallery_break_it_edit_exposes_a_record_difference_without_blessing() {
+fn each_gallery_break_it_edit_exposes_a_record_difference_without_saving() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let temporary =
         std::env::temp_dir().join(format!("rastok-gallery-break-it-{}", std::process::id()));
@@ -112,7 +112,7 @@ fn each_gallery_break_it_edit_exposes_a_record_difference_without_blessing() {
             .current_dir(&root)
             .arg("simulate")
             .arg(&path)
-            .arg("--golden")
+            .arg("--compare")
             .arg(format!("crates/rastok/tests/golden/gallery/{directory}"));
         if graph == "webhook-to-partner" {
             command

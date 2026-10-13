@@ -48,12 +48,12 @@ fn the_package_matches_its_golden() {
     let bytes = rastok::plan::encode(&compilation.plan, &compilation.hash);
     let rendered: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/gauge.rkp");
-    if std::env::var("RASTOK_BLESS").is_ok() {
+    if std::env::var("RASTOK_SAVE_GOLDENS").is_ok() {
         std::fs::write(&path, format!("{rendered}\n")).expect("a writable golden dir");
         return;
     }
     let golden = std::fs::read_to_string(&path)
-        .expect("no package golden; run once with RASTOK_BLESS=1 to bless");
+        .expect("no package golden; run once with RASTOK_SAVE_GOLDENS=1 to save");
     assert_eq!(golden.trim(), rendered, "the typed package is pinned");
 }
 
@@ -99,11 +99,11 @@ fn the_lab_trace_matches_its_golden_and_seals_the_ingress() {
     rendered.push_str(&trace.seal_hex());
     rendered.push('\n');
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/gauge-roundtrip.trace");
-    if std::env::var("RASTOK_BLESS").is_ok() {
+    if std::env::var("RASTOK_SAVE_GOLDENS").is_ok() {
         std::fs::write(&path, &rendered).expect("a writable golden dir");
         return;
     }
     let golden = std::fs::read_to_string(&path)
-        .expect("no trace golden; run once with RASTOK_BLESS=1 to bless");
+        .expect("no trace golden; run once with RASTOK_SAVE_GOLDENS=1 to save");
     assert_eq!(golden, rendered, "the multiport trace is pinned");
 }

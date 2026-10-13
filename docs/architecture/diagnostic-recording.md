@@ -2,7 +2,7 @@
 
 Status: 7 October 2026, diagnostic format **4**, embedding
 plan package **20**. The [v20 inventory](human-review-v20-identity.md) records
-the byte changes inventoried before the single blessing. There is no reader or converter for another
+the byte changes inventoried before the single reference update. There is no reader or converter for another
 recording format. Exact-instance closure packets travel on INGRESS and
 TRANSACTION; unused packets are absent from the causal seal.
 The durable deployment Journal remains M2 work.

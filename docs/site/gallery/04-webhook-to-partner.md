@@ -6,7 +6,7 @@ graph: examples/webhook-to-partner.rkg
 golden: crates/rastok/tests/golden/gallery/webhook-to-partner/webhook.nominal.trace
 command: env RASTOK_SHOWCASE_PARTNER_TOKEN=lab-only-not-a-credential RASTOK_SHOWCASE_PARTNER_TOKEN_VERSION=fixture-v1 rastok simulate examples/webhook-to-partner.rkg --deployment examples/webhook-to-partner.deployment.json
 expected: Six scenarios pass; ACK precedes business completion, retries are bounded, duplicates are suppressed during retention, and 500 is handled as a response.
-break_it: 'Change Retry.attempts = 2 to Retry.attempts = 1, then rerun the same command without --bless.'
+break_it: 'Change Retry.attempts = 2 to Retry.attempts = 1, then rerun the same command without --save.'
 limits:
   - The Lab injects decoded HTTP requests; malformed-wire refusal is qualified separately by the real Driver test.
   - 202 means admitted, not processed; validation and deduplication occur after ACK.
@@ -95,12 +95,12 @@ supplies no charge: missing evidence is **unknown cost, not a zero bill**.
 
 Change the single `Retry.attempts = 2` to `Retry.attempts = 1`. The timeout and
 `500` scenarios can no longer succeed on a second attempt. Rerun the command
-above, without `--bless`, then restore the source.
+above, without `--save`, then restore the source.
 
 ## Read the golden difference
 
 Add
-`--golden crates/rastok/tests/golden/gallery/webhook-to-partner`.
+`--compare crates/rastok/tests/golden/gallery/webhook-to-partner`.
 The CLI names the first differing record and field, expected versus actual,
 and recorded causal context. This classified graph deliberately redacts
 values in divergence messages; it does not expose an email to explain a
