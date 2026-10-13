@@ -153,7 +153,7 @@ lab builders {
     assert_eq!(hash, compilation.hash);
     assert_eq!(plan::encode(&decoded, &hash), bytes);
 
-    let emissions: Vec<_> = decoded.handlers[0]
+    let emissions: Vec<_> = decoded.nodes[0].handlers()[0]
         .dispatch
         .steps()
         .filter_map(|step| match step {
@@ -225,8 +225,11 @@ fn v16_retains_one_operator_loop_without_a_graph_handler_or_command_port() {
         port.port.name(),
         "next" | "Loop.next" | "Loop.again" | "Loop.done"
     )));
-    assert_eq!(compiled.handlers.len(), 1);
-    assert_eq!(compiled.handlers[0].owner, rastok::plan::NodeIndex::new(0));
+    assert_eq!(compiled.handlers().count(), 1);
+    assert_eq!(
+        compiled.handlers().next().unwrap().0,
+        rastok::plan::NodeIndex::new(0)
+    );
 
     let (decoded, declared) = plan::decode(&bytes).expect("v16 revalidates Loop Registry-free");
     assert_eq!(decoded, compiled);
@@ -438,7 +441,7 @@ graph g : App {
         before.lifetime,
         rastok::instance::Lifetime::Idle(30_000_000_000)
     ));
-    assert!(compilation.plan.plan().handlers.iter().any(|handler| {
+    assert!(compilation.plan.plan().handlers().any(|(_, handler)| {
         handler.activation
             == rastok::node::HandlerActivation::Lifecycle(rastok::node::Lifecycle::Start)
     }));
@@ -538,7 +541,7 @@ graph g : App {
     assert_eq!(decoded, compilation.plan);
     assert_eq!(hash, compilation.hash);
     assert!(matches!(
-        &decoded.plan().handlers[0].activation,
+        &decoded.plan().nodes[0].handlers()[0].activation,
         rastok::node::HandlerActivation::Join {
             ports,
             within_ns: Some(2_000_000_000),
@@ -609,6 +612,116 @@ fn reframe_body(
     let mut out = b"RKPB".to_vec();
     out.extend_from_slice(&encode(&Cbor::Map(envelope)));
     out
+}
+
+#[test]
+fn a_connector_cannot_acquire_a_dsl_handler_from_a_raw_plan() {
+    let (plan, _, bytes) = packaged_example();
+    let target = plan
+        .nodes
+        .iter()
+        .position(|node| node.connector().is_some())
+        .unwrap();
+    let node = plan.nodes[target].path.clone();
+    let forged = reframe_body(&bytes, |body| {
+        let Cbor::Array(handlers) = body.get_mut(&4).unwrap() else {
+            panic!("handler array")
+        };
+        let Cbor::Map(handler) = &mut handlers[0] else {
+            panic!("handler map")
+        };
+        handler.insert(
+            1,
+            Cbor::Array(vec![Cbor::Uint(1), Cbor::Uint(target as u64)]),
+        );
+    });
+    assert_eq!(
+        plan::decode(&forged).unwrap_err(),
+        DecodeError::Invalid(plan::PlanValidationError::NonOperatorHandler { node })
+    );
+}
+
+#[test]
+fn a_handler_owner_is_bounds_checked_before_any_signature_is_derived() {
+    let (plan, _, bytes) = packaged_example();
+    let forged = reframe_body(&bytes, |body| {
+        let Cbor::Array(handlers) = body.get_mut(&4).unwrap() else {
+            panic!("handler array")
+        };
+        let Cbor::Map(handler) = &mut handlers[0] else {
+            panic!("handler map")
+        };
+        handler.insert(
+            1,
+            Cbor::Array(vec![Cbor::Uint(1), Cbor::Uint(u64::from(u32::MAX))]),
+        );
+    });
+    assert_eq!(
+        plan::decode(&forged).unwrap_err(),
+        DecodeError::Invalid(plan::PlanValidationError::SlotOutOfBounds {
+            slot: plan::NodeIndex::new(u32::MAX),
+            node_count: plan.nodes.len(),
+        })
+    );
+}
+
+#[test]
+fn a_connector_cannot_acquire_dsl_state_from_a_package() {
+    let source = r#"
+graph state : App {
+  operator relay {
+    var seen: int = 0
+    on in { seen = seen + 1 ; out = data }
+  }
+  connector shell : Process { mode = job ; behavior = deterministic ; command = "cat" ; codec = lines }
+  in -> relay -> shell -> out
+  shell.err -> nothing
+  shell.exit -> nothing
+}
+"#;
+    let compilation = compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
+    let bytes = plan::encode(&compilation.plan, &compilation.hash);
+    let forged = reframe_body(&bytes, |body| {
+        let Cbor::Array(nodes) = body.get_mut(&1).unwrap() else {
+            panic!("node array")
+        };
+        let Cbor::Map(operator) = &nodes[0] else {
+            panic!("Operator map")
+        };
+        let vars = operator[&4].clone();
+        let Cbor::Map(connector) = &mut nodes[1] else {
+            panic!("Connector map")
+        };
+        connector.insert(4, vars);
+    });
+    assert_eq!(
+        plan::decode(&forged).unwrap_err(),
+        DecodeError::Malformed("a Connector cannot contain DSL state cells".into())
+    );
+}
+
+#[test]
+fn serialized_handler_order_cannot_be_normalized_by_containment() {
+    let source = r#"
+graph order : App {
+  input in: text
+  operator first { on in { out = data } }
+  operator second { on in { out = data } }
+  in -> first -> second -> out
+}
+"#;
+    let compilation = compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
+    let bytes = plan::encode(&compilation.plan, &compilation.hash);
+    let forged = reframe_body(&bytes, |body| {
+        let Cbor::Array(handlers) = body.get_mut(&4).unwrap() else {
+            panic!("handler array")
+        };
+        handlers.swap(0, 1);
+    });
+    assert_eq!(
+        plan::decode(&forged).unwrap_err(),
+        DecodeError::NonCanonical("the body is not the canonical encoding of its plan")
+    );
 }
 
 fn connector_spec_mut(body: &mut std::collections::BTreeMap<u64, Cbor>) -> &mut Cbor {

@@ -271,8 +271,8 @@ impl<'plan> Solver<'plan> {
                 });
             }
         }
-        for handler in &self.plan.handlers {
-            let node = handler.owner;
+        for (handler_owner, handler) in self.plan.handlers() {
+            let node = handler_owner;
             let node_index = node.index();
             let input_ports: Vec<node::Port> = match &handler.activation {
                 node::HandlerActivation::Port(port) => alloc::vec![port.clone()],
@@ -363,7 +363,7 @@ impl<'plan> Solver<'plan> {
                             }
                             DispatchStep::SetVar { name, value: expr } => {
                                 if let Some(expected) = self.plan.nodes[node_index]
-                                    .vars
+                                    .vars()
                                     .iter()
                                     .find(|cell| cell.name == *name)
                                     .map(|cell| cell.ty.clone())

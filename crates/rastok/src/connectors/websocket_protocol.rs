@@ -162,7 +162,7 @@ pub(crate) fn bind_server_routes(
             .find(|node| &node.path == path)
             .and_then(|node| match &node.execution {
                 NodeExecution::Connector(spec) => Some(spec),
-                NodeExecution::Operator => None,
+                NodeExecution::Operator { .. } => None,
             })
             .ok_or_else(|| {
                 super::DriverFactoryError::new(format!(
@@ -371,7 +371,7 @@ impl WebSocketLabDriver {
                 .find(|node| &node.path == path)
                 .and_then(|node| match &node.execution {
                     NodeExecution::Connector(spec) => Some(spec),
-                    NodeExecution::Operator => None,
+                    NodeExecution::Operator { .. } => None,
                 })
                 .ok_or_else(|| {
                     super::DriverFactoryError::new(format!(

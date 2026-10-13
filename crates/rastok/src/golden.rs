@@ -275,13 +275,13 @@ pub fn explain_diff(
         || plan.nodes.iter().enumerate().any(|(index, node)| {
             plan.resolved_ports().node(crate::plan::NodeIndex::new(index as u32))
                 .is_some_and(|ports| ports.iter().any(|p| classified(p.annotations())))
-                || node.vars.iter().any(|v| classified(&v.annotations))
+                || node.vars().iter().any(|v| classified(&v.annotations))
         })
         || plan.owners.iter().any(|owner| {
             owner.ports.iter().any(|p| classified(&p.annotations))
                 || owner.vals.iter().any(|v| classified(&v.annotations))
         })
-        || plan.handlers.iter().any(|h| h.dispatch.steps().any(|step| {
+        || plan.handlers().any(|(_, h)| h.dispatch.steps().any(|step| {
             matches!(step, crate::plan::DispatchStep::Let { annotations, .. } if classified(annotations))
         }));
     let cause = actual

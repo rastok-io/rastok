@@ -312,7 +312,7 @@ fn forged_http_client_error(
 fn connector_mut(node: &mut rastok::plan::Node) -> &mut rastok::plan::ConnectorSpec {
     match &mut node.execution {
         rastok::plan::NodeExecution::Connector(spec) => spec,
-        rastok::plan::NodeExecution::Operator => panic!("the test selected a connector"),
+        rastok::plan::NodeExecution::Operator { .. } => panic!("the test selected a connector"),
     }
 }
 
@@ -2366,7 +2366,7 @@ fn a_json_recovery_follows_the_position_terminators() {
     // the fault healed, the handler carries BOTH emissions.
     let healed = "graph g : App {\n  operator o {\n    on in { out = json! {\"a\": 1}; out = data }\n  }\n  in -> o -> out\n}\n";
     let compilation = compile_one(healed).expect("valid");
-    let handler = &compilation.plan.plan().handlers[0];
+    let handler = &compilation.plan.plan().nodes[0].handlers()[0];
     let emissions = handler
         .dispatch
         .steps()

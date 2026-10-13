@@ -26,6 +26,13 @@ fn linear_statements(handler: &mut plan::Handler) -> &mut Vec<DispatchStep> {
     steps
 }
 
+fn operator_handlers(plan: &mut ExecutionPlan, node: usize) -> &mut Vec<plan::Handler> {
+    let plan::NodeExecution::Operator { handlers, .. } = &mut plan.nodes[node].execution else {
+        panic!("the fixture selects an Operator")
+    };
+    handlers
+}
+
 const PROBE: &str = r#"
 graph probe : App {
   connector shell : Process {
@@ -59,41 +66,6 @@ fn raw_probe() -> ExecutionPlan {
 }
 
 #[test]
-fn a_connector_cannot_acquire_a_dsl_handler_from_a_raw_plan() {
-    let mut raw = raw_probe();
-    let target = raw
-        .nodes
-        .iter()
-        .position(|node| node.connector().is_some())
-        .unwrap();
-    let node = raw.nodes[target].path.clone();
-    raw.handlers.push(plan::Handler {
-        owner: NodeIndex::new(u32::try_from(target).unwrap()),
-        activation: node::HandlerActivation::Port(Port::new("in").unwrap()),
-        guard: None,
-        dispatch: plan::Dispatch::Linear(vec![]),
-    });
-    assert_eq!(
-        ValidatedExecutionPlan::try_new(raw).unwrap_err(),
-        PlanValidationError::NonOperatorHandler { node }
-    );
-}
-
-#[test]
-fn a_handler_owner_is_bounds_checked_before_any_signature_is_derived() {
-    let mut raw = raw_probe();
-    let node_count = raw.nodes.len();
-    raw.handlers[0].owner = NodeIndex::new(u32::MAX);
-    assert_eq!(
-        ValidatedExecutionPlan::try_new(raw).unwrap_err(),
-        PlanValidationError::SlotOutOfBounds {
-            slot: NodeIndex::new(u32::MAX),
-            node_count,
-        }
-    );
-}
-
-#[test]
 fn raw_commands_require_an_owning_loop_application() {
     let variants = [
         (
@@ -111,7 +83,7 @@ fn raw_commands_require_an_owning_loop_application() {
     ];
     for (step, statement) in variants {
         let mut raw = raw_probe();
-        linear_statements(&mut raw.handlers[0]).push(step);
+        linear_statements(&mut operator_handlers(&mut raw, 0)[0]).push(step);
         assert_eq!(
             ValidatedExecutionPlan::try_new(raw).unwrap_err(),
             PlanValidationError::UnsupportedStatement {
@@ -266,12 +238,13 @@ fn loop_claims_are_rederived_from_the_host_interface_and_dispatch() {
     ));
 
     let mut wrong_next = raw_loop();
-    wrong_next.handlers[0].dispatch = plan::Dispatch::Linear(vec![DispatchStep::LoopCommand(
-        plan::LoopCommand::Next(plan::EmitValue::Data(expr::Tree {
-            root: expr::Expr::Literal(rastok::value::Value::Int(3)),
-            ty: DataType::INT,
-        })),
-    )]);
+    operator_handlers(&mut wrong_next, 0)[0].dispatch =
+        plan::Dispatch::Linear(vec![DispatchStep::LoopCommand(plan::LoopCommand::Next(
+            plan::EmitValue::Data(expr::Tree {
+                root: expr::Expr::Literal(rastok::value::Value::Int(3)),
+                ty: DataType::INT,
+            }),
+        ))]);
     assert!(matches!(
         ValidatedExecutionPlan::try_new(wrong_next),
         Err(PlanValidationError::InvalidLoopControl { detail, .. })
@@ -290,7 +263,7 @@ fn loop_claims_are_rederived_from_the_host_interface_and_dispatch() {
     ));
 
     let mut unbound_asset = raw_loop();
-    let handler = &mut unbound_asset.handlers[0];
+    let handler = &mut operator_handlers(&mut unbound_asset, 0)[0];
     let DispatchStep::Emit {
         value: plan::EmitValue::Data(tree),
         ..
@@ -308,7 +281,7 @@ fn loop_claims_are_rederived_from_the_host_interface_and_dispatch() {
 #[test]
 fn loop_progress_is_reproved_registry_free_from_the_transported_body() {
     let mut silent = raw_loop();
-    let handler = &mut silent.handlers[0];
+    let handler = &mut operator_handlers(&mut silent, 0)[0];
     let DispatchStep::Emit { value, .. } = &mut linear_statements(handler)[0] else {
         panic!("the Operator emits its result")
     };
@@ -320,7 +293,7 @@ fn loop_progress_is_reproved_registry_free_from_the_transported_body() {
     ));
 
     let mut mixed = raw_loop();
-    let handler = &mut mixed.handlers[0];
+    let handler = &mut operator_handlers(&mut mixed, 0)[0];
     linear_statements(handler).push(DispatchStep::LoopCommand(plan::LoopCommand::Again));
     assert!(matches!(
         ValidatedExecutionPlan::try_new(mixed),
@@ -375,14 +348,15 @@ fn bare_operator_plan() -> ExecutionPlan {
         ],
         nodes: vec![plan::Node {
             path: rastok::node::Path::new(["worker"]).unwrap(),
-            execution: plan::NodeExecution::Operator,
+            execution: plan::NodeExecution::Operator {
+                vars: vec![],
+                handlers: vec![],
+            },
             ports: vec![],
-            vars: vec![],
             owner: node::OwnerSlot::new(1),
         }],
         boundary: vec![],
         edges: vec![],
-        handlers: vec![],
         app_schema: vec![],
         ext_schema: vec![],
         assets: vec![],
@@ -776,8 +750,7 @@ fn closing_budgets_and_stop_recursion_are_registry_free_invariants() {
         ty: Some(DataType::INT),
         annotations: Default::default(),
     });
-    recursive.handlers.push(plan::Handler {
-        owner: NodeIndex::new(0),
+    operator_handlers(&mut recursive, 0).push(plan::Handler {
         activation: rastok::node::HandlerActivation::Lifecycle(rastok::node::Lifecycle::Stop),
         guard: None,
         dispatch: rastok_core::plan::Dispatch::Linear(vec![DispatchStep::Stop]),
@@ -1003,7 +976,7 @@ fn a_dynamic_attribute_cannot_claim_a_later_phase_for_a_literal() {
         .expect("the Process node");
     let spec = match &mut shell.execution {
         plan::NodeExecution::Connector(spec) => spec,
-        plan::NodeExecution::Operator => panic!("shell is a connector"),
+        plan::NodeExecution::Operator { .. } => panic!("shell is a connector"),
     };
     let (_, command) = spec
         .attributes
@@ -1037,7 +1010,7 @@ fn a_dynamic_attribute_requires_a_registry_free_contract_authority() {
         .expect("the connector node");
     let spec = match &mut shell.execution {
         plan::NodeExecution::Connector(spec) => spec,
-        plan::NodeExecution::Operator => panic!("shell is a connector"),
+        plan::NodeExecution::Operator { .. } => panic!("shell is a connector"),
     };
     spec.contract = rastok::connector::ContractId::parse("org.rastok.test/custom@1").unwrap();
     spec.attributes = vec![(
@@ -1090,7 +1063,7 @@ fn instance_values_and_authorized_connector_settings_share_one_phase_judge() {
         .expect("the Process node");
     let spec = match &mut shell.execution {
         plan::NodeExecution::Connector(spec) => spec,
-        plan::NodeExecution::Operator => panic!("shell is a connector"),
+        plan::NodeExecution::Operator { .. } => panic!("shell is a connector"),
     };
     let (_, command) = spec
         .attributes
@@ -1492,9 +1465,12 @@ fn unsorted_vars_are_not_canonical() {
         .iter_mut()
         .find(|node| node.path.to_string() == "relay")
         .expect("the operator");
-    let mut clone = relay.vars[0].clone();
+    let plan::NodeExecution::Operator { vars, .. } = &mut relay.execution else {
+        panic!("relay is an Operator")
+    };
+    let mut clone = vars[0].clone();
     "aaa".clone_into(&mut clone.name);
-    relay.vars.push(clone);
+    vars.push(clone);
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
         PlanValidationError::NonCanonicalOrder { collection: "vars" }
@@ -1582,8 +1558,11 @@ fn a_duplicated_var_refuses() {
         .iter_mut()
         .find(|node| node.path.to_string() == "relay")
         .expect("the operator");
-    let seen = relay.vars[0].clone();
-    relay.vars.insert(0, seen.clone());
+    let plan::NodeExecution::Operator { vars, .. } = &mut relay.execution else {
+        panic!("relay is an Operator")
+    };
+    let seen = vars[0].clone();
+    vars.insert(0, seen.clone());
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
         PlanValidationError::DuplicateVar {
@@ -1596,7 +1575,7 @@ fn a_duplicated_var_refuses() {
 #[test]
 fn a_write_to_an_undeclared_var_refuses() {
     let mut plan = raw_probe();
-    for step in linear_statements(&mut plan.handlers[0]) {
+    for step in linear_statements(&mut operator_handlers(&mut plan, 0)[0]) {
         if let DispatchStep::SetVar { name, .. } = step {
             "ghost".clone_into(name);
         }
@@ -1674,12 +1653,15 @@ fn a_non_adjacent_duplicate_wins_over_the_broken_order() {
         .iter_mut()
         .find(|node| node.path.to_string() == "relay")
         .expect("the operator");
-    let seen = relay.vars[0].clone();
+    let plan::NodeExecution::Operator { vars, .. } = &mut relay.execution else {
+        panic!("relay is an Operator")
+    };
+    let seen = vars[0].clone();
     let mut alpha = seen.clone();
     "alpha".clone_into(&mut alpha.name);
     let mut zeta = seen.clone();
     "zeta".clone_into(&mut zeta.name);
-    relay.vars = vec![zeta.clone(), alpha, zeta];
+    *vars = vec![zeta.clone(), alpha, zeta];
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
         PlanValidationError::DuplicateVar {
@@ -1773,7 +1755,9 @@ graph joined : App {
     );
     assert_ne!(original.hash, wider_count.hash, "`last` is meaning");
     assert_ne!(original.hash, wider_time.hash, "`within` is meaning");
-    let node::HandlerActivation::Join { ports, .. } = &original.plan.handlers[0].activation else {
+    let node::HandlerActivation::Join { ports, .. } =
+        &original.plan.nodes[0].handlers()[0].activation
+    else {
         panic!("the fixture carries one join")
     };
     assert_eq!(
@@ -1788,8 +1772,8 @@ fn a_duplicated_handler_refuses() {
     // Two handlers for one (node, activation): dispatch would fire
     // the first and silently shadow the second — refused by name.
     let mut plan = raw_probe();
-    let first = plan.handlers[0].clone();
-    plan.handlers.insert(0, first);
+    let first = operator_handlers(&mut plan, 0)[0].clone();
+    operator_handlers(&mut plan, 0).insert(0, first);
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
         PlanValidationError::DuplicateHandler {
@@ -1862,7 +1846,7 @@ graph session_echo : App {
 fn a_foreign_plan_cannot_smuggle_malformed_join_activation_or_bounds() {
     let mut duplicate_port = raw_join(true);
     let rastok::node::HandlerActivation::Join { ports, .. } =
-        &mut duplicate_port.handlers[0].activation
+        &mut operator_handlers(&mut duplicate_port, 0)[0].activation
     else {
         panic!("the fixture carries a join")
     };
@@ -1873,7 +1857,8 @@ fn a_foreign_plan_cannot_smuggle_malformed_join_activation_or_bounds() {
     ));
 
     let mut zero_bound = raw_join(true);
-    let rastok::node::HandlerActivation::Join { last, .. } = &mut zero_bound.handlers[0].activation
+    let rastok::node::HandlerActivation::Join { last, .. } =
+        &mut operator_handlers(&mut zero_bound, 0)[0].activation
     else {
         panic!("the fixture carries a join")
     };
@@ -1887,7 +1872,8 @@ fn a_foreign_plan_cannot_smuggle_malformed_join_activation_or_bounds() {
 #[test]
 fn a_bounded_join_never_invents_an_untyped_or_missing_expiry_channel() {
     let mut missing = raw_join(false);
-    let rastok::node::HandlerActivation::Join { last, .. } = &mut missing.handlers[0].activation
+    let rastok::node::HandlerActivation::Join { last, .. } =
+        &mut operator_handlers(&mut missing, 0)[0].activation
     else {
         panic!("the fixture carries a join")
     };
@@ -1898,7 +1884,8 @@ fn a_bounded_join_never_invents_an_untyped_or_missing_expiry_channel() {
     ));
 
     let mut identity = raw_join(false);
-    let DispatchStep::Emit { value, .. } = &mut linear_statements(&mut identity.handlers[0])[0]
+    let DispatchStep::Emit { value, .. } =
+        &mut linear_statements(&mut operator_handlers(&mut identity, 0)[0])[0]
     else {
         panic!("the fixture emits")
     };
@@ -1971,11 +1958,12 @@ graph attributed : App {
     .expect("an explicit named-input pick resolves presence")
     .plan
     .into_inner();
-    let pair = forged
-        .handlers
-        .iter_mut()
-        .find(|handler| forged.nodes[handler.owner.index()].path.to_string() == "pair")
-        .expect("the join handler");
+    let pair_index = forged
+        .nodes
+        .iter()
+        .position(|node| node.path.to_string() == "pair")
+        .expect("the join Operator");
+    let pair = &mut operator_handlers(&mut forged, pair_index)[0];
     let DispatchStep::Emit {
         value: plan::EmitValue::FreshData(writes),
         ..
@@ -1996,7 +1984,7 @@ graph attributed : App {
 #[test]
 fn an_internal_lifecycle_cannot_be_an_authored_handler() {
     let mut plan = raw_probe();
-    plan.handlers[0].activation =
+    operator_handlers(&mut plan, 0)[0].activation =
         rastok::node::HandlerActivation::Lifecycle(rastok::node::Lifecycle::Reply);
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
@@ -2016,7 +2004,7 @@ fn reordered_handlers_are_not_canonical() {
     .expect("a valid plan")
     .plan
     .into_inner();
-    plan.handlers.swap(0, 1);
+    operator_handlers(&mut plan, 0).swap(0, 1);
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
         PlanValidationError::NonCanonicalOrder {
@@ -2073,7 +2061,7 @@ fn an_extra_process_port_refuses_without_a_registry() {
 /// map-literal canonicity provocations.
 fn with_setvar_root(root: expr::Expr) -> ExecutionPlan {
     let mut plan = raw_probe();
-    for step in linear_statements(&mut plan.handlers[0]) {
+    for step in linear_statements(&mut operator_handlers(&mut plan, 0)[0]) {
         if let DispatchStep::SetVar { value: expr, .. } = step {
             expr.root = root.clone();
         }
@@ -2156,7 +2144,7 @@ fn what_the_type_accepts_the_format_reads_back() {
     let mut last_accepted = None;
     let mut refused = false;
     for _ in 0..(MAX_NESTING + 16) {
-        let relay_steps = linear_statements(&mut plan.handlers[0]);
+        let relay_steps = linear_statements(&mut operator_handlers(&mut plan, 0)[0]);
         for step in relay_steps {
             if let DispatchStep::SetVar { value: expr, .. } = step {
                 let previous = core::mem::replace(
@@ -2202,8 +2190,12 @@ fn complete_m13_types_round_trip_through_v7() {
         .iter_mut()
         .find(|node| node.path.to_string() == "relay")
         .expect("the operator");
-    relay.vars[0].ty = DataType::LONG;
-    let DispatchStep::SetVar { value, .. } = &mut linear_statements(&mut plan.handlers[0])[0]
+    let plan::NodeExecution::Operator { vars, .. } = &mut relay.execution else {
+        panic!("relay is an Operator")
+    };
+    vars[0].ty = DataType::LONG;
+    let DispatchStep::SetVar { value, .. } =
+        &mut linear_statements(&mut operator_handlers(&mut plan, 0)[0])[0]
     else {
         panic!("the probe increments its state cell")
     };
@@ -2217,7 +2209,7 @@ fn complete_m13_types_round_trip_through_v7() {
 #[test]
 fn complete_expression_result_types_round_trip_through_v7() {
     let mut plan = raw_probe();
-    linear_statements(&mut plan.handlers[0])[0] = DispatchStep::Let {
+    linear_statements(&mut operator_handlers(&mut plan, 0)[0])[0] = DispatchStep::Let {
         name: String::from("wide"),
         value: expr::Tree {
             root: expr::Expr::Literal(rastok::value::Value::Int(i64::MAX)),
@@ -2247,7 +2239,7 @@ fn narrowing_expressions_round_trip_through_v7() {
                 target: Box::new(target),
             }
         };
-        linear_statements(&mut plan.handlers[0])[0] = DispatchStep::Let {
+        linear_statements(&mut operator_handlers(&mut plan, 0)[0])[0] = DispatchStep::Let {
             name: String::from("narrowed"),
             value: expr::Tree {
                 root,
@@ -2286,7 +2278,7 @@ fn constructed_values_round_trip_through_v7() {
         ),
     ] {
         let mut plan = raw_probe();
-        linear_statements(&mut plan.handlers[0])[0] = DispatchStep::Let {
+        linear_statements(&mut operator_handlers(&mut plan, 0)[0])[0] = DispatchStep::Let {
             name: String::from("constructed"),
             value: expr::Tree { root, ty },
             annotations: Default::default(),

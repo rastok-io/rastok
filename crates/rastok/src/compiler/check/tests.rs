@@ -1557,7 +1557,7 @@ in -> pass -> out
     let plan = crate::plan::ValidatedExecutionPlan::try_new(plan).unwrap();
     assert!(!plan.boundary_routes.is_empty());
     assert_eq!(
-        plan.handlers.len(),
+        plan.handlers().count(),
         1,
         "only the explicit child owns a handler"
     );

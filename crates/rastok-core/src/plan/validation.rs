@@ -34,14 +34,14 @@ pub enum PlanValidationError {
     },
     /// A handler decision contradicts its independently resolved environment.
     InvalidDispatch {
-        /// Handler-table index.
+        /// Handler ordinal in canonical Node and activation order.
         handler: usize,
         /// Exact path and violated decision rule.
         reason: super::DispatchValidationError,
     },
     /// A statement has no executable representation in the current package.
     UnsupportedStatement {
-        /// Handler-table index.
+        /// Handler ordinal in canonical Node and activation order.
         handler: usize,
         /// Named construct, never silently omitted from execution.
         statement: &'static str,
@@ -1086,11 +1086,10 @@ impl ValidatedExecutionPlan {
         verify_instance_key_types(&mut plan, &declared_ports, key_mode)?;
         if key_mode == InstanceKeyTypeMode::Materialize {
             let signatures: Vec<_> = plan
-                .handlers
-                .iter()
-                .map(|handler| handler_signature(&plan, &declared_ports, handler))
+                .handlers()
+                .map(|(owner, handler)| handler_signature(&plan, &declared_ports, owner, handler))
                 .collect();
-            for (handler, signature) in plan.handlers.iter_mut().zip(signatures) {
+            for ((_, handler), signature) in plan.handlers_mut().zip(signatures) {
                 if let Some(signature) = signature {
                     super::dispatch_resolution::resolve(&mut handler.dispatch, signature);
                 }
@@ -1114,7 +1113,10 @@ impl ValidatedExecutionPlan {
                 bound: crate::canonical_cbor::MAX_NESTING,
             });
         }
-        let handler_context = plan.handlers.iter().map(handler_context_use).collect();
+        let handler_context = plan
+            .handlers()
+            .map(|(_, handler)| handler_context_use(handler))
+            .collect();
         Ok(Self {
             plan,
             resolved_ports,
@@ -1380,8 +1382,8 @@ fn handler_decisions_hold(
     plan: &ExecutionPlan,
     ports: &super::ResolvedPortTable,
 ) -> Result<(), PlanValidationError> {
-    for (index, handler) in plan.handlers.iter().enumerate() {
-        let Some(signature) = handler_signature(plan, ports, handler) else {
+    for (index, (handler_owner, handler)) in plan.handlers().enumerate() {
+        let Some(signature) = handler_signature(plan, ports, handler_owner, handler) else {
             continue;
         };
         super::validate_dispatch(&handler.dispatch, &signature).map_err(|reason| {
@@ -1397,9 +1399,9 @@ fn handler_decisions_hold(
 fn handler_signature(
     plan: &ExecutionPlan,
     ports: &super::ResolvedPortTable,
+    slot: NodeIndex,
     handler: &super::Handler,
 ) -> Option<expr::Signature> {
-    let slot = handler.owner;
     let node = &plan.nodes[slot.index()];
     let data = match &handler.activation {
         node::HandlerActivation::Port(port) => ports.node_port_type(slot, port).cloned(),
@@ -1453,7 +1455,7 @@ fn handler_signature(
         }
         owner = plan.owners[slot.index()].parent;
     }
-    for var in &node.vars {
+    for var in node.vars() {
         signature = signature.with(&var.name, var.ty.clone());
     }
     if let node::HandlerActivation::Join { ports: inputs, .. } = &handler.activation {
@@ -1473,7 +1475,7 @@ fn handler_signature(
 
 fn execution_rank(execution: &NodeExecution) -> u8 {
     match execution {
-        NodeExecution::Operator => 0,
+        NodeExecution::Operator { .. } => 0,
         NodeExecution::Connector(_) => 1,
     }
 }
@@ -1730,7 +1732,7 @@ fn annotations_well_formed(
                 )?;
             }
         }
-        for var in &node.vars {
+        for var in node.vars() {
             annotated_schema_at(
                 &var.ty,
                 &var.annotations,
@@ -1760,7 +1762,7 @@ fn annotations_well_formed(
             )?;
         }
     }
-    for (handler_index, handler) in plan.handlers.iter().enumerate() {
+    for (handler_index, (_, handler)) in plan.handlers().enumerate() {
         for step in handler.dispatch.steps() {
             if let DispatchStep::Let {
                 name,
@@ -2285,11 +2287,11 @@ fn data_types_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
                 data_type_at(ty, format!("port `{}.{}`", node.path, decl.port))?;
             }
         }
-        for var in &node.vars {
+        for var in node.vars() {
             data_type_at(&var.ty, format!("state `{}.{}`", node.path, var.name))?;
         }
     }
-    for (handler_index, handler) in plan.handlers.iter().enumerate() {
+    for (handler_index, (_, handler)) in plan.handlers().enumerate() {
         if let Some(guard) = &handler.guard {
             tree_type_at(guard, format!("handler {handler_index} guard"))?;
         }
@@ -2345,10 +2347,11 @@ fn response_path_crosses_join(plan: &ExecutionPlan, target: NodeIndex) -> bool {
         if !visited.insert(slot) {
             continue;
         }
-        if plan.handlers.iter().any(|handler| {
-            handler.owner == slot
-                && matches!(handler.activation, node::HandlerActivation::Join { .. })
-        }) {
+        if plan.nodes[slot.index()]
+            .handlers()
+            .iter()
+            .any(|handler| matches!(handler.activation, node::HandlerActivation::Join { .. }))
+        {
             return true;
         }
         for source in plan.edges.iter().filter_map(|edge| {
@@ -2885,13 +2888,11 @@ fn loop_specs_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
                         Err(crate::loop_proof::Error::CertificateMismatch)
                     }
                 }),
-                OwnerKind::Node(slot) => plan
-                    .handlers
+                OwnerKind::Node(slot) => plan.nodes[slot.index()]
+                    .handlers()
                     .iter()
                     .find(|handler| {
-                        handler.owner == slot
-                            && handler.activation
-                                == node::HandlerActivation::Port(spec.entry.clone())
+                        handler.activation == node::HandlerActivation::Port(spec.entry.clone())
                     })
                     .ok_or(crate::loop_proof::Error::UnsupportedActivation)
                     .and_then(|handler| {
@@ -3113,10 +3114,10 @@ fn owners_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
         {
             return Err(PlanValidationError::InvalidClosingPolicy { owner: path });
         }
-        let explicitly_stoppable = plan.handlers.iter().any(|handler| {
+        let explicitly_stoppable = plan.handlers().any(|(handler_owner, handler)| {
             let belongs_to_owner = plan
                 .nodes
-                .get(handler.owner.index())
+                .get(handler_owner.index())
                 .is_some_and(|node| node.owner == slot);
             belongs_to_owner
                 && handler
@@ -3301,13 +3302,8 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             bound: crate::canonical_cbor::MAX_NESTING,
         });
     }
-    for (handler, definition) in plan.handlers.iter().enumerate() {
-        let handler_owner = plan.nodes.get(definition.owner.index()).ok_or(
-            PlanValidationError::SlotOutOfBounds {
-                slot: definition.owner,
-                node_count: plan.nodes.len(),
-            },
-        )?;
+    for (handler, (owner, definition)) in plan.handlers().enumerate() {
+        let handler_owner = &plan.nodes[owner.index()];
         if definition.guard.is_some()
             && !matches!(definition.activation, node::HandlerActivation::Join { .. })
         {
@@ -3426,7 +3422,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             }
         }
         let mut vars = BTreeSet::new();
-        for var in &node.vars {
+        for var in node.vars() {
             if !vars.insert(var.name.as_str()) {
                 return Err(PlanValidationError::DuplicateVar {
                     node: node.path.clone(),
@@ -3440,7 +3436,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                 }
             }
         }
-        for pair in node.vars.windows(2) {
+        for pair in node.vars().windows(2) {
             if pair[0].name >= pair[1].name {
                 return Err(PlanValidationError::NonCanonicalOrder { collection: "vars" });
             }
@@ -4176,24 +4172,19 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     }
     // Decisions belong inside a Dispatch; no activation can select two handlers.
     let mut node_activations = BTreeSet::new();
-    for handler in &plan.handlers {
-        if !node_activations.insert((handler.owner, handler.activation.canonical_key())) {
+    for (handler_owner, handler) in plan.handlers() {
+        if !node_activations.insert((handler_owner, handler.activation.canonical_key())) {
             return Err(PlanValidationError::DuplicateHandler {
-                node: node_at(handler.owner)?.path.clone(),
+                node: node_at(handler_owner)?.path.clone(),
                 activation: handler.activation.clone(),
             });
         }
     }
 
     let mut activated_inputs = BTreeSet::new();
-    for handler in &plan.handlers {
-        let handler_node = handler.owner;
+    for (handler_owner, handler) in plan.handlers() {
+        let handler_node = handler_owner;
         let node = node_at(handler_node)?;
-        if node.connector().is_some() {
-            return Err(PlanValidationError::NonOperatorHandler {
-                node: node.path.clone(),
-            });
-        }
         match &handler.activation {
             node::HandlerActivation::Port(port) => {
                 if !has_port(node, port, node::PortDirection::Input) {
@@ -4328,7 +4319,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                     }
                 }
                 DispatchStep::SetVar { name, value: expr } => {
-                    if !node.vars.iter().any(|var| var.name == *name) {
+                    if !node.vars().iter().any(|var| var.name == *name) {
                         return Err(PlanValidationError::UnknownVariable {
                             node: node.path.clone(),
                             name: name.clone(),
@@ -4356,17 +4347,17 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
         }
     }
     // Each owner/activation is unique; declaration order is not semantic.
-    for pair in plan.handlers.windows(2) {
-        let order = pair[0].owner.cmp(&pair[1].owner).then_with(|| {
-            pair[0]
+    for node in &plan.nodes {
+        for pair in node.handlers().windows(2) {
+            let order = pair[0]
                 .activation
                 .canonical_key()
-                .cmp(&pair[1].activation.canonical_key())
-        });
-        if order != core::cmp::Ordering::Less {
-            return Err(PlanValidationError::NonCanonicalOrder {
-                collection: "handlers",
-            });
+                .cmp(&pair[1].activation.canonical_key());
+            if order != core::cmp::Ordering::Less {
+                return Err(PlanValidationError::NonCanonicalOrder {
+                    collection: "handlers",
+                });
+            }
         }
     }
     loop_control_holds(plan)?;
@@ -4408,26 +4399,26 @@ fn operator_loop_control(
         path,
         detail,
     };
-    if !matches!(node.execution, NodeExecution::Operator) {
+    if !matches!(node.execution, NodeExecution::Operator { .. }) {
         // Call control is independently proved with its resolved routing and
         // Contract frame/terminal guarantees in call_loop::validate.
         return Ok(());
     }
     let activation = node::HandlerActivation::Port(spec.entry.clone());
-    let Some(handler) = plan
-        .handlers
+    let Some(handler) = node
+        .handlers()
         .iter()
-        .find(|handler| handler.owner == slot && handler.activation == activation)
+        .find(|handler| handler.activation == activation)
     else {
         return Err(refusal(
             String::from("entry"),
             "the Loop entry requires one application handler",
         ));
     };
-    for other in plan
-        .handlers
+    for other in node
+        .handlers()
         .iter()
-        .filter(|handler| handler.owner == slot && handler.activation != activation)
+        .filter(|handler| handler.activation != activation)
     {
         if other
             .dispatch
@@ -4548,9 +4539,9 @@ fn join_metadata_presence_holds(plan: &ExecutionPlan) -> Result<(), PlanValidati
             );
         }
 
-        for handler in &plan.handlers {
-            let handler_node = handler.owner;
-            let base = activation_presence(handler, &inputs, &all_fields);
+        for (handler_owner, handler) in plan.handlers() {
+            let handler_node = handler_owner;
+            let base = activation_presence(handler_owner, handler, &inputs, &all_fields);
             for step in handler.dispatch.steps() {
                 let DispatchStep::Emit { port, value } = step else {
                     continue;
@@ -4616,9 +4607,9 @@ fn join_metadata_presence_holds(plan: &ExecutionPlan) -> Result<(), PlanValidati
         }
     }
 
-    for handler in &plan.handlers {
-        let handler_node = handler.owner;
-        let base = activation_presence(handler, &inputs, &all_fields);
+    for (handler_owner, handler) in plan.handlers() {
+        let handler_node = handler_owner;
+        let base = activation_presence(handler_owner, handler, &inputs, &all_fields);
         let owner = &plan.nodes[handler_node.index()].path.to_string();
         if let Some(guard) = &handler.guard {
             required_meta_reads_hold(&guard.root, &base, owner)?;
@@ -4682,11 +4673,11 @@ fn node_input_presence(
 }
 
 fn activation_presence(
+    handler_node: NodeIndex,
     handler: &crate::plan::Handler,
     inputs: &EndpointPresence,
     all_fields: &MetaPresence,
 ) -> MetaPresence {
-    let handler_node = handler.owner;
     match &handler.activation {
         node::HandlerActivation::Port(port) => inputs
             .get(&(Some(handler_node), port.clone()))

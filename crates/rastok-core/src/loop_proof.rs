@@ -2,8 +2,9 @@
 //!
 //! This module is deliberately narrower than the expression evaluator. A
 //! proof is accepted only when every recurrent Dispatch leaf exposes one direct
-//! literal decrease that this `no_std` verifier can re-derive from the shipped
-//! handler table. Unsupported mathematics is a refusal, never an assumption.
+//! literal decrease that this `no_std` verifier can re-derive from the
+//! Operator handlers in the plan. Unsupported mathematics is a refusal,
+//! never an assumption.
 
 use crate::envelope::WriteTarget;
 use crate::expr::{self, BinaryOp, Expr};

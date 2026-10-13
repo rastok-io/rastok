@@ -864,7 +864,11 @@ fn the_validator_matches_the_decoder_on_decimals_and_digests() {
     // This test is about the declared initializer carrier. Remove the source
     // program's integer state update so it does not add an unrelated int32
     // constraint after the raw state type is changed below.
-    let rastok::plan::Dispatch::Linear(steps) = &mut plan.handlers[0].dispatch else {
+    let rastok::plan::NodeExecution::Operator { handlers, .. } = &mut plan.nodes[0].execution
+    else {
+        panic!("the stateful Operator")
+    };
+    let rastok::plan::Dispatch::Linear(steps) = &mut handlers[0].dispatch else {
         panic!("linear state update")
     };
     steps.remove(0);
@@ -873,8 +877,11 @@ fn the_validator_matches_the_decoder_on_decimals_and_digests() {
         .iter_mut()
         .find(|node| node.path.to_string() == "o")
         .expect("the operator");
-    relay.vars[0].ty = DataType::Decimal(DecimalType::new(10, 0).unwrap());
-    relay.vars[0].init = Some(rastok::value::Value::Decimal {
+    let rastok::plan::NodeExecution::Operator { vars, .. } = &mut relay.execution else {
+        panic!("the stateful Operator")
+    };
+    vars[0].ty = DataType::Decimal(DecimalType::new(10, 0).unwrap());
+    vars[0].init = Some(rastok::value::Value::Decimal {
         unscaled: 20,
         scale: 0,
     });
@@ -888,8 +895,11 @@ fn the_validator_matches_the_decoder_on_decimals_and_digests() {
         .iter_mut()
         .find(|node| node.path.to_string() == "o")
         .expect("the operator");
-    relay.vars[0].ty = DataType::Decimal(DecimalType::new(10, 2).unwrap());
-    relay.vars[0].init = Some(rastok::value::Value::Decimal {
+    let rastok::plan::NodeExecution::Operator { vars, .. } = &mut relay.execution else {
+        panic!("the stateful Operator")
+    };
+    vars[0].ty = DataType::Decimal(DecimalType::new(10, 2).unwrap());
+    vars[0].init = Some(rastok::value::Value::Decimal {
         unscaled: 100,
         scale: 2,
     });
@@ -1023,9 +1033,8 @@ graph app : App {{
 
     let mut referenced: Vec<_> = compilation
         .plan
-        .handlers
-        .iter()
-        .flat_map(|handler| handler.dispatch.steps())
+        .handlers()
+        .flat_map(|(_, handler)| handler.dispatch.steps())
         .filter_map(|step| {
             let DispatchStep::Emit {
                 value: EmitValue::Data(tree),

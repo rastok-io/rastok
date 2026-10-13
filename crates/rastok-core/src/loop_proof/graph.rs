@@ -83,8 +83,8 @@ pub fn derive_graph(
         invariant.clone(),
         &Dispatch::Linear(vec![]),
     )?;
-    for handler in &plan.handlers {
-        let Some(node) = plan.nodes.get(handler.owner.index()) else {
+    for (handler_owner, handler) in plan.handlers() {
+        let Some(node) = plan.nodes.get(handler_owner.index()) else {
             return Err(Error::UnsupportedActivation);
         };
         let keys: BTreeSet<_> = handler

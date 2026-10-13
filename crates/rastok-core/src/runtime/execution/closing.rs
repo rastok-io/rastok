@@ -14,11 +14,11 @@ impl Execution<'_> {
             return BTreeSet::new();
         };
         let mut pending = Vec::new();
-        for handler in &self.plan.handlers {
+        for (handler_owner, handler) in self.plan.handlers() {
             if handler.activation != node::HandlerActivation::Lifecycle(node::Lifecycle::Stop)
                 || !self.closing.iter().any(|reference| {
                     self.instances.get(reference).is_some_and(|instance| {
-                        instance.owner == self.plan.nodes[handler.owner.index()].owner
+                        instance.owner == self.plan.nodes[handler_owner.index()].owner
                             && self.is_within_instance(reference, scope)
                     })
                 })
@@ -31,7 +31,7 @@ impl Execution<'_> {
                     .steps()
                     .flat_map(|step| step.emissions())
                     .filter(|(_, value)| !matches!(value, crate::plan::EmitValue::Nothing))
-                    .map(|(port, _)| (handler.owner, port.clone())),
+                    .map(|(port, _)| (handler_owner, port.clone())),
             );
         }
         let mut visited = BTreeSet::new();
@@ -62,17 +62,18 @@ impl Execution<'_> {
                     continue;
                 }
                 match &node.execution {
-                    NodeExecution::Operator => {
-                        for handler in self.plan.handlers.iter().filter(|handler| {
-                            handler.owner == slot
-                                && match &handler.activation {
+                    NodeExecution::Operator { .. } => {
+                        for handler in
+                            node.handlers()
+                                .iter()
+                                .filter(|handler| match &handler.activation {
                                     node::HandlerActivation::Port(port) => *port == target.port,
                                     node::HandlerActivation::Join { ports, .. } => {
                                         ports.contains(&target.port)
                                     }
                                     node::HandlerActivation::Lifecycle(_) => false,
-                                }
-                        }) {
+                                })
+                        {
                             pending.extend(
                                 handler
                                     .dispatch

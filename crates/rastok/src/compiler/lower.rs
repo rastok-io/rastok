@@ -454,7 +454,6 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
         boundary: sorted_boundary(hir),
         edges: Vec::new(),
         routes: Vec::new(),
-        handlers: Vec::new(),
         // DERIVED from the writes the hash already seals — carried
         // for the ContractCatalog-less validator (D-2026-08-10-1), never
         // hashed twice.
@@ -663,10 +662,12 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
                     behavior: typed_behavior(hir_node),
                     attributes,
                 }),
-                NodeSemantics::Operator => NodeExecution::Operator,
+                NodeSemantics::Operator => NodeExecution::Operator {
+                    vars,
+                    handlers: Vec::with_capacity(hir_node.handlers.len()),
+                },
             },
             ports,
-            vars,
             owner,
         });
     }
@@ -694,22 +695,20 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
         // activation's canonical key, the same key the hash sorts by.
         let mut handlers: Vec<_> = hir_node.handlers.iter().collect();
         handlers.sort_by_key(|handler| handler.activation.canonical_key());
+        let NodeExecution::Operator {
+            handlers: planned, ..
+        } = &mut plan.nodes[slot.index()].execution
+        else {
+            continue;
+        };
         for handler in handlers {
-            plan.handlers.push(Handler {
-                owner: slot,
+            planned.push(Handler {
                 activation: handler.activation.clone(),
                 guard: handler.admission_guard.as_ref().map(&subst),
                 dispatch: lower_dispatch(&handler.dispatch, &subst),
             });
         }
     }
-    plan.handlers.sort_by(|left, right| {
-        left.owner.cmp(&right.owner).then_with(|| {
-            left.activation
-                .canonical_key()
-                .cmp(&right.activation.canonical_key())
-        })
-    });
     plan.routes = routing::flatten(&hir.app).map_err(|error| LowerError {
         owner: endpoint_text(&error.source),
         detail: "Graph boundary composition contradicts checked routing dispositions",
@@ -2279,9 +2278,9 @@ graph m0_probe : App {
                 String::from("cat")
             )))
         );
-        assert_eq!(plan.handlers.len(), 1);
-        let handler = &plan.handlers[0];
-        assert_eq!(handler.owner.index(), 0);
+        assert_eq!(plan.handlers().count(), 1);
+        let (owner, handler) = plan.handlers().next().unwrap();
+        assert_eq!(owner.index(), 0);
         assert_eq!(
             handler.activation,
             node::HandlerActivation::Port(node::Port::new("in").unwrap())
@@ -2408,12 +2407,12 @@ graph app : App {
                 .is_empty()
         );
         assert!(
-            !compilation.plan.plan().nodes[0].vars[0]
+            !compilation.plan.plan().nodes[0].vars()[0]
                 .annotations
                 .is_empty()
         );
         assert!(matches!(
-            compilation.plan.plan().handlers[0].dispatch.steps().next().unwrap(),
+            compilation.plan.plan().nodes[0].handlers()[0].dispatch.steps().next().unwrap(),
             DispatchStep::Let { annotations, .. } if !annotations.is_empty()
         ));
 
@@ -3361,7 +3360,10 @@ graph m0_probe : App {
         assert_ne!(five.hash, six.hash);
         // ...and the shipped guard carries its value: no free
         // `threshold` binding survives in the plan.
-        let (guard, _) = five.plan.handlers[0].dispatch.filter_parts().unwrap();
+        let (guard, _) = five.plan.nodes[0].handlers()[0]
+            .dispatch
+            .filter_parts()
+            .unwrap();
         let rendered = format!("{guard:?}");
         assert!(
             !rendered.contains("threshold"),

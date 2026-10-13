@@ -140,7 +140,7 @@ impl State {
             return cell.clone();
         }
         let mut cell = BTreeMap::new();
-        for var in &plan.nodes[slot.index()].vars {
+        for var in plan.nodes[slot.index()].vars() {
             if let Some(value) = &var.init {
                 cell.insert(var.name.clone(), value.clone());
             }
@@ -725,11 +725,7 @@ impl<'plan> TransactionPreparer<'plan> {
         state: &BTreeMap<String, Value>,
         instance_values: &BTreeMap<String, Value>,
     ) -> Result<bool, Fault> {
-        let Some(handler) =
-            self.plan.handlers.iter().find(|handler| {
-                handler.owner == slot && &handler.activation == candidate.activation
-            })
-        else {
+        let Some(handler) = self.handler_for(slot, candidate.activation) else {
             return Err(Fault::MissingHandler);
         };
         let Some(guard) = &handler.guard else {
@@ -945,11 +941,10 @@ impl<'plan> TransactionPreparer<'plan> {
         };
         let handler = self
             .plan
-            .handlers
-            .iter()
+            .handlers()
             .zip(self.plan.handler_context())
-            .find(|(handler, _)| handler.owner == slot && &handler.activation == activation);
-        let Some((handler, time_use)) = handler else {
+            .find(|((owner, handler), _)| *owner == slot && &handler.activation == activation);
+        let Some(((_, handler), time_use)) = handler else {
             if matches!(
                 activation,
                 node::HandlerActivation::Port(_) | node::HandlerActivation::Join { .. }
@@ -1130,7 +1125,7 @@ impl<'plan> TransactionPreparer<'plan> {
                     // value of the wrong shape — or an int leaving
                     // the 32-bit range — is a typed error, never a
                     // silent coercion.
-                    if let Some(cell) = node.vars.iter().find(|cell| &cell.name == name)
+                    if let Some(cell) = node.vars().iter().find(|cell| &cell.name == name)
                         && let Err(violation) = cell.ty.check_value_type(name, &value)
                     {
                         return Err(Fault::Eval(expr::Error {
@@ -1356,16 +1351,16 @@ impl<'plan> TransactionPreparer<'plan> {
                         ),
                     ));
                 }
-                let join_within = self.plan.handlers.iter().find_map(|handler| {
-                    (handler.owner == target)
-                        .then_some(&handler.activation)
-                        .and_then(|activation| match activation {
+                let join_within =
+                    self.plan.nodes[target.index()]
+                        .handlers()
+                        .iter()
+                        .find_map(|handler| match &handler.activation {
                             node::HandlerActivation::Join {
                                 ports, within_ns, ..
                             } if ports.contains(&to.port) => *within_ns,
                             _ => None,
-                        })
-                });
+                        });
                 if join_within.is_some() {
                     deadline_ids.push((
                         crate::journal::DeadlineKind::JoinWithin,
@@ -1625,9 +1620,11 @@ impl<'plan> TransactionPreparer<'plan> {
         activation: &node::HandlerActivation,
     ) -> Option<&'plan Handler> {
         self.plan
-            .handlers
+            .nodes
+            .get(slot.index())?
+            .handlers()
             .iter()
-            .find(|handler| handler.owner == slot && handler.activation == *activation)
+            .find(|handler| handler.activation == *activation)
     }
 }
 

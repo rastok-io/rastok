@@ -267,7 +267,7 @@ pub(super) fn classified(plan: &ValidatedExecutionPlan) -> bool {
             plan.resolved_ports()
                 .node(NodeIndex::new(index as u32))
                 .is_some_and(|ports| ports.iter().any(|port| sensitive(port.annotations())))
-                || node.vars.iter().any(|var| sensitive(&var.annotations))
+                || node.vars().iter().any(|var| sensitive(&var.annotations))
         })
         || plan.owners.iter().any(|owner| {
             owner.vals.iter().any(|value| sensitive(&value.annotations))
@@ -505,9 +505,11 @@ fn decision(
                 .map(|endpoint| endpoint.port.clone())
         })
         .collect();
-    let handler = plan.handlers.iter().find(|handler| {
-        handler.owner == slot
-            && match &handler.activation {
+    let handler =
+        plan.nodes[slot.index()]
+            .handlers()
+            .iter()
+            .find(|handler| match &handler.activation {
                 HandlerActivation::Port(port) => {
                     tx.join_inputs.is_empty() && tx.trigger == Trigger::Port(port.clone())
                 }
@@ -517,8 +519,7 @@ fn decision(
                 HandlerActivation::Join { ports, .. } => {
                     !tx.join_inputs.is_empty() && ports == &input_ports
                 }
-            }
-    });
+            });
     let Some(handler) = handler else {
         return JsonValue::Null;
     };

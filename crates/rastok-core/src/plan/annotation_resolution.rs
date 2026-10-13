@@ -144,7 +144,7 @@ impl<'a> Solver<'a> {
         let mut vars = BTreeMap::new();
         for (index, node) in plan.nodes.iter().enumerate() {
             let slot = NodeIndex::new(u32::try_from(index).unwrap_or(u32::MAX));
-            for var in &node.vars {
+            for var in node.vars() {
                 let key = VarKey {
                     node: slot,
                     name: var.name.clone(),
@@ -393,8 +393,8 @@ impl<'a> Solver<'a> {
 
         self.derive_owner_values(&mut values)?;
 
-        for (handler_index, handler) in self.plan.handlers.iter().enumerate() {
-            let (environment, input) = self.handler_environment(handler)?;
+        for (handler_index, (handler_owner, handler)) in self.plan.handlers().enumerate() {
+            let (environment, input) = self.handler_environment(handler_owner, handler)?;
             let guard_taint = match &handler.guard {
                 None => AnnotationTable::empty(),
                 Some(guard) => security_taint([data_policy::expression(guard, &environment)
@@ -444,7 +444,7 @@ impl<'a> Solver<'a> {
                         }
                         DispatchStep::SetVar { name, value: expr } => {
                             let key = VarKey {
-                                node: handler.owner,
+                                node: handler_owner,
                                 name: name.clone(),
                             };
                             let derived =
@@ -464,7 +464,7 @@ impl<'a> Solver<'a> {
                         }
                         DispatchStep::Emit { .. } | DispatchStep::MultiEmit { .. } => {
                             for (port, value) in step.emissions() {
-                                let key = self.handler_output(handler.owner, port)?;
+                                let key = self.handler_output(handler_owner, port)?;
                                 if let Some(mut derived) = self.emission(
                                     value,
                                     input.as_ref(),
@@ -485,9 +485,13 @@ impl<'a> Solver<'a> {
                         }
                         DispatchStep::LoopCommand(command) => {
                             let owner =
-                                self.loop_owner(handler).ok_or_else(|| ResolutionError {
-                                    location: format!("handler {handler_index} command"),
-                                    reason: PropagationError::UnknownBinding("Loop.state".into()),
+                                self.loop_owner(handler_owner, handler).ok_or_else(|| {
+                                    ResolutionError {
+                                        location: format!("handler {handler_index} command"),
+                                        reason: PropagationError::UnknownBinding(
+                                            "Loop.state".into(),
+                                        ),
+                                    }
                                 })?;
                             let entry = self.loop_input_key(owner)?;
                             let table = match command {
@@ -695,13 +699,14 @@ impl<'a> Solver<'a> {
 
     fn handler_environment(
         &self,
+        handler_owner: NodeIndex,
         handler: &Handler,
     ) -> Result<(Environment, Option<AnnotationTable>), ResolutionError> {
         let mut environment = Environment::new()
             .with("meta", DataType::Variant, AnnotationTable::empty())
             .with("now", DataType::TIMESTAMP, AnnotationTable::empty());
         let mut ordinary_input = None;
-        match (handler.owner, &handler.activation) {
+        match (handler_owner, &handler.activation) {
             (slot, node::HandlerActivation::Port(port)) => {
                 let state = self.port(&PortKey::Node(slot, port.clone()))?;
                 environment.insert("data", state.ty.clone(), state.current.clone());
@@ -747,7 +752,7 @@ impl<'a> Solver<'a> {
             }
         }
 
-        let owner = self.plan.nodes[handler.owner.index()].owner;
+        let owner = self.plan.nodes[handler_owner.index()].owner;
         let lexical = self.owner_environment(owner, None)?;
         for (name, binding) in lexical.bindings() {
             environment.insert(
@@ -756,7 +761,7 @@ impl<'a> Solver<'a> {
                 binding.annotations().clone(),
             );
         }
-        if let Some(owner) = self.loop_owner(handler) {
+        if let Some(owner) = self.loop_owner(handler_owner, handler) {
             let entry = self.loop_input_key(owner)?;
             let state = self.port(&entry)?;
             environment.insert("Loop.state.data", state.ty.clone(), state.current.clone());
@@ -779,7 +784,7 @@ impl<'a> Solver<'a> {
         for state in self
             .vars
             .values()
-            .filter(|state| state.key.node == handler.owner)
+            .filter(|state| state.key.node == handler_owner)
         {
             environment.insert(
                 state.key.name.clone(),
@@ -853,11 +858,11 @@ impl<'a> Solver<'a> {
         Ok(key)
     }
 
-    fn loop_owner(&self, handler: &Handler) -> Option<node::OwnerSlot> {
+    fn loop_owner(&self, handler_owner: NodeIndex, handler: &Handler) -> Option<node::OwnerSlot> {
         if matches!(handler.activation, node::HandlerActivation::Lifecycle(_)) {
             return None;
         }
-        let mut current = Some(self.plan.nodes[handler.owner.index()].owner);
+        let mut current = Some(self.plan.nodes[handler_owner.index()].owner);
         while let Some(owner) = current {
             if self.plan.owners[owner.index()].loop_spec().is_some() {
                 return Some(owner);
@@ -1001,13 +1006,13 @@ fn has_policy_declaration(plan: &ExecutionPlan, resolved: &ResolvedPortTable) ->
             resolved
                 .node(slot)
                 .is_some_and(|ports| ports.iter().any(|port| !port.annotations().is_empty()))
-                || node.vars.iter().any(|cell| !cell.annotations.is_empty())
+                || node.vars().iter().any(|cell| !cell.annotations.is_empty())
         })
         || plan.owners.iter().any(|owner| {
             owner.ports.iter().any(|port| !port.annotations.is_empty())
                 || owner.vals.iter().any(|value| !value.annotations.is_empty())
         })
-        || plan.handlers.iter().any(|handler| {
+        || plan.handlers().any(|(_, handler)| {
             handler.dispatch.steps().any(
             |step| matches!(step, DispatchStep::Let { annotations, .. } if !annotations.is_empty()),
         )
@@ -1026,7 +1031,7 @@ fn validate_definitions(plan: &ExecutionPlan) -> Result<(), ResolutionError> {
         }
     }
     for node in &plan.nodes {
-        for var in &node.vars {
+        for var in node.vars() {
             validate_table_definitions(&var.annotations, &mut definitions, &mut measures)?;
         }
     }
@@ -1040,7 +1045,7 @@ fn validate_definitions(plan: &ExecutionPlan) -> Result<(), ResolutionError> {
             validate_table_definitions(&value.annotations, &mut definitions, &mut measures)?;
         }
     }
-    for handler in &plan.handlers {
+    for (_, handler) in plan.handlers() {
         for step in handler.dispatch.steps() {
             if let DispatchStep::Let { annotations, .. } = step {
                 validate_table_definitions(annotations, &mut definitions, &mut measures)?;

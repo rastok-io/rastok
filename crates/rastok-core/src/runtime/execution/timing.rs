@@ -94,16 +94,15 @@ impl Execution<'_> {
         let delivery = envelope.meta().sys().id();
         let reference = ids::delivery_id(&edge, delivery);
         let mut deadlines = Vec::new();
-        let within = self.plan.handlers.iter().find_map(|handler| {
-            (handler.owner == slot)
-                .then_some(&handler.activation)
-                .and_then(|activation| match activation {
-                    node::HandlerActivation::Join {
-                        ports, within_ns, ..
-                    } if ports.contains(&to.port) => *within_ns,
-                    _ => None,
-                })
-        });
+        let within = node
+            .handlers()
+            .iter()
+            .find_map(|handler| match &handler.activation {
+                node::HandlerActivation::Join {
+                    ports, within_ns, ..
+                } if ports.contains(&to.port) => *within_ns,
+                _ => None,
+            });
         if let Some(within) = within {
             deadlines.push((
                 Deadline {

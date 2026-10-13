@@ -416,7 +416,7 @@ impl Execution<'_> {
             .all(|pair| pair[0].0 < pair[1].0)
             || record.state_delta.iter().any(|(name, value)| {
                 !self.plan.nodes[slot.index()]
-                    .vars
+                    .vars()
                     .iter()
                     .any(|var| var.name == *name && var.ty.accepts(value))
             })

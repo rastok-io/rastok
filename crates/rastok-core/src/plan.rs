@@ -372,8 +372,8 @@ impl PortDecl {
     }
 }
 
-/// The compiled graph, in the database sense: tables of nodes, edges,
-/// and handlers.
+/// Compiled declarations and static routing for a graph.
+/// Each Operator contains its handlers and private state declarations.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExecutionPlan {
     /// Lexical lifecycle owners, in canonical preorder. Entry zero is the
@@ -398,10 +398,6 @@ pub struct ExecutionPlan {
     /// boundaries remain structural seams, never executable pseudo-nodes.
     /// Empty for plans with no nested boundary or Graph Loop admission.
     pub boundary_routes: Vec<RouteRule>,
-    /// Every handler, in complete canonical transport order. Declaration
-    /// order between mutually exclusive guarded handlers carries no identity;
-    /// only statements INSIDE a handler are order-sensitive.
-    pub handlers: Vec<Handler>,
     /// The resolved `meta.app` schema — inferred from the graph's
     /// writes, travelling so the validator answers without a
     /// Registry (D-2026-08-10-1): flat dotted field, unified type.
@@ -428,6 +424,24 @@ pub struct AssetBlob {
 }
 
 impl ExecutionPlan {
+    /// Iterates over Operator handlers in Node and activation order.
+    /// The owning Node is derived from containment, not stored in each handler.
+    pub fn handlers(&self) -> impl Iterator<Item = (NodeIndex, &Handler)> {
+        self.nodes.iter().zip(0..).flat_map(|(node, index)| {
+            node.handlers()
+                .iter()
+                .map(move |handler| (NodeIndex::new(index), handler))
+        })
+    }
+
+    pub(crate) fn handlers_mut(&mut self) -> impl Iterator<Item = (NodeIndex, &mut Handler)> {
+        self.nodes.iter_mut().zip(0..).flat_map(|(node, index)| {
+            node.handlers_mut()
+                .iter_mut()
+                .map(move |handler| (NodeIndex::new(index), handler))
+        })
+    }
+
     pub(crate) fn endpoint_matches(&self, endpoint: &Endpoint, physical: &EdgeEnd) -> bool {
         endpoint.port == physical.port
             && match (&endpoint.owner, physical.node) {
@@ -567,12 +581,17 @@ impl ExecutionPlan {
 ///
 /// This is deliberately not the semantic [`node::Kind`]. Graphs live in the
 /// owner table rather than the executable-node table; an executable Operator
-/// carries no extra payload, while an executable Connector must carry its
-/// exact contract specification.
+/// owns its state declarations and handlers, while an executable Connector
+/// carries its exact contract specification and cannot contain DSL code.
 #[derive(Debug, Clone, PartialEq)]
 pub enum NodeExecution {
-    /// Pure graph-internal computation.
-    Operator,
+    /// DSL transitions and their private state declarations.
+    Operator {
+        /// Private state declarations in canonical name order.
+        vars: Vec<VarCell>,
+        /// Transitions in canonical activation order.
+        handlers: Vec<Handler>,
+    },
     /// External-effect Driver under a contract sheet.
     Connector(ConnectorSpec),
 }
@@ -589,9 +608,6 @@ pub struct Node {
     /// source/inferred constraints. The total effective types, including
     /// inference origin, live in [`ValidatedExecutionPlan::resolved_ports`].
     pub ports: Vec<PortDecl>,
-    /// Declared state cells with their boot-time defaults, in
-    /// canonical order.
-    pub vars: Vec<VarCell>,
     /// The owner row for this Node. Validation proves that the row is a
     /// [`OwnerKind::Node`] carrying this exact Node slot.
     pub owner: node::OwnerSlot,
@@ -602,7 +618,7 @@ impl Node {
     #[must_use]
     pub const fn kind(&self) -> node::Kind {
         match self.execution {
-            NodeExecution::Operator => node::Kind::Operator,
+            NodeExecution::Operator { .. } => node::Kind::Operator,
             NodeExecution::Connector(_) => node::Kind::Connector,
         }
     }
@@ -612,7 +628,32 @@ impl Node {
     pub fn connector(&self) -> Option<&ConnectorSpec> {
         match &self.execution {
             NodeExecution::Connector(spec) => Some(spec),
-            NodeExecution::Operator => None,
+            NodeExecution::Operator { .. } => None,
+        }
+    }
+
+    /// State declared by this Operator; Connectors have no DSL state cells.
+    #[must_use]
+    pub fn vars(&self) -> &[VarCell] {
+        match &self.execution {
+            NodeExecution::Operator { vars, .. } => vars,
+            NodeExecution::Connector(_) => &[],
+        }
+    }
+
+    /// Handlers contained in this Operator; Connectors have no DSL handlers.
+    #[must_use]
+    pub fn handlers(&self) -> &[Handler] {
+        match &self.execution {
+            NodeExecution::Operator { handlers, .. } => handlers,
+            NodeExecution::Connector(_) => &[],
+        }
+    }
+
+    pub(crate) fn handlers_mut(&mut self) -> &mut [Handler] {
+        match &mut self.execution {
+            NodeExecution::Operator { handlers, .. } => handlers,
+            NodeExecution::Connector(_) => &mut [],
         }
     }
 
@@ -936,9 +977,6 @@ pub struct VarCell {
 /// One Operator transition, with join admission separate from consumption.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Handler {
-    /// Operator index that owns this application transition. Graph scopes
-    /// have no application handlers; Connector transitions follow a Contract.
-    pub owner: NodeIndex,
     /// The declared activation pattern — not the causal trigger a
     /// transaction records; see [`node::HandlerActivation`].
     pub activation: node::HandlerActivation,

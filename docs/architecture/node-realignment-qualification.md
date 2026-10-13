@@ -2,10 +2,12 @@
 
 Status: 13 October 2026. This records the preparation for lot 1 of
 [D-2026-10-11-1](../spec/decisions.md#d-2026-10-11-1--realign-the-plan-and-the-runtime-on-the-specifications-node-ontology-before-the-opening).
-The vocabulary follow-up is `2259fd4` and `beabf68`. The executable plan is
-still format 20, with its existing owner, executable-node and handler tables.
-The production plan representation is unchanged. Isolated allocation probes
-compare possible Node bodies; no new physical layout has been selected.
+The vocabulary follow-up is `2259fd4` and `beabf68`; the Execution interface
+is named in `90c646f` and `9218779`. The executable package remains format 20.
+The Operator-containment step below moves state and handlers into the
+Operator body, without changing the package tables. Graph and executor
+tables are not yet merged. The isolated allocation measurements below
+describe the preceding representation; no final Node layout has been selected.
 
 ## Invariants before changing the representation
 
@@ -321,3 +323,110 @@ were **not rerun for this naming checkpoint**. Their preceding results
 above describe the A-T4-4 checkpoint, not new measurements. They remain
 required before qualifying the production Node representation. Cargo
 checks are run serially with the IDE build to avoid contention on `target`.
+
+## Execution methods and Operator containment — 13 October
+
+`9218779` finishes the separately committed interface naming: `new*`,
+`advance_to`, `logical_time` and `has_ready_work`. The initial full-workspace
+test command for that naming snapshot was interrupted without a reported
+failure, after the `contracts` suite, so that the next checks exercise the
+current structural work instead. It is **not** a completed workspace gate.
+
+The next lot 1 step puts `vars` and `handlers` in `NodeExecution::Operator`.
+The common Node no longer has DSL state, the plan no longer owns a separate
+handler vector, and `Handler` no longer stores its owner. Iteration derives
+the owner from the containing Node. The existing executor ordering and the
+canonical activation ordering are preserved, including the flat indices
+used for validation diagnostics and derived handler context.
+
+The format-20 codec still writes the same tables and owner numbers. It
+derives them from containment when encoding and checks the target Operator
+when decoding. This step introduces no additional package reader, alias or
+format bump. The next package number remains for the complete Node and
+wiring cutover. No identity recipe changes.
+
+Two hostile-plan tests move to the package boundary: a handler cannot name
+a Connector or an out-of-range owner, states the Rust representation can no
+longer construct. Additional package tests cover forged Connector DSL state
+and a reordered cross-Operator handler table: decoding must reject it, not
+silently canonicalize it. `extensions.md` §2 already excludes Connector DSL
+state; the old common `Node::vars` could represent it and its validator had
+no explicit Connector-state rejection. The new decoder refuses that forged
+shape rather than discarding its state.
+
+Operator work selection now borrows its handler slice instead of collecting
+a temporary filtered vector. The optional layout probe follows the new
+control representation, so it does not count the contained handlers twice.
+Neither this change nor the previous copied-layout probes selects the final
+physical layout of the unified Node table.
+
+The two normal Cortex-M33 workload images were rebuilt with `-D warnings`
+and executed separately, without a concurrent network test run. They decode
+the same unchanged packages as the earlier measurements.
+
+| Operator-contained representation | Echo, 32 admissions | Retry with recovery |
+|---|---:|---:|
+| Heap after package decoding | 6,824 B | 5,620 B |
+| Decoder peak | 35,496 B | 30,352 B |
+| Whole-run allocator peak | 112,116 B | 130,528 B |
+| Heap change from the A-T4-4 checkpoint | −540 B | −32 B |
+| Heap margin below 128 KiB | 18,956 B | 544 B |
+| `.text` | 902,484 B | 962,716 B |
+| `.rodata` | 70,340 B | 81,104 B |
+| Code total | 972,824 B | 1,043,820 B |
+| Code change from the A-T4-4 checkpoint | +644 B | +1,756 B |
+| Code margin below 1 MiB | 75,752 B | 4,756 B |
+| Decode ticks, instruction-count proxy | 21,807 | 16,048 |
+| Journal records | 67 | 17 |
+| QEMU result | `SPIKE_OK` | `SPIKE_OK` |
+
+Retry's live heap is 93,432 B after execution and 93,296 B after recovery.
+Both semantic hashes remain those recorded above. The two gates are met,
+but Retry's remaining code margin is only 4,756 B; this is not spare space
+to allocate to the future unified table without a new measurement.
+
+Checks for this structural checkpoint:
+
+- Workspace formatting, strict all-target/all-feature Clippy and workspace
+  rustdoc: passed, no reported warning. Clippy was rerun after correcting
+  the two new test programs.
+- Both library test suites and the fifteen integration suites below:
+  **1,257 passed, 0 remaining failures, 0 ignored**. The first run found
+  two invalid new test programs, before package forging: a Process lacked
+  its required `behavior`, and a graph had no input type constraint. After
+  supplying those declarations, all 27 `plan_package` tests passed; no
+  assertion or identity pin was changed to resolve either failure.
+- The three `no_std` targets listed above: passed.
+- RustRover MCP `build_project` after the final edits: successful, no
+  reported problems.
+- Rustdoc citation lint: 213 Rust files, no relative Markdown links;
+  its four tests passed.
+- Both normal Cortex-M33 images completed as measured above. The optional
+  layout probe compiles with `node-layout-probe,retry-qualification`; its
+  allocation comparison was not rerun for this checkpoint.
+- `git diff --check` and standalone formatting of the edited
+  `node_layout.rs`: passed. An additional whole-spike formatting check
+  reports import/module ordering in `main.rs`, unchanged by this structural
+  slice; that unrelated formatting is not included here.
+- No package, trace, recording, fixture or example changed. The checked
+  echo, JSONL and gauge witnesses passed without saving new references.
+
+The selected test command, with golden saving disabled, was:
+
+```sh
+env -u RASTOK_SAVE_GOLDENS cargo test --locked --workspace --all-features \
+  --lib --test plan_validation --test plan_package --test execution \
+  --test contracts --test literals --test member_presence --test multiport \
+  --test gauge_fixture --test jsonl_fixture --test golden_trace \
+  --test v16_loop --test v16_loop_composition --test v16_recovery \
+  --test retry_runtime --test instance_stop --no-fail-fast
+env -u RASTOK_SAVE_GOLDENS cargo test --locked -p rastok --all-features \
+  --test plan_package
+```
+
+This is a **targeted qualification, not a complete workspace test run**.
+The earlier complete-suite result does not describe this representation.
+Lot 1 remains open: one Node table, one reference wiring per Graph, private
+derived routing indexes, indexed mailbox deliveries, the package cutover
+and the final differential/workspace gate still remain. No push, tag or
+publication is performed.

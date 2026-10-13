@@ -1571,7 +1571,7 @@ graph mixed : App {
         for planned in &mut raw.nodes {
             let Some(spec) = (match &mut planned.execution {
                 crate::plan::NodeExecution::Connector(spec) => Some(spec),
-                crate::plan::NodeExecution::Operator => None,
+                crate::plan::NodeExecution::Operator { .. } => None,
             }) else {
                 continue;
             };

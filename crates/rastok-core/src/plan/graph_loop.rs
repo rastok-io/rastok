@@ -91,15 +91,14 @@ pub(super) fn validate(
         return Ok(Vec::new());
     };
     if plan
-        .handlers
-        .iter()
-        .filter(|handler| {
-            plan.nodes[handler.owner.index()]
+        .handlers()
+        .filter(|(handler_owner, _)| {
+            plan.nodes[handler_owner.index()]
                 .path
                 .segments()
                 .starts_with(owner.path.segments())
         })
-        .any(|handler| matches!(handler.activation, node::HandlerActivation::Lifecycle(_)))
+        .any(|(_, handler)| matches!(handler.activation, node::HandlerActivation::Lifecycle(_)))
     {
         return Err(error(
             "application".into(),
@@ -127,8 +126,8 @@ pub(super) fn validate(
             }
         }
     }
-    for handler in plan.handlers.iter().filter(|handler| {
-        plan.nodes[handler.owner.index()]
+    for (_, handler) in plan.handlers().filter(|(handler_owner, _)| {
+        plan.nodes[handler_owner.index()]
             .path
             .segments()
             .starts_with(owner.path.segments())
@@ -235,7 +234,7 @@ pub(super) fn validate(
                         ));
                     }
                 } else {
-                    let handler = input_handler(plan, input).ok_or_else(|| {
+                    let (_, handler) = input_handler(plan, input).ok_or_else(|| {
                         error(
                             format!("{:?}", input),
                             "an internal Loop input has no finite application handler",
@@ -381,7 +380,7 @@ pub(super) fn validate(
                         )
                     })?
                 } else {
-                    let handler = input_handler(plan, input).ok_or_else(|| {
+                    let (handler_owner, handler) = input_handler(plan, input).ok_or_else(|| {
                         error("input".into(), "an internal Loop input lost its handler")
                     })?;
                     let joined = matches!(handler.activation, node::HandlerActivation::Join { .. });
@@ -398,7 +397,7 @@ pub(super) fn validate(
                             for step in steps {
                                 if let DispatchStep::LoopCommand(command) = step {
                                     let host = &plan.owners
-                                        [plan.nodes[handler.owner.index()].owner.index()];
+                                        [plan.nodes[handler_owner.index()].owner.index()];
                                     if host.loop_spec().is_none() {
                                         return Err(error(
                                             "command".into(),
@@ -485,10 +484,13 @@ pub(super) fn validate(
     }
     for outcome in cache.get(&root).into_iter().flatten() {
         for input in outcome.joins.keys() {
-            let Some(Handler {
-                activation: node::HandlerActivation::Join { ports, .. },
-                ..
-            }) = input_handler(plan, input)
+            let Some((
+                _,
+                Handler {
+                    activation: node::HandlerActivation::Join { ports, .. },
+                    ..
+                },
+            )) = input_handler(plan, input)
             else {
                 continue;
             };
@@ -627,19 +629,23 @@ fn call_outcomes(
     Some(alternatives)
 }
 
-fn input_handler<'a>(plan: &'a ExecutionPlan, input: &Endpoint) -> Option<&'a Handler> {
+fn input_handler<'a>(
+    plan: &'a ExecutionPlan,
+    input: &Endpoint,
+) -> Option<(NodeIndex, &'a Handler)> {
     let EndpointOwner::Node(path) = &input.owner else {
         return None;
     };
     let slot = NodeIndex::new(plan.nodes.iter().position(|node| node.path == *path)? as u32);
-    plan.handlers.iter().find(|handler| {
-        handler.owner == slot
-            && match &handler.activation {
-                node::HandlerActivation::Port(port) => *port == input.port,
-                node::HandlerActivation::Join { ports, .. } => ports.contains(&input.port),
-                _ => false,
-            }
-    })
+    plan.nodes[slot.index()]
+        .handlers()
+        .iter()
+        .find(|handler| match &handler.activation {
+            node::HandlerActivation::Port(port) => *port == input.port,
+            node::HandlerActivation::Join { ports, .. } => ports.contains(&input.port),
+            _ => false,
+        })
+        .map(|handler| (slot, handler))
 }
 
 fn nested_host<'a>(plan: &'a ExecutionPlan, scope: &Owner, work: &Work) -> Option<&'a Owner> {

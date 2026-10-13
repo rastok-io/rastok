@@ -2310,7 +2310,10 @@ fn a_struct_initializer_cannot_enter_an_int_state_cell() {
         .iter_mut()
         .find(|node| node.path.to_string() == "relay")
         .expect("the operator");
-    relay.vars[0].init = Some(rastok::value::Value::Struct(vec![(
+    let rastok::plan::NodeExecution::Operator { vars, .. } = &mut relay.execution else {
+        panic!("the stateful Operator")
+    };
+    vars[0].init = Some(rastok::value::Value::Struct(vec![(
         String::from("field"),
         rastok::value::Value::Int(7),
     )]));

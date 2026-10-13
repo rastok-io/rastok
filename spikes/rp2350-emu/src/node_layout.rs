@@ -121,27 +121,17 @@ fn body(
     let node = &plan.nodes[slot.index()];
     match &node.execution {
         NodeExecution::Connector(spec) => InlineBody::Connector(spec.clone()),
-        NodeExecution::Operator => {
-            // The declaration count is known. `filter().collect()` would
-            // otherwise reserve four handlers for a one-handler Operator.
-            let count = plan
-                .handlers
+        NodeExecution::Operator { vars, handlers } => {
+            let handlers = handlers
                 .iter()
-                .filter(|handler| handler.owner == slot)
-                .count();
-            let mut handlers = Vec::with_capacity(count);
-            handlers.extend(
-                plan.handlers
-                    .iter()
-                    .filter(|handler| handler.owner == slot)
-                    .map(|handler| HandlerBody {
-                        activation: handler.activation.clone(),
-                        guard: handler.guard.clone(),
-                        dispatch: handler.dispatch.clone(),
-                    }),
-            );
+                .map(|handler| HandlerBody {
+                    activation: handler.activation.clone(),
+                    guard: handler.guard.clone(),
+                    dispatch: handler.dispatch.clone(),
+                })
+                .collect();
             InlineBody::Operator(OperatorBody {
-                vars: node.vars.clone(),
+                vars: vars.clone(),
                 handlers,
             })
         }
@@ -186,7 +176,7 @@ fn tables(plan: &ExecutionPlan, inventory: &[rastok_core::plan::RouteRule]) -> T
         match owner.kind {
             OwnerKind::Graph => graphs += 1,
             OwnerKind::Node(slot) => match plan.nodes[slot.index()].execution {
-                NodeExecution::Operator => operators += 1,
+                NodeExecution::Operator { .. } => operators += 1,
                 NodeExecution::Connector(_) => connectors += 1,
             },
         }
@@ -320,7 +310,7 @@ pub(super) fn compare(plan: &ExecutionPlan) {
         "node_layout_control: {} owners / {} executors / {} handlers; routing excluded",
         plan.owners.len(),
         plan.nodes.len(),
-        plan.handlers.len(),
+        plan.handlers().count(),
     );
     measure(
         "current",
@@ -329,14 +319,12 @@ pub(super) fn compare(plan: &ExecutionPlan) {
                 plan.owners.clone(),
                 plan.nodes.clone(),
                 plan.boundary.clone(),
-                plan.handlers.clone(),
             )
         },
-        |(owners, nodes, boundary, handlers)| {
+        |(owners, nodes, boundary)| {
             assert!(owners == &plan.owners);
             assert!(nodes == &plan.nodes);
             assert!(boundary == &plan.boundary);
-            assert!(handlers == &plan.handlers);
         },
     );
     measure(
@@ -369,7 +357,6 @@ fn compare_with_wiring(plan: &ExecutionPlan) {
                 plan.owners.clone(),
                 plan.nodes.clone(),
                 plan.boundary.clone(),
-                plan.handlers.clone(),
                 plan.edges.clone(),
                 plan.routes.clone(),
                 plan.boundary_routes.clone(),

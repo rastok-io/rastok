@@ -1068,7 +1068,7 @@ fn first_annotation_location(
                 }
             }
         }
-        for var in &planned.vars {
+        for var in planned.vars() {
             if contains(&var.annotations) {
                 return Some(format!("var `{}.{}`", planned.path, var.name));
             }
@@ -1086,7 +1086,7 @@ fn first_annotation_location(
             }
         }
     }
-    for (handler_index, handler) in plan.handlers.iter().enumerate() {
+    for (handler_index, (_, handler)) in plan.handlers().enumerate() {
         for step in handler.dispatch.steps() {
             if let crate::plan::DispatchStep::Let {
                 name, annotations, ..
@@ -1147,7 +1147,7 @@ fn personal_data_requirements(
                 }
             }
         }
-        for var in &planned.vars {
+        for var in planned.vars() {
             inspect(&var.annotations);
         }
     }
@@ -1159,7 +1159,7 @@ fn personal_data_requirements(
             inspect(&value.annotations);
         }
     }
-    for handler in &plan.handlers {
+    for (_, handler) in plan.handlers() {
         for step in handler.dispatch.steps() {
             if let crate::plan::DispatchStep::Let { annotations, .. } = step {
                 inspect(annotations);
@@ -1260,7 +1260,7 @@ impl<'plan> Execution<'plan> {
             }
             let spec = owner.loop_spec()?;
             let supported = (owner.kind == OwnerKind::Graph || matches!(owner.kind, crate::plan::OwnerKind::Node(slot)
-                    if matches!(self.plan.nodes[slot.index()].execution, NodeExecution::Operator)
+                    if matches!(self.plan.nodes[slot.index()].execution, NodeExecution::Operator { .. })
                         || self.plan.nodes[slot.index()].connector().and_then(crate::plan::ConnectorSpec::call_semantics).is_some()))
                 && (spec.fuel.is_some() || spec.proof.is_some());
             (!supported).then(|| ExecutionFault::UnsupportedExtension {
@@ -1366,10 +1366,9 @@ impl<'plan> Execution<'plan> {
             requires_personal_retention: personal_data_requirements(plan).personal,
             expected_deployment: boot.map(|boot| boot.attestation().clone()),
             owner_chains,
-            has_join_activations: plan
-                .handlers
-                .iter()
-                .any(|handler| matches!(&handler.activation, node::HandlerActivation::Join { .. })),
+            has_join_activations: plan.handlers().any(|(_, handler)| {
+                matches!(&handler.activation, node::HandlerActivation::Join { .. })
+            }),
             has_loops: plan.owners.iter().any(|owner| {
                 owner
                     .extensions
@@ -1793,7 +1792,7 @@ impl<'plan> Execution<'plan> {
                 return Ok(true);
             }
             match &self.plan.nodes[slot.index()].execution {
-                NodeExecution::Operator => {
+                NodeExecution::Operator { .. } => {
                     self.fire_operator(journal, slot, &instance, &delivery)?
                 }
                 NodeExecution::Connector(_) => {
@@ -1846,20 +1845,23 @@ impl<'plan> Execution<'plan> {
                     self.fire_connector(journal, bindings, slot, &instance, &delivery)?;
                     return Ok(true);
                 }
-                NodeExecution::Operator => {
+                NodeExecution::Operator { .. } => {
                     // An ordinary FIFO head necessarily precedes any work a
                     // later delivery could make runnable. Only a join-owned
                     // head can be partial and require the wider candidate
                     // scan, so the common single-port path stays allocation
                     // free.
-                    let join_owned = self.plan.handlers.iter().any(|handler| {
-                        handler.owner == slot
-                            && matches!(
-                                &handler.activation,
-                                node::HandlerActivation::Join { ports, .. }
-                                    if ports.contains(&delivery.port)
-                            )
-                    });
+                    let join_owned =
+                        self.plan.nodes[slot.index()]
+                            .handlers()
+                            .iter()
+                            .any(|handler| {
+                                matches!(
+                                    &handler.activation,
+                                    node::HandlerActivation::Join { ports, .. }
+                                        if ports.contains(&delivery.port)
+                                )
+                            });
                     let work = if join_owned {
                         let Some(work) = self.operator_work(slot, &instance)? else {
                             continue;
@@ -3089,18 +3091,20 @@ impl<'plan> Execution<'plan> {
         {
             if !matches!(
                 self.plan.nodes[slot.index()].execution,
-                NodeExecution::Operator
+                NodeExecution::Operator { .. }
             ) {
                 return false;
             }
-            let join_owned = self.plan.handlers.iter().any(|handler| {
-                handler.owner == slot
-                    && matches!(
+            let join_owned = self.plan.nodes[slot.index()]
+                .handlers()
+                .iter()
+                .any(|handler| {
+                    matches!(
                         &handler.activation,
                         node::HandlerActivation::Join { ports, .. }
                             if ports.contains(&delivery.port)
                     )
-            });
+                });
             if !join_owned || !matches!(self.operator_work(slot, &instance), Ok(None)) {
                 return false;
             }
@@ -3193,14 +3197,16 @@ impl<'plan> Execution<'plan> {
             ) {
                 return true;
             }
-            let join_owned = self.plan.handlers.iter().any(|handler| {
-                handler.owner == slot
-                    && matches!(
+            let join_owned = self.plan.nodes[slot.index()]
+                .handlers()
+                .iter()
+                .any(|handler| {
+                    matches!(
                         &handler.activation,
                         node::HandlerActivation::Join { ports, .. }
                             if ports.contains(&delivery.port)
                     )
-            });
+                });
             if !join_owned || !matches!(self.operator_work(slot, &instance), Ok(None)) {
                 return true;
             }
@@ -4163,12 +4169,7 @@ impl<'plan> Execution<'plan> {
         let Some(queue) = self.scheduler.mailboxes.queued(slot, instance) else {
             return Ok(None);
         };
-        let handlers: Vec<_> = self
-            .plan
-            .handlers
-            .iter()
-            .filter(|handler| handler.owner == slot)
-            .collect();
+        let handlers = self.plan.nodes[slot.index()].handlers();
         let join_owns = |port: &node::Port| {
             handlers.iter().any(|handler| {
                 matches!(

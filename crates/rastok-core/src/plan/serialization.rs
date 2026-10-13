@@ -254,10 +254,7 @@ fn plan_tree_with_resolved(
             Cbor::Array(plan.boundary.iter().map(port_decl_tree).collect()),
         ),
         (3, Cbor::Array(plan.edges.iter().map(edge_tree).collect())),
-        (
-            4,
-            Cbor::Array(plan.handlers.iter().map(handler_tree).collect()),
-        ),
+        (4, Cbor::Array(plan.handlers().map(handler_tree).collect())),
         (9, Cbor::Array(plan.owners.iter().map(owner_tree).collect())),
         (10, fields::routing_tree(&plan.routes)),
     ]);
@@ -402,7 +399,7 @@ fn schema_tree(schema: &[(String, DataType)]) -> Cbor {
 
 fn node_tree(node: &Node) -> Cbor {
     let execution = match &node.execution {
-        NodeExecution::Operator => Cbor::Uint(1),
+        NodeExecution::Operator { .. } => Cbor::Uint(1),
         NodeExecution::Connector(spec) => Cbor::Array(vec![Cbor::Uint(2), spec_tree(spec)]),
     };
     let fields = BTreeMap::from([
@@ -412,7 +409,7 @@ fn node_tree(node: &Node) -> Cbor {
             3,
             Cbor::Array(node.ports.iter().map(port_decl_tree).collect()),
         ),
-        (4, Cbor::Array(node.vars.iter().map(var_tree).collect())),
+        (4, Cbor::Array(node.vars().iter().map(var_tree).collect())),
         (5, Cbor::Uint(node.owner.index() as u64)),
     ]);
     Cbor::Map(fields)
@@ -688,7 +685,7 @@ fn endpoint_tree(endpoint: &EdgeEnd) -> Cbor {
     Cbor::Array(vec![slot, Cbor::Text(endpoint.port.name().to_string())])
 }
 
-fn handler_tree(handler: &Handler) -> Cbor {
+fn handler_tree((handler_owner, handler): (NodeIndex, &Handler)) -> Cbor {
     let activation = match &handler.activation {
         node::HandlerActivation::Port(port) => {
             Cbor::Array(vec![Cbor::Uint(1), Cbor::Text(port.name().to_string())])
@@ -715,7 +712,7 @@ fn handler_tree(handler: &Handler) -> Cbor {
     };
     let owner = Cbor::Array(vec![
         Cbor::Uint(1),
-        Cbor::Uint(handler.owner.index() as u64),
+        Cbor::Uint(handler_owner.index() as u64),
     ]);
     let mut pairs = BTreeMap::from([(1, owner), (2, activation)]);
     if let Some(guard) = &handler.guard {
@@ -1156,7 +1153,7 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
             }
             annotations(&decl.annotations, 5, &mut max, &mut stack);
         }
-        for var in &node.vars {
+        for var in node.vars() {
             // var map at 4, its fields at 5.
             max = max.max(5);
             stack.push(Item::Ty(&var.ty, 5));
@@ -1240,7 +1237,7 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
         // edge array at 2, endpoint arrays at 3, their fields at 4.
         max = max.max(4);
     }
-    for handler in &plan.handlers {
+    for (_, handler) in plan.handlers() {
         // handler map at 2, activation array at 3, its fields at 4.
         max = max.max(4);
         if let Some(guard) = &handler.guard {
@@ -1642,7 +1639,7 @@ fn plan_from(tree: &Cbor) -> Result<ExecutionPlan, DecodeError> {
         .iter()
         .map(owner_from)
         .collect::<Result<Vec<_>, _>>()?;
-    let nodes = array_of(get(pairs, 1, "plan nodes")?, "plan nodes")?
+    let mut nodes = array_of(get(pairs, 1, "plan nodes")?, "plan nodes")?
         .iter()
         .map(node_from)
         .collect::<Result<Vec<_>, _>>()?;
@@ -1658,6 +1655,33 @@ fn plan_from(tree: &Cbor) -> Result<ExecutionPlan, DecodeError> {
         .iter()
         .map(handler_from)
         .collect::<Result<Vec<_>, _>>()?;
+    for (index, node) in nodes.iter_mut().enumerate() {
+        if let NodeExecution::Operator { handlers: own, .. } = &mut node.execution {
+            own.reserve_exact(
+                handlers
+                    .iter()
+                    .filter(|(owner, _)| owner.index() == index)
+                    .count(),
+            );
+        }
+    }
+    let node_count = nodes.len();
+    for (owner, handler) in handlers {
+        let node = nodes.get_mut(owner.index()).ok_or(DecodeError::Invalid(
+            PlanValidationError::SlotOutOfBounds {
+                slot: owner,
+                node_count,
+            },
+        ))?;
+        let NodeExecution::Operator { handlers, .. } = &mut node.execution else {
+            return Err(DecodeError::Invalid(
+                PlanValidationError::NonOperatorHandler {
+                    node: node.path.clone(),
+                },
+            ));
+        };
+        handlers.push(handler);
+    }
     let routes = array_of(get(pairs, 10, "plan routing")?, "plan routing")?
         .iter()
         .map(fields::route_from)
@@ -1697,7 +1721,6 @@ fn plan_from(tree: &Cbor) -> Result<ExecutionPlan, DecodeError> {
         edges,
         routes,
         boundary_routes,
-        handlers,
         app_schema,
         ext_schema,
         assets,
@@ -1723,8 +1746,11 @@ fn node_from(tree: &Cbor) -> Result<Node, DecodeError> {
             .collect::<Vec<_>>(),
     )
     .map_err(|_| err("node path"))?;
-    let execution = match get(pairs, 2, "node execution")? {
-        Cbor::Uint(1) => NodeExecution::Operator,
+    let mut execution = match get(pairs, 2, "node execution")? {
+        Cbor::Uint(1) => NodeExecution::Operator {
+            vars: Vec::new(),
+            handlers: Vec::new(),
+        },
         Cbor::Array(parts) => match parts.as_slice() {
             [Cbor::Uint(2), spec] => NodeExecution::Connector(spec_from(spec)?),
             _ => return Err(err("node execution")),
@@ -1740,11 +1766,17 @@ fn node_from(tree: &Cbor) -> Result<Node, DecodeError> {
         .map(var_from)
         .collect::<Result<Vec<_>, _>>()?;
     let owner = node::OwnerSlot::new(u32_from(get(pairs, 5, "node owner")?, "node owner")?);
+    match &mut execution {
+        NodeExecution::Operator { vars: own, .. } => *own = vars,
+        NodeExecution::Connector(_) if !vars.is_empty() => {
+            return Err(err("a Connector cannot contain DSL state cells"));
+        }
+        NodeExecution::Connector(_) => {}
+    }
     Ok(Node {
         path,
         execution,
         ports,
-        vars,
         owner,
     })
 }
@@ -2181,7 +2213,7 @@ fn endpoint_from(tree: &Cbor) -> Result<EdgeEnd, DecodeError> {
     }
 }
 
-fn handler_from(tree: &Cbor) -> Result<Handler, DecodeError> {
+fn handler_from(tree: &Cbor) -> Result<(NodeIndex, Handler), DecodeError> {
     let pairs = map_of(tree, "handler")?;
     let owner = match array_of(get(pairs, 1, "handler owner")?, "handler owner")? {
         [Cbor::Uint(1), index] => NodeIndex::new(u32_from(index, "handler node")?),
@@ -2222,12 +2254,14 @@ fn handler_from(tree: &Cbor) -> Result<Handler, DecodeError> {
         None => None,
     };
     let dispatch = fields::dispatch_from(get(pairs, 4, "handler dispatch")?, 0)?;
-    Ok(Handler {
+    Ok((
         owner,
-        activation,
-        guard,
-        dispatch,
-    })
+        Handler {
+            activation,
+            guard,
+            dispatch,
+        },
+    ))
 }
 
 fn step_from(tree: &Cbor) -> Result<DispatchStep, DecodeError> {
@@ -2547,19 +2581,18 @@ mod tests {
     #[test]
     fn handler_owners_admit_only_executor_slots() {
         let handler = Handler {
-            owner: NodeIndex::new(0),
             activation: node::HandlerActivation::Port(node::Port::new("in").unwrap()),
             guard: None,
             dispatch: crate::plan::Dispatch::Linear(vec![]),
         };
-        let tree = handler_tree(&handler);
+        let tree = handler_tree((NodeIndex::new(0), &handler));
         assert_eq!(
             canonical_cbor::encode(&tree),
             [
                 0xa3, 1, 0x82, 1, 0, 2, 0x82, 1, 0x62, b'i', b'n', 4, 0x82, 1, 0x80
             ]
         );
-        assert_eq!(handler_from(&tree).unwrap(), handler);
+        assert_eq!(handler_from(&tree).unwrap(), (NodeIndex::new(0), handler));
         for (key, value, refusal) in [
             (
                 1,
@@ -2643,14 +2676,15 @@ mod tests {
             owners: vec![root_owner(), instance_owner],
             nodes: vec![Node {
                 path: node::Path::new(["worker"]).unwrap(),
-                execution: NodeExecution::Operator,
+                execution: NodeExecution::Operator {
+                    vars: vec![],
+                    handlers: vec![],
+                },
                 ports: vec![],
-                vars: vec![],
                 owner: node::OwnerSlot::new(1),
             }],
             boundary: vec![],
             edges: vec![],
-            handlers: vec![],
             app_schema: vec![],
             ext_schema: vec![],
             assets: vec![],
@@ -2705,7 +2739,6 @@ mod tests {
                 annotations,
             }],
             edges: vec![],
-            handlers: vec![],
             app_schema: vec![],
             ext_schema: vec![],
             assets: vec![],
@@ -3220,7 +3253,6 @@ mod tests {
             nodes: vec![],
             boundary: vec![],
             edges: vec![],
-            handlers: vec![],
             app_schema: vec![],
             ext_schema: vec![],
             assets: vec![],
@@ -3620,6 +3652,64 @@ mod tests {
                 index: Box::new(expr::Expr::Literal(Value::Uint(0))),
             }),
         };
+        let vars = vec![VarCell {
+            name: text("seen"),
+            ty: DataType::text_map(DataType::array(DataType::INT)),
+            init: Some(map_value.clone()),
+            annotations: AnnotationTable::empty(),
+        }];
+        let handlers = vec![Handler {
+            activation: node::HandlerActivation::Port(port("in")),
+            guard: Some(tree(expr.clone())),
+            dispatch: crate::plan::Dispatch::Linear(vec![
+                DispatchStep::Let {
+                    name: text("x"),
+                    value: tree(expr.clone()),
+                    annotations: AnnotationTable::empty(),
+                },
+                DispatchStep::SetVar {
+                    name: text("seen"),
+                    value: tree(expr.clone()),
+                },
+                DispatchStep::Emit {
+                    port: port("out"),
+                    value: EmitValue::Identity,
+                },
+                DispatchStep::Emit {
+                    port: port("out"),
+                    value: EmitValue::Nothing,
+                },
+                DispatchStep::Emit {
+                    port: port("out"),
+                    value: EmitValue::Data(tree(expr.clone())),
+                },
+                DispatchStep::Emit {
+                    port: port("out"),
+                    value: EmitValue::Patch(vec![
+                        FieldWrite {
+                            target: WriteTarget::Data(vec![text("a"), text("b")]),
+                            value: tree(expr),
+                        },
+                        FieldWrite {
+                            target: WriteTarget::App(text("m.dotted")),
+                            value: tree(expr::Expr::Literal(Value::Null)),
+                        },
+                        FieldWrite {
+                            target: WriteTarget::Ext(text("content_type")),
+                            value: tree(expr::Expr::Literal(Value::Text(text("t")))),
+                        },
+                    ]),
+                },
+                DispatchStep::Emit {
+                    port: port("out"),
+                    value: EmitValue::FreshData(vec![FieldWrite {
+                        target: WriteTarget::Data(vec![]),
+                        value: tree(expr::Expr::Literal(Value::Duration(5))),
+                    }]),
+                },
+                DispatchStep::Stop,
+            ]),
+        }];
         ExecutionPlan {
             boundary_routes: Vec::new(),
             routes: vec![],
@@ -3627,7 +3717,7 @@ mod tests {
             nodes: vec![
                 Node {
                     path: node::Path::new(["relay"]).unwrap(),
-                    execution: NodeExecution::Operator,
+                    execution: NodeExecution::Operator { vars, handlers },
                     ports: vec![
                         PortDecl::untyped(port("extra"), node::PortDirection::Output),
                         PortDecl {
@@ -3638,12 +3728,6 @@ mod tests {
                             annotations: AnnotationTable::empty(),
                         },
                     ],
-                    vars: vec![VarCell {
-                        name: text("seen"),
-                        ty: DataType::text_map(DataType::array(DataType::INT)),
-                        init: Some(map_value.clone()),
-                        annotations: AnnotationTable::empty(),
-                    }],
                     owner: node::OwnerSlot::new(1),
                 },
                 Node {
@@ -3666,7 +3750,6 @@ mod tests {
                         ],
                     }),
                     ports: vec![],
-                    vars: vec![],
                     owner: node::OwnerSlot::new(2),
                 },
             ],
@@ -3701,59 +3784,6 @@ mod tests {
                     to: None,
                 },
             ],
-            handlers: vec![Handler {
-                owner: NodeIndex::new(0),
-                activation: node::HandlerActivation::Port(port("in")),
-                guard: Some(tree(expr.clone())),
-                dispatch: crate::plan::Dispatch::Linear(vec![
-                    DispatchStep::Let {
-                        name: text("x"),
-                        value: tree(expr.clone()),
-                        annotations: AnnotationTable::empty(),
-                    },
-                    DispatchStep::SetVar {
-                        name: text("seen"),
-                        value: tree(expr.clone()),
-                    },
-                    DispatchStep::Emit {
-                        port: port("out"),
-                        value: EmitValue::Identity,
-                    },
-                    DispatchStep::Emit {
-                        port: port("out"),
-                        value: EmitValue::Nothing,
-                    },
-                    DispatchStep::Emit {
-                        port: port("out"),
-                        value: EmitValue::Data(tree(expr.clone())),
-                    },
-                    DispatchStep::Emit {
-                        port: port("out"),
-                        value: EmitValue::Patch(vec![
-                            FieldWrite {
-                                target: WriteTarget::Data(vec![text("a"), text("b")]),
-                                value: tree(expr),
-                            },
-                            FieldWrite {
-                                target: WriteTarget::App(text("m.dotted")),
-                                value: tree(expr::Expr::Literal(Value::Null)),
-                            },
-                            FieldWrite {
-                                target: WriteTarget::Ext(text("content_type")),
-                                value: tree(expr::Expr::Literal(Value::Text(text("t")))),
-                            },
-                        ]),
-                    },
-                    DispatchStep::Emit {
-                        port: port("out"),
-                        value: EmitValue::FreshData(vec![FieldWrite {
-                            target: WriteTarget::Data(vec![]),
-                            value: tree(expr::Expr::Literal(Value::Duration(5))),
-                        }]),
-                    },
-                    DispatchStep::Stop,
-                ]),
-            }],
             app_schema: vec![(text("m.dotted"), DataType::Variant)],
             ext_schema: vec![(text("content_type"), DataType::Text)],
             assets: vec![],
@@ -3769,23 +3799,23 @@ mod tests {
             owners: vec![root_owner(), node_owner("o", 0)],
             nodes: vec![Node {
                 path: node::Path::new(["o"]).unwrap(),
-                execution: NodeExecution::Operator,
+                execution: NodeExecution::Operator {
+                    vars: vec![],
+                    handlers: vec![Handler {
+                        activation: node::HandlerActivation::Port(port("in")),
+                        guard: None,
+                        dispatch: crate::plan::Dispatch::Linear(vec![DispatchStep::Let {
+                            name: text("x"),
+                            value: tree(root),
+                            annotations: AnnotationTable::empty(),
+                        }]),
+                    }],
+                },
                 ports: vec![],
-                vars: vec![],
                 owner: node::OwnerSlot::new(1),
             }],
             boundary: vec![],
             edges: vec![],
-            handlers: vec![Handler {
-                owner: NodeIndex::new(0),
-                activation: node::HandlerActivation::Port(port("in")),
-                guard: None,
-                dispatch: crate::plan::Dispatch::Linear(vec![DispatchStep::Let {
-                    name: text("x"),
-                    value: tree(root),
-                    annotations: AnnotationTable::empty(),
-                }]),
-            }],
             app_schema: vec![],
             ext_schema: vec![],
             assets: vec![],
@@ -4136,7 +4166,6 @@ mod tests {
             nodes: vec![],
             boundary: vec![],
             edges: vec![],
-            handlers: vec![],
             app_schema: vec![],
             ext_schema: vec![],
             assets: vec![],
@@ -4287,7 +4316,7 @@ mod tests {
             nested_type = DataType::text_map(nested_type);
         }
         let mut deep_type_plan = one_step_plan(expr::Expr::Literal(Value::Null));
-        deep_type_plan.handlers[0].dispatch =
+        deep_type_plan.nodes[0].handlers_mut()[0].dispatch =
             super::super::Dispatch::Linear(vec![DispatchStep::Let {
                 name: text("x"),
                 value: expr::Tree {
@@ -4394,7 +4423,6 @@ mod tests {
                 nodes: vec![],
                 boundary: vec![],
                 edges: vec![],
-                handlers: vec![],
                 app_schema: vec![],
                 ext_schema: vec![],
                 assets: vec![],
@@ -4445,7 +4473,8 @@ mod tests {
                 DispatchStep::LoopCommand(super::super::LoopCommand::Done),
             ] {
                 let mut raw = one_step_plan(expr::Expr::Literal(Value::Null));
-                raw.handlers[0].dispatch = super::super::Dispatch::Linear(vec![statement]);
+                raw.nodes[0].handlers_mut()[0].dispatch =
+                    super::super::Dispatch::Linear(vec![statement]);
                 assert_eq!(deepest_level(&raw), levels(&plan_tree(&raw)));
                 assert!(
                     matches!(
@@ -4471,7 +4500,6 @@ mod tests {
                 annotations: policy,
             }],
             edges: vec![],
-            handlers: vec![],
             app_schema: vec![],
             ext_schema: vec![],
             assets: vec![],

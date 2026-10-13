@@ -495,7 +495,7 @@ fn topology(
         .enumerate()
         .map(|(index, node)| {
             let (kind, ty) = match &node.execution {
-                NodeExecution::Operator => ("operator", String::from("Operator")),
+                NodeExecution::Operator { .. } => ("operator", String::from("Operator")),
                 NodeExecution::Connector(spec) => ("connector", spec.contract.to_string()),
             };
             let firing = owner_transactions
@@ -535,7 +535,7 @@ fn topology(
                 "retry": retry::spec(&plan.owners[node.owner.index()]),
                 "profile": match &node.execution {
                     NodeExecution::Connector(spec) => Some(format!("{:?} · {:?}", spec.exchange, spec.roles)),
-                    NodeExecution::Operator => None,
+                    NodeExecution::Operator { .. } => None,
                 },
                 "ports": ports,
                 "definition": definition.map(source_definition_json),
@@ -846,7 +846,7 @@ pub fn scenario_definition_json(
             resolved
                 .node(NodeIndex::new(u32::try_from(index).unwrap_or(u32::MAX)))
                 .is_some_and(|ports| ports.iter().any(|port| classified(port.annotations())))
-                || node.vars.iter().any(|var| classified(&var.annotations))
+                || node.vars().iter().any(|var| classified(&var.annotations))
         })
         || plan.owners.iter().any(|owner| {
             owner.ports.iter().any(|port| classified(&port.annotations))
@@ -1205,7 +1205,7 @@ fn instances(
                         .nodes
                         .iter()
                         .find(|node| &node.path == path)
-                        .map(|node| &node.vars);
+                        .map(|node| node.vars());
                     instance
                         .state
                         .iter()
