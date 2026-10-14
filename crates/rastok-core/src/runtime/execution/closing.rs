@@ -18,8 +18,7 @@ impl Execution<'_> {
             if handler.activation != node::HandlerActivation::Lifecycle(node::Lifecycle::Stop)
                 || !self.closing.iter().any(|reference| {
                     self.instances.get(reference).is_some_and(|instance| {
-                        instance.owner == self.plan.nodes[handler_owner.index()].owner
-                            && self.is_within_instance(reference, scope)
+                        instance.owner == handler_owner && self.is_within_instance(reference, scope)
                     })
                 })
             {
@@ -44,16 +43,19 @@ impl Execution<'_> {
                 .plan
                 .edges
                 .iter()
-                .filter(|edge| edge.from.node == Some(source) && edge.from.port == port)
+                .filter(|edge| edge.from.node == source && edge.from.port == port)
             {
                 let Some(target) = &edge.to else { continue };
-                let Some(slot) = target.node else { continue };
+                let slot = target.node;
                 let node = &self.plan.nodes[slot.index()];
+                if node.kind() == node::Kind::Graph {
+                    continue;
+                }
                 // Once a product leaves the closing scope, a later return is
                 // external admission, not work for this old generation.
                 if !self
                     .plan
-                    .scope_chain(node.owner)
+                    .scope_chain(slot)
                     .is_some_and(|chain| chain.contains(&scope_owner))
                 {
                     continue;
@@ -62,8 +64,9 @@ impl Execution<'_> {
                 if !node.input_drives_outputs() {
                     continue;
                 }
-                match &node.execution {
-                    NodeExecution::Operator { .. } => {
+                match &node.body {
+                    NodeKind::Graph => continue,
+                    NodeKind::Operator(_) => {
                         for handler in
                             node.handlers()
                                 .iter()
@@ -87,7 +90,7 @@ impl Execution<'_> {
                             );
                         }
                     }
-                    NodeExecution::Connector(_) => {
+                    NodeKind::Connector(_) => {
                         pending.extend(
                             node.ports
                                 .iter()

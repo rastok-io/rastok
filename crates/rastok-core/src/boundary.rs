@@ -1907,7 +1907,7 @@ pub enum Obligation {
     /// these fields only identify the exact obligation to re-check.
     LoopDelay {
         /// Owner carrying the Loop Extension.
-        owner: node::OwnerSlot,
+        owner: node::NodeIndex,
         /// Exact generation in which the continuation was selected.
         instance: instance::Generation,
         /// Durable Loop run whose fold must still be open.
@@ -1932,7 +1932,7 @@ pub enum Obligation {
     /// `l:start`.
     InstanceLifetime {
         /// Plan owner whose policy scheduled the event.
-        owner: node::OwnerSlot,
+        owner: node::NodeIndex,
         /// Exact generation whose deadline is being observed.
         instance: instance::Generation,
         /// Envelope whose arrival created this deadline and causes `l:stop`.

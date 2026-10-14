@@ -121,10 +121,10 @@ fn validate_capture(
     let personal = crate::data_policy::contains_personal;
     if plan.resolved_ports().boundary().iter().any(|port| personal(port.annotations()))
         || plan.nodes.iter().enumerate().any(|(index, node)| {
-            plan.resolved_ports().node(plan::NodeIndex::new(index as u32)).is_some_and(|ports| ports.iter().any(|port| personal(port.annotations())))
+            plan.resolved_ports().node(crate::node::NodeIndex::new(index as u32)).is_some_and(|ports| ports.iter().any(|port| personal(port.annotations())))
                 || node.vars().iter().any(|var| personal(&var.annotations))
         })
-        || plan.owners.iter().any(|owner| owner.ports.iter().any(|port| personal(&port.annotations)) || owner.vals.iter().any(|value| personal(&value.annotations)))
+        || plan.nodes.iter().any(|owner| owner.ports.iter().any(|port| personal(&port.annotations)) || owner.vals.iter().any(|value| personal(&value.annotations)))
         || plan.handlers().any(|(_, handler)| handler.dispatch.steps().any(|step| matches!(step, plan::DispatchStep::Let { annotations, .. } if personal(annotations))))
     { return Err(Error::PersonalData); }
     if header.is_some_and(|header| header != &DeploymentAttestation::default())

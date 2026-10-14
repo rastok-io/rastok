@@ -51,7 +51,7 @@ impl Execution<'_> {
             return Err(invalid(index, "the retained ingress names no App input"));
         }
         let from = EdgeEnd {
-            node: source.map(|(slot, _)| slot),
+            node: source.map_or(NodeIndex::ROOT, |(slot, _)| slot),
             port: inbound.port.clone(),
         };
         if let Data::Materialized(value) = inbound.envelope.data() {
@@ -228,7 +228,7 @@ impl Execution<'_> {
         } else {
             self.prepare_instance_commands(
                 admissions,
-                &self.graph_endpoint(&from),
+                &self.graph_endpoint(&from)?,
                 target.as_ref().map(|(_, target)| &target.reference),
                 &inbound.envelope,
             )?
@@ -343,7 +343,7 @@ impl Execution<'_> {
         candidates: &mut BTreeMap<instance::Generation, InstanceCandidate>,
     ) -> Result<PreparedTarget, ExecutionFault> {
         let scope = self
-            .scope_chain(self.plan.nodes[slot.index()].owner)?
+            .scope_chain(slot)?
             .first()
             .copied()
             .ok_or_else(|| invalid(index, "an inbound source has no owner chain"))?;
@@ -352,7 +352,7 @@ impl Execution<'_> {
             scope,
             None,
             &EdgeEnd {
-                node: Some(slot),
+                node: slot,
                 port: port.clone(),
             },
             envelope,

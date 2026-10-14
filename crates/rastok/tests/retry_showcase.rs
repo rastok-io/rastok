@@ -17,14 +17,14 @@ fn two_tenants_keep_the_request_fixed_and_only_alice_retries() {
     assert!(
         compilation
             .plan
-            .owners
+            .nodes
             .iter()
             .all(|owner| owner.loop_spec().is_none())
     );
     assert_eq!(
         compilation
             .plan
-            .owners
+            .nodes
             .iter()
             .filter(|owner| owner.retry_spec().is_some())
             .count(),

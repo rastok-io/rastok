@@ -72,7 +72,10 @@ pub trait ConnectorDriverFactory {
         _boot: &crate::deployment::BootBindings,
     ) -> Result<Box<dyn BoundConnectorDriver + 'plan>, DriverFactoryError> {
         for planned in &plan.plan().nodes {
-            if !nodes.contains(&planned.path) {
+            if !planned
+                .executor_path()
+                .is_some_and(|path| nodes.contains(path))
+            {
                 continue;
             }
             let Some(spec) = planned.connector() else {
@@ -355,22 +358,25 @@ impl<'plan> RuntimeBindings<'plan> {
             let callable = plan.plan().edges.iter().any(|edge| {
                 edge.to
                     .as_ref()
-                    .and_then(|endpoint| endpoint.node)
+                    .map(|endpoint| endpoint.node)
                     .is_some_and(|slot| slot.index() == index)
             });
             if !spec.roles.has_inbound() && !(spec.roles.has_outbound() && callable) {
                 continue;
             }
+            let Some(path) = planned.executor_path() else {
+                continue;
+            };
             requirements
                 .entry(spec.contract.clone())
                 .and_modify(|requirement| {
                     requirement.required = union_roles(requirement.required, spec.roles);
                     requirement
                         .nodes
-                        .push((planned.path.clone(), spec.roles, spec.exchange));
+                        .push((path.clone(), spec.roles, spec.exchange));
                 })
                 .or_insert_with(|| FamilyRequirement {
-                    nodes: vec![(planned.path.clone(), spec.roles, spec.exchange)],
+                    nodes: vec![(path.clone(), spec.roles, spec.exchange)],
                     required: spec.roles,
                 });
         }
@@ -1569,9 +1575,9 @@ graph mixed : App {
         .expect("the routing probe compiles");
         let mut raw = compilation.plan.plan().clone();
         for planned in &mut raw.nodes {
-            let Some(spec) = (match &mut planned.execution {
-                crate::plan::NodeExecution::Connector(spec) => Some(spec),
-                crate::plan::NodeExecution::Operator { .. } => None,
+            let Some(spec) = (match &mut planned.body {
+                crate::plan::NodeKind::Connector(spec) => Some(spec),
+                crate::plan::NodeKind::Graph | crate::plan::NodeKind::Operator(_) => None,
             }) else {
                 continue;
             };
@@ -1602,7 +1608,7 @@ graph mixed : App {
             .iter_mut()
             .find(|planned| planned.path.to_string() == "first")
             .expect("the first connector exists");
-        let crate::plan::NodeExecution::Connector(spec) = &mut first.execution else {
+        let crate::plan::NodeKind::Connector(spec) = &mut first.body else {
             panic!("the first node is a connector")
         };
         spec.exchange = ConnectorExchange::Session;
@@ -1635,7 +1641,7 @@ graph inbound : App {
             .iter_mut()
             .find(|planned| planned.path.to_string() == "source")
             .expect("the source connector exists");
-        let crate::plan::NodeExecution::Connector(spec) = &mut source.execution else {
+        let crate::plan::NodeKind::Connector(spec) = &mut source.body else {
             panic!("the source node is a connector")
         };
         spec.contract = ContractId::parse("org.rastok.test/event-source@1").unwrap();
@@ -2380,20 +2386,20 @@ graph api : App {
             .iter()
             .position(|planned| planned.path.to_string() == "server")
             .and_then(|index| u32::try_from(index).ok())
-            .map(crate::plan::NodeIndex::new)
+            .map(crate::node::NodeIndex::new)
             .expect("the server slot is representable");
         let relay_slot = raw
             .nodes
             .iter()
             .position(|planned| planned.path.to_string() == "relay")
             .and_then(|index| u32::try_from(index).ok())
-            .map(crate::plan::NodeIndex::new)
+            .map(crate::node::NodeIndex::new)
             .expect("the relay slot is representable");
         let server = raw
             .nodes
             .get_mut(server_slot.index())
             .expect("the server node exists");
-        let crate::plan::NodeExecution::Connector(spec) = &mut server.execution else {
+        let crate::plan::NodeKind::Connector(spec) = &mut server.body else {
             panic!("the server node is a connector")
         };
         spec.contract = ContractId::parse("org.rastok.test/inbound-call@1").unwrap();
@@ -2402,15 +2408,18 @@ graph api : App {
             .edges
             .iter_mut()
             .find(|edge| {
-                edge.from.node == Some(relay_slot)
-                    && edge.to.as_ref().is_some_and(|to| to.node.is_none())
+                edge.from.node == relay_slot
+                    && edge
+                        .to
+                        .as_ref()
+                        .is_some_and(|to| to.node == crate::node::NodeIndex::ROOT)
             })
             .expect("the relay boundary response exists");
         response.to = Some(crate::plan::EdgeEnd {
-            node: Some(server_slot),
+            node: server_slot,
             port: node::Port::new("in").expect("the conventional input name is valid"),
         });
-        raw.owners[0].ports.retain(|decl| decl.port.name() != "out");
+        raw.nodes[0].ports.retain(|decl| decl.port.name() != "out");
         let mut edges = core::mem::take(&mut raw.edges);
         edges.sort_by_key(|edge| raw.edge_text(edge));
         raw.edges = edges;

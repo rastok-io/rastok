@@ -75,7 +75,7 @@ fn responses_keep_original_job_samples_without_inventing_missing_usage_or_prices
     assert!(
         compilation
             .plan
-            .owners
+            .nodes
             .iter()
             .all(|owner| owner.retry_spec().is_none())
     );

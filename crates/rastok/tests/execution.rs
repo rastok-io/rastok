@@ -1430,11 +1430,11 @@ graph dynamic_binding : App {
     )
     .expect("the static spelling supplies a valid plan skeleton");
     let mut raw = compilation.plan.into_inner();
-    raw.owners[0].instance.key = Some(rastok::expr::Tree {
+    raw.nodes[0].instance.key = Some(rastok::expr::Tree {
         root: rastok::expr::Expr::Literal(Value::Text(String::from("cat"))),
         ty: rastok::datatype::DataType::Text,
     });
-    raw.owners[0].vals.push(OwnerValue {
+    raw.nodes[0].vals.push(OwnerValue {
         name: String::from("selected_command"),
         site: EvaluationSite::Instance,
         expr: rastok::expr::Tree {
@@ -1449,7 +1449,7 @@ graph dynamic_binding : App {
         .iter_mut()
         .find(|node| node.path.to_string() == "shell")
         .expect("the Process node exists");
-    let rastok::plan::NodeExecution::Connector(spec) = &mut shell.execution else {
+    let rastok::plan::NodeKind::Connector(spec) = &mut shell.body else {
         panic!("shell is a connector")
     };
     let (_, command) = spec
@@ -1522,7 +1522,7 @@ graph failing_bundle : App {
     )
     .expect("the keyed plan checks");
     let mut raw = compilation.plan.into_inner();
-    raw.owners[0].vals.push(OwnerValue {
+    raw.nodes[0].vals.push(OwnerValue {
         name: String::from("broken"),
         site: EvaluationSite::Instance,
         expr: rastok::expr::Tree {

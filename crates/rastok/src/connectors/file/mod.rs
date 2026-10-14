@@ -13,7 +13,7 @@ use crate::boundary::{
     PreparedRequest, RequestPreparation, Response, SchedulerCompletion,
 };
 use crate::envelope::{Data, Encoding, Envelope, Value};
-use crate::plan::{AttrSetting, NodeExecution};
+use crate::plan::{AttrSetting, NodeKind};
 use std::collections::BTreeMap;
 use std::fs::{File as FsFile, OpenOptions};
 use std::io::{Read, Write};
@@ -125,7 +125,7 @@ impl FileRequestSettings {
                     reason: FileSettingsError::Unresolved("connector binding path"),
                 });
             };
-            let NodeExecution::Connector(spec) = &node.execution else {
+            let NodeKind::Connector(spec) = &node.body else {
                 return Err(FileBindError {
                     node: path.clone(),
                     reason: FileSettingsError::Unresolved("connector binding kind"),

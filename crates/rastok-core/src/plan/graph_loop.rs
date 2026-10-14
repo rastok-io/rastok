@@ -25,7 +25,7 @@ type Outcomes = BTreeSet<Outcome>;
 // exponentially. Reaching this bound refuses the proof, never approximates it.
 const MAX_GRAPH_LOOP_OUTCOMES: usize = 1024;
 
-fn proof_limit(owner: &Owner) -> PlanValidationError {
+fn proof_limit(owner: &Node) -> PlanValidationError {
     PlanValidationError::InvalidLoopControl {
         owner: owner.path.to_string(),
         path: "proof".into(),
@@ -80,7 +80,7 @@ enum Work {
 
 pub(super) fn validate(
     plan: &ExecutionPlan,
-    owner: &Owner,
+    owner: &Node,
 ) -> Result<Vec<LoopRepeatWarning>, PlanValidationError> {
     let error = |path, detail| PlanValidationError::InvalidLoopControl {
         owner: owner.path.to_string(),
@@ -165,7 +165,7 @@ pub(super) fn validate(
             }
         }
     }
-    if plan.owners.iter().any(|child| {
+    if plan.nodes.iter().any(|child| {
         child.path != owner.path
             && child.path.segments().starts_with(owner.path.segments())
             && child.instance.lifetime != instance::Lifetime::Persistent
@@ -396,8 +396,7 @@ pub(super) fn validate(
                             let mut total = empty();
                             for step in steps {
                                 if let DispatchStep::LoopCommand(command) = step {
-                                    let host = &plan.owners
-                                        [plan.nodes[handler_owner.index()].owner.index()];
+                                    let host = &plan.nodes[handler_owner.index()];
                                     if host.loop_spec().is_none() {
                                         return Err(error(
                                             "command".into(),
@@ -514,7 +513,7 @@ pub(super) fn validate(
                 warnings.insert(LoopRepeatWarning {
                     owner: owner.path.clone(),
                     source: source.clone(),
-                    connector: connector.clone(),
+                    connector: node::OwnerPath::from(connector),
                 });
             }
         }
@@ -566,6 +565,7 @@ fn call_outcomes(
     cache: &BTreeMap<Work, Outcomes>,
 ) -> Option<Outcomes> {
     let connector = node.connector()?;
+    let path = node.executor_path()?;
     let mut alternatives = Outcomes::new();
     for (case, visibility) in call.terminal_cases() {
         let terminal = Work::Source(
@@ -614,7 +614,7 @@ fn call_outcomes(
         // Connector transaction. Only its own boundary crossings coalesce.
         alternatives.extend(total.into_iter().map(|mut outcome| {
             if !visibility.allows_repetition(connector.is_idempotent()) {
-                outcome.visible_calls.insert(node.path.clone());
+                outcome.visible_calls.insert(path.clone());
             }
             Outcome {
                 terminal: false,
@@ -648,7 +648,7 @@ fn input_handler<'a>(
         .map(|handler| (slot, handler))
 }
 
-fn nested_host<'a>(plan: &'a ExecutionPlan, scope: &Owner, work: &Work) -> Option<&'a Owner> {
+fn nested_host<'a>(plan: &'a ExecutionPlan, scope: &Node, work: &Work) -> Option<&'a Node> {
     let endpoint = match work {
         Work::Source(endpoint, _) if matches!(endpoint.owner, EndpointOwner::Graph(_)) => endpoint,
         Work::Input(endpoint) => endpoint,
@@ -658,7 +658,7 @@ fn nested_host<'a>(plan: &'a ExecutionPlan, scope: &Owner, work: &Work) -> Optio
         EndpointOwner::Graph(path) => path.clone(),
         EndpointOwner::Node(path) => node::OwnerPath::from(path),
     };
-    plan.owners.iter().find(|owner| {
+    plan.nodes.iter().find(|owner| {
         owner.path == path
             && owner.path != scope.path
             && owner.path.segments().starts_with(scope.path.segments())
@@ -668,7 +668,7 @@ fn nested_host<'a>(plan: &'a ExecutionPlan, scope: &Owner, work: &Work) -> Optio
     })
 }
 
-fn expiry_work(owner: &Owner) -> Result<Work, PlanValidationError> {
+fn expiry_work(owner: &Node) -> Result<Work, PlanValidationError> {
     let port = owner
         .loop_spec()
         .and_then(|spec| spec.expired.as_ref())
@@ -678,9 +678,9 @@ fn expiry_work(owner: &Owner) -> Result<Work, PlanValidationError> {
             path: "Loop.expired".into(),
             detail: "invalid expiry port",
         })?;
-    let endpoint = match owner.kind {
-        OwnerKind::Graph => EndpointOwner::Graph(owner.path.clone()),
-        OwnerKind::Node(_) => EndpointOwner::Node(
+    let endpoint = match owner.kind() {
+        node::Kind::Graph => EndpointOwner::Graph(owner.path.clone()),
+        node::Kind::Operator | node::Kind::Connector => EndpointOwner::Node(
             node::Path::new(owner.path.segments().iter().cloned()).map_err(|_| {
                 PlanValidationError::InvalidLoopControl {
                     owner: owner.path.to_string(),
@@ -700,7 +700,7 @@ fn expiry_work(owner: &Owner) -> Result<Work, PlanValidationError> {
 }
 
 fn nested_outcomes(
-    owner: &Owner,
+    owner: &Node,
     application: &Outcomes,
     cache: &BTreeMap<Work, Outcomes>,
 ) -> Result<Outcomes, PlanValidationError> {

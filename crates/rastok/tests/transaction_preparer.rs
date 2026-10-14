@@ -13,7 +13,8 @@ use rastok::instance;
 use rastok::node;
 
 use rastok::journal::ids;
-use rastok::plan::{GraphVersion, NodeIndex, ValidatedExecutionPlan};
+use rastok::node::NodeIndex;
+use rastok::plan::{GraphVersion, ValidatedExecutionPlan};
 use rastok::runtime::{Fault, Mailboxes, State, TransactionPreparer, meta_value};
 use std::collections::BTreeMap;
 
@@ -118,7 +119,7 @@ fn an_identity_emission_inherits_everything_but_its_sys_fields() {
     )
     .expect("a valid plan");
     let executor = TransactionPreparer::new(&compilation.plan, GraphVersion(1));
-    let slot = NodeIndex::new(0);
+    let slot = NodeIndex::new(1);
     let state = State::new()
         .cell(&compilation.plan, slot, &singleton())
         .unwrap();
@@ -294,7 +295,7 @@ fn metadata_writes_land_where_the_spec_says() {
     )
     .expect("a valid plan");
     let executor = TransactionPreparer::new(&compilation.plan, GraphVersion(1));
-    let slot = NodeIndex::new(0);
+    let slot = NodeIndex::new(1);
     let state = State::new()
         .cell(&compilation.plan, slot, &singleton())
         .unwrap();

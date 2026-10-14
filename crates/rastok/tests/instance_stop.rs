@@ -670,7 +670,7 @@ fn an_effectful_target_requires_bounded_closing_in_source_and_foreign_plans() {
         "{errors:?}"
     );
     let mut forged = compiled.plan.into_inner();
-    for owner in &mut forged.owners {
+    for owner in &mut forged.nodes {
         owner.instance.closing = None;
     }
     let error = plan::ValidatedExecutionPlan::try_new(forged).unwrap_err();

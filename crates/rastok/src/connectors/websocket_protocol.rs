@@ -11,7 +11,7 @@ use crate::boundary::{
 };
 use crate::connector::{ConnectorDirection, ContractId};
 use crate::envelope::{Data, Envelope};
-use crate::plan::{AttrSetting, NodeExecution, ValidatedExecutionPlan};
+use crate::plan::{AttrSetting, NodeKind, ValidatedExecutionPlan};
 use crate::value::Value;
 use std::collections::BTreeMap;
 
@@ -160,9 +160,9 @@ pub(crate) fn bind_server_routes(
             .nodes
             .iter()
             .find(|node| &node.path == path)
-            .and_then(|node| match &node.execution {
-                NodeExecution::Connector(spec) => Some(spec),
-                NodeExecution::Operator { .. } => None,
+            .and_then(|node| match &node.body {
+                NodeKind::Connector(spec) => Some(spec),
+                NodeKind::Graph | NodeKind::Operator(_) => None,
             })
             .ok_or_else(|| {
                 super::DriverFactoryError::new(format!(
@@ -369,9 +369,9 @@ impl WebSocketLabDriver {
                 .nodes
                 .iter()
                 .find(|node| &node.path == path)
-                .and_then(|node| match &node.execution {
-                    NodeExecution::Connector(spec) => Some(spec),
-                    NodeExecution::Operator { .. } => None,
+                .and_then(|node| match &node.body {
+                    NodeKind::Connector(spec) => Some(spec),
+                    NodeKind::Graph | NodeKind::Operator(_) => None,
                 })
                 .ok_or_else(|| {
                     super::DriverFactoryError::new(format!(
@@ -389,7 +389,7 @@ impl WebSocketLabDriver {
                     "the WebSocket codec of `{path}` is unresolved"
                 )));
             }
-            specs.insert(path.clone(), spec.clone());
+            specs.insert(path.clone(), spec.as_ref().clone());
         }
         Ok(Self { specs })
     }

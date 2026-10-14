@@ -68,7 +68,7 @@ impl Execution<'_> {
         intent: &CallOpen,
     ) -> Result<bool, ExecutionFault> {
         let node = &self.plan.nodes[slot.index()];
-        let Some(spec) = self.plan.owners[node.owner.index()].retry_spec() else {
+        let Some(spec) = node.retry_spec() else {
             return Ok(false);
         };
         if self.retry_attempt(instance, delivery).is_some() {
@@ -334,9 +334,7 @@ impl Execution<'_> {
                 .count(),
         );
         for ((slot, instance), queue) in &self.scheduler.mailboxes.queues {
-            let Some(spec) =
-                self.plan.owners[self.plan.nodes[slot.index()].owner.index()].retry_spec()
-            else {
+            let Some(spec) = self.plan.nodes[slot.index()].retry_spec() else {
                 continue;
             };
             occupied = occupied.saturating_add(
@@ -636,7 +634,7 @@ impl Execution<'_> {
                 self.scheduler.schedule(
                     self.now.saturating_add(ns),
                     Obligation::DeliveryBudget {
-                        connector: self.plan.nodes[slot.index()].path.clone(),
+                        connector: self.executor_path(slot)?.clone(),
                         edge,
                         delivery: envelope.meta().sys().id(),
                         instance: state.instance,

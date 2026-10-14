@@ -433,7 +433,7 @@ fn idempotence_without_retry_is_not_lowered_as_an_effect_alias() {
         let compilation = compile(&[&source], &ContractCatalog::try_m0().expect("catalogue"))
             .expect("ordinary Call");
         assert_eq!(
-            compilation.plan.nodes[0]
+            compilation.plan.nodes[1]
                 .connector()
                 .expect("Call")
                 .is_idempotent(),

@@ -184,7 +184,7 @@ impl Execution<'_> {
         id: crate::envelope::Id,
     ) -> Result<(instance::Generation, envelope::Delivery), ExecutionFault> {
         let mut matches = self.instances.iter().filter_map(|(instance, state)| {
-            if state.owner != self.plan.nodes[slot.index()].owner
+            if state.owner != slot
                 || self.lifecycle.iter().any(|work| {
                     work.instance == *instance && work.lifecycle == node::Lifecycle::Start
                 })
@@ -240,7 +240,7 @@ impl Execution<'_> {
         )
         .map_err(|_| invalid(index, "an exchange terminal has no unique final exit"))?;
         PlanCompletionCheck { plan: self.plan }
-            .admit(&self.plan.nodes[slot.index()].path, &completion)
+            .admit(self.executor_path(slot)?, &completion)
             .map_err(|_| invalid(index, "an exchange terminal violates its Contract"))?;
         let executor = TransactionPreparer::at(self.plan, self.graph_version, self.now);
         let mut held = Vec::new();
@@ -332,7 +332,7 @@ impl Execution<'_> {
                     let settings = self.resolve_invocation_settings(
                         &record.instance,
                         spec,
-                        &self.plan.nodes[slot.index()].path,
+                        self.executor_path(slot)?,
                         &delivery.envelope,
                     )?;
                     if self

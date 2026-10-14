@@ -182,7 +182,7 @@ fn main() -> ! {
     node_layout::compare(plan.plan());
 
     #[cfg(feature = "retry-qualification")]
-    if plan.owners.iter().any(|owner| owner.retry_spec().is_some()) {
+    if plan.nodes.iter().any(|owner| owner.retry_spec().is_some()) {
         let records = retry::run(&plan, hash);
         finish(records);
     }

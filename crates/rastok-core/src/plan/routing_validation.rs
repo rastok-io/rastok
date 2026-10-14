@@ -152,10 +152,10 @@ pub(super) fn validate_plan_routing(
 ) -> Result<(), super::PlanValidationError> {
     let physical = |endpoint: &Endpoint| -> Option<super::EdgeEnd> {
         let node = match &endpoint.owner {
-            super::EndpointOwner::Graph(path) if path.is_root() => None,
-            super::EndpointOwner::Node(path) => Some(super::NodeIndex::new(
+            super::EndpointOwner::Graph(path) if path.is_root() => super::NodeIndex::ROOT,
+            super::EndpointOwner::Node(path) => super::NodeIndex::new(
                 u32::try_from(plan.nodes.iter().position(|node| node.path == *path)?).ok()?,
-            )),
+            ),
             _ => return None,
         };
         let endpoint = super::EdgeEnd {
@@ -202,19 +202,18 @@ pub(super) fn validate_plan_routing(
                 // Boundary composition validates the real command source.
                 // Its flattened source can precede the Graph run admission.
                 let graph_command = matches!(&command.owner, super::EndpointOwner::Graph(owner)
-                    if plan.owners.iter().any(|candidate| candidate.path == *owner && candidate.loop_spec().is_some())
+                    if plan.nodes.iter().any(|candidate| candidate.path == *owner && candidate.loop_spec().is_some())
                     && (!plan.boundary_routes.is_empty()
                         || matches!(&rule.source.owner, super::EndpointOwner::Node(source) if source.segments().starts_with(owner.segments()))));
                 let admitted = graph_command
-                    || command.owner == rule.source.owner
-                        && source.node.is_some_and(|slot| {
-                            let node = &plan.nodes[slot.index()];
-                            plan.owners[node.owner.index()].loop_spec().is_some()
-                                && node
-                                    .connector()
-                                    .and_then(super::ConnectorSpec::call_semantics)
-                                    .is_some()
-                        });
+                    || command.owner == rule.source.owner && {
+                        let node = &plan.nodes[source.node.index()];
+                        node.loop_spec().is_some()
+                            && node
+                                .connector()
+                                .and_then(super::ConnectorSpec::call_semantics)
+                                .is_some()
+                    };
                 if !admitted {
                     return Err(RouteValidationError::at(
                         &path,
@@ -227,12 +226,12 @@ pub(super) fn validate_plan_routing(
                         Some(cases) => super::routing::selected_case_type(ty, cases),
                         None => Some(ty.clone()),
                     });
-                    let entry = plan.owners.iter().enumerate().find_map(|(index, owner)| {
+                    let entry = plan.nodes.iter().enumerate().find_map(|(index, owner)| {
                         if command.owner != super::EndpointOwner::Graph(owner.path.clone()) {
                             return None;
                         }
                         let spec = owner.loop_spec()?;
-                        plan.graph_ports(crate::node::OwnerSlot::new(u32::try_from(index).ok()?))?
+                        plan.graph_ports(crate::node::NodeIndex::new(u32::try_from(index).ok()?))?
                             .iter()
                             .find(|port| port.port == spec.entry)?
                             .ty
@@ -301,11 +300,10 @@ pub(super) fn valid_instance_stop_target(
     plan: &super::ExecutionPlan,
     target: &super::InstanceStopTarget,
 ) -> bool {
-    let Some((scope, _)) = plan
-        .owners
-        .iter()
-        .enumerate()
-        .find(|(_, owner)| owner.path == target.scope && owner.kind == super::OwnerKind::Graph)
+    let Some((scope, _)) =
+        plan.nodes.iter().enumerate().find(|(_, owner)| {
+            owner.path == target.scope && owner.kind() == crate::node::Kind::Graph
+        })
     else {
         return false;
     };
@@ -313,10 +311,10 @@ pub(super) fn valid_instance_stop_target(
         super::EndpointOwner::Graph(path) => (path.clone(), true),
         super::EndpointOwner::Node(path) => (crate::node::OwnerPath::from(path), false),
     };
-    plan.owners.iter().enumerate().any(|(index, owner)| {
+    plan.nodes.iter().enumerate().any(|(index, owner)| {
         owner.path == path
-            && (owner.kind == super::OwnerKind::Graph) == graph
-            && (index == scope || owner.parent == Some(crate::node::OwnerSlot::new(scope as u32)))
+            && (owner.kind() == crate::node::Kind::Graph) == graph
+            && (index == scope || owner.parent == Some(crate::node::NodeIndex::new(scope as u32)))
     })
 }
 

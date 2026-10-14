@@ -72,9 +72,10 @@ fn a_forged_presence_call_cannot_hide_its_receiver_or_key_type() {
         ],
     ] {
         let mut raw = compiled.plan.clone().into_inner();
-        let plan::NodeExecution::Operator { handlers, .. } = &mut raw.nodes[0].execution else {
+        let plan::NodeKind::Operator(operator) = &mut raw.nodes[1].body else {
             panic!("one Operator")
         };
+        let handlers = &mut operator.handlers;
         let plan::Dispatch::Linear(steps) = &mut handlers[0].dispatch else {
             panic!("one linear handler")
         };

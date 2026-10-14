@@ -3770,7 +3770,7 @@ graph websocket : App {{
             .iter_mut()
             .find(|node| node.path.to_string() == node_path)
             .expect("the fixture contains the connector");
-        let crate::plan::NodeExecution::Connector(spec) = &mut node.execution else {
+        let crate::plan::NodeKind::Connector(spec) = &mut node.body else {
             panic!("the fixture node is a connector")
         };
         if let Some((_, value)) = spec.attributes.iter_mut().find(|(field, _)| field == name) {

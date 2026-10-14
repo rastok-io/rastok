@@ -3,13 +3,15 @@
 Status: 14 October 2026. This records the preparation for lot 1 of
 [D-2026-10-11-1](../spec/decisions.md#d-2026-10-11-1--realign-the-plan-and-the-runtime-on-the-specifications-node-ontology-before-the-opening).
 The vocabulary follow-up is `2259fd4` and `beabf68`; the Execution interface
-is named in `90c646f` and `9218779`. The executable package remains format 20.
+is named in `90c646f` and `9218779`. The last qualified package is format 20;
+the format-21 candidate checkpoint is described at the end of this report.
 The Operator-containment step (`5513883`) moves state and handlers into the
 Operator body. `dabda8e` puts the App's port declarations on its
 root Graph. Scope chains now belong to the validated plan rather than each
-Execution. These steps preserve the package tables. Graph and executor
-tables are not yet merged. The isolated allocation measurements below
-describe the preceding representation; no final Node layout has been selected.
+Execution. Those qualified steps preserved the separate declaration tables.
+The working candidate below now merges them. The isolated allocation
+measurements describe the preceding representation; no final Node layout
+has been selected.
 
 ## Invariants before changing the representation
 
@@ -672,3 +674,128 @@ No example, fixture, golden, package, trace or diagnostic recording changed.
 The human-review registers and decisions are untouched. Lot 1 remains open:
 the unified Node table, reference wiring, indexed mailbox deliveries and
 the package cutover still need implementation and end-to-end qualification.
+
+## Unified Node candidate — 14 October, not qualified
+
+The working candidate moves every Graph, Operator and Connector into the
+same Node table. The App Graph is the first row. Graph rows precede the
+Executors; the relative Operator/Connector execution order remains unchanged.
+Each row contains its path, parent, ports, Extensions, instance policy and
+immutable declarations. Only an Operator body contains variables and handlers.
+The separate owner table and reciprocal owner/executor references disappear.
+
+The package reader now identifies this incomplete candidate as format 21;
+no reference package, causal golden or diagnostic recording has been regenerated.
+This is not an approval of the package or of the boxed body layout. Reference
+wiring, indexed deliveries and complete host/embedded qualification still follow.
+
+The unified declaration table receives new plan key **12**. It does not
+reinterpret the former executor table at key 1 or the owner table at key 9.
+Its Node-row map is a new record shape under that new key; existing package
+keys, Extension tags and identity domains are not reassigned. The interim
+physical-edge encoding now names the root Node explicitly, not `null`;
+the final per-Graph wiring will replace transport of those derived edges.
+No intermediate candidate representation is a published or approved format.
+
+`NodeIndex::ROOT` names the root App. Every physical endpoint carries a
+Node index. This removes the boundary-specific absence state from admission,
+routing and recovery; the path-based text used in journal identities stays
+unchanged. A package-unit test rejects a null endpoint and round-trips the
+explicit root. The single declaration table also has one duplicate-path
+check and one out-of-bounds error; reciprocal owner/Executor checks no longer
+have a state to validate.
+
+The package-unit handler encoding changes for a structural reason: handlers
+are children of the Operator body, so their former executor reference is no
+longer serialized. Its unit pin retains the activation and Dispatch bytes and
+removes only the redundant owner entry. Hostile tests must reject a Graph body
+carrying handlers. This package change does not affect a journal record, an
+emission identity, the semantic hash, or a causal trace. The final package
+witness inventory will be measured before any reference regeneration.
+
+### Checkpoint verification
+
+The declaration-table change and explicit root endpoints were compiled as
+one batch with their host, runtime, recovery and test callers. No full test
+gate was rerun between individual edits. The targeted batch has completed:
+
+| Target | Tests passed |
+|---|---:|
+| Hosted library | 390 |
+| `execution` | 85 |
+| `golden_trace` | 8 |
+| `plan_validation` | 74 |
+| `retry_runtime` | 25 |
+| `v16_loop` | 37 |
+| `v16_loop_composition` | 5 |
+| `v16_recovery` | 14 |
+
+The core library batch ran 374 tests: 373 passed, and one hostile-codec test
+failed while constructing its forged Operator handler, before calling the
+decoder. Its base fixture has no handler; the mutation now inserts a complete
+invalid handler rather than indexing an empty array. The targeted codec rerun
+passed all 28 tests, including that rejection. Compilation without default
+features passed on `thumbv7m-none-eabi`,
+`riscv32imac-unknown-none-elf` and `thumbv8m.main-none-eabihf`.
+Clippy found a single-element loop in a rewritten hostile handler test,
+unnecessary borrows in the debugger projection, a redundant test binding and
+one test still checking an absent boundary Node. Those and the test's missing
+Node-index qualification have been corrected; strict Clippy passed on all
+workspace targets and features. Rustdoc completed without warnings. The complete
+workspace test gate and final reference-wiring qualification are not claimed.
+
+The earlier declaration-only checkpoint ran 73/74 plan-validation tests and
+4/5 Graph-composition tests. Their failures were assertions about the removed
+duplicate owner table and an empty executor table, respectively; both now
+check the same invariant against the unified Nodes and pass above. An
+`instance_stop` package-version pin still expects 20 and is intentionally
+unchanged until the final package inventory is approved. It is not a causal
+trace failure, and no test has been ignored.
+
+Candidate packages for the embedded measurements are generated outside the
+repository, without replacing tracked witnesses. On this host a sample of
+`retry_spike_package` more than eight minutes after launch found only
+`_dyld_start`, before any Rust code, with a 96 KiB physical footprint. That
+startup delay is not a Rastok benchmark. The generators subsequently completed
+and the embedded results below were measured. Neither system security settings
+nor test timeouts were changed.
+
+### Candidate execution and memory measurements
+
+Both Cortex-M33 workloads ran the unified Node candidate and ended with
+`SPIKE_OK`, with the original semantic hashes and 67/17 journal records.
+The package was generated from source into a fresh temporary directory and
+selected through `RASTOK_SPIKE_PACKAGE`; no tracked package was replaced.
+
+| Cortex-M33 measurement | Echo, 32 admissions | Retry with recovery |
+|---|---:|---:|
+| Heap immediately after package decoding | 6,784 B | 5,144 B |
+| Package-load peak | 33,972 B | 29,120 B |
+| Complete execution/recovery peak | 111,960 B | 128,940 B |
+| Margin below 128 KiB | 19,112 B | 2,132 B |
+| Live heap after execution | not sampled | 92,900 B |
+| Live heap after recovery | not sampled | 92,764 B |
+| `.text` | 902,916 B | 964,452 B |
+| `.rodata` | 69,816 B | 80,556 B |
+| `.text + .rodata` | 972,732 B | 1,045,008 B |
+| Margin below 1 MiB | 75,844 B | 3,568 B |
+
+Against `0f6cac3`, Retry's whole-run peak falls by 1,572 B and its resident
+decoded plan by 516 B, while code grows by 1,020 B. Echo's whole-run peak falls
+by 132 B and code by 236 B. These are measurements of the current Node-table
+candidate, **not** of the remaining per-Graph wiring and mailbox-index work.
+The gates remain unchanged, and this does not yet select the complete layout.
+
+The package-ledger audit ran all 28 existing gallery scenarios. Each old/new
+record count and causal seal matches. HTTP cases used only the documented
+synthetic secret canaries and `fixture-v1` versions, with Lab responses; no
+external model or partner was called. An initial run without these explicit
+environment bindings stopped at the webhook's secret-version preflight and
+is not counted as a successful gallery run.
+
+Echo, JSONL and gauge also retain their semantic hashes. Their candidate
+body lengths are 919, 964 and 225 bytes, respectively, versus 961, 1,005 and
+249 bytes in the tracked format-20 packages. The body changes remove duplicate
+declaration ownership and handler references and name the App endpoint
+explicitly. These intermediate lengths are evidence, not approved fixture
+pins: the final wiring shape must enter the package inventory first.

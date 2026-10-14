@@ -1843,7 +1843,7 @@ graph api : App {
             .iter_mut()
             .find(|node| node.path.to_string() == "server")
             .expect("the respond plan contains its server");
-        let crate::plan::NodeExecution::Connector(server) = &mut server_node.execution else {
+        let crate::plan::NodeKind::Connector(server) = &mut server_node.body else {
             panic!("the server node is a connector")
         };
         let replace = |attributes: &mut Vec<(String, crate::plan::AttrSetting)>,

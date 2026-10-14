@@ -40,7 +40,7 @@ graph app : App {{
 fn a_json_response_refines_only_the_existing_output_and_retains_its_annotations() {
     let compilation = checked(&source("json", "output out: ModelResponse"))
         .expect("the JSON codec deserializes the declared response type");
-    let model = &compilation.plan.plan().nodes[0];
+    let model = &compilation.plan.plan().nodes[1];
     assert_eq!(model.ports.len(), 3);
     let out = model
         .ports
@@ -114,8 +114,8 @@ fn projected_json_is_an_explicit_plan_profile_not_a_new_struct_type() {
             .expect("opt-in projected response");
     assert_ne!(strict.hash, projected.hash);
     assert_eq!(
-        strict.plan.plan().nodes[0].ports,
-        projected.plan.plan().nodes[0].ports
+        strict.plan.plan().nodes[1].ports,
+        projected.plan.plan().nodes[1].ports
     );
     let encoded = rastok::plan::encode(&projected.plan, &projected.hash);
     assert_eq!(
@@ -123,8 +123,7 @@ fn projected_json_is_an_explicit_plan_profile_not_a_new_struct_type() {
         (projected.plan.clone(), projected.hash)
     );
     let mut without_profile = projected.plan.plan().clone();
-    let rastok::plan::NodeExecution::Connector(spec) = &mut without_profile.nodes[0].execution
-    else {
+    let rastok::plan::NodeKind::Connector(spec) = &mut without_profile.nodes[1].body else {
         panic!("connector")
     };
     spec.attributes.retain(|(name, _)| name != "json_profile");
@@ -164,7 +163,7 @@ fn projected_json_requires_the_http_json_struct_profile() {
 
 #[test]
 fn the_independent_validator_rechecks_projected_json_restrictions() {
-    use rastok::plan::{AttrSetting, NodeExecution, ValidatedExecutionPlan};
+    use rastok::plan::{AttrSetting, NodeKind, ValidatedExecutionPlan};
     for (codec, ports, profile) in [
         ("json", "", "projected"),
         ("text", "", "projected"),
@@ -173,7 +172,7 @@ fn the_independent_validator_rechecks_projected_json_restrictions() {
     ] {
         let compilation = checked(&source(codec, ports)).expect("valid base");
         let mut forged = compilation.plan.plan().clone();
-        let NodeExecution::Connector(spec) = &mut forged.nodes[0].execution else {
+        let NodeKind::Connector(spec) = &mut forged.nodes[1].body else {
             panic!("connector")
         };
         spec.attributes.push((
@@ -219,7 +218,7 @@ fn the_independent_validator_rejects_forged_codec_capabilities() {
     let compilation = checked(&source("json", "")).expect("unrefined base");
     for ty in [DataType::BYTES, DataType::FLOAT, DataType::Uuid] {
         let mut forged = compilation.plan.plan().clone();
-        forged.nodes[0]
+        forged.nodes[1]
             .ports
             .iter_mut()
             .find(|port| port.port.name() == "out")
@@ -229,7 +228,7 @@ fn the_independent_validator_rejects_forged_codec_capabilities() {
     }
     let typed = checked(&source("json", "output out: ModelResponse")).expect("typed response");
     let mut forged = typed.plan.plan().clone();
-    let rastok::plan::NodeExecution::Connector(spec) = &mut forged.nodes[0].execution else {
+    let rastok::plan::NodeKind::Connector(spec) = &mut forged.nodes[1].body else {
         panic!("connector")
     };
     spec.attributes

@@ -48,7 +48,7 @@ fn resident_mock_keeps_one_session_across_writes() {
     let compilation = compile(&[SERVICE], &ContractCatalog::try_m0().unwrap())
         .expect("service is an executable Session, not a job per message");
     assert_eq!(
-        compilation.plan.plan().nodes[0]
+        compilation.plan.plan().nodes[1]
             .connector()
             .map(|s| s.exchange),
         Some(rastok::connector::ConnectorExchange::Session)
@@ -208,7 +208,7 @@ fn independent_core_validation_rejects_forged_service_profiles() {
     let compiled = compile(&[SERVICE], &ContractCatalog::try_m0().unwrap()).unwrap();
     for sabotage in 0..4 {
         let mut plan = compiled.plan.clone().into_inner();
-        let NodeExecution::Connector(spec) = &mut plan.nodes[0].execution else {
+        let NodeKind::Connector(spec) = &mut plan.nodes[1].body else {
             panic!("connector");
         };
         match sabotage {

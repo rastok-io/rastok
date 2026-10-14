@@ -993,8 +993,8 @@ lab app {
         .iter()
         .find(|edge| edge.from.port.name() == "exit")
         .unwrap();
-    let node = &forged.nodes[exit.from.node.unwrap().index()];
-    let owner = plan::EndpointOwner::Node(node.path.clone());
+    let node = &forged.nodes[exit.from.node.index()];
+    let owner = plan::EndpointOwner::Node(node.executor_path().unwrap().clone());
     forged.routes.push(plan::RouteRule {
         source: plan::Endpoint {
             owner: owner.clone(),
@@ -1201,7 +1201,7 @@ fn a_rederived_measure_bounds_commands_without_authored_fuel() {
     ] {
         let plan = compile(&format!("Loop.measure = Loop.state.data; {dispatch}"));
         let proof = plan
-            .owners
+            .nodes
             .iter()
             .find_map(|owner| owner.loop_spec())
             .unwrap()
@@ -1244,7 +1244,7 @@ fn a_package_cannot_replace_the_measured_decrease_with_a_claim() {
     );
     let mut raw = plan.plan().clone();
     let proof = raw
-        .owners
+        .nodes
         .iter_mut()
         .find_map(|owner| {
             owner
@@ -1270,7 +1270,7 @@ fn a_package_cannot_replace_the_measured_decrease_with_a_claim() {
 fn a_package_cannot_erase_its_terminal_selection() {
     let plan = compile("Loop.fuel = 1; on in { out = data }");
     let mut raw = plan.plan().clone();
-    for owner in &mut raw.owners {
+    for owner in &mut raw.nodes {
         for extension in &mut owner.extensions {
             if let plan::ExtensionSpec::Loop(spec) = extension {
                 spec.terminals.clear();

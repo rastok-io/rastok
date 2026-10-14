@@ -33,9 +33,9 @@ use crate::instance;
 use crate::journal::admission::InstanceAdmissions;
 use crate::journal::{Emission, Journal, LoopRunId, RouteTarget, RoutedDelivery, ids};
 use crate::node;
+use crate::node::NodeIndex;
 use crate::plan::{
-    AttrSetting, Edge, EdgeEnd, EvaluationSite, GraphVersion, NodeExecution, NodeIndex, OwnerKind,
-    ValidatedExecutionPlan,
+    AttrSetting, Edge, EdgeEnd, EvaluationSite, GraphVersion, NodeKind, ValidatedExecutionPlan,
 };
 use crate::runtime::{
     DataSlot, Fault, JoinCandidate, LifecycleFiring, Mailboxes, State, TransactionPreparer,
@@ -110,7 +110,7 @@ pub enum ExecutionFault {
     /// A typed Driver outcome contradicts its Contract's production guarantees.
     ContractViolation {
         /// Connector which supplied the contradictory outcome.
-        node: node::Path,
+        node: node::OwnerPath,
         /// Stable explanation, without payload data.
         reason: &'static str,
     },
@@ -131,7 +131,7 @@ pub enum ExecutionFault {
     /// backpressure surfaced before the commit.
     MailboxFull {
         /// The refusing node.
-        node: node::Path,
+        node: node::OwnerPath,
     },
     /// The shared recurrence budget cannot admit another Loop run or Retry operation.
     RecurrenceQueueFull {
@@ -169,7 +169,7 @@ pub enum ExecutionFault {
     /// panic and never a data-representation fault.
     PlanInvariant {
         /// The offending node.
-        node: node::Path,
+        node: node::OwnerPath,
         /// The violated invariant.
         reason: &'static str,
     },
@@ -488,7 +488,7 @@ struct SettledSession {
 /// route commits.
 #[derive(Debug, Clone)]
 struct InstanceCandidate {
-    owner: node::OwnerSlot,
+    owner: node::NodeIndex,
     reference: instance::Generation,
     parent: Option<instance::Generation>,
     frames: Vec<instance::Segment>,
@@ -525,7 +525,7 @@ struct PreparedTarget {
 /// their complete source chain; reclamation follows the successful commit.
 #[derive(Debug, Clone)]
 struct LifecycleWork {
-    owner: node::OwnerSlot,
+    owner: node::NodeIndex,
     instance: instance::Generation,
     parent_instance: Option<instance::Generation>,
     lifecycle: node::Lifecycle,
@@ -723,7 +723,7 @@ impl crate::boundary::CompletionCheck for PlanCompletionCheck<'_> {
             }
             if let Data::Materialized(value) = &output.data {
                 let from = EdgeEnd {
-                    node: Some(slot),
+                    node: slot,
                     port: output.port.clone(),
                 };
                 crate::runtime::crossing_pins_hold(self.plan, &from, value)
@@ -772,7 +772,7 @@ pub struct BoundaryOutput {
 #[derive(Debug, Clone, PartialEq)]
 pub struct EnvelopeView {
     /// The observed node, or `None` at the App boundary.
-    pub node: Option<node::Path>,
+    pub node: Option<node::OwnerPath>,
     /// The source or destination port where the envelope was seen.
     pub port: node::Port,
     /// The observed envelope.
@@ -802,7 +802,7 @@ pub struct InstanceInspection {
     /// Current replay-derivable lifecycle phase.
     pub phase: InstancePhaseInspection,
     /// Executable Node at this owner, absent for a Graph owner.
-    pub node: Option<node::Path>,
+    pub node: Option<node::OwnerPath>,
     /// Current Node-private cells with defaults applied.
     pub state: BTreeMap<String, crate::value::Value>,
 }
@@ -811,7 +811,7 @@ pub struct InstanceInspection {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MailboxInspection {
     /// Executable Node that owns this FIFO.
-    pub node: node::Path,
+    pub node: node::OwnerPath,
     /// Exact logical instance generation owning the FIFO.
     pub instance: instance::Generation,
     /// Whether execution has reserved the mailbox head for an open protocol.
@@ -846,7 +846,7 @@ pub struct CallInspection {
     /// Direction relative to the graph.
     pub direction: CallDirectionInspection,
     /// Connector owning the protocol.
-    pub connector: node::Path,
+    pub connector: node::OwnerPath,
     /// Exact logical instance generation.
     pub instance: instance::Generation,
     /// Whether the terminal observation is retained but not yet consumed.
@@ -870,7 +870,7 @@ pub struct SessionInspection {
     /// Direction of the opening.
     pub direction: SessionDirectionInspection,
     /// Connector owning the protocol.
-    pub connector: node::Path,
+    pub connector: node::OwnerPath,
     /// Exact logical instance generation.
     pub instance: instance::Generation,
     /// Whether the opening handshake completed.
@@ -1071,10 +1071,12 @@ fn first_annotation_location(
             }
         }
     }
-    for owner in &plan.owners {
-        for port in &owner.ports {
-            if contains(&port.annotations) {
-                return Some(format!("Graph port `{}.{}`", owner.path, port.port));
+    for owner in &plan.nodes {
+        if owner.kind() == node::Kind::Graph {
+            for port in &owner.ports {
+                if contains(&port.annotations) {
+                    return Some(format!("Graph port `{}.{}`", owner.path, port.port));
+                }
             }
         }
         for value in &owner.vals {
@@ -1148,9 +1150,11 @@ fn personal_data_requirements(
             inspect(&var.annotations);
         }
     }
-    for owner in &plan.owners {
-        for port in &owner.ports {
-            inspect(&port.annotations);
+    for owner in &plan.nodes {
+        if owner.kind() == node::Kind::Graph {
+            for port in &owner.ports {
+                inspect(&port.annotations);
+            }
         }
         for value in &owner.vals {
             inspect(&value.annotations);
@@ -1199,6 +1203,19 @@ fn first_missing_deployment_binding(
 }
 
 impl<'plan> Execution<'plan> {
+    fn executor_path(&self, index: NodeIndex) -> Result<&'plan node::Path, ExecutionFault> {
+        let node = self
+            .plan
+            .nodes
+            .get(index.index())
+            .ok_or(ExecutionFault::Fault(Fault::UnknownNodeIndex(index)))?;
+        node.executor_path()
+            .ok_or_else(|| ExecutionFault::PlanInvariant {
+                node: node.path.clone(),
+                reason: "a Graph cannot own an application transaction or a Driver exchange",
+            })
+    }
+
     fn preflight(&self, journal: &dyn Journal) -> Result<(), ExecutionFault> {
         if let Some(error) = self.unsupported_feature() {
             return Err(error);
@@ -1218,11 +1235,11 @@ impl<'plan> Execution<'plan> {
 
     fn loop_delay_for(
         &self,
-        owner: node::OwnerSlot,
+        owner: node::NodeIndex,
         iteration: u64,
     ) -> Result<Option<i64>, ExecutionFault> {
-        let path = self.plan.owners[owner.index()].path.clone();
-        let Some(spec) = self.plan.owners[owner.index()].loop_spec() else {
+        let path = self.plan.nodes[owner.index()].path.clone();
+        let Some(spec) = self.plan.nodes[owner.index()].loop_spec() else {
             return Err(ExecutionFault::InvalidLoopDecision {
                 owner: path,
                 reason: "the Loop manager lost its validated Extension specification",
@@ -1251,14 +1268,19 @@ impl<'plan> Execution<'plan> {
                 location: location.clone(),
             });
         }
-        self.plan.owners.iter().find_map(|owner| {
+        self.plan.nodes.iter().find_map(|owner| {
             if owner.retry_spec().is_some() && self.original_hash.is_none() {
-                return Some(ExecutionFault::UnsupportedExtension { owner: owner.path.clone(), extension: node::Extension::Retry });
+                return Some(ExecutionFault::UnsupportedExtension {
+                    owner: owner.path.clone(),
+                    extension: node::Extension::Retry,
+                });
             }
             let spec = owner.loop_spec()?;
-            let supported = (owner.kind == OwnerKind::Graph || matches!(owner.kind, crate::plan::OwnerKind::Node(slot)
-                    if matches!(self.plan.nodes[slot.index()].execution, NodeExecution::Operator { .. })
-                        || self.plan.nodes[slot.index()].connector().and_then(crate::plan::ConnectorSpec::call_semantics).is_some()))
+            let supported = (matches!(owner.body, NodeKind::Graph | NodeKind::Operator(_))
+                || owner
+                    .connector()
+                    .and_then(crate::plan::ConnectorSpec::call_semantics)
+                    .is_some())
                 && (spec.fuel.is_some() || spec.proof.is_some());
             (!supported).then(|| ExecutionFault::UnsupportedExtension {
                 owner: owner.path.clone(),
@@ -1341,7 +1363,7 @@ impl<'plan> Execution<'plan> {
             plan,
             original_hash: None,
             retry_manager: plan
-                .owners
+                .nodes
                 .iter()
                 .any(|owner| owner.retry_spec().is_some())
                 .then(|| Box::new(crate::journal::retry_protocol::RetryView::default())),
@@ -1352,7 +1374,7 @@ impl<'plan> Execution<'plan> {
             has_join_activations: plan.handlers().any(|(_, handler)| {
                 matches!(&handler.activation, node::HandlerActivation::Join { .. })
             }),
-            has_loops: plan.owners.iter().any(|owner| {
+            has_loops: plan.nodes.iter().any(|owner| {
                 owner
                     .extensions
                     .iter()
@@ -1374,11 +1396,11 @@ impl<'plan> Execution<'plan> {
                 })
                 .then(VecDeque::new),
             graph_loops: plan
-                .owners
+                .nodes
                 .iter()
-                .any(|owner| owner.kind == OwnerKind::Graph && owner.loop_spec().is_some())
+                .any(|owner| owner.kind() == node::Kind::Graph && owner.loop_spec().is_some())
                 .then(|| Box::new(graph_loop::GraphLoops::default())),
-            has_lifetime_deadlines: plan.owners.iter().any(|owner| {
+            has_lifetime_deadlines: plan.nodes.iter().any(|owner| {
                 matches!(
                     owner.instance.lifetime,
                     instance::Lifetime::Idle(_)
@@ -1387,7 +1409,7 @@ impl<'plan> Execution<'plan> {
                 )
             }),
             has_single_pass: plan
-                .owners
+                .nodes
                 .iter()
                 .any(|owner| matches!(owner.instance.lifetime, instance::Lifetime::SinglePass)),
             graph_version,
@@ -1512,7 +1534,12 @@ impl<'plan> Execution<'plan> {
                 ));
                 continue;
             }
-            let connector = &self.plan.nodes[pending.slot.index()].path;
+            let Some(connector) = self.plan.nodes[pending.slot.index()].executor_path() else {
+                report
+                    .rejected
+                    .push((event, String::from("an inbound Call has no Executor")));
+                continue;
+            };
             if let Err(reason) = gate.admit(connector, &event.completion) {
                 report.rejected.push((event, reason));
                 continue;
@@ -1541,7 +1568,9 @@ impl<'plan> Execution<'plan> {
                     .filter(|response| !response.started)?;
                 Some(InboundCallResponse {
                     call_id: *call_id,
-                    connector_path: self.plan.nodes[pending.slot.index()].path.clone(),
+                    connector_path: self.plan.nodes[pending.slot.index()]
+                        .executor_path()?
+                        .clone(),
                     response: response.delivery.envelope.clone(),
                 })
             })
@@ -1583,7 +1612,9 @@ impl<'plan> Execution<'plan> {
                     .filter(|timeout| timeout.requested && !timeout.started)?;
                 Some(InboundCallTimeout {
                     call_id: *call_id,
-                    connector_path: self.plan.nodes[pending.slot.index()].path.clone(),
+                    connector_path: self.plan.nodes[pending.slot.index()]
+                        .executor_path()?
+                        .clone(),
                 })
             })
             .collect()
@@ -1774,11 +1805,15 @@ impl<'plan> Execution<'plan> {
             if self.has_loops && self.open_loop_application(journal, slot, &instance, &delivery)? {
                 return Ok(true);
             }
-            match &self.plan.nodes[slot.index()].execution {
-                NodeExecution::Operator { .. } => {
-                    self.fire_operator(journal, slot, &instance, &delivery)?
+            match &self.plan.nodes[slot.index()].body {
+                NodeKind::Graph => {
+                    return Err(ExecutionFault::PlanInvariant {
+                        node: self.plan.nodes[slot.index()].path.clone(),
+                        reason: "a Graph cannot have an application mailbox",
+                    });
                 }
-                NodeExecution::Connector(_) => {
+                NodeKind::Operator(_) => self.fire_operator(journal, slot, &instance, &delivery)?,
+                NodeKind::Connector(_) => {
                     self.fire_connector(journal, bindings, slot, &instance, &delivery)?
                 }
             }
@@ -1818,8 +1853,14 @@ impl<'plan> Execution<'plan> {
                 })
         {
             after = Some((slot, instance.clone()));
-            match &self.plan.nodes[slot.index()].execution {
-                NodeExecution::Connector(_) => {
+            match &self.plan.nodes[slot.index()].body {
+                NodeKind::Graph => {
+                    return Err(ExecutionFault::PlanInvariant {
+                        node: self.plan.nodes[slot.index()].path.clone(),
+                        reason: "a Graph cannot have an application mailbox",
+                    });
+                }
+                NodeKind::Connector(_) => {
                     if self.has_loops
                         && self.open_loop_application(journal, slot, &instance, &delivery)?
                     {
@@ -1828,7 +1869,7 @@ impl<'plan> Execution<'plan> {
                     self.fire_connector(journal, bindings, slot, &instance, &delivery)?;
                     return Ok(true);
                 }
-                NodeExecution::Operator { .. } => {
+                NodeKind::Operator(_) => {
                     // An ordinary FIFO head necessarily precedes any work a
                     // later delivery could make runnable. Only a join-owned
                     // head can be partial and require the wider candidate
@@ -2082,7 +2123,7 @@ impl<'plan> Execution<'plan> {
                             },
                         }
                     })?;
-                    let connector = &self.plan.nodes[session.slot.index()].path;
+                    let connector = self.executor_path(session.slot)?;
                     if let Err(reason) = gate.admit(connector, &completion) {
                         report.rejected_sessions.push((event, reason));
                         continue;
@@ -2154,7 +2195,7 @@ impl<'plan> Execution<'plan> {
         for reference in openings {
             let session = self.sessions.get(&reference).cloned().ok_or_else(|| {
                 ExecutionFault::PlanInvariant {
-                    node: node::Path::new(["session"])
+                    node: node::OwnerPath::new(["session"])
                         .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                     reason: "a pending Session opening disappeared before retry",
                 }
@@ -2202,7 +2243,7 @@ impl<'plan> Execution<'plan> {
                 .get(&reference)
                 .cloned()
                 .ok_or_else(|| ExecutionFault::PlanInvariant {
-                    node: node::Path::new(["session"])
+                    node: node::OwnerPath::new(["session"])
                         .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                     reason: "a pending Session write disappeared before retry",
                 })?;
@@ -2246,12 +2287,12 @@ impl<'plan> Execution<'plan> {
         for reference in pending {
             let session = self.sessions.get(&reference).cloned().ok_or_else(|| {
                 ExecutionFault::PlanInvariant {
-                    node: node::Path::new(["session"])
+                    node: node::OwnerPath::new(["session"])
                         .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                     reason: "a pending Session close lost its logical session",
                 }
             })?;
-            let connector = self.plan.nodes[session.slot.index()].path.clone();
+            let connector = self.executor_path(session.slot)?.clone();
             if bindings
                 .close_session(&connector, reference)
                 .map_err(crate::boundary::PollFault::Driver)
@@ -2482,7 +2523,7 @@ impl<'plan> Execution<'plan> {
                 return Ok(());
             };
             let planned = &self.plan.nodes[slot.index()];
-            let NodeExecution::Connector(spec) = &planned.execution else {
+            let NodeKind::Connector(spec) = &planned.body else {
                 unreachable!("budgets apply to connectors only")
             };
             if !spec.roles.has_outbound() || spec.exchange != ConnectorExchange::Call {
@@ -2497,11 +2538,15 @@ impl<'plan> Execution<'plan> {
                 let resolved_settings = self.resolve_invocation_settings(
                     &instance,
                     spec,
-                    &planned.path,
+                    self.executor_path(slot)?,
                     &queued.envelope,
                 )?;
                 match bindings
-                    .prepare_request(&planned.path, queued.envelope.data(), &resolved_settings)
+                    .prepare_request(
+                        self.executor_path(slot)?,
+                        queued.envelope.data(),
+                        &resolved_settings,
+                    )
                     .map_err(crate::boundary::PollFault::Driver)
                     .map_err(ExecutionFault::Dispatch)?
                 {
@@ -2515,7 +2560,7 @@ impl<'plan> Execution<'plan> {
                             ),
                             emitting_id,
                             edge: queued.edge.clone(),
-                            connector_path: planned.path.clone(),
+                            connector_path: self.executor_path(slot)?.clone(),
                             prepared,
                             idempotency_key: None,
                             resolved_settings,
@@ -2673,7 +2718,7 @@ impl<'plan> Execution<'plan> {
         edge: &str,
         delivery: Id,
     ) -> Result<(), ExecutionFault> {
-        let connector = self.plan.nodes[slot.index()].path.clone();
+        let connector = self.executor_path(slot)?.clone();
         if let Some(session_id) = self
             .sessions
             .iter()
@@ -2686,7 +2731,7 @@ impl<'plan> Execution<'plan> {
         {
             let session = self.sessions.get(&session_id).cloned().ok_or_else(|| {
                 ExecutionFault::PlanInvariant {
-                    node: connector.clone(),
+                    node: node::OwnerPath::from(&connector),
                     reason: "a due Session handshake lost its logical session",
                 }
             })?;
@@ -2713,7 +2758,7 @@ impl<'plan> Execution<'plan> {
                     .mailboxes
                     .remove_by_ref(slot, &instance, edge, delivery)
                     .ok_or_else(|| ExecutionFault::PlanInvariant {
-                        node: connector.clone(),
+                        node: node::OwnerPath::from(&connector),
                         reason: "a due pending Session opening lost its mailbox delivery",
                     })?;
                 if let Some(session) = self.sessions.get_mut(&session_id) {
@@ -2749,7 +2794,7 @@ impl<'plan> Execution<'plan> {
         };
         let spec = self.plan.nodes[slot.index()].connector().ok_or_else(|| {
             ExecutionFault::PlanInvariant {
-                node: connector.clone(),
+                node: node::OwnerPath::from(&connector),
                 reason: "a Session handshake deadline names a non-connector",
             }
         })?;
@@ -2790,7 +2835,7 @@ impl<'plan> Execution<'plan> {
             .mailboxes
             .remove_by_ref(slot, &instance, edge, delivery)
             .ok_or_else(|| ExecutionFault::PlanInvariant {
-                node: connector.clone(),
+                node: node::OwnerPath::from(&connector),
                 reason: "a due queued Session opening disappeared after its WAL fact",
             })?;
         self.sessions.insert(
@@ -2825,7 +2870,7 @@ impl<'plan> Execution<'plan> {
     fn expire_instance(
         &mut self,
         journal: &mut dyn Journal,
-        owner: node::OwnerSlot,
+        owner: node::NodeIndex,
         reference: instance::Generation,
         cause: Id,
         deadline: InstanceDeadline,
@@ -2909,12 +2954,13 @@ impl<'plan> Execution<'plan> {
             .instances
             .iter()
             .map(|(reference, instance)| {
-                let owner = &self.plan.owners[instance.owner.index()];
-                let (node, state) = match owner.kind {
-                    OwnerKind::Graph => (None, BTreeMap::new()),
-                    OwnerKind::Node(slot) => (
-                        Some(self.plan.nodes[slot.index()].path.clone()),
-                        self.state.cell_unchecked(self.plan.plan(), slot, reference),
+                let owner = &self.plan.nodes[instance.owner.index()];
+                let (node, state) = match owner.kind() {
+                    node::Kind::Graph => (None, BTreeMap::new()),
+                    node::Kind::Operator | node::Kind::Connector => (
+                        Some(owner.path.clone()),
+                        self.state
+                            .cell_unchecked(self.plan.plan(), instance.owner, reference),
                     ),
                 };
                 let phase = match instance.phase {
@@ -3072,10 +3118,7 @@ impl<'plan> Execution<'plan> {
                     )
                 })
         {
-            if !matches!(
-                self.plan.nodes[slot.index()].execution,
-                NodeExecution::Operator { .. }
-            ) {
+            if !matches!(self.plan.nodes[slot.index()].body, NodeKind::Operator(_)) {
                 return false;
             }
             let join_owned = self.plan.nodes[slot.index()]
@@ -3174,10 +3217,7 @@ impl<'plan> Execution<'plan> {
                 })
         {
             after = Some((slot, instance.clone()));
-            if matches!(
-                self.plan.nodes[slot.index()].execution,
-                NodeExecution::Connector(_)
-            ) {
+            if matches!(self.plan.nodes[slot.index()].body, NodeKind::Connector(_)) {
                 return true;
             }
             let join_owned = self.plan.nodes[slot.index()]
@@ -3211,9 +3251,10 @@ impl<'plan> Execution<'plan> {
         let Some(instance) = self.instances.get(reference) else {
             return false;
         };
-        let node_work = match self.plan.owners[instance.owner.index()].kind {
-            OwnerKind::Graph => false,
-            OwnerKind::Node(slot) => {
+        let slot = instance.owner;
+        let node_work = match self.plan.nodes[slot.index()].kind() {
+            node::Kind::Graph => false,
+            node::Kind::Operator | node::Kind::Connector => {
                 self.scheduler.mailboxes.has_work(slot, reference)
                     || self
                         .pending
@@ -3248,7 +3289,7 @@ impl<'plan> Execution<'plan> {
         self.instances.iter().find_map(|(reference, instance)| {
             (matches!(instance.phase, instance::Phase::Open)
                 && matches!(
-                    self.plan.owners[instance.owner.index()].instance.lifetime,
+                    self.plan.nodes[instance.owner.index()].instance.lifetime,
                     instance::Lifetime::SinglePass
                 )
                 && !self.lifecycle.iter().any(|work| {
@@ -3300,7 +3341,7 @@ impl<'plan> Execution<'plan> {
         let Some(instance) = self.instances.get(reference) else {
             return Vec::new();
         };
-        let Some(_) = self.plan.owners[instance.owner.index()].instance.closing else {
+        let Some(_) = self.plan.nodes[instance.owner.index()].instance.closing else {
             return Vec::new();
         };
         vec![
@@ -3322,7 +3363,7 @@ impl<'plan> Execution<'plan> {
         let Some(instance) = self.instances.get(reference) else {
             return;
         };
-        let Some(policy) = self.plan.owners[instance.owner.index()].instance.closing else {
+        let Some(policy) = self.plan.nodes[instance.owner.index()].instance.closing else {
             return;
         };
         let drain_at = self.now.saturating_add(policy.drain_for);
@@ -3363,7 +3404,7 @@ impl<'plan> Execution<'plan> {
         }
         let owner = self.instances[reference].owner;
         let mut record = crate::journal::TransactionRecord {
-            owner_path: self.plan.owners[owner.index()].path.clone(),
+            owner_path: self.plan.nodes[owner.index()].path.clone(),
             instance: reference.clone(),
             parent_instance: None,
             close_scope: Some(reference.clone()),
@@ -3399,7 +3440,7 @@ impl<'plan> Execution<'plan> {
     /// queue `l:stop` while a child bundle or child stop fact is outstanding.
     fn activate_close(&mut self, reference: &instance::Generation, cause: Envelope) {
         let closes_subtree = self.instances.get(reference).is_some_and(|instance| {
-            self.plan.owners[instance.owner.index()].kind == OwnerKind::Graph
+            self.plan.nodes[instance.owner.index()].kind() == node::Kind::Graph
         });
         let targets: Vec<instance::Generation> = self
             .instances
@@ -3472,17 +3513,17 @@ impl<'plan> Execution<'plan> {
                 !self.scope_has_work(scope)
                     && !self.instance_has_direct_work(reference)
                     && !self.instance_has_descendants(reference)
-                    && match self.plan.owners[self.instances[*reference].owner.index()].kind {
-                        OwnerKind::Graph => true,
-                        OwnerKind::Node(slot) => !stop_receivers
+                    && match self.plan.nodes[self.instances[*reference].owner.index()].kind() {
+                        node::Kind::Graph => true,
+                        node::Kind::Operator | node::Kind::Connector => !stop_receivers
                             .entry(scope.clone())
                             .or_insert_with(|| self.pending_stop_receivers(scope))
-                            .contains(&slot),
+                            .contains(&self.instances[*reference].owner),
                     }
             })
             .map(|(reference, instance)| {
                 (
-                    self.plan.owners[instance.owner.index()]
+                    self.plan.nodes[instance.owner.index()]
                         .path
                         .segments()
                         .len(),
@@ -3508,9 +3549,11 @@ impl<'plan> Execution<'plan> {
             .iter()
             .filter(|(reference, _)| self.is_within_instance(reference, scope))
             .filter_map(|(reference, instance)| {
-                match self.plan.owners[instance.owner.index()].kind {
-                    OwnerKind::Graph => None,
-                    OwnerKind::Node(slot) => Some((slot, reference.clone())),
+                match self.plan.nodes[instance.owner.index()].kind() {
+                    node::Kind::Graph => None,
+                    node::Kind::Operator | node::Kind::Connector => {
+                        Some((instance.owner, reference.clone()))
+                    }
                 }
             })
             .collect();
@@ -3577,7 +3620,7 @@ impl<'plan> Execution<'plan> {
                         .pending
                         .get(&call_id)
                         .ok_or(ExecutionFault::MissingPending(call_id))?;
-                    let connector = &self.plan.nodes[pending.slot.index()].path;
+                    let connector = self.executor_path(pending.slot)?;
                     bindings
                         .cancel(connector, &call_id)
                         .map_err(crate::boundary::PollFault::Driver)
@@ -3595,12 +3638,12 @@ impl<'plan> Execution<'plan> {
                 for session_id in sessions {
                     let session = self.sessions.get(&session_id).cloned().ok_or_else(|| {
                         ExecutionFault::PlanInvariant {
-                            node: node::Path::new(["session"])
+                            node: node::OwnerPath::new(["session"])
                                 .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                             reason: "a Closing Session vanished before close handoff",
                         }
                     })?;
-                    let connector = self.plan.nodes[session.slot.index()].path.clone();
+                    let connector = self.executor_path(session.slot)?.clone();
                     if bindings
                         .close_session(&connector, session_id)
                         .map_err(crate::boundary::PollFault::Driver)
@@ -3625,7 +3668,7 @@ impl<'plan> Execution<'plan> {
                         .pending
                         .get(&call_id)
                         .ok_or(ExecutionFault::MissingPending(call_id))?;
-                    let connector = self.plan.nodes[pending.slot.index()].path.clone();
+                    let connector = self.executor_path(pending.slot)?.clone();
                     let completion = bindings
                         .scheduler_completion(&connector, SchedulerCompletion::OutcomeUnknown)
                         .map_err(crate::boundary::PollFault::Driver)
@@ -3681,12 +3724,12 @@ impl<'plan> Execution<'plan> {
                     }
                     let session = self.sessions.get(&session_id).ok_or_else(|| {
                         ExecutionFault::PlanInvariant {
-                            node: node::Path::new(["session"])
+                            node: node::OwnerPath::new(["session"])
                                 .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                             reason: "a settling Session lost its logical record",
                         }
                     })?;
-                    let connector = self.plan.nodes[session.slot.index()].path.clone();
+                    let connector = self.executor_path(session.slot)?.clone();
                     let completion = bindings
                         .scheduler_session_completion(
                             &connector,
@@ -3744,9 +3787,9 @@ impl<'plan> Execution<'plan> {
         let parent_instance = (work.lifecycle == node::Lifecycle::Start)
             .then_some(work.parent_instance.as_ref())
             .flatten();
-        let owner = &self.plan.owners[work.owner.index()];
-        let (mut record, prepared, node_slot) = match owner.kind {
-            OwnerKind::Graph => (
+        let owner = &self.plan.nodes[work.owner.index()];
+        let (mut record, prepared, node_slot) = match owner.kind() {
+            node::Kind::Graph => (
                 crate::journal::TransactionRecord {
                     owner_path: owner.path.clone(),
                     instance: work.instance.clone(),
@@ -3770,7 +3813,8 @@ impl<'plan> Execution<'plan> {
                 None,
                 None,
             ),
-            OwnerKind::Node(slot) => {
+            node::Kind::Operator | node::Kind::Connector => {
+                let slot = work.owner;
                 let bundle = self.instances.get(&work.instance).ok_or_else(|| {
                     ExecutionFault::PlanInvariant {
                         node: self.plan.nodes[slot.index()].path.clone(),
@@ -3885,7 +3929,7 @@ impl<'plan> Execution<'plan> {
                     .map_err(ExecutionFault::Journal)?;
                 if expected == *reference {
                     ready.push((
-                        self.plan.owners[waiting.candidate.owner.index()]
+                        self.plan.nodes[waiting.candidate.owner.index()]
                             .path
                             .segments()
                             .len(),
@@ -3951,7 +3995,7 @@ impl<'plan> Execution<'plan> {
                 continue;
             };
             let from = EdgeEnd {
-                node: Some(slot),
+                node: slot,
                 port: output.port.clone(),
             };
             crate::runtime::crossing_pins_hold(self.plan, &from, value)
@@ -4093,7 +4137,7 @@ impl<'plan> Execution<'plan> {
             .unwrap_or_else(|| unreachable!("guarded by the caller"));
         let Some(session) = self.sessions.get(&settled.session).cloned() else {
             return Err(ExecutionFault::PlanInvariant {
-                node: node::Path::new(["session"])
+                node: node::OwnerPath::new(["session"])
                     .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                 reason: "a terminal Session observation lost its logical session",
             });
@@ -4337,10 +4381,7 @@ impl<'plan> Execution<'plan> {
             ),
         }
         .map_err(ExecutionFault::Fault)?;
-        if self.plan.owners[self.plan.nodes[slot.index()].owner.index()]
-            .loop_spec()
-            .is_some()
-        {
+        if self.plan.nodes[slot.index()].loop_spec().is_some() {
             self.prepare_operator_loop_verdict(slot, &mut outcome.record)?;
         }
         if let Some(packet) = outcome.record.loop_record.as_deref_mut() {
@@ -4396,7 +4437,7 @@ impl<'plan> Execution<'plan> {
         delivery: &envelope::Delivery,
     ) -> Result<(), ExecutionFault> {
         let planned = &self.plan.nodes[slot.index()];
-        let NodeExecution::Connector(spec) = &planned.execution else {
+        let NodeKind::Connector(spec) = &planned.body else {
             return Err(ExecutionFault::PlanInvariant {
                 node: planned.path.clone(),
                 reason: "connector dispatch reached a non-connector node",
@@ -4573,7 +4614,7 @@ impl<'plan> Execution<'plan> {
         delivery: &envelope::Delivery,
     ) -> Result<(), ExecutionFault> {
         let planned = &self.plan.nodes[slot.index()];
-        let NodeExecution::Connector(spec) = &planned.execution else {
+        let NodeKind::Connector(spec) = &planned.body else {
             return Err(ExecutionFault::PlanInvariant {
                 node: planned.path.clone(),
                 reason: "an inbound-Call response was routed to a non-connector",
@@ -4638,7 +4679,7 @@ impl<'plan> Execution<'plan> {
     ) -> Result<(), ExecutionFault> {
         let planned = &self.plan.nodes[slot.index()];
         let record = crate::journal::TransactionRecord {
-            owner_path: node::OwnerPath::from(&planned.path),
+            owner_path: planned.path.clone(),
             instance: instance.clone(),
             parent_instance: None,
             close_scope: None,
@@ -4686,7 +4727,7 @@ impl<'plan> Execution<'plan> {
         delivery: &envelope::Delivery,
     ) -> Result<(), ExecutionFault> {
         let planned = &self.plan.nodes[slot.index()];
-        let NodeExecution::Connector(spec) = &planned.execution else {
+        let NodeKind::Connector(spec) = &planned.body else {
             return Err(ExecutionFault::PlanInvariant {
                 node: planned.path.clone(),
                 reason: "Session dispatch reached a non-connector",
@@ -4705,8 +4746,12 @@ impl<'plan> Execution<'plan> {
                     reason: "the Contract has no Session opening rule",
                 }
             })?;
-        let settings =
-            self.resolve_invocation_settings(instance, spec, &planned.path, &delivery.envelope)?;
+        let settings = self.resolve_invocation_settings(
+            instance,
+            spec,
+            self.executor_path(slot)?,
+            &delivery.envelope,
+        )?;
         let selected = self.select_session_id(spec, &delivery.envelope, &settings)?;
         if let Some(session_id) = selected {
             return if self.sessions.get(&session_id).is_some_and(|session| {
@@ -4790,7 +4835,7 @@ impl<'plan> Execution<'plan> {
         if spec.attribute("correlate").is_some() {
             let Some(crate::value::Value::Text(value)) = settings.get("correlate") else {
                 return Err(ExecutionFault::PlanInvariant {
-                    node: node::Path::new(["session"])
+                    node: node::OwnerPath::new(["session"])
                         .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                     reason: "a Session correlator did not resolve to text",
                 });
@@ -4828,7 +4873,11 @@ impl<'plan> Execution<'plan> {
     ) -> Result<(), ExecutionFault> {
         let planned = &self.plan.nodes[slot.index()];
         let preparation = bindings
-            .prepare_session_open(&planned.path, delivery.envelope.data(), settings)
+            .prepare_session_open(
+                self.executor_path(slot)?,
+                delivery.envelope.data(),
+                settings,
+            )
             .map_err(crate::boundary::PollFault::Driver)
             .map_err(ExecutionFault::Dispatch)?;
         let prepared = match preparation {
@@ -4844,14 +4893,14 @@ impl<'plan> Execution<'plan> {
             }
         };
         let session_id = ids::outbound_session_id(
-            &planned.path,
+            self.executor_path(slot)?,
             delivery.envelope.meta().sys().id(),
             prepared.digest(),
         );
         let intent = SessionOpen {
             session_id,
             emitting_id: delivery.envelope.meta().sys().id(),
-            connector_path: planned.path.clone(),
+            connector_path: self.executor_path(slot)?.clone(),
             prepared,
         };
         if let alloc::collections::btree_map::Entry::Vacant(entry) = self.sessions.entry(session_id)
@@ -4915,7 +4964,7 @@ impl<'plan> Execution<'plan> {
         let planned = &self.plan.nodes[slot.index()];
         let preparation = bindings
             .prepare_session_write(
-                &planned.path,
+                self.executor_path(slot)?,
                 session_id,
                 delivery.envelope.data(),
                 settings,
@@ -4951,7 +5000,7 @@ impl<'plan> Execution<'plan> {
             write_ref,
             session_id,
             emitting_id: delivery.envelope.meta().sys().id(),
-            connector_path: planned.path.clone(),
+            connector_path: self.executor_path(slot)?.clone(),
             prepared,
         };
         if let alloc::collections::btree_map::Entry::Vacant(entry) =
@@ -5071,7 +5120,7 @@ impl<'plan> Execution<'plan> {
             return self.retain_call_open(journal, slot, instance, delivery, intent);
         }
         let planned = &self.plan.nodes[slot.index()];
-        let NodeExecution::Connector(spec) = &planned.execution else {
+        let NodeKind::Connector(spec) = &planned.body else {
             unreachable!("routed here by kind");
         };
         if !spec.roles.has_outbound() || spec.exchange != ConnectorExchange::Call {
@@ -5086,10 +5135,18 @@ impl<'plan> Execution<'plan> {
         // one value carried by the intent — nobody recomputes. An
         // unframeable request completes on `exit` before any open
         // fact exists: stderr is not a lifecycle channel.
-        let resolved_settings =
-            self.resolve_invocation_settings(instance, spec, &planned.path, &delivery.envelope)?;
+        let resolved_settings = self.resolve_invocation_settings(
+            instance,
+            spec,
+            self.executor_path(slot)?,
+            &delivery.envelope,
+        )?;
         let prepared = match bindings
-            .prepare_request(&planned.path, delivery.envelope.data(), &resolved_settings)
+            .prepare_request(
+                self.executor_path(slot)?,
+                delivery.envelope.data(),
+                &resolved_settings,
+            )
             .map_err(crate::boundary::PollFault::Driver)
             .map_err(ExecutionFault::Dispatch)?
         {
@@ -5130,7 +5187,7 @@ impl<'plan> Execution<'plan> {
             ),
             emitting_id,
             edge: delivery.edge.clone(),
-            connector_path: planned.path.clone(),
+            connector_path: self.executor_path(slot)?.clone(),
             prepared,
             idempotency_key: None,
             resolved_settings,
@@ -5221,19 +5278,19 @@ impl<'plan> Execution<'plan> {
                     ExecutionFault::Fault(crate::runtime::Fault::InvalidValue(error))
                 })?;
                 let from = EdgeEnd {
-                    node: Some(slot),
+                    node: slot,
                     port: emission.port.clone(),
                 };
                 crate::runtime::crossing_pins_hold(self.plan, &from, value)
                     .map_err(|violation| ExecutionFault::Fault(violation.into_fault()))?;
             }
             let from = EdgeEnd {
-                node: Some(slot),
+                node: slot,
                 port: emission.port.clone(),
             };
             commands.extend(self.prepare_instance_commands(
                 journal,
-                &self.graph_endpoint(&from),
+                &self.graph_endpoint(&from)?,
                 Some(source_instance),
                 &emission.envelope,
             )?);
@@ -5277,7 +5334,7 @@ impl<'plan> Execution<'plan> {
         if self.graph_loops.is_some() {
             return self.prepare_graph_routes(
                 journal,
-                &self.graph_endpoint(from),
+                &self.graph_endpoint(from)?,
                 source_instance,
                 envelope,
                 candidates,
@@ -5307,7 +5364,12 @@ impl<'plan> Execution<'plan> {
             })
             .cloned()
         {
-            let target = match edge.to.as_ref().and_then(|to| to.node) {
+            let target = match edge
+                .to
+                .as_ref()
+                .map(|to| to.node)
+                .filter(|index| *index != NodeIndex::ROOT)
+            {
                 Some(target) => Some(
                     if let Some(target) = self.prepare_direct_inbound_call_response_target(
                         edge.owner,
@@ -5350,7 +5412,7 @@ impl<'plan> Execution<'plan> {
     /// different instance and make the recorded route a lie.
     fn prepare_direct_inbound_call_response_target(
         &self,
-        edge_scope: node::OwnerSlot,
+        edge_scope: node::NodeIndex,
         source_instance: Option<&instance::Generation>,
         target: NodeIndex,
         envelope: &Envelope,
@@ -5381,7 +5443,7 @@ impl<'plan> Execution<'plan> {
             return Ok(None);
         }
 
-        let scope_chain = self.scope_chain(self.plan.nodes[target.index()].owner)?;
+        let scope_chain = self.scope_chain(target)?;
         let Some(scope_index) = scope_chain.iter().position(|owner| *owner == edge_scope) else {
             return Err(ExecutionFault::PlanInvariant {
                 node: self.plan.nodes[target.index()].path.clone(),
@@ -5469,7 +5531,7 @@ impl<'plan> Execution<'plan> {
         } = setting
         else {
             return Err(ExecutionFault::PlanInvariant {
-                node: node::Path::new(["inbound-call"])
+                node: node::OwnerPath::new(["inbound-call"])
                     .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                 reason: "an inbound Call correlator is not one invocation expression",
             });
@@ -5495,7 +5557,7 @@ impl<'plan> Execution<'plan> {
         .map_err(ExecutionFault::Fault)?;
         let crate::value::Value::Text(selected) = selected else {
             return Err(ExecutionFault::PlanInvariant {
-                node: node::Path::new(["inbound-call"])
+                node: node::OwnerPath::new(["inbound-call"])
                     .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                 reason: "an inbound Call correlator did not yield text",
             });
@@ -5542,18 +5604,13 @@ impl<'plan> Execution<'plan> {
     fn prepare_target(
         &self,
         journal: &dyn InstanceAdmissions,
-        scope: node::OwnerSlot,
+        scope: node::NodeIndex,
         source_instance: Option<&instance::Generation>,
         target: &EdgeEnd,
         envelope: &Envelope,
         candidates: &mut BTreeMap<instance::Generation, InstanceCandidate>,
     ) -> Result<PreparedTarget, ExecutionFault> {
-        let slot = target.node.ok_or_else(|| ExecutionFault::PlanInvariant {
-            node: node::Path::new(["admission"])
-                .unwrap_or_else(|_| unreachable!("a literal path is valid")),
-            reason: "an Executor admission has no node",
-        })?;
-        let target_owner = self.plan.nodes[slot.index()].owner;
+        let target_owner = target.node;
         let data = DataSlot {
             ty: self.plan.resolved_ports().endpoint_type(target),
             ..DataSlot::new(envelope.data())
@@ -5573,20 +5630,20 @@ impl<'plan> Execution<'plan> {
     fn prepare_owner_target(
         &self,
         journal: &dyn InstanceAdmissions,
-        scope: node::OwnerSlot,
+        scope: node::NodeIndex,
         source_instance: Option<&instance::Generation>,
-        target_owner: node::OwnerSlot,
+        target_owner: node::NodeIndex,
         envelope: &Envelope,
         data: &DataSlot<'_>,
         candidates: &mut BTreeMap<instance::Generation, InstanceCandidate>,
     ) -> Result<PreparedTarget, ExecutionFault> {
-        let refusal = |reason| match self.plan.owners[target_owner.index()].kind {
-            OwnerKind::Node(slot) => ExecutionFault::PlanInvariant {
-                node: self.plan.nodes[slot.index()].path.clone(),
+        let refusal = |reason| match self.plan.nodes[target_owner.index()].kind() {
+            node::Kind::Operator | node::Kind::Connector => ExecutionFault::PlanInvariant {
+                node: self.plan.nodes[target_owner.index()].path.clone(),
                 reason,
             },
-            OwnerKind::Graph => ExecutionFault::InvalidLoopDecision {
-                owner: self.plan.owners[target_owner.index()].path.clone(),
+            node::Kind::Graph => ExecutionFault::InvalidLoopDecision {
+                owner: self.plan.nodes[target_owner.index()].path.clone(),
                 reason,
             },
         };
@@ -5635,11 +5692,11 @@ impl<'plan> Execution<'plan> {
         })
     }
 
-    fn scope_chain(&self, owner: node::OwnerSlot) -> Result<&[node::OwnerSlot], ExecutionFault> {
+    fn scope_chain(&self, owner: node::NodeIndex) -> Result<&[node::NodeIndex], ExecutionFault> {
         self.plan
             .scope_chain(owner)
             .ok_or_else(|| ExecutionFault::PlanInvariant {
-                node: node::Path::new(["owner"])
+                node: node::OwnerPath::new(["owner"])
                     .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                 reason: "an owner reference escaped the validated owner table",
             })
@@ -5648,13 +5705,13 @@ impl<'plan> Execution<'plan> {
     fn source_instance_for_owner(
         &self,
         source: Option<&instance::Generation>,
-        owner: node::OwnerSlot,
+        owner: node::NodeIndex,
     ) -> Result<Option<instance::Generation>, ExecutionFault> {
         let mut cursor = source.cloned();
         while let Some(reference) = cursor {
             let Some(instance) = self.instances.get(&reference) else {
                 return Err(ExecutionFault::PlanInvariant {
-                    node: node::Path::new(["instance"])
+                    node: node::OwnerPath::new(["instance"])
                         .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                     reason: "a routed source instance has no installed bundle",
                 });
@@ -5692,7 +5749,7 @@ impl<'plan> Execution<'plan> {
     fn candidate_owner(
         &self,
         journal: &dyn InstanceAdmissions,
-        owner_slot: node::OwnerSlot,
+        owner_slot: node::NodeIndex,
         parent: Option<&instance::Generation>,
         source: Option<&instance::Generation>,
         envelope: &Envelope,
@@ -5701,9 +5758,9 @@ impl<'plan> Execution<'plan> {
     ) -> Result<instance::Generation, ExecutionFault> {
         let owner = self
             .plan
-            .owner(owner_slot)
+            .node(owner_slot)
             .ok_or_else(|| ExecutionFault::PlanInvariant {
-                node: node::Path::new(["owner"])
+                node: node::OwnerPath::new(["owner"])
                     .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                 reason: "an owner reference escaped the validated owner table",
             })?;
@@ -5775,7 +5832,7 @@ impl<'plan> Execution<'plan> {
                     (candidate.values.clone(), candidate.frames.clone())
                 } else {
                     return Err(ExecutionFault::PlanInvariant {
-                        node: node::Path::new(["owner"])
+                        node: node::OwnerPath::new(["owner"])
                             .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                         reason: "a selected parent has no live or candidate instance bundle",
                     });
@@ -5811,7 +5868,7 @@ impl<'plan> Execution<'plan> {
                     .div_euclid(every)
                     .checked_mul(every)
                     .ok_or_else(|| ExecutionFault::PlanInvariant {
-                        node: node::Path::new(["instance"])
+                        node: node::OwnerPath::new(["instance"])
                             .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                         reason: "a validated tumbling duration overflowed its epoch box",
                     })?;
@@ -5907,16 +5964,16 @@ impl<'plan> Execution<'plan> {
 
     fn evaluate_owner_values(
         &self,
-        owner_slot: node::OwnerSlot,
+        owner_slot: node::NodeIndex,
         inherited: &BTreeMap<String, crate::value::Value>,
         selected_key: Option<&crate::value::Value>,
         data: &DataSlot<'_>,
     ) -> Result<BTreeMap<String, crate::value::Value>, ExecutionFault> {
         let owner = self
             .plan
-            .owner(owner_slot)
+            .node(owner_slot)
             .ok_or_else(|| ExecutionFault::PlanInvariant {
-                node: node::Path::new(["owner"])
+                node: node::OwnerPath::new(["owner"])
                     .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                 reason: "an owner reference escaped the validated owner table",
             })?;
@@ -5941,7 +5998,7 @@ impl<'plan> Execution<'plan> {
         let mut values = inherited.clone();
         for (declared, value) in owner.vals.iter().zip(resolved) {
             let value = value.ok_or_else(|| ExecutionFault::PlanInvariant {
-                node: node::Path::new(["owner"])
+                node: node::OwnerPath::new(["owner"])
                     .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                 reason: "a validated immutable binding did not resolve",
             })?;
@@ -5953,7 +6010,7 @@ impl<'plan> Execution<'plan> {
     #[allow(clippy::too_many_arguments)]
     fn evaluate_owner_value_at(
         &self,
-        owner_slot: node::OwnerSlot,
+        owner_slot: node::NodeIndex,
         index: usize,
         inherited: &BTreeMap<String, crate::value::Value>,
         selected_key: Option<&crate::value::Value>,
@@ -5967,7 +6024,7 @@ impl<'plan> Execution<'plan> {
         }
         if visiting[index] {
             return Err(ExecutionFault::PlanInvariant {
-                node: node::Path::new(["owner"])
+                node: node::OwnerPath::new(["owner"])
                     .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                 reason: "a validated immutable-binding cycle reached evaluation",
             });
@@ -5975,9 +6032,9 @@ impl<'plan> Execution<'plan> {
         visiting[index] = true;
         let owner = self
             .plan
-            .owner(owner_slot)
+            .node(owner_slot)
             .ok_or_else(|| ExecutionFault::PlanInvariant {
-                node: node::Path::new(["owner"])
+                node: node::OwnerPath::new(["owner"])
                     .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                 reason: "an owner reference escaped the validated owner table",
             })?;
@@ -6002,7 +6059,7 @@ impl<'plan> Execution<'plan> {
             (EvaluationSite::Plan, Some(value)) => value.clone(),
             (EvaluationSite::Plan, None) | (EvaluationSite::Invocation, _) => {
                 return Err(ExecutionFault::PlanInvariant {
-                    node: node::Path::new(["owner"])
+                    node: node::OwnerPath::new(["owner"])
                         .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                     reason: "a validated immutable binding carries an impossible site",
                 });
@@ -6043,22 +6100,19 @@ impl<'plan> Execution<'plan> {
 
     fn evaluate_instance_settings(
         &self,
-        owner_slot: node::OwnerSlot,
+        owner_slot: node::NodeIndex,
         values: &BTreeMap<String, crate::value::Value>,
         selected_key: Option<&crate::value::Value>,
         data: &DataSlot<'_>,
     ) -> Result<BTreeMap<String, crate::value::Value>, ExecutionFault> {
-        let Some(owner) = self.plan.owner(owner_slot) else {
+        let Some(owner) = self.plan.node(owner_slot) else {
             return Err(ExecutionFault::PlanInvariant {
-                node: node::Path::new(["owner"])
+                node: node::OwnerPath::new(["owner"])
                     .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                 reason: "an owner reference escaped the validated owner table",
             });
         };
-        let OwnerKind::Node(slot) = owner.kind else {
-            return Ok(BTreeMap::new());
-        };
-        let Some(spec) = self.plan.nodes[slot.index()].connector() else {
+        let Some(spec) = owner.connector() else {
             return Ok(BTreeMap::new());
         };
         let mut bindings = crate::expr::value_bindings(values);
@@ -6091,7 +6145,7 @@ impl<'plan> Execution<'plan> {
                 })
             })
             .ok_or_else(|| ExecutionFault::PlanInvariant {
-                node: node.clone(),
+                node: node::OwnerPath::from(node),
                 reason: "an opening call lost its selected instance bundle",
             })?;
         if !spec.attributes.iter().any(|(_, setting)| {
@@ -6197,15 +6251,16 @@ impl<'plan> Execution<'plan> {
                 let Some(to) = &prepared.edge.to else {
                     continue;
                 };
-                let Some(target) = to.node else {
+                let target = to.node;
+                if self.plan.nodes[target.index()].kind() == node::Kind::Graph {
                     continue;
-                };
+                }
                 if self.has_loops || self.retry_manager.is_some() {
-                    let owner = self.plan.nodes[target.index()].owner;
-                    if self.plan.owners[owner.index()]
+                    let owner = target;
+                    if self.plan.nodes[owner.index()]
                         .loop_spec()
                         .is_some_and(|spec| spec.entry == to.port)
-                        || self.plan.owners[owner.index()]
+                        || self.plan.nodes[owner.index()]
                             .retry_spec()
                             .is_some_and(|spec| spec.entry == to.port)
                     {
@@ -6245,7 +6300,7 @@ impl<'plan> Execution<'plan> {
                 > WORKER_MAILBOX_CAPACITY
         {
             return Err(ExecutionFault::RecurrenceQueueFull {
-                owner: self.plan.owners[owner.index()].path.clone(),
+                owner: self.plan.nodes[owner.index()].path.clone(),
             });
         }
         Ok(())
@@ -6309,13 +6364,13 @@ impl<'plan> Execution<'plan> {
             match &edge.to {
                 None => {} // `-> nothing`: the explicit, written discard
                 Some(to) => match to.node {
-                    None => {
+                    NodeIndex::ROOT => {
                         self.outputs.push(BoundaryOutput {
                             port: to.port.clone(),
                             envelope: envelope.clone(),
                         });
                     }
-                    Some(target) => {
+                    target => {
                         let prepared = selected
                             .as_ref()
                             .unwrap_or_else(|| unreachable!("a node route has a target bundle"));

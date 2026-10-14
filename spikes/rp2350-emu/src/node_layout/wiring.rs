@@ -5,7 +5,7 @@ use super::NodeIndex;
 use alloc::{collections::BTreeMap, string::String, vec::Vec};
 use rastok_core::{
     node::{OwnerPath, Port, PortDirection},
-    plan::{self, ExecutionPlan, OwnerKind},
+    plan::{self, ExecutionPlan},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -66,7 +66,7 @@ pub(super) struct Indexes {
 fn owner(plan: &ExecutionPlan, segments: &[String]) -> NodeIndex {
     NodeIndex(
         u32::try_from(
-            plan.owners
+            plan.nodes
                 .iter()
                 .position(|owner| owner.path.segments() == segments)
                 .unwrap(),
@@ -92,11 +92,9 @@ fn endpoint(plan: &ExecutionPlan, value: &plan::Endpoint) -> Endpoint {
     }
 }
 
-fn physical_endpoint(plan: &ExecutionPlan, value: &plan::EdgeEnd) -> Endpoint {
+fn physical_endpoint(_plan: &ExecutionPlan, value: &plan::EdgeEnd) -> Endpoint {
     Endpoint {
-        node: value.node.map_or(NodeIndex(0), |slot| {
-            NodeIndex::from(plan.nodes[slot.index()].owner)
-        }),
+        node: NodeIndex::from(value.node),
         port: value.port.clone(),
     }
 }
@@ -143,10 +141,11 @@ pub(super) fn inventory(plan: &ExecutionPlan) -> Vec<plan::RouteRule> {
         return plan.boundary_routes.clone();
     }
     let endpoint = |end: &plan::EdgeEnd| plan::Endpoint {
-        owner: end.node.map_or_else(
-            || plan::EndpointOwner::Graph(OwnerPath::root()),
-            |slot| plan::EndpointOwner::Node(plan.nodes[slot.index()].path.clone()),
-        ),
+        owner: match plan.nodes[end.node.index()].kind() {
+            rastok_core::node::Kind::Graph => plan::EndpointOwner::Graph(plan.nodes[end.node.index()].path.clone()),
+            rastok_core::node::Kind::Operator | rastok_core::node::Kind::Connector =>
+                plan::EndpointOwner::Node(plan.nodes[end.node.index()].executor_path().unwrap().clone()),
+        },
         port: end.port.clone(),
     };
     let mut rules = plan.routes.clone();
@@ -176,13 +175,13 @@ pub(super) fn inventory(plan: &ExecutionPlan) -> Vec<plan::RouteRule> {
 
 fn graph(plan: &ExecutionPlan, rule: &plan::RouteRule) -> usize {
     let source = endpoint_owner(plan, &rule.source.owner).0 as usize;
-    let declaration = &plan.owners[source];
+    let declaration = &plan.nodes[source];
     // A validated root source is always an input, including implicit ports
     // absent from the declaration table. Nested boundaries are explicit.
     let inner_face = source == 0
-        || declaration.kind == OwnerKind::Graph
+        || declaration.kind() == rastok_core::node::Kind::Graph
             && plan
-                .graph_ports(rastok_core::node::OwnerSlot::new(source as u32))
+                .graph_ports(rastok_core::node::NodeIndex::new(source as u32))
                 .unwrap()
                 .iter()
                 .any(|port| {
@@ -217,8 +216,8 @@ pub(super) fn reference(
 pub(super) fn scope_chains(plan: &ExecutionPlan) -> Vec<Vec<NodeIndex>> {
     // Mirror the validated plan's index for every candidate, including
     // the control. These copies do not measure the production loader's peak.
-    let mut chains: Vec<Vec<NodeIndex>> = Vec::with_capacity(plan.owners.len());
-    for (owner, index) in plan.owners.iter().zip(0..) {
+    let mut chains: Vec<Vec<NodeIndex>> = Vec::with_capacity(plan.nodes.len());
+    for (owner, index) in plan.nodes.iter().zip(0..) {
         let mut chain = Vec::with_capacity(owner.path.segments().len() + 1);
         if let Some(parent) = owner.parent {
             chain.extend_from_slice(&chains[parent.index()]);
@@ -230,10 +229,11 @@ pub(super) fn scope_chains(plan: &ExecutionPlan) -> Vec<Vec<NodeIndex>> {
 }
 
 fn edge_scope<'a>(plan: &'a ExecutionPlan, endpoint: &Endpoint) -> &'a OwnerPath {
-    let owner = &plan.owners[endpoint.node.0 as usize];
-    match owner.kind {
-        OwnerKind::Graph => &owner.path,
-        OwnerKind::Node(_) => &plan.owners[owner.parent.unwrap().index()].path,
+    let owner = &plan.nodes[endpoint.node.0 as usize];
+    if owner.kind() == rastok_core::node::Kind::Graph {
+        &owner.path
+    } else {
+        &plan.nodes[owner.parent.unwrap().index()].path
     }
 }
 
@@ -271,8 +271,9 @@ impl Indexes {
             edges,
             execution_order: plan
                 .nodes
-                .iter()
-                .map(|node| NodeIndex::from(node.owner))
+                .iter().enumerate()
+                .filter(|(_, node)| node.kind() != rastok_core::node::Kind::Graph)
+                .map(|(index, _)| NodeIndex(u32::try_from(index).unwrap()))
                 .collect(),
             scope_chains: scope_chains(plan),
         }
@@ -306,8 +307,9 @@ impl Indexes {
         assert_eq!(
             self.execution_order,
             plan.nodes
-                .iter()
-                .map(|node| NodeIndex::from(node.owner))
+                .iter().enumerate()
+                .filter(|(_, node)| node.kind() != rastok_core::node::Kind::Graph)
+                .map(|(index, _)| NodeIndex(u32::try_from(index).unwrap()))
                 .collect::<Vec<_>>()
         );
         assert_eq!(self.scope_chains, scope_chains(plan));

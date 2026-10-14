@@ -131,7 +131,7 @@ impl Execution<'_> {
         } else {
             self.prepare_instance_commands(
                 &journal,
-                &self.graph_endpoint(&endpoint.from),
+                &self.graph_endpoint(&endpoint.from)?,
                 exchange.source_instance(),
                 ingress.envelope(),
             )?
@@ -182,7 +182,7 @@ impl Execution<'_> {
             let source = NodeIndex::new(u32::try_from(source).map_err(|_| unknown())?);
             Ok(IngressEndpoint {
                 from: EdgeEnd {
-                    node: Some(source),
+                    node: source,
                     port: submission.draft.port.clone(),
                 },
                 exchange: Some(exchange),
@@ -197,7 +197,7 @@ impl Execution<'_> {
             }
             Ok(IngressEndpoint {
                 from: EdgeEnd {
-                    node: None,
+                    node: crate::node::NodeIndex::ROOT,
                     port: submission.draft.port.clone(),
                 },
                 exchange: None,
@@ -266,7 +266,7 @@ impl Execution<'_> {
         envelope: &Envelope,
         candidates: &mut BTreeMap<instance::Generation, InstanceCandidate>,
     ) -> Result<PreparedTarget, ExecutionFault> {
-        let owner = self.plan.nodes[source.index()].owner;
+        let owner = source;
         let scope = self.scope_chain(owner)?.first().copied().ok_or_else(|| {
             ExecutionFault::PlanInvariant {
                 node: self.plan.nodes[source.index()].path.clone(),
@@ -306,7 +306,9 @@ impl Execution<'_> {
         mut ingress: PreparedIngress,
         candidates: &mut BTreeMap<instance::Generation, InstanceCandidate>,
     ) -> Result<(PreparedIngress, PreparedExchange), ExecutionFault> {
-        let source = endpoint.from.node.zip(endpoint.exchange);
+        let source = endpoint
+            .exchange
+            .map(|exchange| (endpoint.from.node, exchange));
         // Preserve the existing admission order: Call selection and its
         // journal marker precede refusal of contradictory Session framing.
         let call = if let Some((source, ConnectorExchange::Call)) = source {

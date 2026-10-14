@@ -16,7 +16,7 @@ pub(super) struct BoundaryRoute {
 
 #[derive(Debug, Clone)]
 struct Admission {
-    owner: node::OwnerSlot,
+    owner: node::NodeIndex,
     instance: instance::Generation,
     opening: OpeningAdmissionId,
     delivery: envelope::Delivery,
@@ -32,63 +32,51 @@ pub(super) struct GraphLoops {
 struct Selection {
     destinations: BTreeSet<Endpoint>,
     commands: Vec<LoopCommandTarget>,
-    terminals: BTreeSet<node::OwnerSlot>,
+    terminals: BTreeSet<node::NodeIndex>,
     instance_stops: Vec<crate::plan::InstanceStopTarget>,
 }
 
 impl Execution<'_> {
-    pub(super) fn graph_endpoint(&self, physical: &EdgeEnd) -> Endpoint {
-        Endpoint {
-            owner: physical.node.map_or_else(
-                || EndpointOwner::Graph(node::OwnerPath::root()),
-                |slot| EndpointOwner::Node(self.plan.nodes[slot.index()].path.clone()),
-            ),
+    pub(super) fn graph_endpoint(&self, physical: &EdgeEnd) -> Result<Endpoint, ExecutionFault> {
+        Ok(Endpoint {
+            owner: match self.plan.nodes[physical.node.index()].kind() {
+                node::Kind::Graph => {
+                    EndpointOwner::Graph(self.plan.nodes[physical.node.index()].path.clone())
+                }
+                node::Kind::Operator | node::Kind::Connector => {
+                    EndpointOwner::Node(self.executor_path(physical.node)?.clone())
+                }
+            },
             port: physical.port.clone(),
-        }
+        })
     }
 
-    fn endpoint_owner(&self, endpoint: &Endpoint) -> Result<node::OwnerSlot, ExecutionFault> {
+    fn endpoint_owner(&self, endpoint: &Endpoint) -> Result<node::NodeIndex, ExecutionFault> {
         let path = match &endpoint.owner {
             EndpointOwner::Node(path) => node::OwnerPath::from(path),
             EndpointOwner::Graph(path) => path.clone(),
         };
         self.plan
-            .owners
+            .nodes
             .iter()
             .position(|owner| owner.path == path)
-            .map(|index| node::OwnerSlot::new(index as u32))
+            .map(|index| node::NodeIndex::new(index as u32))
             .ok_or_else(|| graph_error(&path, "a routed endpoint lost its declared owner"))
     }
 
     fn endpoint_ref(&self, endpoint: &Endpoint) -> Result<EdgeEnd, ExecutionFault> {
-        let node = match &endpoint.owner {
-            EndpointOwner::Graph(_) => None,
-            EndpointOwner::Node(path) => Some(
-                self.plan
-                    .nodes
-                    .iter()
-                    .position(|node| node.path == *path)
-                    .map(|index| NodeIndex::new(index as u32))
-                    .ok_or_else(|| {
-                        graph_error(
-                            &node::OwnerPath::from(path),
-                            "a route names no executable Node",
-                        )
-                    })?,
-            ),
-        };
         Ok(EdgeEnd {
-            node,
+            node: self.endpoint_owner(endpoint)?,
             port: endpoint.port.clone(),
         })
     }
 
-    fn graph_entry(&self, endpoint: &Endpoint) -> Option<node::OwnerSlot> {
+    fn graph_entry(&self, endpoint: &Endpoint) -> Option<node::NodeIndex> {
         let EndpointOwner::Graph(path) = &endpoint.owner else {
             return None;
         };
         self.plan
-            .owners
+            .nodes
             .iter()
             .enumerate()
             .find_map(|(index, owner)| {
@@ -96,7 +84,7 @@ impl Execution<'_> {
                     && owner
                         .loop_spec()
                         .is_some_and(|spec| spec.entry == endpoint.port))
-                .then_some(node::OwnerSlot::new(index as u32))
+                .then_some(node::NodeIndex::new(index as u32))
             })
     }
 
@@ -163,26 +151,26 @@ impl Execution<'_> {
                                 if self.graph_entry(target).is_some() {
                                     if !selected.destinations.insert(target.clone()) {
                                         return Err(graph_error(
-                                            &self.plan.owners[owner.index()].path,
+                                            &self.plan.nodes[owner.index()].path,
                                             "a Graph admission was selected twice",
                                         ));
                                     }
                                     continue;
                                 }
-                                if self.plan.owners[owner.index()]
+                                if self.plan.nodes[owner.index()]
                                     .loop_spec()
                                     .is_some_and(|spec| spec.terminals.contains(&target.port))
                                 {
                                     selected.terminals.insert(owner);
                                 }
-                                if !self.plan.owners[owner.index()].path.is_root() {
+                                if !self.plan.nodes[owner.index()].path.is_root() {
                                     pending.push(target.clone());
                                     continue;
                                 }
                             }
                             if !selected.destinations.insert(target.clone()) {
                                 return Err(graph_error(
-                                    &self.plan.owners[owner.index()].path,
+                                    &self.plan.nodes[owner.index()].path,
                                     "a selected route repeats its destination",
                                 ));
                             }
@@ -245,7 +233,9 @@ impl Execution<'_> {
                 },
                 ..DataSlot::new(envelope.data())
             };
-            let target = if to.node.is_some() || self.graph_entry(&destination).is_some() {
+            let target = if self.plan.nodes[to.node.index()].kind() != node::Kind::Graph
+                || self.graph_entry(&destination).is_some()
+            {
                 Some(self.prepare_owner_target(
                     journal,
                     scope,
@@ -289,7 +279,7 @@ impl Execution<'_> {
         )
     }
 
-    pub(super) fn prepared_graph_entry(&self, prepared: &PreparedEdge) -> Option<node::OwnerSlot> {
+    pub(super) fn prepared_graph_entry(&self, prepared: &PreparedEdge) -> Option<node::NodeIndex> {
         prepared
             .boundary
             .as_ref()
@@ -329,7 +319,7 @@ impl Execution<'_> {
             Admission {
                 owner,
                 instance: target.reference.clone(),
-                opening: if self.plan.owners[owner.index()].path.is_root() {
+                opening: if self.plan.nodes[owner.index()].path.is_root() {
                     OpeningAdmissionId::Ingress {
                         inbound: envelope.meta().sys().id(),
                         port: to.port.clone(),
@@ -420,7 +410,7 @@ impl Execution<'_> {
             && state.pending.is_none()
             && self.instances.get(&state.instance).is_some_and(|instance| {
                 matches!(instance.phase, instance::Phase::Open)
-                    && self.plan.owners[instance.owner.index()].kind == OwnerKind::Graph
+                    && self.plan.nodes[instance.owner.index()].kind() == node::Kind::Graph
             })
             && !self.graph_run_has_work(run)
     }
@@ -463,7 +453,7 @@ impl Execution<'_> {
         let Some(admission) = next else {
             return Ok(false);
         };
-        let spec = self.plan.owners[admission.owner.index()]
+        let spec = self.plan.nodes[admission.owner.index()]
             .loop_spec()
             .ok_or_else(|| {
                 graph_error(
@@ -566,13 +556,13 @@ impl Execution<'_> {
     pub(super) fn admit_graph_loop(
         &mut self,
         journal: &mut dyn Journal,
-        owner: node::OwnerSlot,
+        owner: node::NodeIndex,
         run: LoopRunId,
         current: &protocol::RunState,
         envelope: Envelope,
     ) -> Result<bool, ExecutionFault> {
         let source = Endpoint {
-            owner: EndpointOwner::Graph(self.plan.owners[owner.index()].path.clone()),
+            owner: EndpointOwner::Graph(self.plan.nodes[owner.index()].path.clone()),
             port: current.entry.clone(),
         };
         let mut candidates = BTreeMap::new();
@@ -737,21 +727,19 @@ impl Execution<'_> {
             .to_vec();
         let owner = self
             .plan
-            .owners
+            .nodes
             .iter()
             .find(|owner| owner.path == record.owner_path)
             .ok_or_else(|| graph_error(&record.owner_path, "a producer has no declared owner"))?;
+        let producer = owner
+            .endpoint_owner()
+            .map_err(|_| graph_error(&owner.path, "a producer has no valid Node address"))?;
         let produced = self.graph_verdicts(
             &context,
             record.emissions.iter().map(|emission| {
                 (
                     Endpoint {
-                        owner: match owner.kind {
-                            OwnerKind::Graph => EndpointOwner::Graph(owner.path.clone()),
-                            OwnerKind::Node(slot) => {
-                                EndpointOwner::Node(self.plan.nodes[slot.index()].path.clone())
-                            }
-                        },
+                        owner: producer.clone(),
                         port: emission.port.clone(),
                     },
                     &emission.envelope,
@@ -817,7 +805,7 @@ impl Execution<'_> {
             }
         }
         for (owner, cause) in terminals {
-            let path = &self.plan.owners[owner.index()].path;
+            let path = &self.plan.nodes[owner.index()].path;
             let (run, state) = context
                 .iter()
                 .find_map(|run| {
@@ -856,8 +844,9 @@ impl Execution<'_> {
                 .instances
                 .get(&current.instance)
                 .is_some_and(|instance| matches!(instance.phase, instance::Phase::Open))
-            || !self.plan.owners.iter().any(|owner| {
-                owner.path == *current.instance.address().owner() && owner.kind == OwnerKind::Graph
+            || !self.plan.nodes.iter().any(|owner| {
+                owner.path == *current.instance.address().owner()
+                    && owner.kind() == node::Kind::Graph
             })
         {
             return Ok(None);
@@ -930,7 +919,7 @@ impl Execution<'_> {
     pub(super) fn prepare_graph_emissions(
         &self,
         journal: &dyn InstanceAdmissions,
-        owner: node::OwnerSlot,
+        owner: node::NodeIndex,
         instance: &instance::Generation,
         record: &crate::journal::TransactionRecord,
     ) -> Result<PreparedEmissions, ExecutionFault> {
@@ -939,7 +928,7 @@ impl Execution<'_> {
         let mut commands = Vec::new();
         for emission in &record.emissions {
             let source = Endpoint {
-                owner: EndpointOwner::Graph(self.plan.owners[owner.index()].path.clone()),
+                owner: EndpointOwner::Graph(self.plan.nodes[owner.index()].path.clone()),
                 port: emission.port.clone(),
             };
             commands.extend(self.prepare_instance_commands(
@@ -973,27 +962,21 @@ impl Execution<'_> {
 
     pub(super) fn route_graph_emissions(
         &mut self,
-        owner: node::OwnerSlot,
+        owner: node::NodeIndex,
         instance: &instance::Generation,
         prepared: PreparedEmissions,
     ) {
         self.enqueue_instance_commands(prepared.commands);
         for emission in prepared.emissions {
-            if self.plan.owners[owner.index()].path.is_root() {
+            if self.plan.nodes[owner.index()].path.is_root() {
                 self.outputs.push(BoundaryOutput {
                     port: emission.emission.port.clone(),
                     envelope: emission.emission.envelope.clone(),
                 });
             }
             self.observed.push(EnvelopeView {
-                node: node::Path::new(
-                    self.plan.owners[owner.index()]
-                        .path
-                        .segments()
-                        .iter()
-                        .cloned(),
-                )
-                .ok(),
+                node: (!self.plan.nodes[owner.index()].path.is_root())
+                    .then(|| self.plan.nodes[owner.index()].path.clone()),
                 port: emission.emission.port.clone(),
                 envelope: emission.emission.envelope.clone(),
             });
@@ -1012,7 +995,7 @@ impl Execution<'_> {
         journal: &dyn Journal,
         admissions: &dyn InstanceAdmissions,
         index: usize,
-        owner: node::OwnerSlot,
+        owner: node::NodeIndex,
         record: &crate::journal::TransactionRecord,
         resume_at: i64,
     ) -> Result<(), ExecutionFault> {
@@ -1079,7 +1062,7 @@ impl Execution<'_> {
                     .ok_or_else(|| {
                         invalid("a Graph Open has no exact retained boundary admission")
                     })?;
-                let spec = self.plan.owners[owner.index()]
+                let spec = self.plan.nodes[owner.index()]
                     .loop_spec()
                     .ok_or_else(|| invalid("a Graph opening has no Loop specification"))?;
                 let expected = match spec.fuel.as_ref().map(|fuel| &fuel.resolved) {
@@ -1184,7 +1167,7 @@ impl Execution<'_> {
                     None
                 };
                 let source = Endpoint {
-                    owner: EndpointOwner::Graph(self.plan.owners[owner.index()].path.clone()),
+                    owner: EndpointOwner::Graph(self.plan.nodes[owner.index()].path.clone()),
                     port: current.entry.clone(),
                 };
                 let mut candidates = BTreeMap::new();
@@ -1242,7 +1225,7 @@ impl Execution<'_> {
             fact => {
                 if matches!(fact, Fact::Expired { .. })
                     && !matches!(record.emissions.as_slice(), [emission]
-                    if self.plan.owners[owner.index()].loop_spec().and_then(|spec| spec.expired.as_ref())
+                    if self.plan.nodes[owner.index()].loop_spec().and_then(|spec| spec.expired.as_ref())
                         .is_some_and(|target| target.port == emission.port
                             && emission.envelope.data().materialized_value()
                                 .is_some_and(|value| target.ty.accepts(value))))

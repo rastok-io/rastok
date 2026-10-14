@@ -17,9 +17,9 @@ use crate::expr;
 use crate::instance;
 use crate::journal::{ConsumedPosition, Emission, TransactionRecord, ids};
 use crate::node;
+use crate::node::NodeIndex;
 use crate::plan::{
-    DispatchStep, EmitValue, ExecutionPlan, GraphVersion, Handler, NodeIndex,
-    ValidatedExecutionPlan,
+    DispatchStep, EmitValue, ExecutionPlan, GraphVersion, Handler, ValidatedExecutionPlan,
 };
 use crate::value::{Value, ValueError};
 use alloc::boxed::Box;
@@ -69,6 +69,8 @@ pub enum Fault {
     /// A caller-supplied Node index outside the plan's table. Plan validation
     /// proves only its stored indices; public APIs also check caller inputs.
     UnknownNodeIndex(NodeIndex),
+    /// The indexed Node is a Graph, not an application Executor.
+    NotExecutor(NodeIndex),
 }
 
 impl fmt::Display for Fault {
@@ -83,8 +85,9 @@ impl fmt::Display for Fault {
             Self::Opaque(what) => write!(f, "the payload is opaque here: {what}"),
             Self::InvalidUtf8(error) => write!(f, "text payload is not valid UTF-8: {error}"),
             Self::InvalidCanonicalData(error) => error.fmt(f),
+            Self::NotExecutor(index) => write!(f, "Node {} is not an Executor", index.index()),
             Self::UnknownNodeIndex(slot) => {
-                write!(f, "the plan has no node at slot {}", slot.index())
+                write!(f, "the plan has no Node at index {}", slot.index())
             }
         }
     }
@@ -115,15 +118,20 @@ impl State {
     ///
     /// # Errors
     ///
-    /// [`Fault::UnknownNodeIndex`] when the plan has no such node.
+    /// [`Fault::UnknownNodeIndex`] when the plan has no such node, or
+    /// [`Fault::NotExecutor`] when the index names a Graph.
     pub fn cell(
         &self,
         plan: &ValidatedExecutionPlan,
         slot: NodeIndex,
         instance: &instance::Generation,
     ) -> Result<BTreeMap<String, Value>, Fault> {
-        if plan.nodes.get(slot.index()).is_none() {
-            return Err(Fault::UnknownNodeIndex(slot));
+        let node = plan
+            .nodes
+            .get(slot.index())
+            .ok_or(Fault::UnknownNodeIndex(slot))?;
+        if node.kind() == node::Kind::Graph {
+            return Err(Fault::NotExecutor(slot));
         }
         Ok(self.cell_unchecked(plan.plan(), slot, instance))
     }
@@ -153,7 +161,8 @@ impl State {
     ///
     /// # Errors
     ///
-    /// [`Fault::UnknownNodeIndex`] when the plan has no such node.
+    /// [`Fault::UnknownNodeIndex`] when the plan has no such node, or
+    /// [`Fault::NotExecutor`] when the index names a Graph.
     pub fn apply(
         &mut self,
         plan: &ValidatedExecutionPlan,
@@ -161,8 +170,12 @@ impl State {
         instance: &instance::Generation,
         delta: &[(String, Value)],
     ) -> Result<(), Fault> {
-        if plan.nodes.get(slot.index()).is_none() {
-            return Err(Fault::UnknownNodeIndex(slot));
+        let node = plan
+            .nodes
+            .get(slot.index())
+            .ok_or(Fault::UnknownNodeIndex(slot))?;
+        if node.kind() == node::Kind::Graph {
+            return Err(Fault::NotExecutor(slot));
         }
         self.apply_unchecked(plan.plan(), slot, instance, delta);
         Ok(())
@@ -832,17 +845,18 @@ impl<'plan> TransactionPreparer<'plan> {
         let Some(node) = self.plan.nodes.get(slot.index()) else {
             return Err(Fault::UnknownNodeIndex(slot));
         };
+        let execution_path = node.executor_path().ok_or(Fault::NotExecutor(slot))?;
         let port = node::Port::new("expired")
             .map_err(|error| Fault::Unrepresentable(error.to_string()))?;
         let trigger = node::Trigger::Lifecycle(node::Lifecycle::Evict);
         let parent = delivery.envelope.meta().sys();
-        let id = ids::emission_id(&node.path, &trigger, parent.id(), &port, 0);
+        let id = ids::emission_id(execution_path, &trigger, parent.id(), &port, 0);
         let value = Value::TaggedUnion(Box::new(crate::value::TaggedUnionValue {
             case: String::from("JoinExpired"),
             payload: vec![],
         }));
         let from = crate::plan::EdgeEnd {
-            node: Some(slot),
+            node: slot,
             port: port.clone(),
         };
         crossing_pins_hold(self.plan, &from, &value).map_err(PinViolation::into_fault)?;
@@ -853,7 +867,7 @@ impl<'plan> TransactionPreparer<'plan> {
             .with_ext(ext);
         Ok(TransactionOutcome {
             record: TransactionRecord {
-                owner_path: crate::node::OwnerPath::from(&node.path),
+                owner_path: node.path.clone(),
                 instance: instance.clone(),
                 parent_instance: None,
                 close_scope: None,
@@ -939,6 +953,7 @@ impl<'plan> TransactionPreparer<'plan> {
         let Some(node) = self.plan.nodes.get(slot.index()) else {
             return Err(Fault::UnknownNodeIndex(slot));
         };
+        let execution_path = node.executor_path().ok_or(Fault::NotExecutor(slot))?;
         let handler = self
             .plan
             .handlers()
@@ -953,7 +968,7 @@ impl<'plan> TransactionPreparer<'plan> {
             }
             return Ok(TransactionOutcome {
                 record: TransactionRecord {
-                    owner_path: crate::node::OwnerPath::from(&node.path),
+                    owner_path: node.path.clone(),
                     instance: instance.clone(),
                     parent_instance: parent_instance.cloned(),
                     close_scope: None,
@@ -1024,7 +1039,7 @@ impl<'plan> TransactionPreparer<'plan> {
                     // Filtered: consumed with no effect.
                     return Ok(TransactionOutcome {
                         record: TransactionRecord {
-                            owner_path: crate::node::OwnerPath::from(&node.path),
+                            owner_path: node.path.clone(),
                             instance: instance.clone(),
                             parent_instance: parent_instance.cloned(),
                             close_scope: None,
@@ -1150,7 +1165,7 @@ impl<'plan> TransactionPreparer<'plan> {
                         |port, built| {
                             let index = buffer.next_index(port);
                             let id = ids::emission_id(
-                                &node.path,
+                                execution_path,
                                 trigger,
                                 input.meta().sys().id(),
                                 port,
@@ -1170,7 +1185,7 @@ impl<'plan> TransactionPreparer<'plan> {
                             // a pin, pass-through included. Encoded
                             // bytes are the codecs' door.
                             let from = crate::plan::EdgeEnd {
-                                node: Some(slot),
+                                node: slot,
                                 port: port.clone(),
                             };
                             let data = match built.data {
@@ -1235,7 +1250,7 @@ impl<'plan> TransactionPreparer<'plan> {
                             let port = node::Port::new("Loop.next")
                                 .map_err(|error| Fault::Unrepresentable(error.to_string()))?;
                             let id = ids::emission_id(
-                                &node.path,
+                                execution_path,
                                 trigger,
                                 input.meta().sys().id(),
                                 &port,
@@ -1269,7 +1284,7 @@ impl<'plan> TransactionPreparer<'plan> {
         let deadline_ids = self.created_deadline_ids(slot, &emissions)?;
         Ok(TransactionOutcome {
             record: TransactionRecord {
-                owner_path: crate::node::OwnerPath::from(&node.path),
+                owner_path: node.path.clone(),
                 instance: instance.clone(),
                 parent_instance: parent_instance.cloned(),
                 close_scope: close_requested.then(|| instance.clone()),
@@ -1310,7 +1325,7 @@ impl<'plan> TransactionPreparer<'plan> {
         let mut deadline_ids = Vec::new();
         for emission in emissions {
             let source = crate::plan::EdgeEnd {
-                node: Some(slot),
+                node: slot,
                 port: emission.port.clone(),
             };
             let selected_value = self
@@ -1322,7 +1337,7 @@ impl<'plan> TransactionPreparer<'plan> {
                 .plan
                 .edges
                 .iter()
-                .filter(|edge| edge.from.node == Some(slot) && edge.from.port == emission.port)
+                .filter(|edge| edge.from.node == slot && edge.from.port == emission.port)
                 .filter(|edge| {
                     selected_value
                         .as_ref()
@@ -1330,7 +1345,10 @@ impl<'plan> TransactionPreparer<'plan> {
                 })
             {
                 let Some(to) = &edge.to else { continue };
-                let Some(target) = to.node else { continue };
+                let target = to.node;
+                if self.plan.nodes[target.index()].kind() == node::Kind::Graph {
+                    continue;
+                }
                 let budget_kind = self.plan.nodes[target.index()]
                     .connector()
                     .and_then(|spec| {
@@ -1397,7 +1415,8 @@ impl<'plan> TransactionPreparer<'plan> {
         let Some(planned) = self.plan.nodes.get(slot.index()) else {
             return Err(Fault::UnknownNodeIndex(slot));
         };
-        let connector_path = &planned.path;
+        let execution_path = planned.executor_path().ok_or(Fault::NotExecutor(slot))?;
+        let connector_path = execution_path;
         let emissions =
             self.completion_emissions(connector_path, &delivery.envelope, trigger, completion);
         Ok(TransactionOutcome {
@@ -1446,11 +1465,12 @@ impl<'plan> TransactionPreparer<'plan> {
         let Some(planned) = self.plan.nodes.get(slot.index()) else {
             return Err(Fault::UnknownNodeIndex(slot));
         };
+        let execution_path = planned.executor_path().ok_or(Fault::NotExecutor(slot))?;
         let trigger = node::Trigger::Lifecycle(node::Lifecycle::Reply);
-        let emissions = self.completion_emissions(&planned.path, request, &trigger, completion);
+        let emissions = self.completion_emissions(execution_path, request, &trigger, completion);
         Ok(TransactionOutcome {
             record: TransactionRecord {
-                owner_path: crate::node::OwnerPath::from(&planned.path),
+                owner_path: planned.path.clone(),
                 instance: instance.clone(),
                 parent_instance: None,
                 close_scope: None,
@@ -1523,6 +1543,7 @@ impl<'plan> TransactionPreparer<'plan> {
         let Some(planned) = self.plan.nodes.get(slot.index()) else {
             return Err(Fault::UnknownNodeIndex(slot));
         };
+        let execution_path = planned.executor_path().ok_or(Fault::NotExecutor(slot))?;
         let trigger = node::Trigger::Lifecycle(node::Lifecycle::Exit);
         let mut outputs = completion.outputs().to_vec();
         for output in &mut outputs {
@@ -1533,10 +1554,10 @@ impl<'plan> TransactionPreparer<'plan> {
         }
         let completion = Completion::try_new(outputs)
             .map_err(|error| Fault::Unrepresentable(error.to_string()))?;
-        let emissions = self.completion_emissions(&planned.path, opening, &trigger, &completion);
+        let emissions = self.completion_emissions(execution_path, opening, &trigger, &completion);
         Ok(TransactionOutcome {
             record: TransactionRecord {
-                owner_path: crate::node::OwnerPath::from(&planned.path),
+                owner_path: planned.path.clone(),
                 instance: instance.clone(),
                 parent_instance: None,
                 close_scope: None,
@@ -2149,11 +2170,11 @@ impl<'a> PayloadSlots<'a> {
         for delivery in named {
             let mut data = payload(delivery.envelope.data(), &delivery.port);
             if delivery.port.name() == "@Loop.state" {
-                let mut ancestor = Some(plan.nodes[slot.index()].owner);
+                let mut ancestor = Some(slot);
                 while let Some(owner_slot) = ancestor {
-                    let owner = &plan.owners[owner_slot.index()];
+                    let owner = &plan.nodes[owner_slot.index()];
                     if let Some(spec) = owner.loop_spec() {
-                        let ty = if owner_slot == plan.nodes[slot.index()].owner {
+                        let ty = if owner_slot == slot {
                             plan.resolved_ports().node_port_type(slot, &spec.entry)
                         } else {
                             plan.graph_ports(owner_slot)

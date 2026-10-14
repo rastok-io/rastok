@@ -15,7 +15,7 @@ use crate::boundary::{
     OutputOverflowReason, ProcessExit, RequestPreparation, Response, SchedulerCompletion,
 };
 use crate::envelope::{Data, Envelope, Value};
-use crate::plan::{AttrSetting, NodeExecution};
+use crate::plan::{AttrSetting, NodeKind};
 use std::io::Read;
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -145,7 +145,7 @@ impl ProcessRequestSettings {
                     reason: ProcessSettingsError::Unresolved("connector binding path"),
                 });
             };
-            let NodeExecution::Connector(spec) = &node.execution else {
+            let NodeKind::Connector(spec) = &node.body else {
                 return Err(ProcessBindError {
                     node: path.clone(),
                     reason: ProcessSettingsError::Unresolved("connector binding kind"),
@@ -153,11 +153,11 @@ impl ProcessRequestSettings {
             };
             match ProcessBinding::try_from(spec) {
                 Ok(resolved) => {
-                    bindings.insert(node.path.clone(), resolved);
+                    bindings.insert(path.clone(), resolved);
                 }
                 Err(reason) => {
                     return Err(ProcessBindError {
-                        node: node.path.clone(),
+                        node: path.clone(),
                         reason,
                     });
                 }
@@ -741,7 +741,7 @@ impl<'plan> Process<'plan> {
             .filter_map(|node| {
                 node.connector()
                     .filter(|spec| spec.contract.as_str() == crate::connector::PROCESS_CONNECTOR_ID)
-                    .map(|_| node.path.clone())
+                    .and_then(|_| node.executor_path().cloned())
             })
             .collect();
         Self::try_bind(plan, &nodes)

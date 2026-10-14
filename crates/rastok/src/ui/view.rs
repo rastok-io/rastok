@@ -5,7 +5,8 @@ use crate::envelope::{Data, MetaValue, Namespace, Scalar, Value};
 use crate::instance;
 
 use crate::journal::{CallStatus, EgressRecord, Journal, MemJournal, Record, SessionStatus};
-use crate::plan::{NodeExecution, NodeIndex, ValidatedExecutionPlan};
+use crate::node::NodeIndex;
+use crate::plan::{NodeKind, ValidatedExecutionPlan};
 use crate::runtime::execution::{
     CallDirectionInspection, CallReferenceInspection, Execution, ExecutionInspection,
     InstancePhaseInspection, SessionDirectionInspection,
@@ -420,7 +421,7 @@ fn topology(
         .map(|definition| (definition.owner.to_string(), definition))
         .collect::<BTreeMap<_, _>>();
     let mut owner_transactions = plan
-        .owners
+        .nodes
         .iter()
         .map(|owner| (owner.path.to_string(), Traffic::default()))
         .collect::<BTreeMap<_, _>>();
@@ -471,8 +472,11 @@ fn topology(
                 if let Some(slot) = firing_slot.filter(|_| !retry::held(transaction)) {
                     for emission in &transaction.emissions {
                         for edge in &plan.edges {
-                            let leaves_graph = edge.to.as_ref().is_none_or(|to| to.node.is_none());
-                            if edge.from.node.is_some_and(|source| source.index() == slot)
+                            let leaves_graph = edge
+                                .to
+                                .as_ref()
+                                .is_none_or(|to| to.node == crate::node::NodeIndex::ROOT);
+                            if edge.from.node.index() == slot
                                 && edge.from.port == emission.port
                                 && leaves_graph
                             {
@@ -493,10 +497,11 @@ fn topology(
         .nodes
         .iter()
         .enumerate()
-        .map(|(index, node)| {
-            let (kind, ty) = match &node.execution {
-                NodeExecution::Operator { .. } => ("operator", String::from("Operator")),
-                NodeExecution::Connector(spec) => ("connector", spec.contract.to_string()),
+        .filter_map(|(index, node)| {
+            let (kind, ty) = match &node.body {
+                NodeKind::Graph => return None,
+                NodeKind::Operator(_) => ("operator", String::from("Operator")),
+                NodeKind::Connector(spec) => ("connector", spec.contract.to_string()),
             };
             let firing = owner_transactions
                 .get(&node.path.to_string())
@@ -506,23 +511,23 @@ fn topology(
                 .get(&node.path.to_string())
                 .copied()
                 .filter(|definition| definition.kind == node.kind());
-            let extensions = plan.owners[node.owner.index()]
+            let extensions = node
                 .extensions
                 .iter()
                 .map(|aspect| aspect.extension().source_name())
                 .collect::<Vec<_>>();
-            let containing_owner = plan.owners[node.owner.index()]
+            let containing_owner = node
                 .parent
                 .map(|owner| format!("owner:{}", owner.index()));
             let ports = resolved_ports
-                .node(crate::plan::NodeIndex::new(
+                .node(crate::node::NodeIndex::new(
                     u32::try_from(index).unwrap_or(u32::MAX),
                 ))
                 .unwrap_or_default()
                 .iter()
                 .map(|port| port_json(port.port(), port.direction(), Some(port.ty())))
                 .collect::<Vec<_>>();
-            json!({
+            Some(json!({
                 "slot": index,
                 "id": format!("node:{index}"),
                 "path": node.path.to_string(),
@@ -531,11 +536,11 @@ fn topology(
                 "kind": kind,
                 "type": ty,
                 "extensions": extensions,
-                "loop": loop_spec_json(&plan.owners[node.owner.index()]),
-                "retry": retry::spec(&plan.owners[node.owner.index()]),
-                "profile": match &node.execution {
-                    NodeExecution::Connector(spec) => Some(format!("{:?} · {:?}", spec.exchange, spec.roles)),
-                    NodeExecution::Operator { .. } => None,
+                "loop": loop_spec_json(node),
+                "retry": retry::spec(node),
+                "profile": match &node.body {
+                    NodeKind::Connector(spec) => Some(format!("{:?} · {:?}", spec.exchange, spec.roles)),
+                    NodeKind::Graph | NodeKind::Operator(_) => None,
                 },
                 "ports": ports,
                 "definition": definition.map(source_definition_json),
@@ -546,14 +551,14 @@ fn topology(
                 }).filter_map(|instance| {
                     instance_badges.get(&instance.reference).cloned()
                 }).collect::<Vec<_>>(),
-            })
+            }))
         })
         .collect::<Vec<_>>();
     let owners = plan
-        .owners
+        .nodes
         .iter()
         .enumerate()
-        .filter(|(_, owner)| owner.kind == crate::plan::OwnerKind::Graph)
+        .filter(|(_, owner)| owner.kind() == crate::node::Kind::Graph)
         .map(|(index, owner)| {
             let activity = owner_transactions
                 .get(&owner.path.to_string())
@@ -615,7 +620,7 @@ fn topology(
             json!({
                 "index": index,
                 "route": route,
-                "scope": plan.owners[edge.owner.index()].path.to_string(),
+                "scope": plan.nodes[edge.owner.index()].path.to_string(),
                 "source": endpoint_json(&edge.from, true),
                 "target": edge.to.as_ref().map_or_else(
                     || json!({
@@ -623,10 +628,11 @@ fn topology(
                         "kind": "discard",
                         "label": format!(
                             "Discard · {}.{}",
-                            edge.from.node.map_or_else(
-                                || String::from("App"),
-                                |slot| plan.nodes[slot.index()].path.to_string(),
-                            ),
+                            if edge.from.node == crate::node::NodeIndex::ROOT {
+                                String::from("App")
+                            } else {
+                                plan.nodes[edge.from.node.index()].path.to_string()
+                            },
                             edge.from.port,
                         ),
                         "owner": format!("owner:{}", edge.owner.index()),
@@ -755,7 +761,7 @@ fn loop_runs(plan: &ValidatedExecutionPlan, records: &[Record]) -> JsonValue {
                 "active": matches!(run.phase, Phase::Active | Phase::AwaitingAdmission),
                 "waiting": run.phase == Phase::AwaitingAdmission && run.due_at.is_some(),
                 "fuel": owners.get(reference).map(|(_, fuel)| fuel.to_string()),
-                "expired_port": plan.owners.iter().find(|owner| owners.get(reference).is_some_and(|(path, _)| owner.path.to_string() == *path))
+                "expired_port": plan.nodes.iter().find(|owner| owners.get(reference).is_some_and(|(path, _)| owner.path.to_string() == *path))
                     .and_then(|owner| owner.loop_spec()).and_then(|spec| spec.expired.as_ref())
                     .map(|expired| expired.port.name()),
                 "remaining": run.remaining.to_string(),
@@ -793,7 +799,7 @@ fn mailbox_contents(
                     "envelope_id": delivery.envelope.meta().sys().id().to_string(),
                     "origin_id": delivery.envelope.meta().sys().origin_id().to_string(),
                     "meta": meta_json(delivery.envelope.meta()),
-                    "data": port_data_json(plan, Some(&mailbox.node), &delivery.port, delivery.envelope.data()),
+                    "data": port_data_json(plan, mailbox.node.as_node_path(), &delivery.port, delivery.envelope.data()),
                 }));
         }
     }
@@ -848,7 +854,7 @@ pub fn scenario_definition_json(
                 .is_some_and(|ports| ports.iter().any(|port| classified(port.annotations())))
                 || node.vars().iter().any(|var| classified(&var.annotations))
         })
-        || plan.owners.iter().any(|owner| {
+        || plan.nodes.iter().any(|owner| {
             owner.ports.iter().any(|port| classified(&port.annotations))
                 || owner
                     .vals
@@ -895,7 +901,7 @@ fn port_json(
     })
 }
 
-fn loop_spec_json(owner: &crate::plan::Owner) -> JsonValue {
+fn loop_spec_json(owner: &crate::plan::Node) -> JsonValue {
     owner.loop_spec().map_or(JsonValue::Null, |spec| json!({
         "entry": spec.entry.name(),
         "terminals": spec.terminals.iter().map(|port| port.name()).collect::<Vec<_>>(),
@@ -906,13 +912,13 @@ fn loop_spec_json(owner: &crate::plan::Owner) -> JsonValue {
 
 fn endpoint_json(endpoint: &crate::plan::EdgeEnd, source: bool) -> JsonValue {
     match endpoint.node {
-        Some(slot) => json!({
+        slot if slot != crate::node::NodeIndex::ROOT => json!({
             "id": format!("node:{}", slot.index()),
             "kind": "node",
             "label": JsonValue::Null,
             "port": endpoint.port.name(),
         }),
-        None => json!({
+        _ => json!({
             "id": format!(
                 "boundary:{}:{}",
                 if source { "input" } else { "output" },
@@ -966,7 +972,7 @@ fn history(plan: &ValidatedExecutionPlan, vm: &Execution<'_>, journal: &MemJourn
                 "envelope_id": observed.envelope.meta().sys().id().to_string(),
                 "origin_id": observed.envelope.meta().sys().origin_id().to_string(),
                 "meta": meta_json(observed.envelope.meta()),
-                "data": port_data_json(plan, observed.node.as_ref(), &observed.port, observed.envelope.data()),
+                "data": port_data_json(plan, observed.node.as_ref().and_then(crate::node::OwnerPath::as_node_path), &observed.port, observed.envelope.data()),
             })
         })
         .collect::<Vec<_>>();
@@ -1602,14 +1608,14 @@ mod tests {
                         [1; 16],
                     ))),
                     direction: CallDirectionInspection::Outbound,
-                    connector: connector.clone(),
+                    connector: crate::node::OwnerPath::from(&connector),
                     instance: generation.clone(),
                     completion_recorded: completed,
                 }],
                 sessions: vec![SessionInspection {
                     reference: SessionId::new(Id::from_bytes([2; 16])),
                     direction: SessionDirectionInspection::Inbound,
-                    connector: connector.clone(),
+                    connector: crate::node::OwnerPath::from(&connector),
                     instance: generation.clone(),
                     opened: true,
                     pending_writes: 0,

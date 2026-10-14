@@ -428,7 +428,7 @@ pub fn verify_session(profile: &SessionTestFixture<'_>, drivers: &DriverRegistry
         return report;
     }
     let slot = match u32::try_from(slot) {
-        Ok(slot) => crate::plan::NodeIndex::new(slot),
+        Ok(slot) => crate::node::NodeIndex::new(slot),
         Err(_) => {
             report
                 .violations
@@ -872,7 +872,7 @@ fn resolved_exit_cases(
         })
         .ok_or_else(|| format!("the probe instantiates no `{}` connector", contract.name))?;
     let slot = u32::try_from(index)
-        .map(crate::plan::NodeIndex::new)
+        .map(crate::node::NodeIndex::new)
         .map_err(|_| String::from("the probe has more nodes than the plan slot domain"))?;
     let exit = plan
         .resolved_ports()

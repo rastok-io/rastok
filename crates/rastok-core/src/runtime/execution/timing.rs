@@ -27,7 +27,7 @@ impl Execution<'_> {
             let Some(owner) = owner else {
                 continue;
             };
-            let lifetime = &self.plan.owners[owner.index()].instance.lifetime;
+            let lifetime = &self.plan.nodes[owner.index()].instance.lifetime;
             if matches!(
                 lifetime,
                 instance::Lifetime::Persistent | instance::Lifetime::SinglePass
@@ -84,10 +84,11 @@ impl Execution<'_> {
         let Some(to) = &route.edge.to else {
             return Vec::new();
         };
-        let Some(slot) = to.node else {
+        let slot = to.node;
+        let node = &self.plan.nodes[slot.index()];
+        let Some(path) = node.executor_path() else {
             return Vec::new();
         };
-        let node = &self.plan.nodes[slot.index()];
         // A Graph-boundary admission retains its own source path; its
         // executable projection alone cannot identify the delivery deadline.
         let edge = self.prepared_edge_text(route);
@@ -111,7 +112,7 @@ impl Execution<'_> {
                     due_at: self.now.saturating_add(within),
                 },
                 Obligation::JoinWithin {
-                    operator: node.path.clone(),
+                    operator: path.clone(),
                     edge: edge.clone(),
                     delivery,
                     instance: target.reference.clone(),
@@ -167,7 +168,7 @@ impl Execution<'_> {
                     due_at: self.now.saturating_add(budget),
                 },
                 Obligation::DeliveryBudget {
-                    connector: node.path.clone(),
+                    connector: path.clone(),
                     edge,
                     delivery,
                     instance: target.reference.clone(),
@@ -250,7 +251,7 @@ impl Execution<'_> {
         let Some(instance) = self.instances.get(reference) else {
             return Vec::new();
         };
-        let Some(policy) = self.plan.owners[instance.owner.index()].instance.closing else {
+        let Some(policy) = self.plan.nodes[instance.owner.index()].instance.closing else {
             return Vec::new();
         };
         let drain = self.now.saturating_add(policy.drain_for);

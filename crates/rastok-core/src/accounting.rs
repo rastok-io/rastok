@@ -15,8 +15,9 @@ use crate::envelope::{Id, Value};
 
 use crate::journal::{Record, observations_for_records_from, recorded_envelope};
 use crate::node;
+use crate::node::NodeIndex;
 use crate::observation::{ExchangeCorrelation, RecordCorrelation, RecordObservation};
-use crate::plan::{NodeIndex, OwnerKind, ValidatedExecutionPlan};
+use crate::plan::ValidatedExecutionPlan;
 use crate::schema_annotation::{
     AnnotationTable, CurrencyCode, DataAnnotation, MeasureId, SchemaPath, SchemaPathSegment,
     is_iso_4217_currency,
@@ -576,8 +577,8 @@ fn inbound_schema<'a>(
             .ok_or(AccountingError::UnknownFlowSchema)?;
         return Ok(PortSchema {
             annotations,
-            node: Some(&planned.path),
-            connector: planned.connector().map(|_| &planned.path),
+            node: planned.executor_path(),
+            connector: planned.connector().and_then(|_| planned.executor_path()),
         });
     }
     let annotations = plan
@@ -599,19 +600,17 @@ fn transaction_schema<'a>(
     owner_path: &node::OwnerPath,
     port: &node::Port,
 ) -> Result<PortSchema<'a>, AccountingError> {
-    let owner = plan
+    let (index, owner) = plan
         .plan()
-        .owners
+        .nodes
         .iter()
-        .find(|owner| &owner.path == owner_path)
+        .enumerate()
+        .find(|(_, owner)| &owner.path == owner_path)
         .ok_or(AccountingError::UnknownFlowSchema)?;
-    match owner.kind {
-        OwnerKind::Node(slot) => {
-            let planned = plan
-                .plan()
-                .nodes
-                .get(slot.index())
-                .ok_or(AccountingError::UnknownFlowSchema)?;
+    match owner.kind() {
+        node::Kind::Operator | node::Kind::Connector => {
+            let planned = owner;
+            let slot = NodeIndex::new(index as u32);
             let annotations = plan
                 .resolved_ports()
                 .node(slot)
@@ -620,11 +619,11 @@ fn transaction_schema<'a>(
                 .ok_or(AccountingError::UnknownFlowSchema)?;
             Ok(PortSchema {
                 annotations,
-                node: Some(&planned.path),
-                connector: planned.connector().map(|_| &planned.path),
+                node: planned.executor_path(),
+                connector: planned.connector().and_then(|_| planned.executor_path()),
             })
         }
-        OwnerKind::Graph if owner.path.is_root() => {
+        node::Kind::Graph if owner.path.is_root() => {
             let annotations = plan
                 .resolved_ports()
                 .boundary()
@@ -638,7 +637,7 @@ fn transaction_schema<'a>(
                 connector: None,
             })
         }
-        OwnerKind::Graph => {
+        node::Kind::Graph => {
             let annotations = owner
                 .ports
                 .iter()
@@ -720,14 +719,11 @@ fn connector_which_emitted(
         {
             let owner = plan
                 .plan()
-                .owners
+                .nodes
                 .iter()
                 .find(|owner| owner.path == transaction.owner_path)?;
-            let OwnerKind::Node(slot) = owner.kind else {
-                return None;
-            };
-            let planned = plan.plan().nodes.get(slot.index())?;
-            planned.connector().map(|_| planned.path.clone())
+            owner.connector()?;
+            owner.executor_path().cloned()
         }
         Record::Ingress(_) | Record::Transaction(_) | Record::Egress(_) => None,
     })

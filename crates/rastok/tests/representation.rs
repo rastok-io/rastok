@@ -5,8 +5,9 @@ use rastok::compiler::compile;
 use rastok::contract::ContractCatalog;
 use rastok::envelope::{Data, Delivery, Encoding, Envelope, Id, Meta, MetaSys, Value};
 use rastok::instance;
+use rastok::node::NodeIndex;
 use rastok::node::{OwnerPath, Port};
-use rastok::plan::{GraphVersion, NodeIndex};
+use rastok::plan::GraphVersion;
 use rastok::runtime::{Fault, TransactionPreparer};
 use std::collections::BTreeMap;
 
@@ -27,7 +28,7 @@ fn count(ty: &str, data: Data) -> Result<Value, Fault> {
         envelope: Envelope::new(Meta::new(MetaSys::root(Id::from_bytes([1; 16]), 1)), data),
     };
     let result = TransactionPreparer::new(&compiled.plan, GraphVersion(1)).fire(
-        NodeIndex::new(0),
+        NodeIndex::new(1),
         &generation,
         &delivery,
         &BTreeMap::new(),

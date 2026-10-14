@@ -257,7 +257,7 @@ impl Execution<'_> {
             .get(&record.instance)
             .ok_or_else(|| invalid(index, "the transaction owner has no admitted instance"))?;
         let owner = instance.owner;
-        if self.plan.owners[owner.index()].path != record.owner_path {
+        if self.plan.nodes[owner.index()].path != record.owner_path {
             return Err(invalid(
                 index,
                 "the transaction owner differs from its instance",
@@ -300,8 +300,8 @@ impl Execution<'_> {
             }
         }
 
-        let slot = match self.plan.owners[owner.index()].kind {
-            OwnerKind::Graph => {
+        let slot = match self.plan.nodes[owner.index()].kind() {
+            node::Kind::Graph => {
                 if record.loop_protocol().is_some()
                     && record.trigger == node::Trigger::Lifecycle(node::Lifecycle::Next)
                 {
@@ -334,7 +334,7 @@ impl Execution<'_> {
                 }
                 return Ok(());
             }
-            OwnerKind::Node(slot) => slot,
+            node::Kind::Operator | node::Kind::Connector => owner,
         };
         let exchange_consumed = self.restore_exchange_exit(index, slot, record)?;
         if record.trigger == node::Trigger::Lifecycle(node::Lifecycle::Next)
@@ -564,7 +564,7 @@ impl Execution<'_> {
                 self.scheduler.schedule(
                     deadline.due_at,
                     Obligation::DeliveryBudget {
-                        connector: self.plan.nodes[slot.index()].path.clone(),
+                        connector: self.executor_path(slot)?.clone(),
                         edge: edge.clone(),
                         delivery: envelope.meta().sys().id(),
                         instance: record.instance.clone(),
@@ -632,7 +632,7 @@ impl Execution<'_> {
                 .find(matches)
                 .ok_or_else(|| invalid(index, "a consumed Loop cursor has no retained delivery"))?;
             let application = self.loop_application(&record.instance, delivery);
-            let entry = self.plan.owners[self.plan.nodes[slot.index()].owner.index()]
+            let entry = self.plan.nodes[slot.index()]
                 .loop_spec()
                 .is_some_and(|spec| spec.entry == delivery.port);
             if entry && application.is_none() {

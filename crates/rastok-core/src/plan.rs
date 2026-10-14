@@ -306,34 +306,13 @@ pub use validation::{PlanValidationError, ValidatedExecutionPlan};
 use crate::datatype::DataType;
 use crate::expr;
 use crate::node;
+use crate::node::NodeIndex;
 use crate::schema_annotation::AnnotationTable;
 use crate::value::Value;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
-
-/// Index into an execution plan's Node table, not a persistent identity.
-///
-/// Validation proves that indices stored in a [`ValidatedExecutionPlan`] are
-/// in bounds. Callers can construct other indices; public APIs check them
-/// against the supplied plan before accessing a Node.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct NodeIndex(u32);
-
-impl NodeIndex {
-    /// Wraps a node index.
-    #[must_use]
-    pub const fn new(index: u32) -> Self {
-        Self(index)
-    }
-
-    /// The node index inside [`ExecutionPlan::nodes`].
-    #[must_use]
-    pub const fn index(self) -> usize {
-        self.0 as usize
-    }
-}
 
 /// One entry of a port table — a node's or the boundary's: the name,
 /// direction and OPTIONAL pinned type. A present type is a
@@ -376,12 +355,10 @@ impl PortDecl {
 /// Each Operator contains its handlers and private state declarations.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExecutionPlan {
-    /// Lexical lifecycle owners, in canonical preorder. Entry zero is the
-    /// root App Graph. Graph composition may flatten the spatial DAG, but it
-    /// never erases this table: instance addressing, immutable bindings and
-    /// future placement all attach here.
-    pub owners: Vec<Owner>,
-    /// The nodes, in canonical order; [`NodeIndex`]s index this table.
+    /// Every declaration, including Graph scopes. The App root is first,
+    /// followed by nested Graphs in path order, Operators in path order,
+    /// and Connectors in path order. This preserves the deterministic order
+    /// of executable work independently of lexical containment.
     pub nodes: Vec<Node>,
     /// The wiring, desugared to explicit pairs, in canonical order —
     /// the same order the semantic hash sees.
@@ -422,10 +399,10 @@ pub struct AssetBlob {
 impl ExecutionPlan {
     /// Declared ports of the root App Graph, in canonical order.
     /// The root owns these declarations like any other Graph. Validation
-    /// requires its owner row before any plan can execute.
+    /// requires the first Node to be that root before the plan can execute.
     #[must_use]
     pub fn boundary(&self) -> &[PortDecl] {
-        self.owners.first().map_or(&[], |root| &root.ports)
+        self.nodes.first().map_or(&[], |root| &root.ports)
     }
 
     /// Iterates over Operator handlers in Node and activation order.
@@ -448,14 +425,17 @@ impl ExecutionPlan {
 
     pub(crate) fn endpoint_matches(&self, endpoint: &Endpoint, physical: &EdgeEnd) -> bool {
         endpoint.port == physical.port
-            && match (&endpoint.owner, physical.node) {
-                (EndpointOwner::Node(path), Some(slot)) => self
-                    .nodes
-                    .get(slot.index())
-                    .is_some_and(|node| node.path == *path),
-                (EndpointOwner::Graph(path), None) => path.is_root(),
-                _ => false,
-            }
+            && self
+                .nodes
+                .get(physical.node.index())
+                .is_some_and(|node| match &endpoint.owner {
+                    EndpointOwner::Node(path) => {
+                        node.path == *path && node.kind() != node::Kind::Graph
+                    }
+                    EndpointOwner::Graph(path) => {
+                        node.path == *path && node.kind() == node::Kind::Graph
+                    }
+                })
     }
 
     fn route_destination_matches(&self, destination: &RouteDestination, edge: &Edge) -> bool {
@@ -532,11 +512,10 @@ impl ExecutionPlan {
         cases
     }
 
-    /// Resolves one owner reference without trusting a freely constructed
-    /// [`node::OwnerSlot`].
+    /// Resolves a Node index, whether it denotes a Graph or an Executor.
     #[must_use]
-    pub fn owner(&self, slot: node::OwnerSlot) -> Option<&Owner> {
-        self.owners.get(slot.index())
+    pub fn node(&self, index: NodeIndex) -> Option<&Node> {
+        self.nodes.get(index.index())
     }
 
     /// Complete boundary contract of one Graph owner.
@@ -544,28 +523,31 @@ impl ExecutionPlan {
     /// Every Graph, including the root App, owns its port declarations.
     /// Composition does not erase them from the plan.
     #[must_use]
-    pub fn graph_ports(&self, slot: node::OwnerSlot) -> Option<&[PortDecl]> {
-        let owner = self.owner(slot)?;
-        if owner.kind != OwnerKind::Graph {
+    pub fn graph_ports(&self, slot: node::NodeIndex) -> Option<&[PortDecl]> {
+        let owner = self.node(slot)?;
+        if owner.kind() != node::Kind::Graph {
             return None;
         }
         Some(&owner.ports)
     }
 
-    /// The instance policy owned by one executable Node.
+    /// The instance policy of a Graph, Operator or Connector.
     #[must_use]
     pub fn node_instance(&self, slot: NodeIndex) -> Option<&instance::InstanceSpec> {
         let node = self.nodes.get(slot.index())?;
-        self.owner(node.owner).map(|owner| &owner.instance)
+        Some(&node.instance)
     }
 
     /// The canonical text of one edge — the same rendering the
     /// consumed cursors and the budget obligations seal.
     #[must_use]
     pub fn edge_text(&self, edge: &Edge) -> String {
-        let end = |endpoint: &EdgeEnd| match endpoint.node {
-            Some(slot) => format!("{}.{}", self.nodes[slot.index()].path, endpoint.port),
-            None => format!(".{}", endpoint.port),
+        let end = |endpoint: &EdgeEnd| {
+            format!(
+                "{}.{}",
+                self.nodes[endpoint.node.index()].path,
+                endpoint.port
+            )
         };
         let to = match &edge.to {
             Some(endpoint) => end(endpoint),
@@ -575,83 +557,117 @@ impl ExecutionPlan {
     }
 }
 
-/// Executable payload carried by one planned node.
-///
-/// This is deliberately not the semantic [`node::Kind`]. Graphs live in the
-/// owner table rather than the executable-node table; an executable Operator
-/// owns its state declarations and handlers, while an executable Connector
-/// carries its exact contract specification and cannot contain DSL code.
+/// Kind-specific declarations. A Graph cannot carry application state or
+/// handlers; a Connector cannot carry DSL code. The large Executor bodies
+/// are allocated separately from the common Node table.
 #[derive(Debug, Clone, PartialEq)]
-pub enum NodeExecution {
+pub enum NodeKind {
+    /// Lexical containment and boundary ports, without an application mailbox.
+    Graph,
     /// DSL transitions and their private state declarations.
-    Operator {
-        /// Private state declarations in canonical name order.
-        vars: Vec<VarCell>,
-        /// Transitions in canonical activation order.
-        handlers: Vec<Handler>,
-    },
+    Operator(Box<Operator>),
     /// External-effect Driver under a contract sheet.
-    Connector(ConnectorSpec),
+    Connector(Box<ConnectorSpec>),
 }
 
-/// One planned node.
+/// DSL transitions and private state belonging to one Operator.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Operator {
+    /// Private state declarations in canonical name order.
+    pub vars: Vec<VarCell>,
+    /// Transitions in canonical activation order.
+    pub handlers: Vec<Handler>,
+}
+
+/// One Graph, Operator or Connector declaration in the validated program.
+/// Containment, port declarations and instance policy belong to the Node;
+/// its body contains only the declarations permitted by its kind.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Node {
     /// Root-relative address — id-recipe material.
-    pub path: node::Path,
-    /// Kind-specific executable payload.
-    pub execution: NodeExecution,
+    pub path: node::OwnerPath,
+    /// Enclosing Graph; only the App root has no parent.
+    pub parent: Option<NodeIndex>,
+    /// Kind-specific declarations; a Graph has no application code.
+    pub body: NodeKind,
     /// The node's materialized port table, in canonical order. Every resolved
     /// Connector contract row is present and typed; Operator rows record
     /// source/inferred constraints. The total effective types, including
     /// inference origin, live in [`ValidatedExecutionPlan::resolved_ports`].
     pub ports: Vec<PortDecl>,
-    /// The owner row for this Node. Validation proves that the row is a
-    /// [`OwnerKind::Node`] carrying this exact Node slot.
-    pub owner: node::OwnerSlot,
+    /// Complete Extension specifications in canonical order.
+    pub extensions: Vec<ExtensionSpec>,
+    /// Logical addressing and lifetime policy.
+    pub instance: instance::InstanceSpec,
+    /// Immutable bindings owned by this Node, in canonical name order.
+    pub vals: Vec<OwnerValue>,
 }
 
 impl Node {
+    /// Non-root address of an Operator or Connector. A Graph has no
+    /// application mailbox or transaction preparation path.
+    #[must_use]
+    pub fn executor_path(&self) -> Option<&node::Path> {
+        match self.kind() {
+            node::Kind::Graph => None,
+            node::Kind::Operator | node::Kind::Connector => self.path.as_node_path(),
+        }
+    }
+
+    /// Path-based routing identity used by the journal. The App root is a
+    /// Graph; a raw plan cannot disguise its empty address as an Executor.
+    pub(crate) fn endpoint_owner(&self) -> Result<EndpointOwner, PlanValidationError> {
+        if self.kind() == node::Kind::Graph {
+            return Ok(EndpointOwner::Graph(self.path.clone()));
+        }
+        self.path
+            .as_node_path()
+            .cloned()
+            .map(EndpointOwner::Node)
+            .ok_or(PlanValidationError::MissingRootOwner)
+    }
+
     /// The node's structural semantic kind.
     #[must_use]
     pub const fn kind(&self) -> node::Kind {
-        match self.execution {
-            NodeExecution::Operator { .. } => node::Kind::Operator,
-            NodeExecution::Connector(_) => node::Kind::Connector,
+        match self.body {
+            NodeKind::Graph => node::Kind::Graph,
+            NodeKind::Operator(_) => node::Kind::Operator,
+            NodeKind::Connector(_) => node::Kind::Connector,
         }
     }
 
     /// The connector configuration, when the node is a connector.
     #[must_use]
     pub fn connector(&self) -> Option<&ConnectorSpec> {
-        match &self.execution {
-            NodeExecution::Connector(spec) => Some(spec),
-            NodeExecution::Operator { .. } => None,
+        match &self.body {
+            NodeKind::Connector(spec) => Some(spec),
+            NodeKind::Graph | NodeKind::Operator(_) => None,
         }
     }
 
     /// State declared by this Operator; Connectors have no DSL state cells.
     #[must_use]
     pub fn vars(&self) -> &[VarCell] {
-        match &self.execution {
-            NodeExecution::Operator { vars, .. } => vars,
-            NodeExecution::Connector(_) => &[],
+        match &self.body {
+            NodeKind::Operator(operator) => &operator.vars,
+            NodeKind::Graph | NodeKind::Connector(_) => &[],
         }
     }
 
     /// Handlers contained in this Operator; Connectors have no DSL handlers.
     #[must_use]
     pub fn handlers(&self) -> &[Handler] {
-        match &self.execution {
-            NodeExecution::Operator { handlers, .. } => handlers,
-            NodeExecution::Connector(_) => &[],
+        match &self.body {
+            NodeKind::Operator(operator) => &operator.handlers,
+            NodeKind::Graph | NodeKind::Connector(_) => &[],
         }
     }
 
     pub(crate) fn handlers_mut(&mut self) -> &mut [Handler] {
-        match &mut self.execution {
-            NodeExecution::Operator { handlers, .. } => handlers,
-            NodeExecution::Connector(_) => &mut [],
+        match &mut self.body {
+            NodeKind::Operator(operator) => &mut operator.handlers,
+            NodeKind::Graph | NodeKind::Connector(_) => &mut [],
         }
     }
 
@@ -665,36 +681,6 @@ impl Node {
                         && spec.exchange == crate::connector::ConnectorExchange::Call))
         })
     }
-}
-
-/// The declaration represented by one owner row.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum OwnerKind {
-    /// A lexical Graph scope. The root App Graph is the unique parentless row.
-    Graph,
-    /// An executable Operator or Connector.
-    Node(NodeIndex),
-}
-
-/// One lexical lifecycle and instance owner.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Owner {
-    /// Root-relative static owner path.
-    pub path: node::OwnerPath,
-    /// Enclosing Graph owner. Only the root App Graph has no parent.
-    pub parent: Option<node::OwnerSlot>,
-    /// The declaration this row preserves after DAG flattening.
-    pub kind: OwnerKind,
-    /// A Graph's declared boundary contract in canonical order, including
-    /// the root App. Executor ports remain on [`Node`], so their owner rows
-    /// carry an empty table.
-    pub ports: Vec<PortDecl>,
-    /// Complete Extension specifications in canonical order.
-    pub extensions: Vec<ExtensionSpec>,
-    /// Orthogonal logical addressing and lifetime policy.
-    pub instance: instance::InstanceSpec,
-    /// Immutable bindings owned by this scope, in canonical name order.
-    pub vals: Vec<OwnerValue>,
 }
 
 /// One fully configured Extension carried by a categorical plan.
@@ -724,7 +710,7 @@ impl ExtensionSpec {
     }
 }
 
-impl Owner {
+impl Node {
     /// The configured temporal recursion, independent of Extension order.
     #[must_use]
     pub fn loop_spec(&self) -> Option<&LoopSpec> {
@@ -988,18 +974,18 @@ pub struct Handler {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Edge {
     /// Lexical Graph owner in which this route was declared.
-    pub owner: node::OwnerSlot,
+    pub owner: node::NodeIndex,
     /// The emitting end.
     pub from: EdgeEnd,
     /// The receiving end; `None` is the explicit discard.
     pub to: Option<EdgeEnd>,
 }
 
-/// One resolved edge end; a boundary end has no node.
+/// One resolved edge end. The App boundary names the root Graph explicitly.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EdgeEnd {
-    /// The node, or `None` for the graph's boundary.
-    pub node: Option<NodeIndex>,
+    /// The Node owning the port, including the root App Graph.
+    pub node: NodeIndex,
     /// The port.
     pub port: node::Port,
 }

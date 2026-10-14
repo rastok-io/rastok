@@ -562,7 +562,7 @@ fn a_checked_integer_measure_can_replace_the_operational_fuel_cap() {
     let compilation = compile_one(&source).expect("the affine countdown is proved finite");
     let spec = compilation
         .plan
-        .owners
+        .nodes
         .iter()
         .find_map(|owner| owner.loop_spec())
         .unwrap();
@@ -595,7 +595,7 @@ graph finite : App + Loop {
 }
 "#;
     let compilation = compile_one(structured).expect("a struct field can be the ranking measure");
-    let spec = compilation.plan.owners[0].loop_spec().unwrap();
+    let spec = compilation.plan.nodes[0].loop_spec().unwrap();
     assert_eq!(
         spec.proof.as_ref().expect("the proof travels").decreases,
         [1]

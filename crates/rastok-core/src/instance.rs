@@ -471,7 +471,7 @@ pub enum Lifetime {
 /// and lifecycle phase change as the VM processes committed records.
 #[derive(Debug, Clone)]
 pub(crate) struct LiveInstance {
-    pub(crate) owner: node::OwnerSlot,
+    pub(crate) owner: node::NodeIndex,
     pub(crate) parent: Option<Generation>,
     pub(crate) segments: Vec<Segment>,
     pub(crate) values: BTreeMap<String, crate::value::Value>,

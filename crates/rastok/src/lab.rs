@@ -221,7 +221,7 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
         scenario: &'scenario Scenario,
         boot: Option<&crate::deployment::BootBindings>,
     ) -> Result<Self, String> {
-        if hash.is_none() && plan.owners.iter().any(|owner| owner.retry_spec().is_some()) {
+        if hash.is_none() && plan.nodes.iter().any(|owner| owner.retry_spec().is_some()) {
             return Err(
                 "Retry requires the original program identity; use try_new_program or run_program"
                     .into(),
@@ -938,7 +938,7 @@ fn injection_port<'plan>(
                     "the injection `{path}.{port}` requires the HttpServer ack Lab ingress model"
                 ));
             }
-            let slot = crate::plan::NodeIndex::new(
+            let slot = crate::node::NodeIndex::new(
                 u32::try_from(index).map_err(|_| String::from("source slot exceeds u32"))?,
             );
             (
@@ -982,7 +982,8 @@ fn expectation_envelopes<'a>(
                 window
                     .iter()
                     .filter(|observed| {
-                        observed.node.as_ref() == Some(path) && observed.port == *port
+                        observed.node.as_ref().is_some_and(|node| node == path)
+                            && observed.port == *port
                     })
                     .map(|observed| &observed.envelope),
             )
@@ -1008,7 +1009,7 @@ fn check_expectation(
             .position(|node| node.path == *path)
             .and_then(|index| {
                 plan.resolved_ports()
-                    .node_port_type(crate::plan::NodeIndex::new(index as u32), port)
+                    .node_port_type(crate::node::NodeIndex::new(index as u32), port)
             }),
     };
     let name = expectation
@@ -1303,7 +1304,7 @@ impl MockOutboundConnectorDriver<'_> {
             .and_then(|index| {
                 self.plan
                     .resolved_ports()
-                    .node(crate::plan::NodeIndex::new(index as u32))
+                    .node(crate::node::NodeIndex::new(index as u32))
             })
             .and_then(|ports| {
                 ports

@@ -36,7 +36,7 @@ pub(super) fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> 
             _ => return Err(error()),
         }
     }
-    for owner in &plan.owners {
+    for owner in &plan.nodes {
         let Some(spec) = owner.retry_spec() else {
             continue;
         };
@@ -47,13 +47,7 @@ pub(super) fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> 
         if owner.loop_spec().is_some() {
             return Err(error("Loop and Retry cannot share an owner"));
         }
-        let OwnerKind::Node(slot) = owner.kind else {
-            return Err(error("Retry requires an outbound Call Connector"));
-        };
-        let node = plan
-            .nodes
-            .get(slot.index())
-            .ok_or_else(|| error("Retry has no executable owner"))?;
+        let node = owner;
         let connector = node
             .connector()
             .ok_or_else(|| error("Retry requires an outbound Call Connector"))?;
@@ -130,7 +124,7 @@ pub struct LoopRepeatWarning {
     /// Exact source routed to that Loop's Again command.
     pub source: Endpoint,
     /// Call without a sufficient original-plan idempotence guarantee.
-    pub connector: node::Path,
+    pub connector: node::OwnerPath,
 }
 
 impl ValidatedExecutionPlan {
@@ -139,21 +133,21 @@ impl ValidatedExecutionPlan {
     pub fn loop_repeat_warnings(&self) -> Result<Vec<LoopRepeatWarning>, PlanValidationError> {
         let plan = self.plan();
         let mut warnings = alloc::collections::BTreeSet::new();
-        for owner in &plan.owners {
+        for owner in &plan.nodes {
             if owner.loop_spec().is_none() {
                 continue;
             }
-            match owner.kind {
-                OwnerKind::Graph => warnings.extend(super::graph_loop::validate(plan, owner)?),
-                OwnerKind::Node(slot) => {
-                    let node = &plan.nodes[slot.index()];
+            match owner.kind() {
+                node::Kind::Graph => warnings.extend(super::graph_loop::validate(plan, owner)?),
+                node::Kind::Operator | node::Kind::Connector => {
+                    let node = owner;
                     let Some(connector) = node.connector() else {
                         continue;
                     };
                     let Some(call) = connector.call_semantics() else {
                         continue;
                     };
-                    let target = EndpointOwner::Node(node.path.clone());
+                    let target = node.endpoint_owner()?;
                     for rule in plan
                         .boundary_routes
                         .iter()

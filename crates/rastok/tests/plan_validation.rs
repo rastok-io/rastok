@@ -13,10 +13,10 @@ use rastok::contract::ContractCatalog;
 use rastok::datatype::{DataType, StructType, TaggedCase, TaggedUnionType};
 use rastok::expr;
 use rastok::instance;
+use rastok::node::NodeIndex;
 use rastok::node::{self, Port, PortDirection};
 use rastok::plan::{
-    self, DispatchStep, Edge, EdgeEnd, ExecutionPlan, NodeIndex, PlanValidationError,
-    ValidatedExecutionPlan,
+    self, DispatchStep, Edge, EdgeEnd, ExecutionPlan, PlanValidationError, ValidatedExecutionPlan,
 };
 
 fn linear_statements(handler: &mut plan::Handler) -> &mut Vec<DispatchStep> {
@@ -27,10 +27,10 @@ fn linear_statements(handler: &mut plan::Handler) -> &mut Vec<DispatchStep> {
 }
 
 fn operator_handlers(plan: &mut ExecutionPlan, node: usize) -> &mut Vec<plan::Handler> {
-    let plan::NodeExecution::Operator { handlers, .. } = &mut plan.nodes[node].execution else {
+    let plan::NodeKind::Operator(operator) = &mut plan.nodes[node].body else {
         panic!("the fixture selects an Operator")
     };
-    handlers
+    &mut operator.handlers
 }
 
 const PROBE: &str = r#"
@@ -83,7 +83,7 @@ fn raw_commands_require_an_owning_loop_application() {
     ];
     for (step, statement) in variants {
         let mut raw = raw_probe();
-        linear_statements(&mut operator_handlers(&mut raw, 0)[0]).push(step);
+        linear_statements(&mut operator_handlers(&mut raw, 1)[0]).push(step);
         assert_eq!(
             ValidatedExecutionPlan::try_new(raw).unwrap_err(),
             PlanValidationError::UnsupportedStatement {
@@ -188,7 +188,7 @@ graph app : App {
     .expect("an App val remains visible in its nested Loop");
     let countdown = compilation
         .plan
-        .owners
+        .nodes
         .iter()
         .find(|owner| owner.path.to_string() == "countdown")
         .expect("the Operator owner travels");
@@ -207,7 +207,7 @@ graph app : App {
 
     let mut forged = compilation.plan.clone().into_inner();
     let countdown = forged
-        .owners
+        .nodes
         .iter_mut()
         .find(|owner| owner.path.to_string() == "countdown")
         .expect("the Operator owner");
@@ -227,7 +227,7 @@ graph app : App {
 #[test]
 fn loop_claims_are_rederived_from_the_host_interface_and_dispatch() {
     let mut zero_fuel = raw_loop();
-    let [plan::ExtensionSpec::Loop(spec)] = zero_fuel.owners[1].extensions.as_mut_slice() else {
+    let [plan::ExtensionSpec::Loop(spec)] = zero_fuel.nodes[1].extensions.as_mut_slice() else {
         panic!("the fixture has one Loop");
     };
     spec.fuel.as_mut().expect("fuel").resolved = rastok::value::Value::Int(0);
@@ -238,7 +238,7 @@ fn loop_claims_are_rederived_from_the_host_interface_and_dispatch() {
     ));
 
     let mut wrong_next = raw_loop();
-    operator_handlers(&mut wrong_next, 0)[0].dispatch =
+    operator_handlers(&mut wrong_next, 1)[0].dispatch =
         plan::Dispatch::Linear(vec![DispatchStep::LoopCommand(plan::LoopCommand::Next(
             plan::EmitValue::Data(expr::Tree {
                 root: expr::Expr::Literal(rastok::value::Value::Int(3)),
@@ -252,7 +252,7 @@ fn loop_claims_are_rederived_from_the_host_interface_and_dispatch() {
     ));
 
     let mut wrong_entry = raw_loop();
-    let [plan::ExtensionSpec::Loop(spec)] = wrong_entry.owners[1].extensions.as_mut_slice() else {
+    let [plan::ExtensionSpec::Loop(spec)] = wrong_entry.nodes[1].extensions.as_mut_slice() else {
         panic!("the Operator carries Loop");
     };
     spec.entry = Port::new("interrupt").unwrap();
@@ -263,7 +263,7 @@ fn loop_claims_are_rederived_from_the_host_interface_and_dispatch() {
     ));
 
     let mut unbound_asset = raw_loop();
-    let handler = &mut operator_handlers(&mut unbound_asset, 0)[0];
+    let handler = &mut operator_handlers(&mut unbound_asset, 1)[0];
     let DispatchStep::Emit {
         value: plan::EmitValue::Data(tree),
         ..
@@ -281,7 +281,7 @@ fn loop_claims_are_rederived_from_the_host_interface_and_dispatch() {
 #[test]
 fn loop_progress_is_reproved_registry_free_from_the_transported_body() {
     let mut silent = raw_loop();
-    let handler = &mut operator_handlers(&mut silent, 0)[0];
+    let handler = &mut operator_handlers(&mut silent, 1)[0];
     let DispatchStep::Emit { value, .. } = &mut linear_statements(handler)[0] else {
         panic!("the Operator emits its result")
     };
@@ -293,7 +293,7 @@ fn loop_progress_is_reproved_registry_free_from_the_transported_body() {
     ));
 
     let mut mixed = raw_loop();
-    let handler = &mut operator_handlers(&mut mixed, 0)[0];
+    let handler = &mut operator_handlers(&mut mixed, 1)[0];
     linear_statements(handler).push(DispatchStep::LoopCommand(plan::LoopCommand::Again));
     assert!(matches!(
         ValidatedExecutionPlan::try_new(mixed),
@@ -305,8 +305,8 @@ fn loop_progress_is_reproved_registry_free_from_the_transported_body() {
 #[test]
 fn a_loop_spec_cannot_be_detached_from_its_host_contributions() {
     let mut plan = raw_loop();
-    let extensions = core::mem::take(&mut plan.owners[1].extensions);
-    plan.owners[0].extensions.extend(extensions);
+    let extensions = core::mem::take(&mut plan.nodes[1].extensions);
+    plan.nodes[0].extensions.extend(extensions);
     let error = ValidatedExecutionPlan::try_new(plan).unwrap_err();
     assert!(
         matches!(&error, PlanValidationError::InvalidGraphContract { .. }),
@@ -318,11 +318,11 @@ fn bare_operator_plan() -> ExecutionPlan {
     ExecutionPlan {
         boundary_routes: Vec::new(),
         routes: vec![],
-        owners: vec![
-            plan::Owner {
+        nodes: vec![
+            plan::Node {
                 path: node::OwnerPath::root(),
                 parent: None,
-                kind: plan::OwnerKind::Graph,
+                body: plan::NodeKind::Graph,
                 ports: vec![],
                 extensions: vec![plan::ExtensionSpec::App],
                 instance: instance::InstanceSpec {
@@ -332,10 +332,13 @@ fn bare_operator_plan() -> ExecutionPlan {
                 },
                 vals: vec![],
             },
-            plan::Owner {
+            plan::Node {
                 path: node::OwnerPath::new(["worker"]).unwrap(),
-                parent: Some(node::OwnerSlot::new(0)),
-                kind: plan::OwnerKind::Node(NodeIndex::new(0)),
+                parent: Some(node::NodeIndex::new(0)),
+                body: plan::NodeKind::Operator(Box::new(plan::Operator {
+                    vars: vec![],
+                    handlers: vec![],
+                })),
                 ports: vec![],
                 extensions: vec![],
                 instance: instance::InstanceSpec {
@@ -346,15 +349,6 @@ fn bare_operator_plan() -> ExecutionPlan {
                 vals: vec![],
             },
         ],
-        nodes: vec![plan::Node {
-            path: rastok::node::Path::new(["worker"]).unwrap(),
-            execution: plan::NodeExecution::Operator {
-                vars: vec![],
-                handlers: vec![],
-            },
-            ports: vec![],
-            owner: node::OwnerSlot::new(1),
-        }],
         edges: vec![],
         app_schema: vec![],
         ext_schema: vec![],
@@ -366,24 +360,20 @@ fn port(name: &str) -> Port {
     Port::new(name).unwrap()
 }
 
-fn owner_mut<'a>(plan: &'a mut ExecutionPlan, node: &str) -> &'a mut plan::Owner {
-    let owner = plan
-        .nodes
-        .iter()
+fn owner_mut<'a>(plan: &'a mut ExecutionPlan, node: &str) -> &'a mut plan::Node {
+    plan.nodes
+        .iter_mut()
         .find(|candidate| candidate.path.to_string() == node)
         .expect("the node exists")
-        .owner;
-    plan.owners
-        .get_mut(owner.index())
-        .expect("its owner exists")
 }
 
-fn owner_slot(plan: &ExecutionPlan, node: &str) -> node::OwnerSlot {
-    plan.nodes
-        .iter()
-        .find(|candidate| candidate.path.to_string() == node)
-        .expect("the node exists")
-        .owner
+fn owner_slot(plan: &ExecutionPlan, node: &str) -> node::NodeIndex {
+    node::NodeIndex::new(
+        plan.nodes
+            .iter()
+            .position(|candidate| candidate.path.to_string() == node)
+            .expect("the node exists") as u32,
+    )
 }
 
 #[test]
@@ -417,11 +407,11 @@ graph app : App {
             annotations: Default::default(),
         },
     ];
-    for (index, graph) in plan.owners.iter().enumerate() {
-        if graph.kind == plan::OwnerKind::Graph {
+    for (index, graph) in plan.nodes.iter().enumerate() {
+        if graph.kind() == node::Kind::Graph {
             assert_eq!(graph.ports, expected, "Graph {} owns its ports", graph.path);
             assert_eq!(
-                plan.graph_ports(node::OwnerSlot::new(index as u32)),
+                plan.graph_ports(node::NodeIndex::new(index as u32)),
                 Some(graph.ports.as_slice())
             );
         }
@@ -516,7 +506,7 @@ graph g : App {
         })
     );
     assert!(
-        raw.nodes[0].ports.iter().any(|decl| {
+        raw.nodes[1].ports.iter().any(|decl| {
             decl.port.name() == "in" && decl.ty.as_ref() == Some(&DataType::Variant)
         })
     );
@@ -589,7 +579,7 @@ fn an_unconstrained_raw_port_never_becomes_variant() {
     assert_eq!(
         ValidatedExecutionPlan::try_new(raw).unwrap_err(),
         PlanValidationError::UnresolvedPortType {
-            node: Some(rastok::node::Path::new(["relay"]).unwrap()),
+            node: Some(rastok::node::OwnerPath::new(["relay"]).unwrap()),
             port: port("unused"),
         }
     );
@@ -650,7 +640,7 @@ fn every_closed_lifetime_profile_validates_once_the_scheduler_supports_it() {
         instance::Lifetime::Tumbling(1),
     ] {
         let mut raw = bare_operator_plan();
-        raw.owners[1].instance.lifetime = lifetime;
+        raw.nodes[1].instance.lifetime = lifetime;
         ValidatedExecutionPlan::try_new(raw).expect("R4 executes every closed lifetime profile");
     }
 }
@@ -658,7 +648,7 @@ fn every_closed_lifetime_profile_validates_once_the_scheduler_supports_it() {
 #[test]
 fn a_persistent_graph_owned_instance_is_a_valid_route_scope() {
     let mut raw = bare_operator_plan();
-    raw.owners[0].instance.key = Some(expr::Tree {
+    raw.nodes[0].instance.key = Some(expr::Tree {
         root: expr::Expr::Path(vec![
             String::from("meta"),
             String::from("sys"),
@@ -672,7 +662,7 @@ fn a_persistent_graph_owned_instance_is_a_valid_route_scope() {
 #[test]
 fn a_data_key_without_an_admission_signature_never_trusts_its_claimed_type() {
     let mut raw = bare_operator_plan();
-    raw.owners[1].instance.key = Some(expr::Tree {
+    raw.nodes[1].instance.key = Some(expr::Tree {
         root: expr::Expr::Path(vec![String::from("data")]),
         ty: DataType::Text,
     });
@@ -688,7 +678,7 @@ fn a_data_key_without_an_admission_signature_never_trusts_its_claimed_type() {
 #[test]
 fn instance_key_type_is_a_derived_fact_not_a_package_claim() {
     let mut metadata = bare_operator_plan();
-    metadata.owners[1].instance.key = Some(expr::Tree {
+    metadata.nodes[1].instance.key = Some(expr::Tree {
         root: expr::Expr::Path(vec![
             String::from("meta"),
             String::from("sys"),
@@ -748,7 +738,7 @@ fn every_finite_scope_with_a_process_requires_explicit_closing() {
     );
 
     let mut graph = raw_probe();
-    graph.owners[0].instance.lifetime = instance::Lifetime::Fixed(1);
+    graph.nodes[0].instance.lifetime = instance::Lifetime::Fixed(1);
     assert_eq!(
         ValidatedExecutionPlan::try_new(graph).unwrap_err(),
         PlanValidationError::MissingClosingPolicy {
@@ -772,7 +762,7 @@ fn every_finite_scope_with_a_process_requires_explicit_closing() {
 #[test]
 fn closing_budgets_and_stop_recursion_are_registry_free_invariants() {
     let mut invalid = bare_operator_plan();
-    invalid.owners[1].instance.closing = Some(instance::Closing {
+    invalid.nodes[1].instance.closing = Some(instance::Closing {
         drain_for: 0,
         settle_for: 1,
     });
@@ -784,14 +774,14 @@ fn closing_budgets_and_stop_recursion_are_registry_free_invariants() {
     );
 
     let mut recursive = bare_operator_plan();
-    recursive.nodes[0].ports.push(plan::PortDecl {
+    recursive.nodes[1].ports.push(plan::PortDecl {
         port: port("in"),
         direction: PortDirection::Input,
 
         ty: Some(DataType::INT),
         annotations: Default::default(),
     });
-    operator_handlers(&mut recursive, 0).push(plan::Handler {
+    operator_handlers(&mut recursive, 1).push(plan::Handler {
         activation: rastok::node::HandlerActivation::Lifecycle(rastok::node::Lifecycle::Stop),
         guard: None,
         dispatch: rastok_core::plan::Dispatch::Linear(vec![DispatchStep::Stop]),
@@ -799,35 +789,34 @@ fn closing_budgets_and_stop_recursion_are_registry_free_invariants() {
     assert_eq!(
         ValidatedExecutionPlan::try_new(recursive).unwrap_err(),
         PlanValidationError::RecursiveStop {
-            node: rastok::node::Path::new(["worker"]).unwrap(),
+            node: rastok::node::OwnerPath::new(["worker"]).unwrap(),
         }
     );
 }
 
 #[test]
-fn a_raw_node_and_owner_must_point_to_each_other() {
-    let mut raw = raw_probe();
-    let relay_index = raw
-        .nodes
-        .iter()
-        .position(|node| node.path.to_string() == "relay")
-        .expect("the relay slot");
-    let relay_slot = NodeIndex::new(u32::try_from(relay_index).expect("the plan is small"));
-    raw.nodes[relay_index].owner = node::OwnerSlot::new(0);
-
+fn a_graph_cannot_be_used_as_an_executor() {
+    let plan = ValidatedExecutionPlan::try_new(raw_probe()).unwrap();
+    let root = node::NodeIndex::new(0);
+    let generation = instance::Generation::new(
+        instance::InstanceAddress::new(&node::OwnerPath::root(), &[]).unwrap(),
+        0,
+    );
+    let mut state = rastok::runtime::State::new();
     assert_eq!(
-        ValidatedExecutionPlan::try_new(raw).unwrap_err(),
-        PlanValidationError::OwnerNodeMismatch {
-            node: relay_slot,
-            owner: node::OwnerSlot::new(1),
-        }
+        state.cell(&plan, root, &generation),
+        Err(rastok::runtime::Fault::NotExecutor(root))
+    );
+    assert_eq!(
+        state.apply(&plan, root, &generation, &[]),
+        Err(rastok::runtime::Fault::NotExecutor(root))
     );
 }
 
 #[test]
 fn a_raw_plan_requires_one_unique_root_owner() {
     let mut missing = raw_probe();
-    missing.owners.clear();
+    missing.nodes.clear();
     assert_eq!(
         ValidatedExecutionPlan::try_new(missing).unwrap_err(),
         PlanValidationError::MissingRootOwner
@@ -836,11 +825,11 @@ fn a_raw_plan_requires_one_unique_root_owner() {
     let mut duplicate = raw_probe();
     let relay = owner_slot(&duplicate, "relay");
     let shell = owner_slot(&duplicate, "shell");
-    duplicate.owners[shell.index()].path = duplicate.owners[relay.index()].path.clone();
+    duplicate.nodes[shell.index()].path = duplicate.nodes[relay.index()].path.clone();
     assert_eq!(
         ValidatedExecutionPlan::try_new(duplicate).unwrap_err(),
-        PlanValidationError::DuplicateOwnerPath {
-            path: String::from("relay"),
+        PlanValidationError::DuplicateNodePath {
+            path: node::OwnerPath::new(["relay"]).unwrap(),
         }
     );
 }
@@ -850,7 +839,7 @@ fn a_raw_owner_parent_must_be_an_enclosing_graph() {
     let mut raw = raw_probe();
     let relay = owner_slot(&raw, "relay");
     let shell = owner_slot(&raw, "shell");
-    raw.owners[shell.index()].parent = Some(relay);
+    raw.nodes[shell.index()].parent = Some(relay);
 
     assert_eq!(
         ValidatedExecutionPlan::try_new(raw).unwrap_err(),
@@ -874,7 +863,7 @@ fn an_edge_scope_must_name_a_graph_owner() {
 fn an_owner_value_cannot_lie_about_its_evaluation_site() {
     let mut raw = raw_probe();
     let relay = owner_slot(&raw, "relay");
-    raw.owners[relay.index()].vals.push(plan::OwnerValue {
+    raw.nodes[relay.index()].vals.push(plan::OwnerValue {
         name: String::from("workdir"),
         site: plan::EvaluationSite::Instance,
         expr: expr::Tree {
@@ -897,7 +886,7 @@ fn an_owner_value_cannot_lie_about_its_evaluation_site() {
 #[test]
 fn a_plan_owner_value_cannot_lie_about_its_reduction() {
     let mut raw = raw_probe();
-    raw.owners[0].vals.push(plan::OwnerValue {
+    raw.nodes[0].vals.push(plan::OwnerValue {
         name: String::from("answer"),
         site: plan::EvaluationSite::Plan,
         expr: expr::Tree {
@@ -920,7 +909,7 @@ fn a_plan_owner_value_cannot_lie_about_its_reduction() {
 #[test]
 fn an_owner_value_cannot_read_outside_its_lexical_environment() {
     let mut raw = raw_probe();
-    raw.owners[0].vals.push(plan::OwnerValue {
+    raw.nodes[0].vals.push(plan::OwnerValue {
         name: String::from("answer"),
         site: plan::EvaluationSite::Plan,
         expr: expr::Tree {
@@ -944,7 +933,7 @@ fn an_owner_value_cannot_read_outside_its_lexical_environment() {
 #[test]
 fn owner_value_dependencies_are_order_free_but_never_cyclic() {
     let mut raw = raw_probe();
-    raw.owners[0].vals = vec![
+    raw.nodes[0].vals = vec![
         plan::OwnerValue {
             name: String::from("a"),
             site: plan::EvaluationSite::Plan,
@@ -973,7 +962,7 @@ fn owner_value_dependencies_are_order_free_but_never_cyclic() {
     ValidatedExecutionPlan::try_new(raw.clone())
         .expect("a canonical dependency is independently reducible");
 
-    raw.owners[0].vals[1].expr.root = expr::Expr::Path(vec![String::from("a")]);
+    raw.nodes[0].vals[1].expr.root = expr::Expr::Path(vec![String::from("a")]);
     assert_eq!(
         ValidatedExecutionPlan::try_new(raw).unwrap_err(),
         PlanValidationError::CyclicOwnerValue {
@@ -987,7 +976,7 @@ fn owner_value_dependencies_are_order_free_but_never_cyclic() {
 fn an_owner_value_cannot_claim_a_later_phase_for_a_literal() {
     let mut raw = raw_probe();
     let relay = owner_slot(&raw, "relay");
-    raw.owners[relay.index()].vals.push(plan::OwnerValue {
+    raw.nodes[relay.index()].vals.push(plan::OwnerValue {
         name: String::from("workdir"),
         site: plan::EvaluationSite::Instance,
         expr: expr::Tree {
@@ -1015,9 +1004,9 @@ fn a_dynamic_attribute_cannot_claim_a_later_phase_for_a_literal() {
         .iter_mut()
         .find(|node| node.path.to_string() == "shell")
         .expect("the Process node");
-    let spec = match &mut shell.execution {
-        plan::NodeExecution::Connector(spec) => spec,
-        plan::NodeExecution::Operator { .. } => panic!("shell is a connector"),
+    let spec = match &mut shell.body {
+        plan::NodeKind::Connector(spec) => spec,
+        plan::NodeKind::Graph | plan::NodeKind::Operator(_) => panic!("shell is a connector"),
     };
     let (_, command) = spec
         .attributes
@@ -1049,9 +1038,9 @@ fn a_dynamic_attribute_requires_a_registry_free_contract_authority() {
         .iter_mut()
         .find(|node| node.path.to_string() == "shell")
         .expect("the connector node");
-    let spec = match &mut shell.execution {
-        plan::NodeExecution::Connector(spec) => spec,
-        plan::NodeExecution::Operator { .. } => panic!("shell is a connector"),
+    let spec = match &mut shell.body {
+        plan::NodeKind::Connector(spec) => spec,
+        plan::NodeKind::Graph | plan::NodeKind::Operator(_) => panic!("shell is a connector"),
     };
     spec.contract = rastok::connector::ContractId::parse("org.rastok.test/custom@1").unwrap();
     spec.attributes = vec![(
@@ -1065,7 +1054,7 @@ fn a_dynamic_attribute_requires_a_registry_free_contract_authority() {
         },
     )];
     let owner = owner_slot(&raw, "shell");
-    raw.owners[owner.index()].instance.key = Some(expr::Tree {
+    raw.nodes[owner.index()].instance.key = Some(expr::Tree {
         root: expr::Expr::Literal(rastok::value::Value::Text(String::from("tenant"))),
         ty: DataType::Text,
     });
@@ -1083,11 +1072,11 @@ fn a_dynamic_attribute_requires_a_registry_free_contract_authority() {
 fn instance_values_and_authorized_connector_settings_share_one_phase_judge() {
     let mut raw = raw_probe();
     let shell_owner = owner_slot(&raw, "shell");
-    raw.owners[shell_owner.index()].instance.key = Some(expr::Tree {
+    raw.nodes[shell_owner.index()].instance.key = Some(expr::Tree {
         root: expr::Expr::Literal(rastok::value::Value::Text(String::from("tenant"))),
         ty: DataType::Text,
     });
-    raw.owners[shell_owner.index()].vals.push(plan::OwnerValue {
+    raw.nodes[shell_owner.index()].vals.push(plan::OwnerValue {
         name: String::from("workdir"),
         site: plan::EvaluationSite::Instance,
         expr: expr::Tree {
@@ -1102,9 +1091,9 @@ fn instance_values_and_authorized_connector_settings_share_one_phase_judge() {
         .iter_mut()
         .find(|node| node.path.to_string() == "shell")
         .expect("the Process node");
-    let spec = match &mut shell.execution {
-        plan::NodeExecution::Connector(spec) => spec,
-        plan::NodeExecution::Operator { .. } => panic!("shell is a connector"),
+    let spec = match &mut shell.body {
+        plan::NodeKind::Connector(spec) => spec,
+        plan::NodeKind::Graph | plan::NodeKind::Operator(_) => panic!("shell is a connector"),
     };
     let (_, command) = spec
         .attributes
@@ -1173,7 +1162,7 @@ fn a_raw_port_cannot_contradict_its_instantiated_contract() {
     assert_eq!(
         ValidatedExecutionPlan::try_new(raw).unwrap_err(),
         PlanValidationError::ContractPortMismatch {
-            node: rastok::node::Path::new(["shell"]).unwrap(),
+            node: rastok::node::OwnerPath::new(["shell"]).unwrap(),
             port: port("in"),
         }
     );
@@ -1260,7 +1249,7 @@ fn a_process_table_cannot_omit_a_contract_port() {
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
         PlanValidationError::MissingContractPort {
-            node: rastok::node::Path::new(["shell"]).unwrap(),
+            node: rastok::node::OwnerPath::new(["shell"]).unwrap(),
             port: "exit",
         }
     );
@@ -1274,14 +1263,14 @@ fn a_process_plan_cannot_omit_the_effective_err_codec() {
         .iter_mut()
         .find(|node| node.path.to_string() == "shell")
         .expect("the Process node");
-    let rastok::plan::NodeExecution::Connector(shell) = &mut shell.execution else {
+    let rastok::plan::NodeKind::Connector(shell) = &mut shell.body else {
         panic!("the Process spec");
     };
     shell.attributes.retain(|(name, _)| name != "err_codec");
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
         PlanValidationError::MissingErrCodec {
-            node: rastok::node::Path::new(["shell"]).unwrap(),
+            node: rastok::node::OwnerPath::new(["shell"]).unwrap(),
         }
     );
 }
@@ -1292,21 +1281,21 @@ fn a_boundary_input_cannot_be_an_edge_target() {
     // INPUT: the boundary convention inverts the node one, and the
     // checker refuses this shape — the type must too.
     let mut plan = raw_probe();
-    plan.owners[0].ports.push(plan::PortDecl::untyped(
+    plan.nodes[0].ports.push(plan::PortDecl::untyped(
         port("request"),
         PortDirection::Input,
     ));
-    plan.owners[0]
+    plan.nodes[0]
         .ports
         .sort_by(|left, right| left.key().cmp(&right.key()));
     plan.edges.push(Edge {
-        owner: node::OwnerSlot::new(0),
+        owner: node::NodeIndex::new(0),
         from: EdgeEnd {
-            node: Some(NodeIndex::new(0)),
+            node: NodeIndex::new(1),
             port: port("out"),
         },
         to: Some(EdgeEnd {
-            node: None,
+            node: rastok_core::node::NodeIndex::ROOT,
             port: port("request"),
         }),
     });
@@ -1329,21 +1318,21 @@ fn a_boundary_output_cannot_be_an_edge_source() {
     // `.response -> operator.in` with `response` declared as a graph
     // OUTPUT.
     let mut plan = raw_probe();
-    plan.owners[0].ports.push(plan::PortDecl::untyped(
+    plan.nodes[0].ports.push(plan::PortDecl::untyped(
         port("response"),
         PortDirection::Output,
     ));
-    plan.owners[0]
+    plan.nodes[0]
         .ports
         .sort_by(|left, right| left.key().cmp(&right.key()));
     plan.edges.push(Edge {
-        owner: node::OwnerSlot::new(0),
+        owner: node::NodeIndex::new(0),
         from: EdgeEnd {
-            node: None,
+            node: rastok_core::node::NodeIndex::ROOT,
             port: port("response"),
         },
         to: Some(EdgeEnd {
-            node: Some(NodeIndex::new(0)),
+            node: NodeIndex::new(1),
             port: port("in"),
         }),
     });
@@ -1367,13 +1356,13 @@ fn conventional_ports_hold_their_directions() {
     // inside the graph — refuses.
     let mut plan = raw_probe();
     plan.edges.push(Edge {
-        owner: node::OwnerSlot::new(0),
+        owner: node::NodeIndex::new(0),
         from: EdgeEnd {
-            node: Some(NodeIndex::new(0)),
+            node: NodeIndex::new(1),
             port: port("out"),
         },
         to: Some(EdgeEnd {
-            node: None,
+            node: rastok_core::node::NodeIndex::ROOT,
             port: port("in"),
         }),
     });
@@ -1393,13 +1382,13 @@ fn conventional_ports_hold_their_directions() {
     // Conventional `out` used as a SOURCE refuses likewise.
     let mut plan = raw_probe();
     plan.edges.push(Edge {
-        owner: node::OwnerSlot::new(0),
+        owner: node::NodeIndex::new(0),
         from: EdgeEnd {
-            node: None,
+            node: rastok_core::node::NodeIndex::ROOT,
             port: port("out"),
         },
         to: Some(EdgeEnd {
-            node: Some(NodeIndex::new(0)),
+            node: NodeIndex::new(1),
             port: port("in"),
         }),
     });
@@ -1447,7 +1436,7 @@ graph probe : App {
 #[test]
 fn an_unsorted_boundary_is_not_canonical() {
     let mut plan = raw_probe();
-    plan.owners[0].ports = vec![
+    plan.nodes[0].ports = vec![
         plan::PortDecl::untyped(port("zeta"), PortDirection::Input),
         plan::PortDecl::untyped(port("alpha"), PortDirection::Input),
     ];
@@ -1462,7 +1451,7 @@ fn an_unsorted_boundary_is_not_canonical() {
 #[test]
 fn a_duplicated_boundary_port_refuses() {
     let mut plan = raw_probe();
-    plan.owners[0].ports = vec![
+    plan.nodes[0].ports = vec![
         plan::PortDecl::untyped(port("request"), PortDirection::Input),
         plan::PortDecl::untyped(port("request"), PortDirection::Input),
     ];
@@ -1479,7 +1468,7 @@ fn reordered_nodes_are_not_canonical() {
     // Same graph, same declared identity, different table order —
     // exactly the second byte form the type exists to refuse.
     let mut plan = raw_probe();
-    plan.nodes.swap(0, 1);
+    plan.nodes.swap(1, 2);
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
         PlanValidationError::NonCanonicalOrder {
@@ -1508,9 +1497,10 @@ fn unsorted_vars_are_not_canonical() {
         .iter_mut()
         .find(|node| node.path.to_string() == "relay")
         .expect("the operator");
-    let plan::NodeExecution::Operator { vars, .. } = &mut relay.execution else {
+    let plan::NodeKind::Operator(operator) = &mut relay.body else {
         panic!("relay is an Operator")
     };
+    let vars = &mut operator.vars;
     let mut clone = vars[0].clone();
     "aaa".clone_into(&mut clone.name);
     vars.push(clone);
@@ -1528,7 +1518,7 @@ fn a_duplicated_connector_attribute_refuses() {
         .iter_mut()
         .find(|node| node.path.to_string() == "shell")
         .expect("the connector");
-    let rastok::plan::NodeExecution::Connector(spec) = &mut shell.execution else {
+    let rastok::plan::NodeKind::Connector(spec) = &mut shell.body else {
         panic!("a connector");
     };
     let first = spec.attributes[0].clone();
@@ -1547,12 +1537,12 @@ fn a_duplicated_node_refuses_as_a_duplicate() {
     // Two identical nodes break the sort too — but the defect is the
     // duplication, and the dedicated variant must say so.
     let mut plan = raw_probe();
-    let relay = plan.nodes[0].clone();
-    plan.nodes.insert(0, relay);
+    let relay = plan.nodes[1].clone();
+    plan.nodes.insert(1, relay);
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
         PlanValidationError::DuplicateNodePath {
-            path: rastok::node::Path::new(["relay"]).unwrap(),
+            path: rastok::node::OwnerPath::new(["relay"]).unwrap(),
         }
     );
 
@@ -1560,12 +1550,12 @@ fn a_duplicated_node_refuses_as_a_duplicate() {
     // connectors) — with another operator between them, the
     // NON-adjacent duplicate must still refuse.
     let mut plan = raw_probe();
-    let mut ghost = plan.nodes[0].clone();
+    let mut ghost = plan.nodes[1].clone();
     ghost.path = shell_path();
-    let mut zeta = plan.nodes[0].clone();
-    zeta.path = rastok::node::Path::new(["zeta"]).unwrap();
-    plan.nodes.insert(1, ghost);
-    plan.nodes.insert(2, zeta);
+    let mut zeta = plan.nodes[1].clone();
+    zeta.path = rastok::node::OwnerPath::new(["zeta"]).unwrap();
+    plan.nodes.insert(2, ghost);
+    plan.nodes.insert(3, zeta);
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
         PlanValidationError::DuplicateNodePath { path: shell_path() }
@@ -1587,7 +1577,7 @@ fn a_duplicated_node_port_refuses() {
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
         PlanValidationError::DuplicatePort {
-            node: rastok::node::Path::new(["relay"]).unwrap(),
+            node: rastok::node::OwnerPath::new(["relay"]).unwrap(),
             port: port("extra"),
         }
     );
@@ -1601,15 +1591,16 @@ fn a_duplicated_var_refuses() {
         .iter_mut()
         .find(|node| node.path.to_string() == "relay")
         .expect("the operator");
-    let plan::NodeExecution::Operator { vars, .. } = &mut relay.execution else {
+    let plan::NodeKind::Operator(operator) = &mut relay.body else {
         panic!("relay is an Operator")
     };
+    let vars = &mut operator.vars;
     let seen = vars[0].clone();
     vars.insert(0, seen.clone());
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
         PlanValidationError::DuplicateVar {
-            node: rastok::node::Path::new(["relay"]).unwrap(),
+            node: rastok::node::OwnerPath::new(["relay"]).unwrap(),
             name: seen.name,
         }
     );
@@ -1618,7 +1609,7 @@ fn a_duplicated_var_refuses() {
 #[test]
 fn a_write_to_an_undeclared_var_refuses() {
     let mut plan = raw_probe();
-    for step in linear_statements(&mut operator_handlers(&mut plan, 0)[0]) {
+    for step in linear_statements(&mut operator_handlers(&mut plan, 1)[0]) {
         if let DispatchStep::SetVar { name, .. } = step {
             "ghost".clone_into(name);
         }
@@ -1626,7 +1617,7 @@ fn a_write_to_an_undeclared_var_refuses() {
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
         PlanValidationError::UnknownVariable {
-            node: rastok::node::Path::new(["relay"]).unwrap(),
+            node: rastok::node::OwnerPath::new(["relay"]).unwrap(),
             name: String::from("ghost"),
         }
     );
@@ -1638,9 +1629,9 @@ fn an_edge_to_an_unknown_port_refuses() {
     // — the reference is not usable in the required role.
     let mut plan = raw_probe();
     plan.edges.push(Edge {
-        owner: node::OwnerSlot::new(0),
+        owner: node::NodeIndex::new(0),
         from: EdgeEnd {
-            node: Some(NodeIndex::new(0)),
+            node: NodeIndex::new(1),
             port: port("ghost"),
         },
         to: None,
@@ -1648,7 +1639,7 @@ fn an_edge_to_an_unknown_port_refuses() {
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
         PlanValidationError::WrongPortDirection {
-            node: Some(rastok::node::Path::new(["relay"]).unwrap()),
+            node: Some(rastok::node::OwnerPath::new(["relay"]).unwrap()),
             port: port("ghost"),
             expected: PortDirection::Output,
         }
@@ -1657,9 +1648,9 @@ fn an_edge_to_an_unknown_port_refuses() {
     // A boundary port that exists nowhere refuses by its own name.
     let mut plan = raw_probe();
     plan.edges.push(Edge {
-        owner: node::OwnerSlot::new(0),
+        owner: node::NodeIndex::new(0),
         from: EdgeEnd {
-            node: None,
+            node: rastok_core::node::NodeIndex::ROOT,
             port: port("ghost"),
         },
         to: None,
@@ -1680,7 +1671,7 @@ fn a_non_adjacent_duplicate_wins_over_the_broken_order() {
     // a GLOBAL pass that runs first, so the dedicated variant names
     // the defect — never NonCanonicalOrder standing in front of it.
     let mut plan = raw_probe();
-    plan.owners[0].ports = vec![
+    plan.nodes[0].ports = vec![
         plan::PortDecl::untyped(port("zeta"), PortDirection::Input),
         plan::PortDecl::untyped(port("alpha"), PortDirection::Input),
         plan::PortDecl::untyped(port("zeta"), PortDirection::Input),
@@ -1696,9 +1687,10 @@ fn a_non_adjacent_duplicate_wins_over_the_broken_order() {
         .iter_mut()
         .find(|node| node.path.to_string() == "relay")
         .expect("the operator");
-    let plan::NodeExecution::Operator { vars, .. } = &mut relay.execution else {
+    let plan::NodeKind::Operator(operator) = &mut relay.body else {
         panic!("relay is an Operator")
     };
+    let vars = &mut operator.vars;
     let seen = vars[0].clone();
     let mut alpha = seen.clone();
     "alpha".clone_into(&mut alpha.name);
@@ -1708,7 +1700,7 @@ fn a_non_adjacent_duplicate_wins_over_the_broken_order() {
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
         PlanValidationError::DuplicateVar {
-            node: rastok::node::Path::new(["relay"]).unwrap(),
+            node: rastok::node::OwnerPath::new(["relay"]).unwrap(),
             name: String::from("zeta"),
         }
     );
@@ -1799,7 +1791,7 @@ graph joined : App {
     assert_ne!(original.hash, wider_count.hash, "`last` is meaning");
     assert_ne!(original.hash, wider_time.hash, "`within` is meaning");
     let node::HandlerActivation::Join { ports, .. } =
-        &original.plan.nodes[0].handlers()[0].activation
+        &original.plan.nodes[1].handlers()[0].activation
     else {
         panic!("the fixture carries one join")
     };
@@ -1815,12 +1807,12 @@ fn a_duplicated_handler_refuses() {
     // Two handlers for one (node, activation): dispatch would fire
     // the first and silently shadow the second — refused by name.
     let mut plan = raw_probe();
-    let first = operator_handlers(&mut plan, 0)[0].clone();
-    operator_handlers(&mut plan, 0).insert(0, first);
+    let first = operator_handlers(&mut plan, 1)[0].clone();
+    operator_handlers(&mut plan, 1).insert(0, first);
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
         PlanValidationError::DuplicateHandler {
-            node: rastok::node::Path::new(["relay"]).unwrap(),
+            node: rastok::node::OwnerPath::new(["relay"]).unwrap(),
             activation: rastok::node::HandlerActivation::Port(port("in")),
         }
     );
@@ -1845,11 +1837,15 @@ fn a_forged_executable_cycle_never_earns_the_validated_type() {
         .edges
         .iter_mut()
         .find(|edge| {
-            edge.from.node == Some(shell) && edge.to.as_ref().is_some_and(|to| to.node.is_none())
+            edge.from.node == shell
+                && edge
+                    .to
+                    .as_ref()
+                    .is_some_and(|to| to.node == NodeIndex::ROOT)
         })
         .expect("the fixture routes shell to the boundary");
     back_edge.to = Some(EdgeEnd {
-        node: Some(relay),
+        node: relay,
         port: Port::new("in").unwrap(),
     });
 
@@ -1889,7 +1885,7 @@ graph session_echo : App {
 fn a_foreign_plan_cannot_smuggle_malformed_join_activation_or_bounds() {
     let mut duplicate_port = raw_join(true);
     let rastok::node::HandlerActivation::Join { ports, .. } =
-        &mut operator_handlers(&mut duplicate_port, 0)[0].activation
+        &mut operator_handlers(&mut duplicate_port, 1)[0].activation
     else {
         panic!("the fixture carries a join")
     };
@@ -1901,7 +1897,7 @@ fn a_foreign_plan_cannot_smuggle_malformed_join_activation_or_bounds() {
 
     let mut zero_bound = raw_join(true);
     let rastok::node::HandlerActivation::Join { last, .. } =
-        &mut operator_handlers(&mut zero_bound, 0)[0].activation
+        &mut operator_handlers(&mut zero_bound, 1)[0].activation
     else {
         panic!("the fixture carries a join")
     };
@@ -1916,7 +1912,7 @@ fn a_foreign_plan_cannot_smuggle_malformed_join_activation_or_bounds() {
 fn a_bounded_join_never_invents_an_untyped_or_missing_expiry_channel() {
     let mut missing = raw_join(false);
     let rastok::node::HandlerActivation::Join { last, .. } =
-        &mut operator_handlers(&mut missing, 0)[0].activation
+        &mut operator_handlers(&mut missing, 1)[0].activation
     else {
         panic!("the fixture carries a join")
     };
@@ -1928,7 +1924,7 @@ fn a_bounded_join_never_invents_an_untyped_or_missing_expiry_channel() {
 
     let mut identity = raw_join(false);
     let DispatchStep::Emit { value, .. } =
-        &mut linear_statements(&mut operator_handlers(&mut identity, 0)[0])[0]
+        &mut linear_statements(&mut operator_handlers(&mut identity, 1)[0])[0]
     else {
         panic!("the fixture emits")
     };
@@ -2027,12 +2023,12 @@ graph attributed : App {
 #[test]
 fn an_internal_lifecycle_cannot_be_an_authored_handler() {
     let mut plan = raw_probe();
-    operator_handlers(&mut plan, 0)[0].activation =
+    operator_handlers(&mut plan, 1)[0].activation =
         rastok::node::HandlerActivation::Lifecycle(rastok::node::Lifecycle::Reply);
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
         PlanValidationError::UnsupportedLifecycleHandler {
-            node: rastok::node::Path::new(["relay"]).unwrap(),
+            node: rastok::node::OwnerPath::new(["relay"]).unwrap(),
             lifecycle: rastok::node::Lifecycle::Reply,
         }
     );
@@ -2047,7 +2043,7 @@ fn reordered_handlers_are_not_canonical() {
     .expect("a valid plan")
     .plan
     .into_inner();
-    operator_handlers(&mut plan, 0).swap(0, 1);
+    operator_handlers(&mut plan, 1).swap(0, 1);
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
         PlanValidationError::NonCanonicalOrder {
@@ -2104,7 +2100,7 @@ fn an_extra_process_port_refuses_without_a_registry() {
 /// map-literal canonicity provocations.
 fn with_setvar_root(root: expr::Expr) -> ExecutionPlan {
     let mut plan = raw_probe();
-    for step in linear_statements(&mut operator_handlers(&mut plan, 0)[0]) {
+    for step in linear_statements(&mut operator_handlers(&mut plan, 1)[0]) {
         if let DispatchStep::SetVar { value: expr, .. } = step {
             expr.root = root.clone();
         }
@@ -2187,7 +2183,7 @@ fn what_the_type_accepts_the_format_reads_back() {
     let mut last_accepted = None;
     let mut refused = false;
     for _ in 0..(MAX_NESTING + 16) {
-        let relay_steps = linear_statements(&mut operator_handlers(&mut plan, 0)[0]);
+        let relay_steps = linear_statements(&mut operator_handlers(&mut plan, 1)[0]);
         for step in relay_steps {
             if let DispatchStep::SetVar { value: expr, .. } = step {
                 let previous = core::mem::replace(
@@ -2233,12 +2229,13 @@ fn complete_m13_types_round_trip_through_v7() {
         .iter_mut()
         .find(|node| node.path.to_string() == "relay")
         .expect("the operator");
-    let plan::NodeExecution::Operator { vars, .. } = &mut relay.execution else {
+    let plan::NodeKind::Operator(operator) = &mut relay.body else {
         panic!("relay is an Operator")
     };
+    let vars = &mut operator.vars;
     vars[0].ty = DataType::LONG;
     let DispatchStep::SetVar { value, .. } =
-        &mut linear_statements(&mut operator_handlers(&mut plan, 0)[0])[0]
+        &mut linear_statements(&mut operator_handlers(&mut plan, 1)[0])[0]
     else {
         panic!("the probe increments its state cell")
     };
@@ -2252,7 +2249,7 @@ fn complete_m13_types_round_trip_through_v7() {
 #[test]
 fn complete_expression_result_types_round_trip_through_v7() {
     let mut plan = raw_probe();
-    linear_statements(&mut operator_handlers(&mut plan, 0)[0])[0] = DispatchStep::Let {
+    linear_statements(&mut operator_handlers(&mut plan, 1)[0])[0] = DispatchStep::Let {
         name: String::from("wide"),
         value: expr::Tree {
             root: expr::Expr::Literal(rastok::value::Value::Int(i64::MAX)),
@@ -2282,7 +2279,7 @@ fn narrowing_expressions_round_trip_through_v7() {
                 target: Box::new(target),
             }
         };
-        linear_statements(&mut operator_handlers(&mut plan, 0)[0])[0] = DispatchStep::Let {
+        linear_statements(&mut operator_handlers(&mut plan, 1)[0])[0] = DispatchStep::Let {
             name: String::from("narrowed"),
             value: expr::Tree {
                 root,
@@ -2321,7 +2318,7 @@ fn constructed_values_round_trip_through_v7() {
         ),
     ] {
         let mut plan = raw_probe();
-        linear_statements(&mut operator_handlers(&mut plan, 0)[0])[0] = DispatchStep::Let {
+        linear_statements(&mut operator_handlers(&mut plan, 1)[0])[0] = DispatchStep::Let {
             name: String::from("constructed"),
             value: expr::Tree { root, ty },
             annotations: Default::default(),
@@ -2358,8 +2355,8 @@ graph g : App {
     assert_eq!(hash, compilation.hash);
 }
 
-fn shell_path() -> rastok::node::Path {
-    rastok::node::Path::new(["shell"]).unwrap()
+fn shell_path() -> rastok::node::OwnerPath {
+    rastok::node::OwnerPath::new(["shell"]).unwrap()
 }
 
 fn attribute_name() -> String {
@@ -2369,7 +2366,7 @@ fn attribute_name() -> String {
         .iter()
         .find(|node| node.path.to_string() == "shell")
         .expect("the connector");
-    let rastok::plan::NodeExecution::Connector(spec) = &shell.execution else {
+    let rastok::plan::NodeKind::Connector(spec) = &shell.body else {
         panic!("a connector");
     };
     spec.attributes[0].0.clone()

@@ -29,14 +29,11 @@ fn loop_uses_declared_host_terminals_without_contributing_ports() {
     let compiled = compiler::compile(&[OPERATOR], &ContractCatalog::try_m0().unwrap()).unwrap();
     let (decoded, hash) = plan::decode(&plan::encode(&compiled.plan, &compiled.hash)).unwrap();
     assert_eq!(hash, compiled.hash);
-    let node = &decoded.nodes[0];
+    let node = &decoded.nodes[1];
     let names: Vec<_> = node.ports.iter().map(|port| port.port.name()).collect();
     assert_eq!(names.len(), 3);
     assert!(names.contains(&"in") && names.contains(&"out") && names.contains(&"err"));
-    let terminals = &decoded.owners[node.owner.index()]
-        .loop_spec()
-        .unwrap()
-        .terminals;
+    let terminals = &node.loop_spec().unwrap().terminals;
     assert_eq!(
         terminals.iter().map(|port| port.name()).collect::<Vec<_>>(),
         ["err", "out"]
@@ -78,7 +75,7 @@ graph app : App {
 "#;
     let compiled = compiler::compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
     let (decoded, _) = plan::decode(&plan::encode(&compiled.plan, &compiled.hash)).unwrap();
-    assert!(decoded.owners[1].loop_spec().unwrap().expired.is_none());
+    assert!(decoded.nodes[1].loop_spec().unwrap().expired.is_none());
 }
 
 #[test]
@@ -114,7 +111,7 @@ graph app : App {
 "#;
     let compiled = compiler::compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
     let (decoded, _) = plan::decode(&plan::encode(&compiled.plan, &compiled.hash)).unwrap();
-    let node = &decoded.nodes[0];
+    let node = &decoded.nodes[1];
     assert_eq!(node.ports.len(), 4);
     let exit = node
         .ports
@@ -287,7 +284,7 @@ fn registry_free_validation_rejects_missing_and_forged_expiry_targets() {
     let compiled = compiler::compile(&[OPERATOR], &ContractCatalog::try_m0().unwrap()).unwrap();
     for mutation in 0..4 {
         let mut raw = compiled.plan.plan().clone();
-        let plan::ExtensionSpec::Loop(spec) = &mut raw.owners[1].extensions[0] else {
+        let plan::ExtensionSpec::Loop(spec) = &mut raw.nodes[1].extensions[0] else {
             panic!("Loop owner")
         };
         match mutation {
@@ -319,7 +316,7 @@ fn conventional_terminals_leave_progress_outputs_as_frames() {
             "count.err -> err\ncount.progress -> nothing",
         );
     let compiled = compiler::compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap();
-    let spec = compiled.plan.owners[1].loop_spec().unwrap();
+    let spec = compiled.plan.nodes[1].loop_spec().unwrap();
     assert_eq!(
         spec.terminals
             .iter()

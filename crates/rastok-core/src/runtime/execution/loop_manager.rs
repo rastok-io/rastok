@@ -22,9 +22,7 @@ impl Execution<'_> {
             fold.runs().filter(|(_, state)| live(state)).count()
         });
         for ((slot, instance), queue) in &self.scheduler.mailboxes.queues {
-            let Some(spec) =
-                self.plan.owners[self.plan.nodes[slot.index()].owner.index()].loop_spec()
-            else {
+            let Some(spec) = self.plan.nodes[slot.index()].loop_spec() else {
                 continue;
             };
             for delivery in queue.iter().filter(|delivery| delivery.port == spec.entry) {
@@ -136,7 +134,7 @@ impl Execution<'_> {
         instance: &instance::Generation,
         delivery: &envelope::Delivery,
     ) -> Result<bool, ExecutionFault> {
-        let owner = &self.plan.owners[self.plan.nodes[slot.index()].owner.index()];
+        let owner = &self.plan.nodes[slot.index()];
         let Some(spec) = owner.loop_spec() else {
             return Ok(false);
         };
@@ -210,11 +208,7 @@ impl Execution<'_> {
         edge: &str,
         envelope: Id,
     ) -> Result<(), ExecutionFault> {
-        if !self.has_loops
-            || self.plan.owners[self.plan.nodes[slot.index()].owner.index()]
-                .loop_spec()
-                .is_none()
-        {
+        if !self.has_loops || self.plan.nodes[slot.index()].loop_spec().is_none() {
             return Ok(());
         }
         let delivery = self
@@ -259,7 +253,7 @@ impl Execution<'_> {
         let Some(packet) = record.loop_record.as_deref_mut() else {
             return Ok(());
         };
-        let owner = &self.plan.owners[self.plan.nodes[slot.index()].owner.index()];
+        let owner = &self.plan.nodes[slot.index()];
         let spec = owner.loop_spec().ok_or_else(|| {
             loop_error(
                 &record.instance,
@@ -399,7 +393,7 @@ impl Execution<'_> {
                     let RouteDestination::LoopCommand(command) = destination else {
                         continue;
                     };
-                    if command.owner != crate::plan::EndpointOwner::Node(node.path.clone()) {
+                    if command.owner != crate::plan::EndpointOwner::Node(self.executor_path(slot)?.clone()) {
                         continue;
                     }
                     let value = match command.kind {
@@ -469,17 +463,14 @@ impl Execution<'_> {
         };
         let (owner, slot) = self
             .plan
-            .owners
+            .nodes
             .iter()
             .enumerate()
             .find_map(|(index, owner)| {
                 (owner.path == *current.instance.address().owner()).then(|| {
                     (
-                        node::OwnerSlot::new(index as u32),
-                        match owner.kind {
-                            OwnerKind::Node(slot) => Some(slot),
-                            OwnerKind::Graph => None,
-                        },
+                        node::NodeIndex::new(index as u32),
+                        (owner.kind() != node::Kind::Graph).then_some(NodeIndex::new(index as u32)),
                     )
                 })
             })
@@ -603,7 +594,7 @@ impl Execution<'_> {
                     self.scheduler.schedule(
                         self.now.saturating_add(timeout),
                         Obligation::DeliveryBudget {
-                            connector: self.plan.nodes[slot.index()].path.clone(),
+                            connector: self.executor_path(slot)?.clone(),
                             edge,
                             delivery: envelope.meta().sys().id(),
                             instance: current.instance.clone(),
@@ -662,7 +653,7 @@ impl Execution<'_> {
                         due_at: due,
                     });
                 } else {
-                    let port = self.plan.owners[owner.index()]
+                    let port = self.plan.nodes[owner.index()]
                         .loop_spec()
                         .and_then(|spec| spec.expired.as_ref())
                         .map(|expired| expired.port.clone())
@@ -685,7 +676,7 @@ impl Execution<'_> {
                             .plan
                             .resolved_ports()
                             .node_port_type(slot, &current.entry),
-                        None if self.plan.owners[owner.index()].path.is_root() => self
+                        None if self.plan.nodes[owner.index()].path.is_root() => self
                             .plan
                             .resolved_ports()
                             .boundary()

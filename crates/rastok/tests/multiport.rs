@@ -1602,7 +1602,7 @@ fn the_validator_refuses_mismatched_edge_pins() {
     .expect("a valid plan")
     .plan
     .into_inner();
-    let measure = plan.owners[0]
+    let measure = plan.nodes[1]
         .ports
         .iter_mut()
         .find(|decl| decl.port.name() == "measure")
@@ -1712,7 +1712,7 @@ graph g : App {
             compilation
                 .plan
                 .resolved_ports()
-                .node(rastok::plan::NodeIndex::new(u32::try_from(index).ok()?))
+                .node(rastok::node::NodeIndex::new(u32::try_from(index).ok()?))
         })
         .and_then(|ports| ports.iter().find(|port| port.port().name() == "err"))
         .expect("the wired ordinary port resolves");
@@ -1894,7 +1894,7 @@ fn an_ingress_pin_violation_is_a_named_error() {
         error,
         ExecutionFault::IngressPinViolation { ingress, rejected_at, .. }
             if ingress.name() == "alpha"
-                && rejected_at.node.is_none()
+                && rejected_at.node == rastok::node::NodeIndex::ROOT
                 && rejected_at.port.name() == "alpha"
     ));
 }
@@ -1983,8 +1983,9 @@ fn the_validator_reads_the_table_and_gates_the_capability() {
     // Process cannot grow a port beyond its resolved contract, while a
     // referenced row absent from the table refuses by ignorance.
     use rastok::datatype::DataType;
+    use rastok::node::NodeIndex;
     use rastok::node::PortDirection;
-    use rastok::plan::{Edge, EdgeEnd, NodeIndex, PortDecl, ValidatedExecutionPlan};
+    use rastok::plan::{Edge, EdgeEnd, PortDecl, ValidatedExecutionPlan};
     let source = "graph g : App {\n  input in: text\n  output out: text\n  connector probe : Process {\n    mode = job ; command = \"cat\"\n    codec = lines\n    idempotent = true; behavior = deterministic\n  }\n  in -> probe -> out\n  probe.err -> nothing\n  probe.exit -> nothing\n}\n";
     let mut plan = compile(
         &[source],
@@ -2010,13 +2011,13 @@ fn the_validator_reads_the_table_and_gates_the_capability() {
         .ports
         .sort_by(|left, right| left.key().cmp(&right.key()));
     plan.edges.push(Edge {
-        owner: rastok::node::OwnerSlot::new(0),
+        owner: rastok::node::NodeIndex::new(0),
         from: EdgeEnd {
-            node: None,
+            node: rastok_core::node::NodeIndex::ROOT,
             port: rastok::node::Port::new("in").unwrap(),
         },
         to: Some(EdgeEnd {
-            node: Some(NodeIndex::new(u32::try_from(probe_slot).unwrap())),
+            node: NodeIndex::new(u32::try_from(probe_slot).unwrap()),
             port: rastok::node::Port::new("request").unwrap(),
         }),
     });
@@ -2310,9 +2311,10 @@ fn a_struct_initializer_cannot_enter_an_int_state_cell() {
         .iter_mut()
         .find(|node| node.path.to_string() == "relay")
         .expect("the operator");
-    let rastok::plan::NodeExecution::Operator { vars, .. } = &mut relay.execution else {
+    let rastok::plan::NodeKind::Operator(operator) = &mut relay.body else {
         panic!("the stateful Operator")
     };
+    let vars = &mut operator.vars;
     vars[0].init = Some(rastok::value::Value::Struct(vec![(
         String::from("field"),
         rastok::value::Value::Int(7),

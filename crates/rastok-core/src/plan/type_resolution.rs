@@ -14,9 +14,8 @@ use crate::datatype::{DataType, StructType, TypeField};
 use crate::envelope::WriteTarget;
 use crate::expr;
 use crate::node;
-use crate::plan::{
-    Dispatch, DispatchStep, EdgeEnd, EmitValue, ExecutionPlan, NodeIndex, PlanValidationError,
-};
+use crate::node::NodeIndex;
+use crate::plan::{Dispatch, DispatchStep, EdgeEnd, EmitValue, ExecutionPlan, PlanValidationError};
 use crate::schema_annotation::AnnotationTable;
 
 /// Why one effective port type holds.
@@ -95,8 +94,8 @@ impl ResolvedPortTable {
     #[must_use]
     pub fn endpoint_type(&self, endpoint: &EdgeEnd) -> Option<&DataType> {
         let row = match endpoint.node {
-            Some(slot) => self.node(slot)?,
-            None => self.boundary(),
+            NodeIndex::ROOT => self.boundary(),
+            index => self.node(index)?,
         };
         row.iter()
             .find(|resolved| resolved.port == endpoint.port)
@@ -223,7 +222,7 @@ impl<'plan> Solver<'plan> {
 
     fn endpoint(&mut self, endpoint: &EdgeEnd, direction: node::PortDirection) -> usize {
         self.ensure(
-            endpoint.node.map(NodeIndex::index),
+            (endpoint.node != NodeIndex::ROOT).then_some(endpoint.node.index()),
             &endpoint.port,
             direction,
         )
@@ -248,6 +247,9 @@ impl<'plan> Solver<'plan> {
             }
         }
         for (node_index, planned) in self.plan.nodes.iter().enumerate() {
+            if planned.kind() == node::Kind::Graph {
+                continue;
+            }
             for decl in &planned.ports {
                 let index = self.ensure(Some(node_index), &decl.port, decl.direction);
                 self.states[index].annotations = decl.annotations.clone();

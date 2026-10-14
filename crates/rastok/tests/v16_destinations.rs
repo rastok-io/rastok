@@ -313,10 +313,9 @@ fn nested_dispositions_are_rederived_even_after_flattening() {
     // Remove the matching flattened edge as well: flat routing alone cannot
     // tell that one sibling boundary disposition has been erased.
     forged.edges.retain(|edge| {
-        !edge
-            .to
-            .as_ref()
-            .is_some_and(|target| target.node.is_none() && target.port.name() == "auxiliary")
+        !edge.to.as_ref().is_some_and(|target| {
+            target.node == rastok_core::node::NodeIndex::ROOT && target.port.name() == "auxiliary"
+        })
     });
     let error = plan::ValidatedExecutionPlan::try_new(forged).unwrap_err();
     assert!(
@@ -333,7 +332,7 @@ fn nested_dispositions_are_rederived_even_after_flattening() {
 
     let mut forged = decoded.into_inner();
     let inner = forged
-        .owners
+        .nodes
         .iter_mut()
         .find(|owner| owner.path.to_string() == "inner")
         .unwrap();

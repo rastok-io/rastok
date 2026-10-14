@@ -197,9 +197,9 @@ pub fn compile_with_assets(
     };
     // A Graph proof is derived from the complete unflattened routing. It is
     // evidence beside the plan, never a synthetic application handler.
-    for index in 0..plan.owners.len() {
-        let owner = &plan.owners[index];
-        if owner.kind != crate::plan::OwnerKind::Graph {
+    for index in 0..plan.nodes.len() {
+        let owner = &plan.nodes[index];
+        if owner.kind() != crate::node::Kind::Graph {
             continue;
         }
         let Some(proof) = owner.loop_spec().and_then(|spec| spec.proof.as_ref()) else {
@@ -228,7 +228,7 @@ pub fn compile_with_assets(
                 return Err(bag);
             }
         };
-        for extension in &mut plan.owners[index].extensions {
+        for extension in &mut plan.nodes[index].extensions {
             if let crate::plan::ExtensionSpec::Loop(spec) = extension {
                 spec.proof = Some(derived.clone());
             }
@@ -869,7 +869,7 @@ graph inferred_instance : App {
         assert_eq!(
             compilation
                 .plan
-                .node_instance(crate::plan::NodeIndex::new(0))
+                .node_instance(crate::node::NodeIndex::new(1))
                 .expect("the node has an owner")
                 .key
                 .as_ref()
@@ -928,7 +928,7 @@ graph inferred_composite : App {
         .expect("the resolved input closes every composite-key leaf");
         let key = compilation
             .plan
-            .node_instance(crate::plan::NodeIndex::new(0))
+            .node_instance(crate::node::NodeIndex::new(1))
             .expect("the node has an owner")
             .key
             .as_ref()
@@ -971,7 +971,7 @@ graph finite_singleton : App {
         assert_eq!(
             compilation
                 .plan
-                .node_instance(crate::plan::NodeIndex::new(0))
+                .node_instance(crate::node::NodeIndex::new(1))
                 .expect("relay has one owner")
                 .lifetime,
             crate::instance::Lifetime::Fixed(30_000_000_000)

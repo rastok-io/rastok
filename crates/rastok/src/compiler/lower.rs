@@ -25,11 +25,11 @@ use crate::datatype::{
 };
 use crate::expr;
 use crate::node;
+use crate::node::NodeIndex;
 use crate::plan::{
     AttrSetting, ConnectorSpec, DelayPolicy, DispatchStep, Edge, EdgeEnd, EvaluationSite,
-    ExecutionPlan, ExtensionSpec, FieldWrite, Handler, LoopSpec as PlanLoopSpec, Node,
-    NodeExecution, NodeIndex, Owner, OwnerKind, OwnerValue, PlanConstant, SemanticHash,
-    SymbolTable, VarCell,
+    ExecutionPlan, ExtensionSpec, FieldWrite, Handler, LoopSpec as PlanLoopSpec, Node, NodeKind,
+    Operator, OwnerValue, PlanConstant, SemanticHash, SymbolTable, VarCell,
 };
 use crate::schema_annotation::{
     AnnotationTable, DataAnnotation, SchemaPathSegment, SensitivityLevel,
@@ -374,6 +374,7 @@ fn flat_edge_text(edge: &FlatEdge) -> String {
 /// Lowers a checked graph into the shipped plan and its symbol table.
 pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
     let nodes = sorted_nodes(hir);
+    let graphs = sorted_graphs(hir);
     for graph in sorted_graphs(hir) {
         let owns_app = graph.extensions.contains(&node::Extension::App);
         if owns_app != graph.path.is_root() {
@@ -439,17 +440,17 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
     let slot_of = |path: &node::Path| {
         NodeIndex::new(
             u32::try_from(
-                nodes
-                    .iter()
-                    .position(|candidate| &candidate.path == path)
-                    .unwrap_or_else(|| unreachable!("edges resolved against these nodes")),
+                graphs.len()
+                    + nodes
+                        .iter()
+                        .position(|candidate| &candidate.path == path)
+                        .unwrap_or_else(|| unreachable!("edges resolved against these nodes")),
             )
             .unwrap_or_else(|_| unreachable!("node count fits u32")),
         )
     };
     let mut plan = ExecutionPlan {
         boundary_routes: Vec::new(),
-        owners: Vec::new(),
         nodes: Vec::new(),
         edges: Vec::new(),
         routes: Vec::new(),
@@ -473,16 +474,13 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
             .iter()
             .map(|node| (node::OwnerPath::from(&node.path), CheckedOwner::Node(node))),
     );
-    checked_owners.sort_by(|left, right| left.0.cmp(&right.0));
-
     let mut owner_slots = std::collections::BTreeMap::new();
-    let mut node_owners = std::collections::BTreeMap::new();
     for (index, (path, checked)) in checked_owners.into_iter().enumerate() {
         let owner_index = u32::try_from(index).map_err(|_| LowerError {
             owner: path.to_string(),
             detail: "the owner table exceeds its u32 slot domain",
         })?;
-        let owner_slot = node::OwnerSlot::new(owner_index);
+        let owner_slot = node::NodeIndex::new(owner_index);
         let parent_path = path.parent();
         let parent = match parent_path.as_ref() {
             None => None,
@@ -503,7 +501,7 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
             }
         };
         let mut constants = graph_constant_environment(hir, &graph_path);
-        let (kind, ports, extensions, instance, vals) = match checked {
+        let (body, ports, extensions, instance, vals) = match checked {
             CheckedOwner::Graph(graph) => {
                 let mut ports = graph.boundary.clone();
                 ports.sort_by(|left, right| left.key().cmp(&right.key()));
@@ -520,7 +518,7 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
                     extensions.insert(0, ExtensionSpec::App);
                 }
                 (
-                    OwnerKind::Graph,
+                    NodeKind::Graph,
                     ports,
                     extensions,
                     lower_instance(graph.instance.as_ref(), &constants, &graph.path.to_string())?,
@@ -533,11 +531,10 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
                         .iter()
                         .map(|value| (value.name.clone(), value.value.value.clone())),
                 );
-                let slot = slot_of(&node.path);
-                node_owners.insert(node.path.clone(), owner_slot);
+                let (body, ports) = lower_executor_body(hir, node, &graph_path);
                 (
-                    OwnerKind::Node(slot),
-                    Vec::new(),
+                    body,
+                    ports,
                     if let Some(spec) = &node.loop_spec {
                         vec![ExtensionSpec::Loop(Box::new(lower_loop_spec(
                             spec, &constants,
@@ -561,10 +558,10 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
                 )
             }
         };
-        plan.owners.push(Owner {
+        plan.nodes.push(Node {
             path: path.clone(),
             parent,
-            kind,
+            body,
             ports,
             extensions,
             instance,
@@ -572,100 +569,13 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
         });
         owner_slots.insert(path, owner_slot);
     }
-    let mut symbols = SymbolTable { nodes: Vec::new() };
-    for hir_node in &nodes {
-        let owner = node_owners
-            .get(&hir_node.path)
-            .copied()
-            .ok_or_else(|| LowerError {
-                owner: hir_node.path.to_string(),
-                detail: "the canonical owner table omitted an executable Node",
-            })?;
-        symbols.nodes.push(hir_node.path.to_string());
-        let owner_path =
-            node::OwnerPath::new(hir_node.path.segments().iter().cloned()).map_err(|_| {
-                LowerError {
-                    owner: hir_node.path.to_string(),
-                    detail: "a checked Node path did not form an owner path",
-                }
-            })?;
-        let graph_path = owner_path.parent().unwrap_or_else(node::OwnerPath::root);
-        let mut constants = graph_runtime_constant_environment(hir, &graph_path);
-        constants.extend(
-            hir_node
-                .vals
-                .iter()
-                .filter(|value| value.annotations.is_empty())
-                .map(|value| (value.name.clone(), value.value.value.clone())),
-        );
-        // Declaratively unordered collections ship in canonical order,
-        // so equal hashes always mean equal plans.
-        let mut attributes: Vec<_> = hir_node
-            .attributes()
+    let symbols = SymbolTable {
+        nodes: plan
+            .nodes
             .iter()
-            .filter(|attribute| attribute.name != "behavior")
-            .map(|attribute| {
-                let setting = match &attribute.value {
-                    AttrValue::Word(word) => AttrSetting::Word(word.clone()),
-                    AttrValue::Const(constant) => AttrSetting::Value(constant.value.clone()),
-                    AttrValue::Expr { site, tree } => AttrSetting::Expr {
-                        site: *site,
-                        expr: substitute_tree(tree, &constants),
-                    },
-                };
-                (attribute.name.clone(), setting)
-            })
-            .collect();
-        attributes.sort_by(|a, b| a.0.cmp(&b.0));
-        let mut ports = hir_node.ports.clone();
-        ports.sort_by(|a, b| a.key().cmp(&b.key()));
-        let mut vars: Vec<_> = hir_node
-            .vars
-            .iter()
-            .map(|var| VarCell {
-                name: var.name.clone(),
-                ty: var.ty.clone(),
-                init: var.init.as_ref().map(|init| init.value.clone()),
-                annotations: var.annotations.clone(),
-            })
-            .collect();
-        vars.sort_by(|a, b| a.name.cmp(&b.name));
-        plan.nodes.push(Node {
-            path: hir_node.path.clone(),
-            execution: match &hir_node.semantics {
-                NodeSemantics::Connector {
-                    contract,
-                    roles,
-                    exchange,
-                    ..
-                } => NodeExecution::Connector(ConnectorSpec {
-                    contract: contract.clone(),
-                    roles: *roles,
-                    exchange: *exchange,
-                    idempotent: hir_node.attributes().iter().find_map(|attribute| {
-                        if attribute.name != "idempotent" {
-                            return None;
-                        }
-                        let AttrValue::Const(constant) = &attribute.value else {
-                            return None;
-                        };
-                        Some(PlanConstant {
-                            expr: substitute_tree(&constant.tree, &constants),
-                            resolved: constant.value.clone(),
-                        })
-                    }),
-                    behavior: typed_behavior(hir_node),
-                    attributes,
-                }),
-                NodeSemantics::Operator => NodeExecution::Operator {
-                    vars,
-                    handlers: Vec::with_capacity(hir_node.handlers.len()),
-                },
-            },
-            ports,
-            owner,
-        });
-    }
+            .map(|node| node.path.to_string())
+            .collect(),
+    };
     for hir_node in &nodes {
         let slot = slot_of(&hir_node.path);
         // Plain constants are substituted into shipped trees. Annotated
@@ -690,14 +600,11 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
         // activation's canonical key, the same key the hash sorts by.
         let mut handlers: Vec<_> = hir_node.handlers.iter().collect();
         handlers.sort_by_key(|handler| handler.activation.canonical_key());
-        let NodeExecution::Operator {
-            handlers: planned, ..
-        } = &mut plan.nodes[slot.index()].execution
-        else {
+        let NodeKind::Operator(operator) = &mut plan.nodes[slot.index()].body else {
             continue;
         };
         for handler in handlers {
-            planned.push(Handler {
+            operator.handlers.push(Handler {
                 activation: handler.activation.clone(),
                 guard: handler.admission_guard.as_ref().map(&subst),
                 dispatch: lower_dispatch(&handler.dispatch, &subst),
@@ -709,9 +616,9 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
         detail: "Graph boundary composition contradicts checked routing dispositions",
     })?;
     if plan
-        .owners
+        .nodes
         .iter()
-        .any(|owner| owner.kind == OwnerKind::Graph && !owner.path.is_root())
+        .any(|owner| owner.kind() == node::Kind::Graph && !owner.path.is_root())
         || hir.app.loop_spec.is_some()
         || plan.routes.iter().any(|rule| match &rule.selection {
             RouteSelection::All(set) => set
@@ -733,8 +640,8 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
         }
         let endpoint = |end: &crate::compiler::hir::Endpoint| -> Result<EdgeEnd, LowerError> {
             let node = match &end.owner {
-                EndpointOwner::Node(path) => Some(slot_of(path)),
-                EndpointOwner::Graph(path) if path.is_root() => None,
+                EndpointOwner::Node(path) => slot_of(path),
+                EndpointOwner::Graph(path) if path.is_root() => NodeIndex::ROOT,
                 EndpointOwner::Graph(path) => {
                     return Err(LowerError {
                         owner: path.to_string(),
@@ -761,6 +668,86 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
         });
     }
     Ok((plan, symbols))
+}
+
+fn lower_executor_body(
+    hir: &Hir,
+    hir_node: &HirNode,
+    graph_path: &node::OwnerPath,
+) -> (NodeKind, Vec<crate::plan::PortDecl>) {
+    let mut constants = graph_runtime_constant_environment(hir, graph_path);
+    constants.extend(
+        hir_node
+            .vals
+            .iter()
+            .filter(|value| value.annotations.is_empty())
+            .map(|value| (value.name.clone(), value.value.value.clone())),
+    );
+    let mut ports = hir_node.ports.clone();
+    ports.sort_by(|a, b| a.key().cmp(&b.key()));
+    let body = match &hir_node.semantics {
+        NodeSemantics::Connector {
+            contract,
+            roles,
+            exchange,
+            ..
+        } => {
+            let mut attributes: Vec<_> = hir_node
+                .attributes()
+                .iter()
+                .filter(|attribute| attribute.name != "behavior")
+                .map(|attribute| {
+                    let setting = match &attribute.value {
+                        AttrValue::Word(word) => AttrSetting::Word(word.clone()),
+                        AttrValue::Const(constant) => AttrSetting::Value(constant.value.clone()),
+                        AttrValue::Expr { site, tree } => AttrSetting::Expr {
+                            site: *site,
+                            expr: substitute_tree(tree, &constants),
+                        },
+                    };
+                    (attribute.name.clone(), setting)
+                })
+                .collect();
+            attributes.sort_by(|a, b| a.0.cmp(&b.0));
+            NodeKind::Connector(Box::new(ConnectorSpec {
+                contract: contract.clone(),
+                roles: *roles,
+                exchange: *exchange,
+                idempotent: hir_node.attributes().iter().find_map(|attribute| {
+                    if attribute.name != "idempotent" {
+                        return None;
+                    }
+                    let AttrValue::Const(constant) = &attribute.value else {
+                        return None;
+                    };
+                    Some(PlanConstant {
+                        expr: substitute_tree(&constant.tree, &constants),
+                        resolved: constant.value.clone(),
+                    })
+                }),
+                behavior: typed_behavior(hir_node),
+                attributes,
+            }))
+        }
+        NodeSemantics::Operator => {
+            let mut vars: Vec<_> = hir_node
+                .vars
+                .iter()
+                .map(|var| VarCell {
+                    name: var.name.clone(),
+                    ty: var.ty.clone(),
+                    init: var.init.as_ref().map(|init| init.value.clone()),
+                    annotations: var.annotations.clone(),
+                })
+                .collect();
+            vars.sort_by(|a, b| a.name.cmp(&b.name));
+            NodeKind::Operator(Box::new(Operator {
+                vars,
+                handlers: Vec::with_capacity(hir_node.handlers.len()),
+            }))
+        }
+    };
+    (body, ports)
 }
 
 fn lower_owner_values(values: &[crate::compiler::hir::Val]) -> Vec<OwnerValue> {
@@ -2257,11 +2244,12 @@ graph m0_probe : App {
         .expect("a valid plan");
         assert!(compilation.warnings.is_empty());
         let plan = &compilation.plan;
-        assert_eq!(plan.nodes.len(), 2);
+        assert_eq!(plan.nodes.len(), 3);
+        assert!(plan.nodes[0].path.is_root());
         // Canonical order: operators before connectors.
-        assert_eq!(plan.nodes[0].path.to_string(), "shout");
-        assert_eq!(plan.nodes[1].path.to_string(), "echo");
-        let spec = plan.nodes[1].connector().expect("a connector spec");
+        assert_eq!(plan.nodes[1].path.to_string(), "shout");
+        assert_eq!(plan.nodes[2].path.to_string(), "echo");
+        let spec = plan.nodes[2].connector().expect("a connector spec");
         assert_eq!(
             spec.contract.as_str(),
             crate::connector::PROCESS_CONNECTOR_ID
@@ -2275,7 +2263,7 @@ graph m0_probe : App {
         );
         assert_eq!(plan.handlers().count(), 1);
         let (owner, handler) = plan.handlers().next().unwrap();
-        assert_eq!(owner.index(), 0);
+        assert_eq!(owner.index(), 1);
         assert_eq!(
             handler.activation,
             node::HandlerActivation::Port(node::Port::new("in").unwrap())
@@ -2288,7 +2276,7 @@ graph m0_probe : App {
             }
         ));
         assert_eq!(plan.edges.len(), 5);
-        assert_eq!(compilation.symbols.nodes, ["shout", "echo"]);
+        assert_eq!(compilation.symbols.nodes, ["", "shout", "echo"]);
         let resolved = plan.resolved_ports();
         let boundary_in = resolved
             .boundary()
@@ -2299,7 +2287,7 @@ graph m0_probe : App {
         assert_eq!(boundary_in.origin(), crate::plan::TypeOrigin::Inferred);
         assert_eq!(
             resolved
-                .node(crate::plan::NodeIndex::new(0))
+                .node(crate::node::NodeIndex::new(1))
                 .expect("the operator row")
                 .iter()
                 .find(|port| port.port().name() == "out")
@@ -2397,17 +2385,17 @@ graph app : App {
         let registry = ContractCatalog::try_m0().expect("the standard catalogue holds");
         let compilation = compile(&[source], &registry).expect("the annotated program compiles");
         assert!(
-            !compilation.plan.plan().owners[0].vals[0]
+            !compilation.plan.plan().nodes[0].vals[0]
                 .annotations
                 .is_empty()
         );
         assert!(
-            !compilation.plan.plan().nodes[0].vars()[0]
+            !compilation.plan.plan().nodes[1].vars()[0]
                 .annotations
                 .is_empty()
         );
         assert!(matches!(
-            compilation.plan.plan().nodes[0].handlers()[0].dispatch.steps().next().unwrap(),
+            compilation.plan.plan().nodes[1].handlers()[0].dispatch.steps().next().unwrap(),
             DispatchStep::Let { annotations, .. } if !annotations.is_empty()
         ));
 
@@ -2490,7 +2478,7 @@ graph app : App {
             .nodes
             .iter()
             .position(|node| node.path.to_string() == "relay")
-            .map(|index| crate::plan::NodeIndex::new(u32::try_from(index).expect("small plan")))
+            .map(|index| crate::node::NodeIndex::new(u32::try_from(index).expect("small plan")))
             .expect("relay node");
         let relay_output = compilation
             .plan
@@ -3037,7 +3025,7 @@ graph app : App {
             &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect("declared boot references compile");
-        let spec = compilation.plan.plan().nodes[0]
+        let spec = compilation.plan.plan().nodes[1]
             .connector()
             .expect("HttpClient connector");
         for name in ["auth_bearer", "url"] {
@@ -3116,7 +3104,7 @@ graph app : App {
             &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .unwrap();
-        let spec = compilation.plan.nodes[1].connector().unwrap();
+        let spec = compilation.plan.nodes[2].connector().unwrap();
         assert!(spec.is_idempotent());
         assert_eq!(
             spec.attribute("idempotent"),
@@ -3324,7 +3312,7 @@ graph m0_probe : App {
             &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .unwrap();
-        let ports = &compilation.plan.nodes[0].ports;
+        let ports = &compilation.plan.nodes[1].ports;
         assert_eq!(ports.len(), 2, "only the operator's real ports travel");
         assert!(ports.iter().any(|decl| decl.port.name() == "event"));
         assert!(ports.iter().any(|decl| decl.port.name() == "result"));
@@ -3355,7 +3343,7 @@ graph m0_probe : App {
         assert_ne!(five.hash, six.hash);
         // ...and the shipped guard carries its value: no free
         // `threshold` binding survives in the plan.
-        let (guard, _) = five.plan.nodes[0].handlers()[0]
+        let (guard, _) = five.plan.nodes[1].handlers()[0]
             .dispatch
             .filter_parts()
             .unwrap();

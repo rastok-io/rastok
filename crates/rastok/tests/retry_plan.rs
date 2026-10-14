@@ -40,8 +40,8 @@ fn constant(source: &str) -> plan::PlanConstant {
 
 fn retry_plan() -> plan::ExecutionPlan {
     let mut raw = compile("idempotent = true").plan.plan().clone();
-    let owner = raw.nodes[0].owner;
-    raw.owners[owner.index()]
+    let owner = rastok::node::NodeIndex::new(1);
+    raw.nodes[owner.index()]
         .extensions
         .push(plan::ExtensionSpec::Retry(Box::new(plan::RetrySpec {
             attempts: constant("3"),
@@ -61,7 +61,7 @@ fn omission_and_explicit_false_are_one_plan_and_identity() {
     let explicit = compile("idempotent = false");
     assert_eq!(omitted.hash, explicit.hash);
     assert_eq!(omitted.plan, explicit.plan);
-    assert!(!omitted.plan.nodes[0].connector().unwrap().is_idempotent());
+    assert!(!omitted.plan.nodes[1].connector().unwrap().is_idempotent());
     assert_ne!(omitted.hash, compile("idempotent = true").hash);
 }
 
@@ -69,7 +69,7 @@ fn omission_and_explicit_false_are_one_plan_and_identity() {
 fn original_guarantee_must_match_its_closed_expression_and_effective_attribute() {
     for mutation in 0..4 {
         let mut raw = compile("idempotent = true").plan.plan().clone();
-        let plan::NodeExecution::Connector(call) = &mut raw.nodes[0].execution else {
+        let plan::NodeKind::Connector(call) = &mut raw.nodes[1].body else {
             unreachable!()
         };
         match mutation {
@@ -101,7 +101,7 @@ fn original_guarantee_must_match_its_closed_expression_and_effective_attribute()
 fn retry_roundtrips_without_any_command_port_or_expired_wrapper() {
     let raw = retry_plan();
     let ordinary = compile("idempotent = true");
-    assert_eq!(raw.nodes[0].ports, ordinary.plan.nodes[0].ports);
+    assert_eq!(raw.nodes[1].ports, ordinary.plan.nodes[1].ports);
     let validated = plan::ValidatedExecutionPlan::try_new(raw).unwrap();
     let bytes = plan::encode(&validated, &ordinary.hash);
     let (decoded, _) = plan::decode(&bytes).unwrap();
@@ -127,8 +127,8 @@ fn retry_roundtrips_without_any_command_port_or_expired_wrapper() {
 fn hostile_retry_policies_are_rederived_in_core() {
     for mutation in 0..8 {
         let mut raw = retry_plan();
-        let owner = raw.nodes[0].owner;
-        let plan::ExtensionSpec::Retry(spec) = &mut raw.owners[owner.index()].extensions[0] else {
+        let owner = rastok::node::NodeIndex::new(1);
+        let plan::ExtensionSpec::Retry(spec) = &mut raw.nodes[owner.index()].extensions[0] else {
             unreachable!()
         };
         match mutation {
@@ -155,7 +155,7 @@ fn hostile_retry_policies_are_rederived_in_core() {
 #[test]
 fn retry_safety_uses_the_original_guarantee_and_terminal_visibility() {
     let mut raw = retry_plan();
-    let plan::NodeExecution::Connector(call) = &mut raw.nodes[0].execution else {
+    let plan::NodeKind::Connector(call) = &mut raw.nodes[1].body else {
         unreachable!()
     };
     call.idempotent = Some(constant("false"));
@@ -168,8 +168,8 @@ fn retry_safety_uses_the_original_guarantee_and_terminal_visibility() {
         plan::ValidatedExecutionPlan::try_new(raw.clone()),
         Err(plan::PlanValidationError::InvalidRetryPolicy { .. })
     ));
-    let owner = raw.nodes[0].owner;
-    let plan::ExtensionSpec::Retry(spec) = &mut raw.owners[owner.index()].extensions[0] else {
+    let owner = rastok::node::NodeIndex::new(1);
+    let plan::ExtensionSpec::Retry(spec) = &mut raw.nodes[owner.index()].extensions[0] else {
         unreachable!()
     };
     spec.cases = vec!["SpawnFailed".into()];
@@ -219,22 +219,20 @@ graph app : App {{
     assert_eq!(normal, reversed);
     assert_eq!(hash, reversed_hash);
     assert_ne!(hash, checked("[SpawnFailed, TimeoutExpired]", 4).1);
-    let spec = normal.owners[normal.nodes[0].owner.index()]
-        .retry_spec()
-        .unwrap();
+    let spec = normal.nodes[1].retry_spec().unwrap();
     assert_eq!(spec.attempts.resolved, Value::Int(3));
     assert_eq!(
         spec.delay.as_ref().unwrap().duration_after(1),
         Some(10_000_000)
     );
     assert!(
-        normal.nodes[0]
+        normal.nodes[1]
             .ports
             .iter()
             .all(|port| !port.port.name().starts_with("Retry"))
     );
     assert!(
-        normal.nodes[0]
+        normal.nodes[1]
             .connector()
             .unwrap()
             .attributes

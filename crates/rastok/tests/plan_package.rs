@@ -153,7 +153,7 @@ lab builders {
     assert_eq!(hash, compilation.hash);
     assert_eq!(plan::encode(&decoded, &hash), bytes);
 
-    let emissions: Vec<_> = decoded.nodes[0].handlers()[0]
+    let emissions: Vec<_> = decoded.nodes[1].handlers()[0]
         .dispatch
         .steps()
         .filter_map(|step| match step {
@@ -196,9 +196,9 @@ lab builders {
 #[test]
 fn v16_retains_one_operator_loop_without_a_graph_handler_or_command_port() {
     let (compiled, hash, bytes) = packaged_loop();
-    let root = compiled.owners.first().expect("the root owner");
+    let root = compiled.nodes.first().expect("the root owner");
     assert_eq!(root.extensions, [rastok::plan::ExtensionSpec::App]);
-    let owner = &compiled.owners[compiled.nodes[0].owner.index()];
+    let owner = &compiled.nodes[1];
     let [rastok::plan::ExtensionSpec::Loop(spec)] = owner.extensions.as_slice() else {
         panic!("the Operator carries exactly one Loop specification");
     };
@@ -215,20 +215,20 @@ fn v16_retains_one_operator_loop_without_a_graph_handler_or_command_port() {
             rastok::node::Port::new("out").unwrap()
         ]
     );
-    assert!(compiled.nodes[0].ports.iter().any(|port| {
+    assert!(compiled.nodes[1].ports.iter().any(|port| {
         port.port.name() == "err"
             && port.direction == rastok::node::PortDirection::Output
             && port.ty.as_ref()
                 == Some(&rastok::node::loop_expired_type(rastok::datatype::DataType::Text).unwrap())
     }));
-    assert!(compiled.nodes[0].ports.iter().all(|port| !matches!(
+    assert!(compiled.nodes[1].ports.iter().all(|port| !matches!(
         port.port.name(),
         "next" | "Loop.next" | "Loop.again" | "Loop.done"
     )));
     assert_eq!(compiled.handlers().count(), 1);
     assert_eq!(
         compiled.handlers().next().unwrap().0,
-        rastok::plan::NodeIndex::new(0)
+        rastok::node::NodeIndex::new(1)
     );
 
     let (decoded, declared) = plan::decode(&bytes).expect("v16 revalidates Loop Registry-free");
@@ -278,7 +278,7 @@ fn v16_round_trips_the_checked_loop_proof() {
     assert_eq!(decoded, compiled, "the certificate survives categorically");
     assert_eq!(declared, hash, "the proof-bearing identity travels intact");
 
-    let owner = &decoded.owners[decoded.nodes[0].owner.index()];
+    let owner = &decoded.nodes[1];
     let [rastok::plan::ExtensionSpec::Loop(spec)] = owner.extensions.as_slice() else {
         panic!("the Operator carries the Loop Extension");
     };
@@ -294,13 +294,13 @@ fn a_partial_foreign_or_false_loop_spec_never_enters_a_v16_plan() {
     let (_, _, bytes) = packaged_loop();
     let mutate_extension = |body: &mut std::collections::BTreeMap<u64, Cbor>,
                             edit: &dyn Fn(&mut Vec<Cbor>)| {
-        let Cbor::Array(owners) = body.get_mut(&9).expect("the owner table") else {
+        let Cbor::Array(owners) = body.get_mut(&12).expect("the owner table") else {
             panic!("owners are an array");
         };
         let Cbor::Map(owner) = &mut owners[1] else {
             panic!("the Operator owner is a map");
         };
-        let Cbor::Array(extensions) = owner.get_mut(&7).expect("the Extension table") else {
+        let Cbor::Array(extensions) = owner.get_mut(&6).expect("the Extension table") else {
             panic!("extensions are an array");
         };
         let Cbor::Array(extension) = &mut extensions[0] else {
@@ -431,7 +431,7 @@ graph g : App {
     let before = compilation
         .plan
         .plan()
-        .node_instance(rastok::plan::NodeIndex::new(0))
+        .node_instance(rastok::node::NodeIndex::new(1))
         .expect("the lowered node has an owner");
     assert_eq!(
         before.key.as_ref().expect("the node is keyed").ty,
@@ -489,7 +489,7 @@ graph g : App {
 
     let plan = decoded.plan();
     assert!(
-        plan.owners
+        plan.nodes
             .iter()
             .any(|owner| owner.path.to_string() == "sessions")
     );
@@ -502,7 +502,7 @@ graph g : App {
     assert!(
         plan.edges
             .iter()
-            .all(|edge| plan.owners[edge.owner.index()].path.is_root())
+            .all(|edge| plan.nodes[edge.owner.index()].path.is_root())
     );
 }
 
@@ -541,7 +541,7 @@ graph g : App {
     assert_eq!(decoded, compilation.plan);
     assert_eq!(hash, compilation.hash);
     assert!(matches!(
-        &decoded.plan().nodes[0].handlers()[0].activation,
+        &decoded.plan().nodes[1].handlers()[0].activation,
         rastok::node::HandlerActivation::Join {
             ports,
             within_ns: Some(2_000_000_000),
@@ -618,71 +618,65 @@ fn reframe_body(
 fn the_root_contract_has_one_serialized_authority() {
     let (_, _, bytes) = packaged_example();
     let forged = reframe_body(&bytes, |body| {
-        let ports = body[&2].clone();
-        let Cbor::Array(owners) = body.get_mut(&9).unwrap() else {
-            panic!("owner array")
+        let Cbor::Array(nodes) = &body[&12] else {
+            panic!("nodes")
         };
-        let Cbor::Map(root) = &mut owners[0] else {
-            panic!("root owner map")
+        let Cbor::Map(root) = &nodes[0] else {
+            panic!("App Node")
         };
-        root.insert(6, ports);
+        let ports = root[&3].clone();
+        body.insert(2, ports);
     });
     assert_eq!(
         plan::decode(&forged).unwrap_err(),
-        DecodeError::Invalid(plan::PlanValidationError::InvalidGraphContract {
-            owner: String::new(),
-            detail: "the root Graph boundary belongs only to the plan boundary table",
-        })
+        DecodeError::NonCanonical("the body is not the canonical encoding of its plan")
     );
 }
 
 #[test]
 fn a_connector_cannot_acquire_a_dsl_handler_from_a_raw_plan() {
-    let (plan, _, bytes) = packaged_example();
-    let target = plan
-        .nodes
-        .iter()
-        .position(|node| node.connector().is_some())
-        .unwrap();
-    let node = plan.nodes[target].path.clone();
+    let (_, _, bytes) = packaged_example();
     let forged = reframe_body(&bytes, |body| {
-        let Cbor::Array(handlers) = body.get_mut(&4).unwrap() else {
-            panic!("handler array")
+        let Cbor::Array(nodes) = body.get_mut(&12).unwrap() else {
+            panic!("nodes")
         };
-        let Cbor::Map(handler) = &mut handlers[0] else {
-            panic!("handler map")
+        let Cbor::Map(operator) = &nodes[1] else {
+            panic!("Operator")
         };
-        handler.insert(
-            1,
-            Cbor::Array(vec![Cbor::Uint(1), Cbor::Uint(target as u64)]),
-        );
+        let Cbor::Array(operator_body) = &operator[&7] else {
+            panic!("Operator body")
+        };
+        let handlers = operator_body[2].clone();
+        let Cbor::Map(connector) = &mut nodes[2] else {
+            panic!("Connector")
+        };
+        let Cbor::Array(connector_body) = connector.get_mut(&7).unwrap() else {
+            panic!("Connector body")
+        };
+        connector_body.push(handlers);
     });
     assert_eq!(
         plan::decode(&forged).unwrap_err(),
-        DecodeError::Invalid(plan::PlanValidationError::NonOperatorHandler { node })
+        DecodeError::Malformed("Node body".into())
     );
 }
 
 #[test]
-fn a_handler_owner_is_bounds_checked_before_any_signature_is_derived() {
-    let (plan, _, bytes) = packaged_example();
+fn a_node_parent_is_bounds_checked_before_any_signature_is_derived() {
+    let (_, _, bytes) = packaged_example();
     let forged = reframe_body(&bytes, |body| {
-        let Cbor::Array(handlers) = body.get_mut(&4).unwrap() else {
-            panic!("handler array")
+        let Cbor::Array(nodes) = body.get_mut(&12).unwrap() else {
+            panic!("nodes")
         };
-        let Cbor::Map(handler) = &mut handlers[0] else {
-            panic!("handler map")
+        let Cbor::Map(operator) = &mut nodes[1] else {
+            panic!("Operator")
         };
-        handler.insert(
-            1,
-            Cbor::Array(vec![Cbor::Uint(1), Cbor::Uint(u64::from(u32::MAX))]),
-        );
+        operator.insert(2, Cbor::Uint(u64::from(u32::MAX)));
     });
     assert_eq!(
         plan::decode(&forged).unwrap_err(),
-        DecodeError::Invalid(plan::PlanValidationError::SlotOutOfBounds {
-            slot: plan::NodeIndex::new(u32::MAX),
-            node_count: plan.nodes.len(),
+        DecodeError::Invalid(plan::PlanValidationError::InvalidOwnerTree {
+            owner: rastok::node::NodeIndex::new(1),
         })
     );
 }
@@ -704,21 +698,27 @@ graph state : App {
     let compilation = compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
     let bytes = plan::encode(&compilation.plan, &compilation.hash);
     let forged = reframe_body(&bytes, |body| {
-        let Cbor::Array(nodes) = body.get_mut(&1).unwrap() else {
+        let Cbor::Array(nodes) = body.get_mut(&12).unwrap() else {
             panic!("node array")
         };
-        let Cbor::Map(operator) = &nodes[0] else {
+        let Cbor::Map(operator) = &nodes[1] else {
             panic!("Operator map")
         };
-        let vars = operator[&4].clone();
-        let Cbor::Map(connector) = &mut nodes[1] else {
+        let Cbor::Array(operator_body) = &operator[&7] else {
+            panic!("Operator body")
+        };
+        let vars = operator_body[1].clone();
+        let Cbor::Map(connector) = &mut nodes[2] else {
             panic!("Connector map")
         };
-        connector.insert(4, vars);
+        let Cbor::Array(connector_body) = connector.get_mut(&7).unwrap() else {
+            panic!("Connector body")
+        };
+        connector_body.push(vars);
     });
     assert_eq!(
         plan::decode(&forged).unwrap_err(),
-        DecodeError::Malformed("a Connector cannot contain DSL state cells".into())
+        DecodeError::Malformed("Node body".into())
     );
 }
 
@@ -727,34 +727,50 @@ fn serialized_handler_order_cannot_be_normalized_by_containment() {
     let source = r#"
 graph order : App {
   input in: text
-  operator first { on in { out = data } }
-  operator second { on in { out = data } }
-  in -> first -> second -> out
+  operator relay {
+    input a: text
+    input b: text
+    on a { out = data }
+    on b { out = data }
+  }
+  in -> { relay.a ; relay.b }
+  relay -> out
 }
 "#;
     let compilation = compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
     let bytes = plan::encode(&compilation.plan, &compilation.hash);
     let forged = reframe_body(&bytes, |body| {
-        let Cbor::Array(handlers) = body.get_mut(&4).unwrap() else {
-            panic!("handler array")
+        let Cbor::Array(nodes) = body.get_mut(&12).unwrap() else {
+            panic!("nodes")
+        };
+        let Cbor::Map(operator) = &mut nodes[1] else {
+            panic!("Operator")
+        };
+        let Cbor::Array(operator_body) = operator.get_mut(&7).unwrap() else {
+            panic!("Operator body")
+        };
+        let Cbor::Array(handlers) = &mut operator_body[2] else {
+            panic!("handlers")
         };
         handlers.swap(0, 1);
     });
     assert_eq!(
         plan::decode(&forged).unwrap_err(),
-        DecodeError::NonCanonical("the body is not the canonical encoding of its plan")
+        DecodeError::Invalid(plan::PlanValidationError::NonCanonicalOrder {
+            collection: "handlers"
+        })
     );
 }
 
 fn connector_spec_mut(body: &mut std::collections::BTreeMap<u64, Cbor>) -> &mut Cbor {
-    let Cbor::Array(nodes) = body.get_mut(&1).expect("the node table") else {
-        panic!("nodes are an array");
+    let Cbor::Array(nodes) = body.get_mut(&12).expect("the Node table") else {
+        panic!("nodes")
     };
-    let Cbor::Map(shell) = &mut nodes[1] else {
-        panic!("shell is a node map");
+    let Cbor::Map(shell) = &mut nodes[2] else {
+        panic!("shell Node")
     };
-    let Cbor::Array(kind) = shell.get_mut(&2).expect("the node kind") else {
-        panic!("the connector kind is an array");
+    let Cbor::Array(kind) = shell.get_mut(&7).expect("Node body") else {
+        panic!("Connector body")
     };
     &mut kind[1]
 }
@@ -785,7 +801,7 @@ fn connector_identity_roles_and_exchange_are_categorical_plan_facts() {
     assert_eq!(
         plan::decode(&forged_role).unwrap_err(),
         DecodeError::Invalid(rastok::plan::PlanValidationError::ContractRoleMismatch {
-            node: rastok::node::Path::new(["shell"]).unwrap(),
+            node: rastok::node::OwnerPath::new(["shell"]).unwrap(),
         })
     );
 
@@ -799,7 +815,7 @@ fn connector_identity_roles_and_exchange_are_categorical_plan_facts() {
         plan::decode(&forged_exchange).unwrap_err(),
         DecodeError::Invalid(
             rastok::plan::PlanValidationError::ContractExchangeMismatch {
-                node: rastok::node::Path::new(["shell"]).unwrap(),
+                node: rastok::node::OwnerPath::new(["shell"]).unwrap(),
             }
         )
     );
@@ -980,7 +996,7 @@ fn an_out_of_bounds_slot_cannot_become_a_validated_plan() {
     // plan must re-earn the type, and cannot.
     let mut raw = plan.into_inner();
     raw.edges[0].to = Some(rastok::plan::EdgeEnd {
-        node: Some(rastok::plan::NodeIndex::new(999)),
+        node: rastok::node::NodeIndex::new(999),
         port: rastok::node::Port::new("in").unwrap(),
     });
     let refused = rastok::plan::ValidatedExecutionPlan::try_from(raw);

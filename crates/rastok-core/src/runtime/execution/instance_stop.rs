@@ -66,10 +66,10 @@ impl Execution<'_> {
             };
             let slot = self
                 .plan
-                .owners
+                .nodes
                 .iter()
                 .position(|entry| entry.path == owner)
-                .map(|index| node::OwnerSlot::new(index as u32))
+                .map(|index| node::NodeIndex::new(index as u32))
                 .ok_or_else(|| self.command_error(&owner, Error::Source))?;
             // This is a pure selection. The bundle is not installed: a target
             // absent from the retained lifecycle prefix still refuses below.
@@ -83,7 +83,7 @@ impl Execution<'_> {
             };
             self.prepare_owner_target(
                 journal,
-                node::OwnerSlot::new(0),
+                node::NodeIndex::new(0),
                 None,
                 slot,
                 envelope,

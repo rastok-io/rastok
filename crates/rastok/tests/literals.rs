@@ -864,10 +864,10 @@ fn the_validator_matches_the_decoder_on_decimals_and_digests() {
     // This test is about the declared initializer carrier. Remove the source
     // program's integer state update so it does not add an unrelated int32
     // constraint after the raw state type is changed below.
-    let rastok::plan::NodeExecution::Operator { handlers, .. } = &mut plan.nodes[0].execution
-    else {
+    let rastok::plan::NodeKind::Operator(operator) = &mut plan.nodes[1].body else {
         panic!("the stateful Operator")
     };
+    let handlers = &mut operator.handlers;
     let rastok::plan::Dispatch::Linear(steps) = &mut handlers[0].dispatch else {
         panic!("linear state update")
     };
@@ -877,9 +877,10 @@ fn the_validator_matches_the_decoder_on_decimals_and_digests() {
         .iter_mut()
         .find(|node| node.path.to_string() == "o")
         .expect("the operator");
-    let rastok::plan::NodeExecution::Operator { vars, .. } = &mut relay.execution else {
+    let rastok::plan::NodeKind::Operator(operator) = &mut relay.body else {
         panic!("the stateful Operator")
     };
+    let vars = &mut operator.vars;
     vars[0].ty = DataType::Decimal(DecimalType::new(10, 0).unwrap());
     vars[0].init = Some(rastok::value::Value::Decimal {
         unscaled: 20,
@@ -895,9 +896,10 @@ fn the_validator_matches_the_decoder_on_decimals_and_digests() {
         .iter_mut()
         .find(|node| node.path.to_string() == "o")
         .expect("the operator");
-    let rastok::plan::NodeExecution::Operator { vars, .. } = &mut relay.execution else {
+    let rastok::plan::NodeKind::Operator(operator) = &mut relay.body else {
         panic!("the stateful Operator")
     };
+    let vars = &mut operator.vars;
     vars[0].ty = DataType::Decimal(DecimalType::new(10, 2).unwrap());
     vars[0].init = Some(rastok::value::Value::Decimal {
         unscaled: 100,

@@ -17,7 +17,7 @@ impl Execution<'_> {
         let packet = record
             .loop_protocol()
             .ok_or_else(|| invalid(index, "a manager transition has no protocol"))?;
-        let owner = &self.plan.owners[self.plan.nodes[slot.index()].owner.index()];
+        let owner = &self.plan.nodes[slot.index()];
         let spec = owner
             .loop_spec()
             .ok_or_else(|| invalid(index, "a manager transition has no Loop host"))?;
@@ -193,7 +193,7 @@ impl Execution<'_> {
                         } = fact
                         {
                             let expected = self
-                                .loop_delay_for(self.plan.nodes[slot.index()].owner, *to_iteration)?
+                                .loop_delay_for(slot, *to_iteration)?
                                 .map(|delay| self.now.saturating_add(delay));
                             if *due_at != expected {
                                 return Err(invalid(

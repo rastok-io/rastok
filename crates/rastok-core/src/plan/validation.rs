@@ -12,9 +12,9 @@ use alloc::vec::Vec;
 use crate::datatype::{DataType, TypeError};
 use crate::expr;
 use crate::node;
+use crate::node::NodeIndex;
 use crate::plan::{
-    DispatchStep, EdgeEnd, EmitValue, EvaluationSite, ExecutionPlan, Node, NodeExecution,
-    NodeIndex, OwnerKind,
+    DispatchStep, EdgeEnd, EmitValue, EvaluationSite, ExecutionPlan, Node, NodeKind,
 };
 use crate::schema_annotation::{AnnotationTable, SchemaAnnotationError};
 
@@ -28,7 +28,7 @@ pub enum PlanValidationError {
     /// A possible output has no explicit spatial or manager destination.
     UnwiredOutput {
         /// The producing Executor.
-        node: node::Path,
+        node: node::OwnerPath,
         /// The output requiring a destination.
         port: node::Port,
     },
@@ -46,36 +46,12 @@ pub enum PlanValidationError {
         /// Named construct, never silently omitted from execution.
         statement: &'static str,
     },
-    /// A DSL handler targets an Executor whose transitions are Contract-owned.
-    NonOperatorHandler {
-        /// The invalid handler target.
-        node: node::Path,
-    },
-    /// The categorical owner table is absent or has no root App Graph.
+    /// The Node table is absent or has no root App Graph.
     MissingRootOwner,
-    /// An owner reference indexes past the owner table.
-    OwnerOutOfBounds {
-        /// The impossible reference.
-        owner: node::OwnerSlot,
-        /// The table it missed.
-        owner_count: usize,
-    },
-    /// Two owners share one static lexical path.
-    DuplicateOwnerPath {
-        /// The repeated dotted path; empty denotes the root App Graph.
-        path: String,
-    },
     /// One owner does not form a valid parent-linked lexical tree.
     InvalidOwnerTree {
         /// The malformed row.
-        owner: node::OwnerSlot,
-    },
-    /// A Node and its owner row do not point to one another.
-    OwnerNodeMismatch {
-        /// The Node slot.
-        node: NodeIndex,
-        /// The claimed owner row.
-        owner: node::OwnerSlot,
+        owner: node::NodeIndex,
     },
     /// An owner carries a malformed boundary or Extension contract.
     InvalidGraphContract {
@@ -103,7 +79,7 @@ pub enum PlanValidationError {
     /// An edge's lexical scope is absent or is not a Graph owner.
     InvalidEdgeScope {
         /// The claimed Graph owner.
-        owner: node::OwnerSlot,
+        owner: node::NodeIndex,
     },
     /// One owner declares an immutable binding twice.
     DuplicateOwnerValue {
@@ -145,36 +121,36 @@ pub enum PlanValidationError {
         /// The lying binding.
         name: String,
     },
-    /// A slot indexes past the node table.
-    SlotOutOfBounds {
+    /// A Node index is outside the declaration table.
+    NodeOutOfBounds {
         /// The impossible reference.
-        slot: NodeIndex,
+        node: NodeIndex,
         /// The table it missed.
         node_count: usize,
     },
     /// Two nodes share a path.
     DuplicateNodePath {
         /// The repeated path.
-        path: node::Path,
+        path: node::OwnerPath,
     },
     /// Flattening lexical Graph boundaries exposed a cycle between executable
     /// Nodes. The shipped spatial graph is always a DAG, independently of how
     /// many composition seams the source crossed.
     WiringCycle {
         /// One Node on the cycle.
-        node: node::Path,
+        node: node::OwnerPath,
     },
     /// One node declares a port twice.
     DuplicatePort {
         /// The declaring node.
-        node: node::Path,
+        node: node::OwnerPath,
         /// The repeated port.
         port: node::Port,
     },
     /// One node declares a var twice.
     DuplicateVar {
         /// The declaring node.
-        node: node::Path,
+        node: node::OwnerPath,
         /// The repeated name.
         name: String,
     },
@@ -186,14 +162,14 @@ pub enum PlanValidationError {
     /// A connector declares an attribute twice.
     DuplicateAttribute {
         /// The declaring node.
-        node: node::Path,
+        node: node::OwnerPath,
         /// The repeated attribute.
         name: String,
     },
     /// A built-in Connector omits one effective sheet attribute.
     MissingContractAttribute {
         /// Connector node.
-        node: node::Path,
+        node: node::OwnerPath,
         /// Required effective attribute.
         attribute: &'static str,
     },
@@ -201,7 +177,7 @@ pub enum PlanValidationError {
     /// mirror (shape, value, phase, or profile applicability).
     ContractAttributeMismatch {
         /// Connector node.
-        node: node::Path,
+        node: node::OwnerPath,
         /// Contradicting attribute.
         attribute: String,
     },
@@ -210,43 +186,43 @@ pub enum PlanValidationError {
     /// the contract therefore requires an explicit correlator.
     AmbiguousInboundCallCorrelation {
         /// Inbound Call Connector receiving the response.
-        node: node::Path,
+        node: node::OwnerPath,
     },
     /// A `Process` connector's `codec` is outside the runtime's
     /// dispatch domain — accepting it would silently run as
     /// `lines`.
     UnknownCodec {
         /// The declaring node.
-        node: node::Path,
+        node: node::OwnerPath,
     },
     /// A `Process` connector carries no `codec` at all — the sheet
     /// requires one, so a plan without it never left the compiler.
     MissingCodec {
         /// The declaring node.
-        node: node::Path,
+        node: node::OwnerPath,
     },
     /// A `Process` connector carries no effective `err_codec` even though
     /// the sheet defaults it before lowering.
     MissingErrCodec {
         /// The declaring node.
-        node: node::Path,
+        node: node::OwnerPath,
     },
     /// A `Process` connector's stderr framing is outside `lines | bytes`.
     UnknownErrCodec {
         /// The declaring node.
-        node: node::Path,
+        node: node::OwnerPath,
     },
     /// A connector some edge delivers to exposes neither the outbound role
     /// nor the inbound-Call response protocol required to consume it.
     CallableConnectorWithoutOutboundRole {
         /// The declaring node.
-        node: node::Path,
+        node: node::OwnerPath,
     },
     /// One node declares two handlers for one activation — the
     /// second would silently shadow the first at dispatch.
     DuplicateHandler {
         /// The declaring node.
-        node: node::Path,
+        node: node::OwnerPath,
         /// The doubled activation — carried whole, so a future join
         /// activation changes nothing about this variant's shape.
         activation: node::HandlerActivation,
@@ -254,30 +230,30 @@ pub enum PlanValidationError {
     /// A join activation has fewer than two distinct input ports.
     InvalidJoinActivation {
         /// The declaring node.
-        node: node::Path,
+        node: node::OwnerPath,
     },
     /// One input port participates in more than one activation. Dispatch must
     /// never guess whether an arrival is a single-port firing or join input.
     AmbiguousInputActivation {
         /// The declaring node.
-        node: node::Path,
+        node: node::OwnerPath,
         /// The multiply-owned input port.
         port: node::Port,
     },
     /// A join retention bound is zero or otherwise outside its closed domain.
     InvalidJoinBound {
         /// The declaring node.
-        node: node::Path,
+        node: node::OwnerPath,
     },
     /// A bounded join lacks the conventional typed eviction output.
     MissingJoinExpiryPort {
         /// The declaring node.
-        node: node::Path,
+        node: node::OwnerPath,
     },
     /// Identity emission has no unique input envelope under a join.
     AmbiguousJoinIdentity {
         /// The declaring node.
-        node: node::Path,
+        node: node::OwnerPath,
     },
     /// A required metadata read can observe a field removed by a preceding
     /// join's CommonOrAbsent merge. An explicit write must select the value
@@ -292,7 +268,7 @@ pub enum PlanValidationError {
     /// retains the closed registry without silently enabling it.
     UnsupportedLifecycleHandler {
         /// The declaring node.
-        node: node::Path,
+        node: node::OwnerPath,
         /// The unsupported lifecycle name.
         lifecycle: node::Lifecycle,
     },
@@ -300,7 +276,7 @@ pub enum PlanValidationError {
     /// causal parent could be created.
     LifecycleWithoutInput {
         /// The declaring node.
-        node: node::Path,
+        node: node::OwnerPath,
         /// The impossible lifecycle hook.
         lifecycle: node::Lifecycle,
     },
@@ -312,7 +288,7 @@ pub enum PlanValidationError {
     /// A resolved built-in Connector table omits one promised port.
     MissingContractPort {
         /// Connector node.
-        node: node::Path,
+        node: node::OwnerPath,
         /// Missing port.
         port: &'static str,
     },
@@ -320,25 +296,25 @@ pub enum PlanValidationError {
     /// does not define.
     ContractRoleMismatch {
         /// Connector node.
-        node: node::Path,
+        node: node::OwnerPath,
     },
     /// A built-in Connector claims an exchange lifecycle that its stable
     /// contract id does not define.
     ContractExchangeMismatch {
         /// Connector node.
-        node: node::Path,
+        node: node::OwnerPath,
     },
     /// The conventional terminal row contradicts the generic exchange fact.
     ExchangeTerminalMismatch {
         /// Connector node.
-        node: node::Path,
+        node: node::OwnerPath,
         /// Exchange whose terminal cardinality was contradicted.
         exchange: crate::connector::ConnectorExchange,
     },
     /// The role set cannot expose this exchange's complete generic protocol.
     ExchangeRoleMismatch {
         /// Connector node.
-        node: node::Path,
+        node: node::OwnerPath,
         /// Incompatible exchange.
         exchange: crate::connector::ConnectorExchange,
         /// Incompatible roles.
@@ -348,7 +324,7 @@ pub enum PlanValidationError {
     /// contract rule (direction, routing policy, or effective type).
     ContractPortMismatch {
         /// Connector node.
-        node: node::Path,
+        node: node::OwnerPath,
         /// Mismatching port.
         port: node::Port,
     },
@@ -356,7 +332,7 @@ pub enum PlanValidationError {
     /// not declare.
     UnexpectedContractPort {
         /// Connector node.
-        node: node::Path,
+        node: node::OwnerPath,
         /// Unexpected port.
         port: node::Port,
     },
@@ -365,7 +341,7 @@ pub enum PlanValidationError {
     /// on an output, an emission on an input.
     WrongPortDirection {
         /// The owning node; `None` is the boundary.
-        node: Option<node::Path>,
+        node: Option<node::OwnerPath>,
         /// The port.
         port: node::Port,
         /// The role the reference required.
@@ -379,7 +355,7 @@ pub enum PlanValidationError {
     /// A handler writes a var its node does not declare.
     UnknownVariable {
         /// The writing node.
-        node: node::Path,
+        node: node::OwnerPath,
         /// The undeclared name.
         name: String,
     },
@@ -460,7 +436,7 @@ pub enum PlanValidationError {
     /// restriction lifts when the port enters `CallOpen`.
     UnsupportedConnectorPort {
         /// The connector.
-        node: node::Path,
+        node: node::OwnerPath,
         /// The not-yet-executable port.
         port: node::Port,
     },
@@ -479,14 +455,14 @@ pub enum PlanValidationError {
     /// logical type. `variant` is never substituted for this state.
     UnresolvedPortType {
         /// The owning node; `None` is the graph boundary.
-        node: Option<node::Path>,
+        node: Option<node::OwnerPath>,
         /// The unresolved port.
         port: node::Port,
     },
     /// Two constraints on one port cannot both hold.
     ConflictingPortTypes {
         /// The owning node; `None` is the graph boundary.
-        node: Option<node::Path>,
+        node: Option<node::OwnerPath>,
         /// The constrained port.
         port: node::Port,
         /// The type already required there.
@@ -586,7 +562,7 @@ pub enum PlanValidationError {
     /// An `on stop` handler recursively requests the same close.
     RecursiveStop {
         /// The offending node.
-        node: node::Path,
+        node: node::OwnerPath,
     },
     /// A collection the plan documents as canonically ordered is not.
     NonCanonicalOrder {
@@ -618,32 +594,12 @@ impl core::fmt::Display for PlanValidationError {
             Self::UnsupportedStatement { handler, statement } => {
                 write!(f, "invalid plan: handler {handler} uses {statement}")
             }
-            Self::NonOperatorHandler { node } => write!(
-                f,
-                "invalid plan: Connector `{node}` cannot own DSL handlers; its Contract defines its transitions"
-            ),
             Self::MissingRootOwner => {
-                f.write_str("invalid plan: the owner table has no root App Graph")
+                f.write_str("invalid plan: the Node table has no root App Graph")
             }
-            Self::OwnerOutOfBounds { owner, owner_count } => write!(
-                f,
-                "invalid plan: owner {} of {owner_count} owners",
-                owner.index()
-            ),
-            Self::DuplicateOwnerPath { path } => write!(
-                f,
-                "invalid plan: duplicate owner path `{}`",
-                if path.is_empty() { "<root>" } else { path }
-            ),
             Self::InvalidOwnerTree { owner } => write!(
                 f,
                 "invalid plan: owner {} does not form a canonical lexical tree",
-                owner.index()
-            ),
-            Self::OwnerNodeMismatch { node, owner } => write!(
-                f,
-                "invalid plan: node {} and owner {} do not refer to each other",
-                node.index(),
                 owner.index()
             ),
             Self::InvalidGraphContract { owner, detail } => write!(
@@ -686,10 +642,10 @@ impl core::fmt::Display for PlanValidationError {
                 f,
                 "invalid plan: immutable value `{owner}.{name}` does not reduce to its transported value"
             ),
-            Self::SlotOutOfBounds { slot, node_count } => write!(
+            Self::NodeOutOfBounds { node, node_count } => write!(
                 f,
-                "invalid plan: slot {} of {node_count} nodes",
-                slot.index()
+                "invalid plan: Node index {} of {node_count} Nodes",
+                node.index()
             ),
             Self::DuplicateNodePath { path } => {
                 write!(f, "invalid plan: duplicate node path `{path}`")
@@ -1015,7 +971,7 @@ pub struct ValidatedExecutionPlan {
     handler_context: Vec<HandlerContextUse>,
     // Complete root-to-owner chains, derived after parent validation. Shared
     // by live and recovered executions, never serialized or mutated by them.
-    scope_chains: Vec<Vec<node::OwnerSlot>>,
+    scope_chains: Vec<Vec<node::NodeIndex>>,
 }
 
 /// Derived context demand for one handler. It never travels in a package:
@@ -1120,13 +1076,13 @@ impl ValidatedExecutionPlan {
             .handlers()
             .map(|(_, handler)| handler_context_use(handler))
             .collect();
-        let mut scope_chains: Vec<Vec<node::OwnerSlot>> = Vec::with_capacity(plan.owners.len());
-        for (owner, index) in plan.owners.iter().zip(0..) {
+        let mut scope_chains: Vec<Vec<node::NodeIndex>> = Vec::with_capacity(plan.nodes.len());
+        for (owner, index) in plan.nodes.iter().zip(0..) {
             let mut chain = Vec::with_capacity(owner.path.segments().len() + 1);
             if let Some(parent) = owner.parent {
                 chain.extend_from_slice(&scope_chains[parent.index()]);
             }
-            chain.push(node::OwnerSlot::new(index));
+            chain.push(node::NodeIndex::new(index));
             scope_chains.push(chain);
         }
         Ok(Self {
@@ -1164,7 +1120,7 @@ impl ValidatedExecutionPlan {
     /// Complete lexical chain, from App through each containing Graph to the
     /// requested owner. Execution borrows it for instance admission, Closing
     /// and Loop contexts; no live generation or scheduler state belongs here.
-    pub(crate) fn scope_chain(&self, owner: node::OwnerSlot) -> Option<&[node::OwnerSlot]> {
+    pub(crate) fn scope_chain(&self, owner: node::NodeIndex) -> Option<&[node::NodeIndex]> {
         self.scope_chains.get(owner.index()).map(Vec::as_slice)
     }
 
@@ -1211,34 +1167,34 @@ fn verify_instance_key_types(
     ports: &super::type_resolution::ResolvedPortTable,
     mode: InstanceKeyTypeMode,
 ) -> Result<(), PlanValidationError> {
-    for index in 0..plan.owners.len() {
-        let Some(key) = plan.owners[index].instance.key.as_ref() else {
+    for index in 0..plan.nodes.len() {
+        let Some(key) = plan.nodes[index].instance.key.as_ref() else {
             continue;
         };
-        let owner_name = plan.owners[index].path.to_string();
-        let kind = plan.owners[index].kind.clone();
+        let owner_name = plan.nodes[index].path.to_string();
+        let kind = plan.nodes[index].kind();
         let reads_data = super::type_resolution::expression_reads_data(&key.root);
         let resolved = if reads_data {
             let mut resolved: Option<DataType> = None;
             let inputs: alloc::vec::Vec<DataType> = match kind {
-                OwnerKind::Node(slot) => ports
-                    .node(slot)
+                node::Kind::Operator | node::Kind::Connector => ports
+                    .node(NodeIndex::new(index as u32))
                     .unwrap_or(&[])
                     .iter()
                     .filter(|port| port.direction() == node::PortDirection::Input)
                     .map(|port| port.ty().clone())
                     .collect(),
-                OwnerKind::Graph if index == 0 => ports
+                node::Kind::Graph if index == 0 => ports
                     .boundary()
                     .iter()
                     .filter(|port| port.direction() == node::PortDirection::Input)
                     .map(|port| port.ty().clone())
                     .collect(),
-                OwnerKind::Graph if plan.owners[index].loop_spec().is_some() => {
+                node::Kind::Graph if plan.nodes[index].loop_spec().is_some() => {
                     // The manager admits the typed Graph entry before any
                     // fan-out. A descendant Call may accept variant without
                     // weakening that opening's type or reselecting its key.
-                    let owner = &plan.owners[index];
+                    let owner = &plan.nodes[index];
                     owner
                         .ports
                         .iter()
@@ -1253,18 +1209,18 @@ fn verify_instance_key_types(
                 // Nested Graph admission types are closed by the compiler from
                 // the scoped crossing routes before transport. The owner tree
                 // preserves the boundary even though the spatial DAG is flat.
-                OwnerKind::Graph => {
-                    let owner = node::OwnerSlot::new(u32::try_from(index).map_err(|_| {
-                        PlanValidationError::OwnerOutOfBounds {
-                            owner: node::OwnerSlot::new(u32::MAX),
-                            owner_count: plan.owners.len(),
+                node::Kind::Graph => {
+                    let owner = node::NodeIndex::new(u32::try_from(index).map_err(|_| {
+                        PlanValidationError::NodeOutOfBounds {
+                            node: node::NodeIndex::new(u32::MAX),
+                            node_count: plan.nodes.len(),
                         }
                     })?);
                     plan.edges
                         .iter()
                         .filter_map(|edge| {
                             let target = edge.to.as_ref()?;
-                            let target_owner = plan.nodes.get(target.node?.index())?.owner;
+                            let target_owner = target.node;
                             (owner_contains(plan, owner, target_owner)
                                 && edge.owner != owner
                                 && owner_contains(plan, edge.owner, owner))
@@ -1337,7 +1293,7 @@ fn verify_instance_key_types(
                             found: key.ty.clone(),
                         });
                     }
-                    if let Some(key) = plan.owners[index].instance.key.as_mut() {
+                    if let Some(key) = plan.nodes[index].instance.key.as_mut() {
                         key.ty = resolved;
                     }
                 }
@@ -1378,9 +1334,9 @@ fn instance_key_signature(
     }
 
     let mut lineage = Vec::new();
-    let mut cursor = plan.owners.get(owner_index).and_then(|owner| owner.parent);
+    let mut cursor = plan.nodes.get(owner_index).and_then(|owner| owner.parent);
     while let Some(parent) = cursor {
-        let Some(owner) = plan.owners.get(parent.index()) else {
+        let Some(owner) = plan.nodes.get(parent.index()) else {
             break;
         };
         lineage.push(owner);
@@ -1434,10 +1390,10 @@ fn handler_signature(
         _ => None,
     }
     .unwrap_or(DataType::Variant);
-    let mut signature = instance_key_signature(plan, node.owner.index(), data)
+    let mut signature = instance_key_signature(plan, slot.index(), data)
         .with_metadata("meta")
         .with("now", DataType::TIMESTAMP);
-    if let Some(spec) = plan.owners[node.owner.index()].loop_spec()
+    if let Some(spec) = node.loop_spec()
         && handler.activation == node::HandlerActivation::Port(spec.entry.clone())
         && let Some(state) = ports.node_port_type(slot, &spec.entry)
     {
@@ -1446,9 +1402,9 @@ fn handler_signature(
             .with("Loop.state.data", state.clone())
             .with_metadata("Loop.state.meta");
     } else if !matches!(handler.activation, node::HandlerActivation::Lifecycle(_)) {
-        let mut ancestor = plan.owners[node.owner.index()].parent;
+        let mut ancestor = node.parent;
         while let Some(owner) = ancestor {
-            if let Some(spec) = plan.owners[owner.index()].loop_spec() {
+            if let Some(spec) = plan.nodes[owner.index()].loop_spec() {
                 if let Some(state) = plan
                     .graph_ports(owner)
                     .and_then(|ports| ports.iter().find(|port| port.port == spec.entry))
@@ -1461,19 +1417,19 @@ fn handler_signature(
                 }
                 break;
             }
-            ancestor = plan.owners[owner.index()].parent;
+            ancestor = plan.nodes[owner.index()].parent;
         }
     }
-    for value in &plan.owners[node.owner.index()].vals {
+    for value in &node.vals {
         signature = signature.with(&value.name, value.expr.ty.clone());
     }
-    let mut owner = Some(node.owner);
+    let mut owner = Some(slot);
     while let Some(slot) = owner {
-        if let Some(key) = &plan.owners[slot.index()].instance.key {
+        if let Some(key) = &plan.nodes[slot.index()].instance.key {
             signature = signature.with("instance.key", key.ty.clone());
             break;
         }
-        owner = plan.owners[slot.index()].parent;
+        owner = plan.nodes[slot.index()].parent;
     }
     for var in node.vars() {
         signature = signature.with(&var.name, var.ty.clone());
@@ -1493,10 +1449,11 @@ fn handler_signature(
     Some(signature)
 }
 
-fn execution_rank(execution: &NodeExecution) -> u8 {
+fn execution_rank(execution: &NodeKind) -> u8 {
     match execution {
-        NodeExecution::Operator { .. } => 0,
-        NodeExecution::Connector(_) => 1,
+        NodeKind::Graph => 0,
+        NodeKind::Operator(_) => 1,
+        NodeKind::Connector(_) => 2,
     }
 }
 
@@ -1760,7 +1717,7 @@ fn annotations_well_formed(
             )?;
         }
     }
-    for owner in &plan.owners {
+    for owner in &plan.nodes {
         // The root's annotations use the resolved boundary types checked above.
         if !owner.path.is_root() {
             for port in &owner.ports {
@@ -2246,7 +2203,7 @@ fn data_types_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
     for (field, ty) in &plan.ext_schema {
         data_type_at(ty, format!("meta.ext.{field}"))?;
     }
-    for owner in &plan.owners {
+    for owner in &plan.nodes {
         for decl in &owner.ports {
             if let Some(ty) = &decl.ty {
                 let location = if owner.path.is_root() {
@@ -2298,7 +2255,7 @@ fn data_types_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
         }
     }
     for node in &plan.nodes {
-        if let NodeExecution::Connector(spec) = &node.execution {
+        if let NodeKind::Connector(spec) = &node.body {
             for (name, setting) in &spec.attributes {
                 if let crate::plan::AttrSetting::Expr { expr, .. } = setting {
                     tree_type_at(expr, format!("attribute `{}.{name}`", node.path))?;
@@ -2380,8 +2337,9 @@ fn response_path_crosses_join(plan: &ExecutionPlan, target: NodeIndex) -> bool {
         for source in plan.edges.iter().filter_map(|edge| {
             edge.to
                 .as_ref()
-                .filter(|endpoint| endpoint.node == Some(slot))
-                .and(edge.from.node)
+                .filter(|endpoint| endpoint.node == slot)
+                .map(|_| edge.from.node)
+                .filter(|source| *source != NodeIndex::ROOT)
         }) {
             pending.push(source);
         }
@@ -2428,7 +2386,7 @@ impl expr::Bindings for PlanValueBindings<'_> {
 
 fn expression_site(
     expression: &expr::Expr,
-    owner: &crate::plan::Owner,
+    owner: &crate::plan::Node,
     inherited: &BTreeMap<String, ImmutableBinding>,
     local: &BTreeMap<&str, usize>,
     visits: &mut [BindingVisit],
@@ -2546,7 +2504,7 @@ pub(super) fn plan_constant_holds(
 
 fn owner_value_site(
     index: usize,
-    owner: &crate::plan::Owner,
+    owner: &crate::plan::Node,
     inherited: &BTreeMap<String, ImmutableBinding>,
     local: &BTreeMap<&str, usize>,
     visits: &mut [BindingVisit],
@@ -2602,7 +2560,7 @@ fn owner_value_site(
 /// order that canonical transport deliberately erases.
 fn owner_values_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     let mut environments: Vec<BTreeMap<String, ImmutableBinding>> = Vec::new();
-    for owner in &plan.owners {
+    for owner in &plan.nodes {
         let inherited = owner
             .parent
             .and_then(|parent| environments.get(parent.index()))
@@ -2669,10 +2627,7 @@ fn owner_values_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationEr
                 });
             }
         }
-        if let OwnerKind::Node(slot) = owner.kind
-            && let Some(NodeExecution::Connector(spec)) =
-                plan.nodes.get(slot.index()).map(|node| &node.execution)
-        {
+        if let Some(spec) = owner.connector() {
             for (name, setting) in &spec.attributes {
                 let crate::plan::AttrSetting::Expr { site, expr } = setting else {
                     continue;
@@ -2711,8 +2666,7 @@ fn owner_values_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationEr
 }
 
 fn loop_specs_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
-    for (owner_index, owner) in plan.owners.iter().enumerate() {
-        let owner_slot = node::OwnerSlot::new(u32::try_from(owner_index).unwrap_or(u32::MAX));
+    for owner in &plan.nodes {
         let Some(spec) = owner.loop_spec() else {
             continue;
         };
@@ -2721,17 +2675,7 @@ fn loop_specs_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
         } else {
             owner.path.to_string()
         };
-        let ports = match owner.kind {
-            OwnerKind::Graph => plan.graph_ports(owner_slot),
-            OwnerKind::Node(slot) => plan
-                .nodes
-                .get(slot.index())
-                .map(|node| node.ports.as_slice()),
-        }
-        .ok_or_else(|| PlanValidationError::InvalidGraphContract {
-            owner: owner_name.clone(),
-            detail: "the Loop owner has no port table",
-        })?;
+        let ports = owner.ports.as_slice();
         let state = ports
             .iter()
             .find(|port| port.port == spec.entry && port.direction == node::PortDirection::Input)
@@ -2746,8 +2690,7 @@ fn loop_specs_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
                 detail: "Loop terminal outputs must be unique and canonically ordered",
             });
         }
-        let connector = matches!(owner.kind, OwnerKind::Node(slot)
-            if matches!(plan.nodes[slot.index()].execution, NodeExecution::Connector(_)));
+        let connector = owner.connector().is_some();
         for terminal in &spec.terminals {
             if !ports
                 .iter()
@@ -2767,14 +2710,10 @@ fn loop_specs_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
         })?;
         match &spec.expired {
             Some(target) => {
-                let terminal = if let OwnerKind::Node(slot) = owner.kind {
-                    plan.nodes[slot.index()]
-                        .connector()
-                        .and_then(crate::plan::ConnectorSpec::call_semantics)
-                        .map(|call| call.terminal())
-                } else {
-                    None
-                };
+                let terminal = owner
+                    .connector()
+                    .and_then(crate::plan::ConnectorSpec::call_semantics)
+                    .map(|call| call.terminal());
                 if !matches!(target.ty, DataType::TaggedUnion(_))
                     || !expired.is_assignable_to(&target.ty)
                     || !ports.iter().any(|port| {
@@ -2897,8 +2836,8 @@ fn loop_specs_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
                     });
                 }
             }
-            let verification = match owner.kind {
-                OwnerKind::Graph => crate::loop_proof::derive_graph(
+            let verification = match owner.kind() {
+                node::Kind::Graph => crate::loop_proof::derive_graph(
                     proof.measure.clone(),
                     proof.invariant.clone(),
                     plan,
@@ -2911,7 +2850,7 @@ fn loop_specs_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
                         Err(crate::loop_proof::Error::CertificateMismatch)
                     }
                 }),
-                OwnerKind::Node(slot) => plan.nodes[slot.index()]
+                node::Kind::Operator | node::Kind::Connector => owner
                     .handlers()
                     .iter()
                     .find(|handler| {
@@ -3000,21 +2939,16 @@ fn loop_specs_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
 }
 
 fn owners_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
-    let Some(root) = plan.owners.first() else {
+    let Some(root) = plan.nodes.first() else {
         return Err(PlanValidationError::MissingRootOwner);
     };
-    if !root.path.is_root() || root.parent.is_some() || root.kind != OwnerKind::Graph {
+    if !root.path.is_root() || root.parent.is_some() || root.kind() != node::Kind::Graph {
         return Err(PlanValidationError::MissingRootOwner);
     }
 
-    let mut paths = BTreeSet::new();
-    let mut owned_nodes = BTreeSet::new();
-    for (index, owner) in plan.owners.iter().enumerate() {
-        let slot = node::OwnerSlot::new(u32::try_from(index).unwrap_or(u32::MAX));
+    for (index, owner) in plan.nodes.iter().enumerate() {
+        let slot = node::NodeIndex::new(u32::try_from(index).unwrap_or(u32::MAX));
         let path = owner.path.to_string();
-        if !paths.insert(path.clone()) {
-            return Err(PlanValidationError::DuplicateOwnerPath { path });
-        }
         if index > 0 {
             let Some(parent_slot) = owner.parent else {
                 return Err(PlanValidationError::InvalidOwnerTree { owner: slot });
@@ -3022,13 +2956,13 @@ fn owners_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             if parent_slot.index() >= index {
                 return Err(PlanValidationError::InvalidOwnerTree { owner: slot });
             }
-            let Some(parent) = plan.owners.get(parent_slot.index()) else {
-                return Err(PlanValidationError::OwnerOutOfBounds {
-                    owner: parent_slot,
-                    owner_count: plan.owners.len(),
+            let Some(parent) = plan.nodes.get(parent_slot.index()) else {
+                return Err(PlanValidationError::NodeOutOfBounds {
+                    node: parent_slot,
+                    node_count: plan.nodes.len(),
                 });
             };
-            if parent.kind != OwnerKind::Graph
+            if parent.kind() != node::Kind::Graph
                 || owner.path.segments().len() != parent.path.segments().len() + 1
                 || !owner.path.segments().starts_with(parent.path.segments())
             {
@@ -3036,32 +2970,7 @@ fn owners_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             }
         }
 
-        if let OwnerKind::Node(node_slot) = owner.kind {
-            if !owner.ports.is_empty() {
-                return Err(PlanValidationError::InvalidGraphContract {
-                    owner: path.clone(),
-                    detail: "Node owner ports belong only to the Node table",
-                });
-            }
-            let Some(node) = plan.nodes.get(node_slot.index()) else {
-                return Err(PlanValidationError::SlotOutOfBounds {
-                    slot: node_slot,
-                    node_count: plan.nodes.len(),
-                });
-            };
-            if node.owner != slot || node.path.segments() != owner.path.segments() {
-                return Err(PlanValidationError::OwnerNodeMismatch {
-                    node: node_slot,
-                    owner: slot,
-                });
-            }
-            if !owned_nodes.insert(node_slot) {
-                return Err(PlanValidationError::OwnerNodeMismatch {
-                    node: node_slot,
-                    owner: slot,
-                });
-            }
-        } else {
+        if owner.kind() == node::Kind::Graph {
             // App ports keep their boundary-specific diagnostics below.
             // All Graph declarations have the same in-memory ownership.
             if !owner.path.is_root() {
@@ -3131,10 +3040,7 @@ fn owners_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             return Err(PlanValidationError::InvalidClosingPolicy { owner: path });
         }
         let explicitly_stoppable = plan.handlers().any(|(handler_owner, handler)| {
-            let belongs_to_owner = plan
-                .nodes
-                .get(handler_owner.index())
-                .is_some_and(|node| node.owner == slot);
+            let belongs_to_owner = handler_owner == slot;
             belongs_to_owner
                 && handler
                     .dispatch
@@ -3159,11 +3065,13 @@ fn owners_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             }
         });
         if owner.instance.lifetime != instance::Lifetime::Persistent || explicitly_stoppable {
-            for node in &plan.nodes {
+            for (node_index, node) in plan.nodes.iter().enumerate() {
                 let Some(spec) = node.connector() else {
                     continue;
                 };
-                if !spec.roles.has_outbound() || !owner_contains(plan, slot, node.owner) {
+                if !spec.roles.has_outbound()
+                    || !owner_contains(plan, slot, NodeIndex::new(node_index as u32))
+                {
                     continue;
                 }
                 if owner.instance.closing.is_none() {
@@ -3188,10 +3096,10 @@ fn owners_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             let mut enclosing = BTreeSet::new();
             let mut cursor = owner.parent;
             while let Some(parent) = cursor {
-                let Some(ancestor) = plan.owners.get(parent.index()) else {
-                    return Err(PlanValidationError::OwnerOutOfBounds {
-                        owner: parent,
-                        owner_count: plan.owners.len(),
+                let Some(ancestor) = plan.nodes.get(parent.index()) else {
+                    return Err(PlanValidationError::NodeOutOfBounds {
+                        node: parent,
+                        node_count: plan.nodes.len(),
                     });
                 };
                 enclosing.extend(ancestor.vals.iter().map(|value| value.name.as_str()));
@@ -3237,33 +3145,12 @@ fn owners_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             }
         }
     }
-    for pair in plan.owners.windows(2) {
-        if pair[0].path >= pair[1].path {
-            return Err(PlanValidationError::NonCanonicalOrder {
-                collection: "owners",
-            });
-        }
-    }
-    if owned_nodes.len() != plan.nodes.len() {
-        let missing = (0..plan.nodes.len())
-            .map(|index| NodeIndex::new(u32::try_from(index).unwrap_or(u32::MAX)))
-            .find(|slot| !owned_nodes.contains(slot))
-            .unwrap_or_else(|| NodeIndex::new(u32::MAX));
-        let owner = plan
-            .nodes
-            .get(missing.index())
-            .map_or(node::OwnerSlot::new(u32::MAX), |node| node.owner);
-        return Err(PlanValidationError::OwnerNodeMismatch {
-            node: missing,
-            owner,
-        });
-    }
-    let is_descendant = |mut owner: node::OwnerSlot, ancestor: node::OwnerSlot| {
+    let is_descendant = |mut owner: node::NodeIndex, ancestor: node::NodeIndex| {
         loop {
             if owner == ancestor {
                 return true;
             }
-            let Some(row) = plan.owner(owner) else {
+            let Some(row) = plan.node(owner) else {
                 return false;
             };
             let Some(parent) = row.parent else {
@@ -3274,17 +3161,16 @@ fn owners_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     };
     for edge in &plan.edges {
         if !matches!(
-            plan.owner(edge.owner).map(|owner| &owner.kind),
-            Some(OwnerKind::Graph)
+            plan.node(edge.owner).map(Node::kind),
+            Some(node::Kind::Graph)
         ) {
             return Err(PlanValidationError::InvalidEdgeScope { owner: edge.owner });
         }
         let endpoint_is_scoped = |endpoint: &EdgeEnd| {
-            endpoint.node.is_none_or(|slot| {
-                plan.nodes
-                    .get(slot.index())
-                    .is_some_and(|node| is_descendant(node.owner, edge.owner))
-            })
+            endpoint.node == NodeIndex::ROOT
+                || plan.nodes.get(endpoint.node.index()).is_some_and(|node| {
+                    node.kind() != node::Kind::Graph && is_descendant(endpoint.node, edge.owner)
+                })
         };
         if !endpoint_is_scoped(&edge.from)
             || edge.to.as_ref().is_some_and(|to| !endpoint_is_scoped(to))
@@ -3296,14 +3182,14 @@ fn owners_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     Ok(())
 }
 
-fn owner_contains(plan: &ExecutionPlan, ancestor: node::OwnerSlot, child: node::OwnerSlot) -> bool {
+fn owner_contains(plan: &ExecutionPlan, ancestor: node::NodeIndex, child: node::NodeIndex) -> bool {
     let mut cursor = Some(child);
     while let Some(owner) = cursor {
         if owner == ancestor {
             return true;
         }
         cursor = plan
-            .owners
+            .nodes
             .get(owner.index())
             .and_then(|candidate| candidate.parent);
     }
@@ -3332,10 +3218,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             .dispatch
             .steps()
             .any(|step| matches!(step, DispatchStep::LoopCommand(_)))
-            && !plan
-                .owners
-                .get(handler_owner.owner.index())
-                .is_some_and(|owner| owner.loop_spec().is_some())
+            && handler_owner.loop_spec().is_none()
         {
             return Err(PlanValidationError::UnsupportedStatement {
                 handler,
@@ -3364,8 +3247,8 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
         }
     }
     for pair in plan.nodes.windows(2) {
-        if (execution_rank(&pair[0].execution), pair[0].path.to_string())
-            >= (execution_rank(&pair[1].execution), pair[1].path.to_string())
+        if (execution_rank(&pair[0].body), pair[0].path.to_string())
+            >= (execution_rank(&pair[1].body), pair[1].path.to_string())
         {
             return Err(PlanValidationError::NonCanonicalOrder {
                 collection: "nodes",
@@ -3410,6 +3293,9 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     // dependent semantic claim.
     loop_specs_well_formed(plan)?;
     for (node_index, node) in plan.nodes.iter().enumerate() {
+        if node.kind() == node::Kind::Graph {
+            continue;
+        }
         if let Some((decl, expected)) = node.ports.iter().find_map(|decl| {
             conventional_direction(&decl.port)
                 .filter(|expected| decl.direction != *expected)
@@ -3457,7 +3343,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                 return Err(PlanValidationError::NonCanonicalOrder { collection: "vars" });
             }
         }
-        if let NodeExecution::Connector(spec) = &node.execution {
+        if let NodeKind::Connector(spec) = &node.body {
             for (name, setting) in &spec.attributes {
                 match setting {
                     crate::plan::AttrSetting::Value(value) => value_expressible(value)?,
@@ -3517,11 +3403,11 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             // spelling its own `codec` vocabulary is untouched.
             // The Contract roles distinguish an outgoing request from a
             // retained inbound Call response delivered on an input port.
-            let slot = crate::plan::NodeIndex::new(u32::try_from(node_index).unwrap_or(u32::MAX));
+            let slot = crate::node::NodeIndex::new(u32::try_from(node_index).unwrap_or(u32::MAX));
             let receives = plan
                 .edges
                 .iter()
-                .any(|edge| edge.to.as_ref().is_some_and(|to| to.node == Some(slot)));
+                .any(|edge| edge.to.as_ref().is_some_and(|to| to.node == slot));
             let receives_inbound_call_response = receives
                 && spec.roles.has_inbound()
                 && !spec.roles.has_outbound()
@@ -3793,7 +3679,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                     };
                     let expected_ty = effective_contract_port(
                         node,
-                        plan.owners[node.owner.index()].loop_spec(),
+                        node.loop_spec(),
                         name,
                         crate::boundary::process_port_type(
                             &spec.contract,
@@ -3937,7 +3823,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                         || port.ty
                             != effective_contract_port(
                                 node,
-                                plan.owners[node.owner.index()].loop_spec(),
+                                node.loop_spec(),
                                 name,
                                 crate::boundary::file_port_type(&spec.contract, name, Some(mode)),
                             )
@@ -3959,7 +3845,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                     });
                 }
             }
-            validate_network_connector(node, spec, plan.owners[node.owner.index()].loop_spec())?;
+            validate_network_connector(node, spec, node.loop_spec())?;
             // Built-in sheets above retain their more specific missing-row
             // diagnostics. Foreign families still cannot bypass the generic
             // exchange lifecycle.
@@ -4024,8 +3910,8 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     let node_at = |slot: NodeIndex| {
         plan.nodes
             .get(slot.index())
-            .ok_or(PlanValidationError::SlotOutOfBounds {
-                slot,
+            .ok_or(PlanValidationError::NodeOutOfBounds {
+                node: slot,
                 node_count: plan.nodes.len(),
             })
     };
@@ -4037,7 +3923,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     let endpoint_ok =
         |endpoint: &EdgeEnd, position: node::PortDirection| -> Result<(), PlanValidationError> {
             match endpoint.node {
-                Some(slot) => {
+                slot if slot != NodeIndex::ROOT => {
                     let node = node_at(slot)?;
                     if !has_port(node, &endpoint.port, position) {
                         return Err(PlanValidationError::WrongPortDirection {
@@ -4049,7 +3935,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                     // The table ANSWERED for the port — but the
                     // OutboundConnectorDriver seam cannot execute it yet: refuse by
                     // capability, distinctly from ignorance.
-                    if matches!(node.execution, NodeExecution::Connector(_))
+                    if matches!(node.body, NodeKind::Connector(_))
                         && !matches!(endpoint.port.name(), "in" | "out" | "err" | "exit")
                     {
                         return Err(PlanValidationError::UnsupportedConnectorPort {
@@ -4059,7 +3945,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                     }
                     Ok(())
                 }
-                None => {
+                _ => {
                     let expected = match position {
                         node::PortDirection::Output => node::PortDirection::Input,
                         node::PortDirection::Input => node::PortDirection::Output,
@@ -4098,7 +3984,11 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     // bounded by the already-validated plan size and avoids recursion.
     let mut successors = vec![Vec::new(); plan.nodes.len()];
     for edge in &plan.edges {
-        if let (Some(from), Some(to)) = (edge.from.node, edge.to.as_ref().and_then(|to| to.node)) {
+        if let Some(to) = edge.to.as_ref().map(|to| to.node)
+            && edge.from.node != NodeIndex::ROOT
+            && to != NodeIndex::ROOT
+        {
+            let from = edge.from.node;
             if !plan.nodes[to.index()].input_drives_outputs() {
                 // An inbound Call or duplex Session node has two boundary
                 // halves, not an implicit `in -> out` execution arc. A
@@ -4143,20 +4033,11 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     // holds the surface to; endpoint slots are proven above, so the
     // lookups dereference safely.
     let pin_of = |endpoint: &EdgeEnd| -> Option<DataType> {
-        match endpoint.node {
-            Some(slot) => {
-                let node = &plan.nodes[slot.index()];
-                node.ports
-                    .iter()
-                    .find(|decl| decl.port == endpoint.port)
-                    .and_then(|decl| decl.ty.clone())
-            }
-            None => plan
-                .boundary()
-                .iter()
-                .find(|decl| decl.port == endpoint.port)
-                .and_then(|decl| decl.ty.clone()),
-        }
+        plan.nodes[endpoint.node.index()]
+            .ports
+            .iter()
+            .find(|decl| decl.port == endpoint.port)
+            .and_then(|decl| decl.ty.clone())
     };
     for edge in &plan.edges {
         if let Some(to) = &edge.to
@@ -4382,7 +4263,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
 }
 
 fn loop_control_holds(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
-    for owner in &plan.owners {
+    for (index, owner) in plan.nodes.iter().enumerate() {
         if owner.loop_spec().is_none() {
             continue;
         }
@@ -4391,9 +4272,11 @@ fn loop_control_holds(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
         } else {
             owner.path.to_string()
         };
-        match owner.kind {
-            OwnerKind::Node(slot) => operator_loop_control(plan, slot, &owner_name)?,
-            OwnerKind::Graph => {
+        match owner.kind() {
+            node::Kind::Operator | node::Kind::Connector => {
+                operator_loop_control(plan, NodeIndex::new(index as u32), &owner_name)?
+            }
+            node::Kind::Graph => {
                 super::graph_loop::validate(plan, owner)?;
             }
         }
@@ -4407,7 +4290,7 @@ fn operator_loop_control(
     owner_name: &str,
 ) -> Result<(), PlanValidationError> {
     let node = &plan.nodes[slot.index()];
-    let Some(spec) = plan.owners[node.owner.index()].loop_spec() else {
+    let Some(spec) = node.loop_spec() else {
         return Ok(());
     };
     let refusal = |path: String, detail| PlanValidationError::InvalidLoopControl {
@@ -4415,7 +4298,7 @@ fn operator_loop_control(
         path,
         detail,
     };
-    if !matches!(node.execution, NodeExecution::Operator { .. }) {
+    if !matches!(node.body, NodeKind::Operator(_)) {
         // Call control is independently proved with its resolved routing and
         // Contract frame/terminal guarantees in call_loop::validate.
         return Ok(());
@@ -4519,7 +4402,7 @@ enum WritableMetaRead {
 }
 
 type MetaPresence = BTreeSet<WritableMetaField>;
-type EndpointPresence = BTreeMap<(Option<NodeIndex>, node::Port), MetaPresence>;
+type EndpointPresence = BTreeMap<(NodeIndex, node::Port), MetaPresence>;
 
 /// Proves the static half of CommonOrAbsent. A join is allowed to discard a
 /// conflicting field silently; only a later required read is illegal. The
@@ -4570,9 +4453,7 @@ fn join_metadata_presence_holds(plan: &ExecutionPlan) -> Result<(), PlanValidati
                     emitted.remove(&field);
                 }
                 changed |= extend_presence(
-                    outputs
-                        .entry((Some(handler_node), port.clone()))
-                        .or_default(),
+                    outputs.entry((handler_node, port.clone())).or_default(),
                     &emitted,
                 );
             }
@@ -4594,14 +4475,14 @@ fn join_metadata_presence_holds(plan: &ExecutionPlan) -> Result<(), PlanValidati
                     }
                 })?;
                 changed |= extend_presence(
-                    outputs.entry((Some(handler_node), expired)).or_default(),
+                    outputs.entry((handler_node, expired)).or_default(),
                     &inherited,
                 );
             }
         }
 
         for (slot_index, planned) in plan.nodes.iter().enumerate() {
-            if !matches!(planned.execution, NodeExecution::Connector(_)) {
+            if !matches!(planned.body, NodeKind::Connector(_)) {
                 continue;
             }
             let slot = NodeIndex::new(slot_index as u32);
@@ -4612,7 +4493,7 @@ fn join_metadata_presence_holds(plan: &ExecutionPlan) -> Result<(), PlanValidati
                 .filter(|port| port.direction == node::PortDirection::Output)
             {
                 changed |= extend_presence(
-                    outputs.entry((Some(slot), port.port.clone())).or_default(),
+                    outputs.entry((slot, port.port.clone())).or_default(),
                     &inherited,
                 );
             }
@@ -4647,14 +4528,14 @@ fn join_metadata_presence_holds(plan: &ExecutionPlan) -> Result<(), PlanValidati
             continue;
         }
         let owner = planned.path.to_string();
-        if let NodeExecution::Connector(spec) = &planned.execution {
+        if let NodeKind::Connector(spec) = &planned.body {
             for (_, setting) in &spec.attributes {
                 if let crate::plan::AttrSetting::Expr { expr, .. } = setting {
                     required_meta_reads_hold(&expr.root, &base, &owner)?;
                 }
             }
         }
-        let lexical_owner = &plan.owners[planned.owner.index()];
+        let lexical_owner = planned;
         if let Some(key) = &lexical_owner.instance.key {
             required_meta_reads_hold(&key.root, &base, &owner)?;
         }
@@ -4680,7 +4561,7 @@ fn node_input_presence(
     let mut presence = MetaPresence::new();
     for port in &plan.nodes[slot.index()].ports {
         if port.direction == node::PortDirection::Input
-            && let Some(fields) = inputs.get(&(Some(slot), port.port.clone()))
+            && let Some(fields) = inputs.get(&(slot, port.port.clone()))
         {
             presence.extend(fields.iter().cloned());
         }
@@ -4696,14 +4577,14 @@ fn activation_presence(
 ) -> MetaPresence {
     match &handler.activation {
         node::HandlerActivation::Port(port) => inputs
-            .get(&(Some(handler_node), port.clone()))
+            .get(&(handler_node, port.clone()))
             .cloned()
             .unwrap_or_default(),
         node::HandlerActivation::Join { .. } => all_fields.clone(),
         node::HandlerActivation::Lifecycle(_) => {
             let mut presence = MetaPresence::new();
             for ((slot, _), fields) in inputs {
-                if *slot == Some(handler_node) {
+                if *slot == handler_node {
                     presence.extend(fields.iter().cloned());
                 }
             }
@@ -5016,7 +4897,7 @@ fn narrow_target_canonical(target: &expr::NarrowTarget) -> Result<(), PlanValida
 #[cfg(test)]
 mod scope_chain_tests {
     use super::*;
-    use crate::plan::{ExtensionSpec, Owner};
+    use crate::plan::{ExtensionSpec, Node};
 
     fn nested_plan() -> ExecutionPlan {
         let declarations: &[(&[&str], Option<u32>)] = &[
@@ -5028,12 +4909,12 @@ mod scope_chain_tests {
             (&["beta", "leaf"], Some(4)),
         ];
         ExecutionPlan {
-            owners: declarations
+            nodes: declarations
                 .iter()
-                .map(|(path, parent)| Owner {
+                .map(|(path, parent)| Node {
                     path: node::OwnerPath::new(path.iter().copied()).unwrap(),
-                    parent: parent.map(node::OwnerSlot::new),
-                    kind: OwnerKind::Graph,
+                    parent: parent.map(node::NodeIndex::new),
+                    body: NodeKind::Graph,
                     ports: vec![],
                     extensions: if parent.is_none() {
                         vec![ExtensionSpec::App]
@@ -5048,7 +4929,6 @@ mod scope_chain_tests {
                     vals: vec![],
                 })
                 .collect(),
-            nodes: vec![],
             edges: vec![],
             routes: vec![],
             boundary_routes: vec![],
@@ -5075,27 +4955,27 @@ mod scope_chain_tests {
         assert_eq!(decoded_hash, hash);
         assert_eq!(crate::plan::encode(&decoded, &hash), package);
         for (expected, index) in expected.iter().zip(0..) {
-            let expected: Vec<_> = expected.iter().copied().map(node::OwnerSlot::new).collect();
+            let expected: Vec<_> = expected.iter().copied().map(node::NodeIndex::new).collect();
             for plan in [&plan, &decoded] {
                 assert_eq!(
-                    plan.scope_chain(node::OwnerSlot::new(index)),
+                    plan.scope_chain(node::NodeIndex::new(index)),
                     Some(expected.as_slice())
                 );
             }
         }
-        assert_eq!(plan.scope_chain(node::OwnerSlot::new(6)), None);
-        assert_eq!(plan.scope_chain(node::OwnerSlot::new(u32::MAX)), None);
+        assert_eq!(plan.scope_chain(node::NodeIndex::new(6)), None);
+        assert_eq!(plan.scope_chain(node::NodeIndex::new(u32::MAX)), None);
     }
 
     #[test]
     fn invalid_parents_are_rejected_before_scope_chains_are_derived() {
         for parent in [1, 2, u32::MAX] {
             let mut plan = nested_plan();
-            plan.owners[1].parent = Some(node::OwnerSlot::new(parent));
+            plan.nodes[1].parent = Some(node::NodeIndex::new(parent));
             assert!(matches!(
                 ValidatedExecutionPlan::try_new(plan),
                 Err(PlanValidationError::InvalidOwnerTree { owner })
-                    if owner == node::OwnerSlot::new(1)
+                    if owner == node::NodeIndex::new(1)
             ));
         }
     }

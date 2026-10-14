@@ -10,8 +10,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use super::{
-    EdgeEnd, Endpoint, EndpointOwner, ExecutionPlan, NodeIndex, OwnerKind, ResolvedPortTable,
-    RouteArm, RouteDestination, RouteErrorKind, RouteRule, RouteSelection, RouteValidationError,
+    EdgeEnd, Endpoint, EndpointOwner, ExecutionPlan, NodeIndex, ResolvedPortTable, RouteArm,
+    RouteDestination, RouteErrorKind, RouteRule, RouteSelection, RouteValidationError,
 };
 use crate::datatype::DataType;
 use crate::node::PortDirection;
@@ -58,8 +58,8 @@ pub(super) fn validate(
     plan: &ExecutionPlan,
     ports: &ResolvedPortTable,
 ) -> Result<(), super::PlanValidationError> {
-    let needs_inventory = plan.owners.iter().any(|owner| {
-        owner.kind == OwnerKind::Graph && (!owner.path.is_root() || owner.loop_spec().is_some())
+    let needs_inventory = plan.nodes.iter().any(|owner| {
+        owner.kind() == node::Kind::Graph && (!owner.path.is_root() || owner.loop_spec().is_some())
     }) || plan
         .routes
         .iter()
@@ -119,7 +119,7 @@ pub(super) fn validate(
                             EndpointOwner::Node(path) => crate::node::OwnerPath::from(path),
                         };
                         source.segments().starts_with(owner.segments())
-                            && plan.owners.iter().any(|candidate| {
+                            && plan.nodes.iter().any(|candidate| {
                                 candidate.path == *owner && candidate.loop_spec().is_some()
                             })
                     }
@@ -130,7 +130,7 @@ pub(super) fn validate(
                             .iter()
                             .find(|node| node.path == *owner)
                             .is_some_and(|node| {
-                                plan.owners[node.owner.index()].loop_spec().is_some()
+                                node.loop_spec().is_some()
                                     && node
                                         .connector()
                                         .and_then(super::ConnectorSpec::call_semantics)
@@ -166,25 +166,22 @@ pub(super) fn validate(
     derived.retain(|rule| !matches!(&rule.selection, RouteSelection::All(set) if set.is_empty()));
     let mut actual = plan.routes.clone();
     let mut unconditional = BTreeMap::<Endpoint, Vec<RouteDestination>>::new();
-    let endpoint = |physical: &EdgeEnd| Endpoint {
-        owner: physical.node.map_or_else(
-            || EndpointOwner::Graph(crate::node::OwnerPath::root()),
-            |slot| EndpointOwner::Node(plan.nodes[slot.index()].path.clone()),
-        ),
-        port: physical.port.clone(),
+    let endpoint = |physical: &EdgeEnd| -> Result<Endpoint, super::PlanValidationError> {
+        Ok(Endpoint {
+            owner: plan.nodes[physical.node.index()].endpoint_owner()?,
+            port: physical.port.clone(),
+        })
     };
     for edge in &plan.edges {
-        let source = endpoint(&edge.from);
+        let source = endpoint(&edge.from)?;
         if plan.routes.iter().any(|rule| rule.source == source) {
             continue;
         }
-        unconditional.entry(source).or_default().push(
-            edge.to
-                .as_ref()
-                .map_or(RouteDestination::Discard, |target| {
-                    RouteDestination::Port(endpoint(target))
-                }),
-        );
+        let target = match &edge.to {
+            Some(target) => RouteDestination::Port(endpoint(target)?),
+            None => RouteDestination::Discard,
+        };
+        unconditional.entry(source).or_default().push(target);
     }
     actual.extend(unconditional.into_iter().map(|(source, mut set)| {
         set.sort();
@@ -206,7 +203,7 @@ pub(super) fn validate(
         .filter(|source| concrete(source))
     {
         if let EndpointOwner::Node(path) = &source.owner {
-            let Some((index, node)) = plan
+            let Some((index, _)) = plan
                 .nodes
                 .iter()
                 .enumerate()
@@ -214,7 +211,7 @@ pub(super) fn validate(
             else {
                 return Err(failure("boundary_routes", RouteErrorKind::UnknownEndpoint).into());
             };
-            if !live[node.owner.index()]
+            if !live[index]
                 || !super::productibility::may_produce(
                     plan,
                     NodeIndex::new(index as u32),
@@ -282,10 +279,10 @@ fn port<'a>(
             .map(|port| (port.direction(), Some(port.ty()))),
         EndpointOwner::Graph(path) => {
             let index = plan
-                .owners
+                .nodes
                 .iter()
-                .position(|owner| owner.path == *path && owner.kind == OwnerKind::Graph)?;
-            plan.graph_ports(node::OwnerSlot::new(u32::try_from(index).ok()?))?
+                .position(|owner| owner.path == *path && owner.kind() == node::Kind::Graph)?;
+            plan.graph_ports(node::NodeIndex::new(u32::try_from(index).ok()?))?
                 .iter()
                 .find(|port| port.port == endpoint.port)
                 .map(|port| (port.direction, port.ty.as_ref()))

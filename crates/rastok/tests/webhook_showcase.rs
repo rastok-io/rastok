@@ -207,14 +207,14 @@ fn charges_are_exact_reported_evidence_not_an_invented_price_for_timeouts() {
     assert!(
         compilation
             .plan
-            .owners
+            .nodes
             .iter()
             .all(|owner| owner.loop_spec().is_none())
     );
     assert_eq!(
         compilation
             .plan
-            .owners
+            .nodes
             .iter()
             .filter(|owner| owner.retry_spec().is_some())
             .count(),

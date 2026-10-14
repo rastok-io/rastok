@@ -13,9 +13,9 @@ use cortex_m_semihosting::hprintln;
 use rastok_core::{
     expr,
     instance::InstanceSpec,
-    node::{HandlerActivation, OwnerPath, OwnerSlot},
+    node::{HandlerActivation, OwnerPath},
     plan::{
-        ConnectorSpec, Dispatch, ExecutionPlan, ExtensionSpec, Handler, NodeExecution, OwnerKind,
+        ConnectorSpec, Dispatch, ExecutionPlan, ExtensionSpec, Handler, NodeKind,
         OwnerValue, PortDecl, VarCell,
     },
 };
@@ -25,8 +25,8 @@ use rastok_core::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct NodeIndex(u32);
 
-impl From<OwnerSlot> for NodeIndex {
-    fn from(owner: OwnerSlot) -> Self {
+impl From<rastok_core::node::NodeIndex> for NodeIndex {
+    fn from(owner: rastok_core::node::NodeIndex) -> Self {
         Self(u32::try_from(owner.index()).unwrap())
     }
 }
@@ -92,11 +92,8 @@ struct Tables {
 }
 
 fn header(plan: &ExecutionPlan, index: usize) -> Header {
-    let owner = &plan.owners[index];
-    let ports = match owner.kind {
-        OwnerKind::Graph => &owner.ports,
-        OwnerKind::Node(slot) => &plan.nodes[slot.index()].ports,
-    };
+    let owner = &plan.nodes[index];
+    let ports = &owner.ports;
     Header {
         path: owner.path.clone(),
         parent: owner.parent.map(NodeIndex::from),
@@ -112,16 +109,14 @@ fn body(
     index: usize,
     inventory: &[rastok_core::plan::RouteRule],
 ) -> InlineBody {
-    let OwnerKind::Node(slot) = plan.owners[index].kind else {
-        return InlineBody::Graph(GraphBody {
+    let node = &plan.nodes[index];
+    match &node.body {
+        NodeKind::Graph => InlineBody::Graph(GraphBody {
             wiring: wiring::reference(plan, index, inventory),
-        });
-    };
-    let node = &plan.nodes[slot.index()];
-    match &node.execution {
-        NodeExecution::Connector(spec) => InlineBody::Connector(spec.clone()),
-        NodeExecution::Operator { vars, handlers } => {
-            let handlers = handlers
+        }),
+        NodeKind::Connector(spec) => InlineBody::Connector(spec.as_ref().clone()),
+        NodeKind::Operator(operator) => {
+            let handlers = operator.handlers
                 .iter()
                 .map(|handler| HandlerBody {
                     activation: handler.activation.clone(),
@@ -130,7 +125,7 @@ fn body(
                 })
                 .collect();
             InlineBody::Operator(OperatorBody {
-                vars: vars.clone(),
+                vars: operator.vars.clone(),
                 handlers,
             })
         }
@@ -141,8 +136,8 @@ fn inline(
     plan: &ExecutionPlan,
     inventory: &[rastok_core::plan::RouteRule],
 ) -> Vec<Node<InlineBody>> {
-    let mut nodes = Vec::with_capacity(plan.owners.len());
-    for index in 0..plan.owners.len() {
+    let mut nodes = Vec::with_capacity(plan.nodes.len());
+    for index in 0..plan.nodes.len() {
         nodes.push(Node {
             header: header(plan, index),
             body: body(plan, index, inventory),
@@ -152,8 +147,8 @@ fn inline(
 }
 
 fn boxed(plan: &ExecutionPlan, inventory: &[rastok_core::plan::RouteRule]) -> Vec<Node<BoxedBody>> {
-    let mut nodes = Vec::with_capacity(plan.owners.len());
-    for index in 0..plan.owners.len() {
+    let mut nodes = Vec::with_capacity(plan.nodes.len());
+    for index in 0..plan.nodes.len() {
         let body = match body(plan, index, inventory) {
             InlineBody::Graph(body) => BoxedBody::Graph(Box::new(body)),
             InlineBody::Operator(body) => BoxedBody::Operator(Box::new(body)),
@@ -171,22 +166,20 @@ fn tables(plan: &ExecutionPlan, inventory: &[rastok_core::plan::RouteRule]) -> T
     let mut graphs = 0;
     let mut operators = 0;
     let mut connectors = 0;
-    for owner in &plan.owners {
-        match owner.kind {
-            OwnerKind::Graph => graphs += 1,
-            OwnerKind::Node(slot) => match plan.nodes[slot.index()].execution {
-                NodeExecution::Operator { .. } => operators += 1,
-                NodeExecution::Connector(_) => connectors += 1,
-            },
+    for owner in &plan.nodes {
+        match owner.body {
+            NodeKind::Graph => graphs += 1,
+            NodeKind::Operator(_) => operators += 1,
+            NodeKind::Connector(_) => connectors += 1,
         }
     }
     let mut tables = Tables {
-        nodes: Vec::with_capacity(plan.owners.len()),
+        nodes: Vec::with_capacity(plan.nodes.len()),
         graphs: Vec::with_capacity(graphs),
         operators: Vec::with_capacity(operators),
         connectors: Vec::with_capacity(connectors),
     };
-    for index in 0..plan.owners.len() {
+    for index in 0..plan.nodes.len() {
         let body = match body(plan, index, inventory) {
             InlineBody::Graph(body) => {
                 tables.graphs.push(body);
@@ -217,7 +210,7 @@ fn check_inline(
     nodes: &[Node<InlineBody>],
     inventory: &[rastok_core::plan::RouteRule],
 ) {
-    assert_eq!(nodes.len(), plan.owners.len());
+    assert_eq!(nodes.len(), plan.nodes.len());
     for (index, node) in nodes.iter().enumerate() {
         assert!(node.header == header(plan, index));
         match (&node.body, body(plan, index, inventory)) {
@@ -234,7 +227,7 @@ fn check_boxed(
     nodes: &[Node<BoxedBody>],
     inventory: &[rastok_core::plan::RouteRule],
 ) {
-    assert_eq!(nodes.len(), plan.owners.len());
+    assert_eq!(nodes.len(), plan.nodes.len());
     for (index, node) in nodes.iter().enumerate() {
         assert!(node.header == header(plan, index));
         match (&node.body, body(plan, index, inventory)) {
@@ -251,7 +244,7 @@ fn check_boxed(
 }
 
 fn check_tables(plan: &ExecutionPlan, tables: &Tables, inventory: &[rastok_core::plan::RouteRule]) {
-    assert_eq!(tables.nodes.len(), plan.owners.len());
+    assert_eq!(tables.nodes.len(), plan.nodes.len());
     for (index, node) in tables.nodes.iter().enumerate() {
         assert!(node.header == header(plan, index));
         match (&node.body, body(plan, index, inventory)) {
@@ -306,18 +299,15 @@ pub(super) fn compare(plan: &ExecutionPlan) {
         size_of::<HandlerBody>(),
     );
     hprintln!(
-        "node_layout_control: {} owners / {} executors / {} handlers; routing excluded",
-        plan.owners.len(),
+        "node_layout_control: {} Nodes / {} executors / {} handlers; routing excluded",
         plan.nodes.len(),
+        plan.nodes.iter().filter(|node| node.kind() != rastok_core::node::Kind::Graph).count(),
         plan.handlers().count(),
     );
     measure(
         "current",
-        || (plan.owners.clone(), plan.nodes.clone()),
-        |(owners, nodes)| {
-            assert!(owners == &plan.owners);
-            assert!(nodes == &plan.nodes);
-        },
+        || plan.nodes.clone(),
+        |nodes| assert!(nodes == &plan.nodes),
     );
     measure(
         "inline",
@@ -346,7 +336,6 @@ fn compare_with_wiring(plan: &ExecutionPlan) {
         "current_with_wiring",
         || {
             (
-                plan.owners.clone(),
                 plan.nodes.clone(),
                 plan.edges.clone(),
                 plan.routes.clone(),

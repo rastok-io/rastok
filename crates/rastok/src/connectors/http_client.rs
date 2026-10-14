@@ -12,7 +12,7 @@ use crate::boundary::{
     Completion, HttpClientExit, PreparedRequest, RequestPreparation, SchedulerCompletion,
 };
 use crate::envelope::Data;
-use crate::plan::{AttrSetting, NodeExecution, ValidatedExecutionPlan};
+use crate::plan::{AttrSetting, NodeKind, ValidatedExecutionPlan};
 use crate::value::Value;
 use std::collections::BTreeMap;
 
@@ -109,9 +109,9 @@ impl HttpClientRequestSettings {
                 .nodes
                 .iter()
                 .find(|node| &node.path == path)
-                .and_then(|node| match &node.execution {
-                    NodeExecution::Connector(spec) => Some(spec),
-                    NodeExecution::Operator { .. } => None,
+                .and_then(|node| match &node.body {
+                    NodeKind::Connector(spec) => Some(spec),
+                    NodeKind::Graph | NodeKind::Operator(_) => None,
                 })
                 .ok_or_else(|| {
                     super::DriverFactoryError::new(format!(
@@ -181,7 +181,7 @@ impl HttpClientRequestSettings {
                     }
                 }
             }
-            specs.insert(path.clone(), spec.clone());
+            specs.insert(path.clone(), spec.as_ref().clone());
         }
         Ok(Self {
             specs,

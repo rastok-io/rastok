@@ -20,17 +20,16 @@ impl Contracts {
             let Some(contract) = node.connector() else {
                 continue;
             };
+            let Some(path) = node.executor_path() else {
+                continue;
+            };
             if let Some((_, binder)) = scripted_protocol_binders()
                 .into_iter()
                 .find(|(id, _)| *id == contract.contract.as_str())
             {
-                let protocol = binder(
-                    plan,
-                    std::slice::from_ref(&node.path),
-                    &BootBindings::empty(),
-                )
-                .map_err(|error| Error::Contract(error.to_string()))?;
-                protocols.insert(node.path.clone(), protocol);
+                let protocol = binder(plan, std::slice::from_ref(path), &BootBindings::empty())
+                    .map_err(|error| Error::Contract(error.to_string()))?;
+                protocols.insert(path.clone(), protocol);
             }
         }
         Ok(Self { protocols })

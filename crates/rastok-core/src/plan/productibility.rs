@@ -10,7 +10,7 @@ pub(super) fn validate(
 ) -> Result<(), PlanValidationError> {
     let live = live_owners(plan);
     for (index, node) in plan.nodes.iter().enumerate() {
-        if !live[node.owner.index()] {
+        if !live[index] || node.kind() == node::Kind::Graph {
             continue;
         }
         let slot = NodeIndex::new(u32::try_from(index).unwrap_or(u32::MAX));
@@ -21,7 +21,7 @@ pub(super) fn validate(
                 continue;
             }
             let source = EdgeEnd {
-                node: Some(slot),
+                node: slot,
                 port: decl.port().clone(),
             };
             if plan.edges.iter().any(|edge| edge.from == source)
@@ -45,15 +45,16 @@ pub(super) fn validate(
 
 pub(super) fn may_produce(plan: &ExecutionPlan, slot: NodeIndex, port: &node::Port) -> bool {
     let node = &plan.nodes[slot.index()];
-    if plan.owners[node.owner.index()]
+    if node
         .loop_spec()
         .and_then(|spec| spec.expired.as_ref())
         .is_some_and(|expired| expired.port == *port)
     {
         return true;
     }
-    match &node.execution {
-        NodeExecution::Operator { handlers, .. } => handlers.iter().any(|handler| {
+    match &node.body {
+        NodeKind::Graph => false,
+        NodeKind::Operator(operator) => operator.handlers.iter().any(|handler| {
             handler.dispatch.may_emit(port)
                     // Re-derive the implicit producer from the validated join bound.
                     || (port.name() == "expired"
@@ -61,7 +62,7 @@ pub(super) fn may_produce(plan: &ExecutionPlan, slot: NodeIndex, port: &node::Po
                             node::HandlerActivation::Join { within_ns: Some(_), .. }
                             | node::HandlerActivation::Join { last: Some(_), .. }))
         }),
-        NodeExecution::Connector(connector) => !connector
+        NodeKind::Connector(connector) => !connector
             .call_semantics()
             .is_some_and(|call| call.frame_production(port.name()) == Some(FrameProduction::Never)),
     }
@@ -71,30 +72,30 @@ pub(super) fn may_produce(plan: &ExecutionPlan, slot: NodeIndex, port: &node::Po
 /// scope. Inbound Contracts are roots; a spatial crossing may activate every
 /// enclosing scope. A least fixed point does not depend on slot order.
 pub(super) fn live_owners(plan: &ExecutionPlan) -> Vec<bool> {
-    let mut live = alloc::vec![false; plan.owners.len()];
+    let mut live = alloc::vec![false; plan.nodes.len()];
     live[0] = true;
-    let activate = |owner: node::OwnerSlot, live: &mut [bool]| {
+    let activate = |owner: node::NodeIndex, live: &mut [bool]| {
         let mut current = Some(owner);
         let mut changed = false;
         while let Some(slot) = current {
             changed |= !live[slot.index()];
             live[slot.index()] = true;
-            current = plan.owners[slot.index()].parent;
+            current = plan.nodes[slot.index()].parent;
         }
         changed
     };
-    for node in &plan.nodes {
+    for (index, node) in plan.nodes.iter().enumerate() {
         if node
             .connector()
             .is_some_and(|connector| connector.roles.has_inbound())
         {
-            activate(node.owner, &mut live);
+            activate(NodeIndex::new(index as u32), &mut live);
         }
     }
     loop {
         let mut changed = false;
-        for (index, owner) in plan.owners.iter().enumerate() {
-            if matches!(owner.kind, OwnerKind::Node(_))
+        for (index, owner) in plan.nodes.iter().enumerate() {
+            if owner.kind() != node::Kind::Graph
                 && owner.parent.is_some_and(|parent| live[parent.index()])
                 && !live[index]
             {
@@ -103,15 +104,11 @@ pub(super) fn live_owners(plan: &ExecutionPlan) -> Vec<bool> {
             }
         }
         for edge in &plan.edges {
-            if edge
-                .from
-                .node
-                .is_some_and(|slot| !live[plan.nodes[slot.index()].owner.index()])
-            {
+            if !live[edge.from.node.index()] {
                 continue;
             }
-            if let Some(slot) = edge.to.as_ref().and_then(|target| target.node) {
-                changed |= activate(plan.nodes[slot.index()].owner, &mut live);
+            if let Some(target) = &edge.to {
+                changed |= activate(target.node, &mut live);
             }
         }
         for rule in &plan.boundary_routes {
@@ -120,7 +117,7 @@ pub(super) fn live_owners(plan: &ExecutionPlan) -> Vec<bool> {
                 EndpointOwner::Graph(path) => path.clone(),
             };
             if !plan
-                .owners
+                .nodes
                 .iter()
                 .enumerate()
                 .any(|(index, owner)| owner.path == source_path && live[index])
@@ -136,9 +133,9 @@ pub(super) fn live_owners(plan: &ExecutionPlan) -> Vec<bool> {
                     owner: EndpointOwner::Graph(path),
                     ..
                 }) = target
-                    && let Some(index) = plan.owners.iter().position(|owner| owner.path == *path)
+                    && let Some(index) = plan.nodes.iter().position(|owner| owner.path == *path)
                 {
-                    changed |= activate(node::OwnerSlot::new(index as u32), &mut live);
+                    changed |= activate(node::NodeIndex::new(index as u32), &mut live);
                 }
             }
         }

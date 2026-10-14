@@ -31,13 +31,13 @@ impl fmt::Display for InvalidName {
 
 impl core::error::Error for InvalidName {}
 
-/// Stable root-relative node address.
+/// Stable root-relative address of a Node below the App root.
 ///
 /// A node is addressed by the chain of declaration names from the `: App`
 /// root graph down to itself: a `codex` connector declared inside a
 /// `sessions` graph is `sessions.codex`. The address names the node in
-/// the composition tree — it is not a wiring route; edges connect
-/// `(Path, Port)` endpoints.
+/// the composition tree, not a wiring route. Journal identities use this
+/// address; the execution plan resolves declarations to [`NodeIndex`] values.
 ///
 /// The dotted rendering enters the identity recipes, so it must be
 /// injective: segments may not be empty or contain `.`.
@@ -92,17 +92,19 @@ impl fmt::Display for Path {
     }
 }
 
-/// Root-relative lexical owner path. The root App Graph is the empty path;
-/// every nested Graph or Node appends one non-empty segment. This differs
-/// deliberately from [`Path`], whose empty form is never a Node.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct OwnerPath(Vec<String>);
+/// Root-relative lexical Node path, including the App root as the empty path.
+/// Every child declaration appends one non-empty segment. Unlike [`Path`],
+/// this type can name the root itself as an instance or Extension owner.
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct OwnerPath(Path);
 
 impl OwnerPath {
     /// The root App Graph path.
     #[must_use]
     pub const fn root() -> Self {
-        Self(Vec::new())
+        Self(Path {
+            segments: Vec::new(),
+        })
     }
 
     /// Builds a root-relative owner path.
@@ -119,26 +121,37 @@ impl OwnerPath {
         if segments.is_empty() {
             return Ok(Self::root());
         }
-        Path::new(segments.clone())?;
-        Ok(Self(segments))
+        Ok(Self(Path::new(segments)?))
     }
 
     /// The path segments, outermost first.
     #[must_use]
     pub fn segments(&self) -> &[String] {
-        &self.0
+        self.0.segments()
     }
 
     /// Whether this is the root App Graph.
     #[must_use]
     pub fn is_root(&self) -> bool {
-        self.0.is_empty()
+        self.0.segments.is_empty()
+    }
+
+    /// Borrows the non-root Node path without allocating a second address.
+    /// The App root has no such path; world-facing Connector addresses remain
+    /// non-empty even when plan declarations share one owner-path type.
+    #[must_use]
+    pub fn as_node_path(&self) -> Option<&Path> {
+        (!self.is_root()).then_some(&self.0)
     }
 
     /// Enclosing lexical Graph path. The root has no parent.
     #[must_use]
     pub fn parent(&self) -> Option<Self> {
-        (!self.0.is_empty()).then(|| Self(self.0[..self.0.len() - 1].to_vec()))
+        (!self.is_root()).then(|| {
+            Self(Path {
+                segments: self.0.segments[..self.0.segments.len() - 1].to_vec(),
+            })
+        })
     }
 
     /// Deepest lexical path shared by both owners.
@@ -146,40 +159,64 @@ impl OwnerPath {
     pub fn common_ancestor(&self, other: &Self) -> Self {
         let length = self
             .0
+            .segments
             .iter()
-            .zip(&other.0)
+            .zip(&other.0.segments)
             .take_while(|(left, right)| left == right)
             .count();
-        Self(self.0[..length].to_vec())
+        Self(Path {
+            segments: self.0.segments[..length].to_vec(),
+        })
     }
 }
 
 impl From<&Path> for OwnerPath {
     fn from(path: &Path) -> Self {
-        Self(path.segments().to_vec())
+        Self(path.clone())
+    }
+}
+
+impl PartialEq<Path> for OwnerPath {
+    fn eq(&self, other: &Path) -> bool {
+        self.segments() == other.segments()
+    }
+}
+
+impl PartialEq<OwnerPath> for Path {
+    fn eq(&self, other: &OwnerPath) -> bool {
+        self.segments() == other.segments()
     }
 }
 
 impl fmt::Display for OwnerPath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0.join("."))
+        self.0.fmt(f)
     }
 }
 
-/// Compile-time resolved owner reference. Like [`crate::plan::NodeIndex`], the freely
+impl fmt::Debug for OwnerPath {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("OwnerPath").field(&self.0.segments).finish()
+    }
+}
+
+/// Index into the Node table, not a persistent identity. The freely
 /// constructible value carries no validity claim until it sits in a
 /// [`crate::plan::ValidatedExecutionPlan`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct OwnerSlot(u32);
+pub struct NodeIndex(u32);
 
-impl OwnerSlot {
-    /// Wraps an owner-table index.
+impl NodeIndex {
+    /// The root App Graph, first in every validated Node table.
+    pub const ROOT: Self = Self(0);
+
+    /// Wraps a Node-table index.
     #[must_use]
     pub const fn new(index: u32) -> Self {
         Self(index)
     }
 
-    /// The index inside [`crate::plan::ExecutionPlan::owners`].
+    /// The index inside [`crate::plan::ExecutionPlan::nodes`].
     #[must_use]
     pub const fn index(self) -> usize {
         self.0 as usize
@@ -675,6 +712,33 @@ mod tests {
         let from_slices = Path::new(["a", "b"]).unwrap();
         let from_strings = Path::new(vec![String::from("a"), String::from("b")]).unwrap();
         assert_eq!(from_slices, from_strings);
+    }
+
+    #[test]
+    fn owner_path_borrows_only_non_root_node_addresses() {
+        let root = OwnerPath::new(Vec::<String>::new()).unwrap();
+        assert_eq!(root, OwnerPath::root());
+        assert!(root.as_node_path().is_none());
+        assert!(root.parent().is_none());
+        assert!(Path::new(root.segments().iter().cloned()).is_err());
+
+        let owner = OwnerPath::new(["sessions", "dialogue"]).unwrap();
+        let path = owner.as_node_path().unwrap();
+        assert_eq!(path.segments(), owner.segments());
+        assert!(core::ptr::eq(path.segments(), owner.segments()));
+        assert_eq!(path.to_string(), "sessions.dialogue");
+        assert_eq!(OwnerPath::from(path), owner);
+        assert_eq!(owner.parent(), Some(OwnerPath::new(["sessions"]).unwrap()));
+        assert_eq!(
+            owner.common_ancestor(&OwnerPath::new(["sessions", "audit"]).unwrap()),
+            OwnerPath::new(["sessions"]).unwrap()
+        );
+        assert_eq!(
+            alloc::format!("{owner:?}"),
+            "OwnerPath([\"sessions\", \"dialogue\"])"
+        );
+        assert!(OwnerPath::new([""]).is_err());
+        assert!(OwnerPath::new(["sessions.dialogue"]).is_err());
     }
 
     #[test]

@@ -44,7 +44,9 @@ graph app : App {{
             compiler::compile(&[source.as_str()], &ContractCatalog::try_m0().unwrap()).unwrap();
         let (plan, _) = plan::decode(&plan::encode(&compiled.plan, &compiled.hash)).unwrap();
         assert!(
-            plan.nodes.is_empty(),
+            plan.nodes
+                .iter()
+                .all(|node| matches!(node.body, plan::NodeKind::Graph)),
             "a boundary-only Graph needs no synthetic Operator"
         );
         let mut journal = MemJournal::new(GraphVersion(1));
@@ -344,7 +346,7 @@ graph app : App {{
     let bad = source.replace("data - 1", "data + 1");
     assert!(compiler::compile(&[&bad], &ContractCatalog::try_m0().unwrap()).is_err());
     let mut forged = plan.plan().clone();
-    for owner in &mut forged.owners {
+    for owner in &mut forged.nodes {
         for extension in &mut owner.extensions {
             if let plan::ExtensionSpec::Loop(spec) = extension {
                 spec.proof.as_mut().unwrap().decreases.push(99);

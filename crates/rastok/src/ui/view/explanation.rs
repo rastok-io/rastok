@@ -166,10 +166,9 @@ fn physical_matches(
     physical: &crate::plan::EdgeEnd,
 ) -> bool {
     logical.port == physical.port
-        && match (&logical.owner, physical.node) {
-            (EndpointOwner::Node(path), Some(slot)) => plan.nodes[slot.index()].path == *path,
-            (EndpointOwner::Graph(path), None) => path.is_root(),
-            _ => false,
+        && match &logical.owner {
+            EndpointOwner::Node(path) => plan.nodes[physical.node.index()].path == *path,
+            EndpointOwner::Graph(path) => plan.nodes[physical.node.index()].path == *path,
         }
 }
 
@@ -269,7 +268,7 @@ pub(super) fn classified(plan: &ValidatedExecutionPlan) -> bool {
                 .is_some_and(|ports| ports.iter().any(|port| sensitive(port.annotations())))
                 || node.vars().iter().any(|var| sensitive(&var.annotations))
         })
-        || plan.owners.iter().any(|owner| {
+        || plan.nodes.iter().any(|owner| {
             owner.vals.iter().any(|value| sensitive(&value.annotations))
                 || owner.ports.iter().any(|port| sensitive(&port.annotations))
         })
@@ -318,7 +317,7 @@ pub(super) fn history(plan: &ValidatedExecutionPlan, records: &[Record]) -> Hist
                     else {
                         continue;
                     };
-                    let scope = &plan.owners[edge.owner.index()].path;
+                    let scope = &plan.nodes[edge.owner.index()].path;
                     let mut source = Some(&route.target);
                     while let Some(reference) = source {
                         let Some((owner, parent)) = parents.get(reference) else {
@@ -348,7 +347,9 @@ pub(super) fn history(plan: &ValidatedExecutionPlan, records: &[Record]) -> Hist
                 let slot = plan
                     .nodes
                     .iter()
-                    .position(|node| crate::node::OwnerPath::from(&node.path) == tx.owner_path)
+                    .position(|node| {
+                        node.kind() != crate::node::Kind::Graph && node.path == tx.owner_path
+                    })
                     .map(|slot| NodeIndex::new(slot as u32));
                 if let Some(slot) = slot {
                     extra["decision"] = if context_valid {
@@ -614,13 +615,13 @@ fn decision(
     // Only plan-reduced immutable values are available without reconstructing
     // instance bindings. Missing context is an explicit explanation limit.
     let mut owners = Vec::new();
-    let mut owner = Some(plan.nodes[slot.index()].owner);
+    let mut owner = Some(slot);
     while let Some(current) = owner {
         owners.push(current);
-        owner = plan.owners[current.index()].parent;
+        owner = plan.nodes[current.index()].parent;
     }
     for owner in owners.into_iter().rev() {
-        for declaration in &plan.owners[owner.index()].vals {
+        for declaration in &plan.nodes[owner.index()].vals {
             if let Some(value) = &declaration.resolved {
                 bindings.insert(
                     declaration.name.clone(),
@@ -884,9 +885,11 @@ mod tests {
             .edges
             .iter()
             .find(|edge| {
-                edge.from.node.is_some_and(|slot| {
-                    compilation.plan.nodes[slot.index()].path.to_string() == "classify"
-                }) && edge.to.is_some()
+                compilation.plan.nodes[edge.from.node.index()]
+                    .path
+                    .to_string()
+                    == "classify"
+                    && edge.to.is_some()
             })
             .unwrap();
         assert_eq!(edge_cases(compilation.plan.plan(), edge), ["Kept"]);

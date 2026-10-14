@@ -62,7 +62,7 @@ fn currency_units_have_no_special_annotation_authority() {
             &format!("@measure(id = amount, unit = \"{unit}\")"),
         )
         .expect("opaque unit and ordinary exact decimal");
-        let set = result.plan.plan().nodes[0]
+        let set = result.plan.plan().nodes[1]
             .ports
             .iter()
             .find(|port| port.port.name() == "in")

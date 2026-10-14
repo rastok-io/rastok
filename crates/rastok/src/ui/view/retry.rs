@@ -4,7 +4,7 @@
 use super::*;
 use crate::journal::retry_protocol::{Fact, Phase};
 
-pub(super) fn spec(owner: &crate::plan::Owner) -> JsonValue {
+pub(super) fn spec(owner: &crate::plan::Node) -> JsonValue {
     owner.retry_spec().map_or(JsonValue::Null, |spec| json!({
         "entry": spec.entry.name(),
         "terminal": spec.terminal.name(),

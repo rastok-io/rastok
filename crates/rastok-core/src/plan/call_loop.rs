@@ -12,9 +12,7 @@ pub(super) fn validate(
     ports: &ResolvedPortTable,
 ) -> Result<(), PlanValidationError> {
     let node = &plan.nodes[slot.index()];
-    let (NodeExecution::Connector(connector), Some(spec)) =
-        (&node.execution, plan.owners[node.owner.index()].loop_spec())
-    else {
+    let (NodeKind::Connector(connector), Some(spec)) = (&node.body, node.loop_spec()) else {
         return Ok(());
     };
     let error = |path: &str, detail| PlanValidationError::InvalidLoopControl {
@@ -47,7 +45,7 @@ pub(super) fn validate(
             "a Connector-dependent recurrence requires explicit fuel, not a measure proof",
         ));
     }
-    let owner = EndpointOwner::Node(node.path.clone());
+    let owner = node.endpoint_owner()?;
     let rules = || plan.routes.iter().filter(|rule| rule.source.owner == owner);
     for rule in rules() {
         let sets: Vec<_> = match &rule.selection {

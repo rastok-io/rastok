@@ -1,7 +1,7 @@
 //! The plan package — the transportable, verifiable serialization
 //! of an [`ExecutionPlan`], per `docs/architecture/plan-package.md`.
 //!
-//! Format v20: the 4-byte magic `RKPB`, then one canonical CBOR map —
+//! Format v21: the 4-byte magic `RKPB`, then one canonical CBOR map —
 //! format version, the plan's semantic hash, the body as an embedded
 //! byte string, and a blake3 checksum over the domain-framed
 //! association `domain ‖ version ‖ semantic_hash ‖ body`, so a
@@ -28,11 +28,12 @@ use crate::envelope::WriteTarget;
 use crate::expr;
 
 use crate::node;
+use crate::node::NodeIndex;
 use crate::plan::{
     AttrSetting, ConnectorSpec, DelayPolicy, DispatchStep, Edge, EdgeEnd, EmitValue,
-    EvaluationSite, ExecutionPlan, ExtensionSpec, FieldWrite, Handler, LoopSpec, Node,
-    NodeExecution, NodeIndex, Owner, OwnerKind, OwnerValue, PlanConstant, PlanValidationError,
-    PortDecl, SemanticHash, ValidatedExecutionPlan, VarCell,
+    EvaluationSite, ExecutionPlan, ExtensionSpec, FieldWrite, Handler, LoopSpec, Node, NodeKind,
+    Operator, OwnerValue, PlanConstant, PlanValidationError, PortDecl, SemanticHash,
+    ValidatedExecutionPlan, VarCell,
 };
 use crate::schema_annotation::{
     AnnotationApplication, AnnotationBinding, AnnotationSet, AnnotationTable, DataAnnotation,
@@ -53,7 +54,7 @@ pub const MAGIC: [u8; 4] = *b"RKPB";
 /// explicit Extensions and dispositions, and exact `std/` Contracts. The
 /// compact registry and ccbor values have one reading; every other package
 /// version refuses before its body can be interpreted.
-pub const FORMAT_VERSION: u32 = 20;
+pub const FORMAT_VERSION: u32 = 21;
 
 /// The checksum domain — fixed-width framing, so the covered fields
 /// cannot slide into one another.
@@ -248,14 +249,8 @@ fn plan_tree_with_resolved(
     resolved: Option<&super::ResolvedPortTable>,
 ) -> Cbor {
     let mut pairs = BTreeMap::from([
-        (1, Cbor::Array(plan.nodes.iter().map(node_tree).collect())),
-        (
-            2,
-            Cbor::Array(plan.boundary().iter().map(port_decl_tree).collect()),
-        ),
+        (12, Cbor::Array(plan.nodes.iter().map(node_tree).collect())),
         (3, Cbor::Array(plan.edges.iter().map(edge_tree).collect())),
-        (4, Cbor::Array(plan.handlers().map(handler_tree).collect())),
-        (9, Cbor::Array(plan.owners.iter().map(owner_tree).collect())),
         (10, fields::routing_tree(&plan.routes)),
     ]);
     if !plan.boundary_routes.is_empty() {
@@ -398,54 +393,36 @@ fn schema_tree(schema: &[(String, DataType)]) -> Cbor {
 }
 
 fn node_tree(node: &Node) -> Cbor {
-    let execution = match &node.execution {
-        NodeExecution::Operator { .. } => Cbor::Uint(1),
-        NodeExecution::Connector(spec) => Cbor::Array(vec![Cbor::Uint(2), spec_tree(spec)]),
+    let body = match &node.body {
+        NodeKind::Graph => Cbor::Array(vec![Cbor::Uint(1)]),
+        NodeKind::Operator(operator) => Cbor::Array(vec![
+            Cbor::Uint(2),
+            Cbor::Array(operator.vars.iter().map(var_tree).collect()),
+            Cbor::Array(operator.handlers.iter().map(handler_tree).collect()),
+        ]),
+        NodeKind::Connector(spec) => Cbor::Array(vec![Cbor::Uint(3), spec_tree(spec)]),
     };
-    let fields = BTreeMap::from([
+    Cbor::Map(BTreeMap::from([
         (1, Cbor::Text(node.path.to_string())),
-        (2, execution),
+        (
+            2,
+            node.parent
+                .map_or(Cbor::Null, |index| Cbor::Uint(index.index() as u64)),
+        ),
         (
             3,
             Cbor::Array(node.ports.iter().map(port_decl_tree).collect()),
         ),
-        (4, Cbor::Array(node.vars().iter().map(var_tree).collect())),
-        (5, Cbor::Uint(node.owner.index() as u64)),
-    ]);
-    Cbor::Map(fields)
-}
-
-fn owner_tree(owner: &Owner) -> Cbor {
-    // Format 20 places the root contract at plan key 2. In memory it belongs
-    // to the root Graph, just like every nested Graph's contract.
-    let ports = if owner.path.is_root() {
-        &[][..]
-    } else {
-        owner.ports.as_slice()
-    };
-    let kind = match owner.kind {
-        OwnerKind::Graph => Cbor::Array(vec![Cbor::Uint(1)]),
-        OwnerKind::Node(slot) => Cbor::Array(vec![Cbor::Uint(2), Cbor::Uint(slot.index() as u64)]),
-    };
-    Cbor::Map(BTreeMap::from([
-        (1, Cbor::Text(owner.path.to_string())),
-        (
-            2,
-            owner
-                .parent
-                .map_or(Cbor::Null, |slot| Cbor::Uint(slot.index() as u64)),
-        ),
-        (3, kind),
-        (4, instance_tree(&owner.instance)),
+        (4, instance_tree(&node.instance)),
         (
             5,
-            Cbor::Array(owner.vals.iter().map(owner_value_tree).collect()),
+            Cbor::Array(node.vals.iter().map(owner_value_tree).collect()),
         ),
-        (6, Cbor::Array(ports.iter().map(port_decl_tree).collect())),
         (
-            7,
-            Cbor::Array(owner.extensions.iter().map(extension_spec_tree).collect()),
+            6,
+            Cbor::Array(node.extensions.iter().map(extension_spec_tree).collect()),
         ),
+        (7, body),
     ]))
 }
 
@@ -682,14 +659,13 @@ fn edge_tree(edge: &Edge) -> Cbor {
 }
 
 fn endpoint_tree(endpoint: &EdgeEnd) -> Cbor {
-    let slot = match endpoint.node {
-        Some(slot) => Cbor::Uint(slot.index() as u64),
-        None => Cbor::Null,
-    };
-    Cbor::Array(vec![slot, Cbor::Text(endpoint.port.name().to_string())])
+    Cbor::Array(vec![
+        Cbor::Uint(endpoint.node.index() as u64),
+        Cbor::Text(endpoint.port.name().to_string()),
+    ])
 }
 
-fn handler_tree((handler_owner, handler): (NodeIndex, &Handler)) -> Cbor {
+fn handler_tree(handler: &Handler) -> Cbor {
     let activation = match &handler.activation {
         node::HandlerActivation::Port(port) => {
             Cbor::Array(vec![Cbor::Uint(1), Cbor::Text(port.name().to_string())])
@@ -714,11 +690,7 @@ fn handler_tree((handler_owner, handler): (NodeIndex, &Handler)) -> Cbor {
             Cbor::Uint(u64::from(u8::from(*lifecycle))),
         ]),
     };
-    let owner = Cbor::Array(vec![
-        Cbor::Uint(1),
-        Cbor::Uint(handler_owner.index() as u64),
-    ]);
-    let mut pairs = BTreeMap::from([(1, owner), (2, activation)]);
+    let mut pairs = BTreeMap::from([(2, activation)]);
     if let Some(guard) = &handler.guard {
         pairs.insert(3, tree_tree(guard));
     }
@@ -1128,7 +1100,7 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
     for node in &plan.nodes {
         // node map at 2: path, kind, and the two table arrays at 3.
         max = max.max(3);
-        if let NodeExecution::Connector(spec) = &node.execution {
+        if let NodeKind::Connector(spec) = &node.body {
             // kind array at 3, spec map at 4, its fields at 5.
             max = max.max(5);
             if let Some(guarantee) = &spec.idempotent {
@@ -1158,16 +1130,16 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
             annotations(&decl.annotations, 5, &mut max, &mut stack);
         }
         for var in node.vars() {
-            // var map at 4, its fields at 5.
-            max = max.max(5);
-            stack.push(Item::Ty(&var.ty, 5));
+            // Operator body at 3, vars at 4, variable map at 5, fields at 6.
+            max = max.max(6);
+            stack.push(Item::Ty(&var.ty, 6));
             if let Some(init) = &var.init {
-                stack.push(Item::Val(init, 5));
+                stack.push(Item::Val(init, 6));
             }
-            annotations(&var.annotations, 5, &mut max, &mut stack);
+            annotations(&var.annotations, 6, &mut max, &mut stack);
         }
     }
-    for owner in &plan.owners {
+    for owner in &plan.nodes {
         // owner map at 2, fields and instance map at 3, instance fields at 4.
         max = max.max(5);
         if let Some(key) = &owner.instance.key {
@@ -1180,15 +1152,6 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
                 stack.push(Item::Val(resolved, 5));
             }
             annotations(&value.annotations, 5, &mut max, &mut stack);
-        }
-        if !owner.path.is_root() {
-            for decl in &owner.ports {
-                // owner port array at 3, declaration array at 4, fields at 5.
-                if let Some(ty) = &decl.ty {
-                    stack.push(Item::Ty(ty, 5));
-                }
-                annotations(&decl.annotations, 5, &mut max, &mut stack);
-            }
         }
         for extension in &owner.extensions {
             // Extension array at 3, tagged payload at 4, policy map at 5.
@@ -1230,27 +1193,19 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
             }
         }
     }
-    for decl in plan.boundary() {
-        // decl array at 2, name and direction at 3 — and the
-        // optional pinned type's root at 3.
-        max = max.max(3);
-        if let Some(ty) = &decl.ty {
-            stack.push(Item::Ty(ty, 3));
-        }
-        annotations(&decl.annotations, 3, &mut max, &mut stack);
-    }
     if !plan.edges.is_empty() {
         // edge array at 2, endpoint arrays at 3, their fields at 4.
         max = max.max(4);
     }
     for (_, handler) in plan.handlers() {
-        // handler map at 2, activation array at 3, its fields at 4.
-        max = max.max(4);
+        // Operator body at 3, handlers at 4, handler map at 5,
+        // activation at 6 and its fields at 7.
+        max = max.max(7);
         if let Some(guard) = &handler.guard {
-            // tree_tree at 3, type and expression roots at 4.
-            tree(guard, 4, &mut stack);
+            // tree_tree at 6, type and expression roots at 7.
+            tree(guard, 7, &mut stack);
         }
-        stack.push(Item::Dispatch(&handler.dispatch, 3));
+        stack.push(Item::Dispatch(&handler.dispatch, 6));
     }
     while let Some(item) = stack.pop() {
         match item {
@@ -1641,68 +1596,14 @@ fn err(detail: &str) -> DecodeError {
 
 fn plan_from(tree: &Cbor) -> Result<ExecutionPlan, DecodeError> {
     let pairs = map_of(tree, "plan")?;
-    let mut owners = array_of(get(pairs, 9, "plan owners")?, "plan owners")?
-        .iter()
-        .map(owner_from)
-        .collect::<Result<Vec<_>, _>>()?;
-    let mut nodes = array_of(get(pairs, 1, "plan nodes")?, "plan nodes")?
+    let nodes = array_of(get(pairs, 12, "plan nodes")?, "plan nodes")?
         .iter()
         .map(node_from)
         .collect::<Result<Vec<_>, _>>()?;
-    let boundary = array_of(get(pairs, 2, "plan boundary")?, "plan boundary")?
-        .iter()
-        .map(port_decl_from)
-        .collect::<Result<Vec<_>, _>>()?;
-    let root = owners
-        .first_mut()
-        .filter(|root| {
-            root.path.is_root() && root.parent.is_none() && root.kind == OwnerKind::Graph
-        })
-        .ok_or(DecodeError::Invalid(PlanValidationError::MissingRootOwner))?;
-    if !root.ports.is_empty() {
-        return Err(DecodeError::Invalid(
-            PlanValidationError::InvalidGraphContract {
-                owner: root.path.to_string(),
-                detail: "the root Graph boundary belongs only to the plan boundary table",
-            },
-        ));
-    }
-    root.ports = boundary;
     let edges = array_of(get(pairs, 3, "plan edges")?, "plan edges")?
         .iter()
         .map(edge_from)
         .collect::<Result<Vec<_>, _>>()?;
-    let handlers = array_of(get(pairs, 4, "plan handlers")?, "plan handlers")?
-        .iter()
-        .map(handler_from)
-        .collect::<Result<Vec<_>, _>>()?;
-    for (index, node) in nodes.iter_mut().enumerate() {
-        if let NodeExecution::Operator { handlers: own, .. } = &mut node.execution {
-            own.reserve_exact(
-                handlers
-                    .iter()
-                    .filter(|(owner, _)| owner.index() == index)
-                    .count(),
-            );
-        }
-    }
-    let node_count = nodes.len();
-    for (owner, handler) in handlers {
-        let node = nodes.get_mut(owner.index()).ok_or(DecodeError::Invalid(
-            PlanValidationError::SlotOutOfBounds {
-                slot: owner,
-                node_count,
-            },
-        ))?;
-        let NodeExecution::Operator { handlers, .. } = &mut node.execution else {
-            return Err(DecodeError::Invalid(
-                PlanValidationError::NonOperatorHandler {
-                    node: node.path.clone(),
-                },
-            ));
-        };
-        handlers.push(handler);
-    }
     let routes = array_of(get(pairs, 10, "plan routing")?, "plan routing")?
         .iter()
         .map(fields::route_from)
@@ -1736,7 +1637,6 @@ fn plan_from(tree: &Cbor) -> Result<ExecutionPlan, DecodeError> {
         None => Vec::new(),
     };
     Ok(ExecutionPlan {
-        owners,
         nodes,
         edges,
         routes,
@@ -1758,88 +1658,53 @@ fn schema_from(tree: &Cbor) -> Result<Vec<(String, DataType)>, DecodeError> {
 }
 
 fn node_from(tree: &Cbor) -> Result<Node, DecodeError> {
-    let pairs = map_of(tree, "node")?;
-    let path = node::Path::new(
-        text_of(get(pairs, 1, "node path")?, "node path")?
-            .split('.')
-            .map(ToString::to_string)
-            .collect::<Vec<_>>(),
-    )
-    .map_err(|_| err("node path"))?;
-    let mut execution = match get(pairs, 2, "node execution")? {
-        Cbor::Uint(1) => NodeExecution::Operator {
-            vars: Vec::new(),
-            handlers: Vec::new(),
-        },
-        Cbor::Array(parts) => match parts.as_slice() {
-            [Cbor::Uint(2), spec] => NodeExecution::Connector(spec_from(spec)?),
-            _ => return Err(err("node execution")),
-        },
-        _ => return Err(err("node execution")),
+    let fields = map_of(tree, "Node")?;
+    let path_text = text_of(get(fields, 1, "Node path")?, "Node path")?;
+    let path = if path_text.is_empty() {
+        node::OwnerPath::root()
+    } else {
+        node::OwnerPath::new(path_text.split('.')).map_err(|_| err("Node path"))?
     };
-    let ports = array_of(get(pairs, 3, "node ports")?, "node ports")?
+    let parent = match get(fields, 2, "Node parent")? {
+        Cbor::Null => None,
+        value => Some(NodeIndex::new(u32_from(value, "Node parent")?)),
+    };
+    let ports = array_of(get(fields, 3, "Node ports")?, "Node ports")?
         .iter()
         .map(port_decl_from)
         .collect::<Result<Vec<_>, _>>()?;
-    let vars = array_of(get(pairs, 4, "node vars")?, "node vars")?
-        .iter()
-        .map(var_from)
-        .collect::<Result<Vec<_>, _>>()?;
-    let owner = node::OwnerSlot::new(u32_from(get(pairs, 5, "node owner")?, "node owner")?);
-    match &mut execution {
-        NodeExecution::Operator { vars: own, .. } => *own = vars,
-        NodeExecution::Connector(_) if !vars.is_empty() => {
-            return Err(err("a Connector cannot contain DSL state cells"));
-        }
-        NodeExecution::Connector(_) => {}
-    }
-    Ok(Node {
-        path,
-        execution,
-        ports,
-        owner,
-    })
-}
-
-fn owner_from(tree: &Cbor) -> Result<Owner, DecodeError> {
-    let fields = map_of(tree, "owner")?;
-    let path_text = text_of(get(fields, 1, "owner path")?, "owner path")?;
-    let segments = if path_text.is_empty() {
-        Vec::new()
-    } else {
-        path_text.split('.').map(ToString::to_string).collect()
-    };
-    let path = node::OwnerPath::new(segments).map_err(|_| err("owner path"))?;
-    let parent = match get(fields, 2, "owner parent")? {
-        Cbor::Null => None,
-        value => Some(node::OwnerSlot::new(u32_from(value, "owner parent")?)),
-    };
-    let kind = match array_of(get(fields, 3, "owner kind")?, "owner kind")? {
-        [Cbor::Uint(1)] => OwnerKind::Graph,
-        [Cbor::Uint(2), slot] => OwnerKind::Node(NodeIndex::new(u32_from(slot, "owner node")?)),
-        _ => return Err(err("owner kind")),
-    };
-    let instance = instance_from(get(fields, 4, "owner instance")?)?;
-    let vals = array_of(get(fields, 5, "owner vals")?, "owner vals")?
+    let instance = instance_from(get(fields, 4, "Node instance")?)?;
+    let vals = array_of(get(fields, 5, "Node vals")?, "Node vals")?
         .iter()
         .map(owner_value_from)
         .collect::<Result<Vec<_>, _>>()?;
-    let ports = array_of(get(fields, 6, "owner ports")?, "owner ports")?
-        .iter()
-        .map(port_decl_from)
-        .collect::<Result<Vec<_>, _>>()?;
-    let extensions = array_of(get(fields, 7, "owner extensions")?, "owner extensions")?
+    let extensions = array_of(get(fields, 6, "Node extensions")?, "Node extensions")?
         .iter()
         .map(extension_spec_from)
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(Owner {
+    let body = match array_of(get(fields, 7, "Node body")?, "Node body")? {
+        [Cbor::Uint(1)] => NodeKind::Graph,
+        [Cbor::Uint(2), vars, handlers] => NodeKind::Operator(Box::new(Operator {
+            vars: array_of(vars, "Operator vars")?
+                .iter()
+                .map(var_from)
+                .collect::<Result<Vec<_>, _>>()?,
+            handlers: array_of(handlers, "Operator handlers")?
+                .iter()
+                .map(handler_from)
+                .collect::<Result<Vec<_>, _>>()?,
+        })),
+        [Cbor::Uint(3), spec] => NodeKind::Connector(Box::new(spec_from(spec)?)),
+        _ => return Err(err("Node body")),
+    };
+    Ok(Node {
         path,
         parent,
-        kind,
         ports,
-        extensions,
         instance,
         vals,
+        extensions,
+        body,
     })
 }
 
@@ -2197,12 +2062,12 @@ fn var_from(tree: &Cbor) -> Result<VarCell, DecodeError> {
 fn edge_from(tree: &Cbor) -> Result<Edge, DecodeError> {
     match array_of(tree, "edge")? {
         [scope, from, Cbor::Null] => Ok(Edge {
-            owner: node::OwnerSlot::new(u32_from(scope, "edge scope")?),
+            owner: node::NodeIndex::new(u32_from(scope, "edge scope")?),
             from: endpoint_from(from)?,
             to: None,
         }),
         [scope, from, to] => Ok(Edge {
-            owner: node::OwnerSlot::new(u32_from(scope, "edge scope")?),
+            owner: node::NodeIndex::new(u32_from(scope, "edge scope")?),
             from: endpoint_from(from)?,
             to: Some(endpoint_from(to)?),
         }),
@@ -2219,26 +2084,16 @@ fn u32_from(tree: &Cbor, detail: &str) -> Result<u32, DecodeError> {
 
 fn endpoint_from(tree: &Cbor) -> Result<EdgeEnd, DecodeError> {
     match array_of(tree, "endpoint")? {
-        [slot, Cbor::Text(port)] => Ok(EdgeEnd {
-            node: match slot {
-                Cbor::Null => None,
-                Cbor::Uint(index) => Some(NodeIndex::new(
-                    u32::try_from(*index).map_err(|_| err("slot"))?,
-                )),
-                _ => return Err(err("endpoint slot")),
-            },
+        [Cbor::Uint(index), Cbor::Text(port)] => Ok(EdgeEnd {
+            node: NodeIndex::new(u32::try_from(*index).map_err(|_| err("Node index"))?),
             port: node::Port::new(port.clone()).map_err(|_| err("endpoint port"))?,
         }),
         _ => Err(err("endpoint")),
     }
 }
 
-fn handler_from(tree: &Cbor) -> Result<(NodeIndex, Handler), DecodeError> {
+fn handler_from(tree: &Cbor) -> Result<Handler, DecodeError> {
     let pairs = map_of(tree, "handler")?;
-    let owner = match array_of(get(pairs, 1, "handler owner")?, "handler owner")? {
-        [Cbor::Uint(1), index] => NodeIndex::new(u32_from(index, "handler node")?),
-        _ => return Err(err("handler owner")),
-    };
     let activation = match array_of(get(pairs, 2, "activation")?, "activation")? {
         [Cbor::Uint(1), Cbor::Text(port)] => node::HandlerActivation::Port(
             node::Port::new(port.clone()).map_err(|_| err("activation port"))?,
@@ -2274,14 +2129,11 @@ fn handler_from(tree: &Cbor) -> Result<(NodeIndex, Handler), DecodeError> {
         None => None,
     };
     let dispatch = fields::dispatch_from(get(pairs, 4, "handler dispatch")?, 0)?;
-    Ok((
-        owner,
-        Handler {
-            activation,
-            guard,
-            dispatch,
-        },
-    ))
+    Ok(Handler {
+        activation,
+        guard,
+        dispatch,
+    })
 }
 
 fn step_from(tree: &Cbor) -> Result<DispatchStep, DecodeError> {
@@ -2599,42 +2451,41 @@ mod tests {
     }
 
     #[test]
-    fn handler_owners_admit_only_executor_slots() {
+    fn handlers_belong_to_operator_bodies_and_reject_unknown_activations() {
         let handler = Handler {
             activation: node::HandlerActivation::Port(node::Port::new("in").unwrap()),
             guard: None,
             dispatch: crate::plan::Dispatch::Linear(vec![]),
         };
-        let tree = handler_tree((NodeIndex::new(0), &handler));
+        let tree = handler_tree(&handler);
         assert_eq!(
             canonical_cbor::encode(&tree),
-            [
-                0xa3, 1, 0x82, 1, 0, 2, 0x82, 1, 0x62, b'i', b'n', 4, 0x82, 1, 0x80
-            ]
+            [0xa2, 2, 0x82, 1, 0x62, b'i', b'n', 4, 0x82, 1, 0x80]
         );
-        assert_eq!(handler_from(&tree).unwrap(), (NodeIndex::new(0), handler));
-        for (key, value, refusal) in [
-            (
-                1,
-                Cbor::Array(vec![Cbor::Uint(2), Cbor::Uint(0)]),
-                "handler owner",
-            ),
-            (
-                2,
-                Cbor::Array(vec![
-                    Cbor::Uint(4),
-                    Cbor::Text(text("child")),
-                    Cbor::Text(text("out")),
-                ]),
-                "activation",
-            ),
-        ] {
-            let Cbor::Map(mut fields) = tree.clone() else {
-                unreachable!()
-            };
-            fields.insert(key, value);
-            assert_eq!(handler_from(&Cbor::Map(fields)), Err(err(refusal)));
-        }
+        assert_eq!(handler_from(&tree).unwrap(), handler);
+        let Cbor::Map(mut graph) = node_tree(&root_owner()) else {
+            panic!("Node map")
+        };
+        graph.insert(
+            7,
+            Cbor::Array(vec![Cbor::Uint(1), Cbor::Array(vec![tree.clone()])]),
+        );
+        assert!(
+            node_from(&Cbor::Map(graph)).is_err(),
+            "a Graph cannot carry handlers"
+        );
+        let Cbor::Map(mut fields) = tree else {
+            panic!("handler map")
+        };
+        fields.insert(
+            2,
+            Cbor::Array(vec![
+                Cbor::Uint(4),
+                Cbor::Text(text("child")),
+                Cbor::Text(text("out")),
+            ]),
+        );
+        assert_eq!(handler_from(&Cbor::Map(fields)), Err(err("activation")));
     }
 
     fn port(name: &str) -> node::Port {
@@ -2648,11 +2499,11 @@ mod tests {
         }
     }
 
-    fn root_owner() -> Owner {
-        Owner {
+    fn root_owner() -> Node {
+        Node {
             path: node::OwnerPath::root(),
             parent: None,
-            kind: OwnerKind::Graph,
+            body: NodeKind::Graph,
             ports: vec![],
             extensions: vec![ExtensionSpec::App],
             instance: instance::InstanceSpec {
@@ -2664,11 +2515,14 @@ mod tests {
         }
     }
 
-    fn node_owner(name: &str, slot: u32) -> Owner {
-        Owner {
+    fn node_owner(name: &str) -> Node {
+        Node {
             path: node::OwnerPath::new([name]).unwrap(),
-            parent: Some(node::OwnerSlot::new(0)),
-            kind: OwnerKind::Node(NodeIndex::new(slot)),
+            parent: Some(node::NodeIndex::new(0)),
+            body: NodeKind::Operator(Box::new(Operator {
+                vars: vec![],
+                handlers: vec![],
+            })),
             ports: vec![],
             extensions: vec![],
             instance: instance::InstanceSpec {
@@ -2681,7 +2535,7 @@ mod tests {
     }
 
     fn instance_package() -> Vec<u8> {
-        let mut instance_owner = node_owner("worker", 0);
+        let mut instance_owner = node_owner("worker");
         instance_owner.instance = instance::InstanceSpec {
             key: Some(expr::Tree {
                 root: expr::Expr::Path(vec![text("meta"), text("sys"), text("id")]),
@@ -2693,16 +2547,7 @@ mod tests {
         let validated = ValidatedExecutionPlan::try_new(ExecutionPlan {
             boundary_routes: Vec::new(),
             routes: vec![],
-            owners: vec![root_owner(), instance_owner],
-            nodes: vec![Node {
-                path: node::Path::new(["worker"]).unwrap(),
-                execution: NodeExecution::Operator {
-                    vars: vec![],
-                    handlers: vec![],
-                },
-                ports: vec![],
-                owner: node::OwnerSlot::new(1),
-            }],
+            nodes: vec![root_owner(), instance_owner],
             edges: vec![],
             app_schema: vec![],
             ext_schema: vec![],
@@ -2748,7 +2593,7 @@ mod tests {
         ValidatedExecutionPlan::try_new(ExecutionPlan {
             boundary_routes: Vec::new(),
             routes: vec![],
-            owners: vec![Owner {
+            nodes: vec![Node {
                 ports: vec![PortDecl {
                     port: port("in"),
                     direction: node::PortDirection::Input,
@@ -2757,7 +2602,6 @@ mod tests {
                 }],
                 ..root_owner()
             }],
-            nodes: vec![],
             edges: vec![],
             app_schema: vec![],
             ext_schema: vec![],
@@ -2994,7 +2838,7 @@ mod tests {
             DataType::Float(crate::datatype::FloatType::Binary64),
         ] {
             let mut forged = plan.plan().clone();
-            forged.owners[0].ports[0].ty = Some(target);
+            forged.nodes[0].ports[0].ty = Some(target);
             assert!(
                 ValidatedExecutionPlan::try_new(forged).is_err(),
                 "numeric target checked independently"
@@ -3026,7 +2870,7 @@ mod tests {
             one_annotation(note(DataType::Bool, Value::Bool(true))),
         )])
         .expect("other site");
-        raw.owners[0].ports.push(other);
+        raw.nodes[0].ports.push(other);
         let error =
             ValidatedExecutionPlan::try_new(raw).expect_err("one declaring name has one schema");
         assert!(
@@ -3173,10 +3017,7 @@ mod tests {
         );
 
         let erase_source = mutate_package_body(&package, |body| {
-            let Cbor::Array(boundary) = body.get_mut(&2).unwrap_or_else(|| panic!("boundary"))
-            else {
-                panic!("boundary array");
-            };
+            let boundary = ports_mut(body, 0);
             let Cbor::Array(port) = &mut boundary[0] else {
                 panic!("port declaration");
             };
@@ -3195,10 +3036,7 @@ mod tests {
         let package = encode(&plan, &SemanticHash::from_bytes([0; 32]));
 
         let bad_path = mutate_package_body(&package, |body| {
-            let Cbor::Array(boundary) = body.get_mut(&2).unwrap_or_else(|| panic!("boundary"))
-            else {
-                panic!("boundary array");
-            };
+            let boundary = ports_mut(body, 0);
             let Cbor::Array(port) = &mut boundary[0] else {
                 panic!("port declaration");
             };
@@ -3221,10 +3059,7 @@ mod tests {
         ));
 
         let unknown_binding = mutate_package_body(&package, |body| {
-            let Cbor::Array(boundary) = body.get_mut(&2).unwrap_or_else(|| panic!("boundary"))
-            else {
-                panic!("boundary array");
-            };
+            let boundary = ports_mut(body, 0);
             let Cbor::Array(port) = &mut boundary[0] else {
                 panic!("port declaration");
             };
@@ -3254,7 +3089,7 @@ mod tests {
         nested.extensions.clear();
         nested.path = node::OwnerPath::new(["nested"])
             .unwrap_or_else(|error| panic!("nested owner path: {error}"));
-        nested.parent = Some(node::OwnerSlot::new(0));
+        nested.parent = Some(node::NodeIndex::new(0));
         nested.ports = vec![PortDecl {
             port: port("in"),
             direction: node::PortDirection::Input,
@@ -3269,8 +3104,7 @@ mod tests {
         let plan = ValidatedExecutionPlan::try_new(ExecutionPlan {
             boundary_routes: Vec::new(),
             routes: vec![],
-            owners: vec![root_owner(), nested],
-            nodes: vec![],
+            nodes: vec![root_owner(), nested],
             edges: vec![],
             app_schema: vec![],
             ext_schema: vec![],
@@ -3279,13 +3113,13 @@ mod tests {
         .unwrap_or_else(|error| panic!("typed nested Graph policy validates: {error}"));
         let package = encode(&plan, &SemanticHash::from_bytes([0; 32]));
         let detached = mutate_package_body(&package, |body| {
-            let Cbor::Array(owners) = body.get_mut(&9).unwrap_or_else(|| panic!("owners")) else {
+            let Cbor::Array(owners) = body.get_mut(&12).unwrap_or_else(|| panic!("owners")) else {
                 panic!("owner array");
             };
             let Cbor::Map(nested) = &mut owners[1] else {
                 panic!("nested owner");
             };
-            let Cbor::Array(ports) = nested.get_mut(&6).unwrap_or_else(|| panic!("Graph ports"))
+            let Cbor::Array(ports) = nested.get_mut(&3).unwrap_or_else(|| panic!("Graph ports"))
             else {
                 panic!("Graph port array");
             };
@@ -3336,10 +3170,7 @@ mod tests {
 
         let mutate_both_tables = |edit: fn(&mut [Cbor])| {
             mutate_package_body(&package, |body| {
-                let Cbor::Array(boundary) = body.get_mut(&2).unwrap_or_else(|| panic!("boundary"))
-                else {
-                    panic!("boundary array");
-                };
+                let boundary = ports_mut(body, 0);
                 let Cbor::Array(port) = &mut boundary[0] else {
                     panic!("port declaration");
                 };
@@ -3406,7 +3237,7 @@ mod tests {
         else {
             panic!("map envelope");
         };
-        for version in [19, 21, u64::MAX] {
+        for version in [19, 20, 22, u64::MAX] {
             envelope.insert(1, Cbor::Uint(version));
             let mut previous = MAGIC.to_vec();
             previous.extend_from_slice(&canonical_cbor::encode(&Cbor::Map(envelope.clone())));
@@ -3426,6 +3257,21 @@ mod tests {
                 "an unknown tag cannot become a port direction"
             );
         }
+    }
+
+    #[test]
+    fn every_edge_endpoint_names_a_node_including_the_app_root() {
+        let endpoint = EdgeEnd {
+            node: NodeIndex::ROOT,
+            port: port("in"),
+        };
+        let encoded = Cbor::Array(vec![Cbor::Uint(0), Cbor::Text(text("in"))]);
+        assert_eq!(endpoint_tree(&endpoint), encoded);
+        assert_eq!(endpoint_from(&encoded).unwrap(), endpoint);
+        assert_eq!(
+            endpoint_from(&Cbor::Array(vec![Cbor::Null, Cbor::Text(text("in"))])),
+            Err(err("endpoint")),
+        );
     }
 
     #[test]
@@ -3449,37 +3295,55 @@ mod tests {
     #[test]
     fn a_valid_checksum_cannot_restore_a_graph_handler_or_child_activation() {
         let package = instance_package();
-        for (owner, activation, detail) in [
-            (
-                Cbor::Array(vec![Cbor::Uint(2), Cbor::Uint(0)]),
-                Cbor::Array(vec![Cbor::Uint(1), Cbor::Text(text("in"))]),
-                "handler owner",
-            ),
-            (
-                Cbor::Array(vec![Cbor::Uint(1), Cbor::Uint(0)]),
-                Cbor::Array(vec![
-                    Cbor::Uint(4),
-                    Cbor::Text(text("child")),
-                    Cbor::Text(text("out")),
-                ]),
-                "activation",
-            ),
-        ] {
-            let forged = mutate_package_body(&package, |body| {
-                body.insert(
+        let graph_handler = mutate_package_body(&package, |body| {
+            let Cbor::Array(nodes) = body.get_mut(&12).expect("nodes") else {
+                panic!("nodes")
+            };
+            let Cbor::Map(root) = &mut nodes[0] else {
+                panic!("root")
+            };
+            let Cbor::Array(graph) = root.get_mut(&7).expect("body") else {
+                panic!("Graph body")
+            };
+            graph.push(Cbor::Array(vec![Cbor::Map(BTreeMap::from([
+                (2, Cbor::Array(vec![Cbor::Uint(1), Cbor::Text(text("in"))])),
+                (
                     4,
-                    Cbor::Array(vec![Cbor::Map(BTreeMap::from([
-                        (1, owner),
-                        (2, activation),
-                        (
-                            4,
-                            fields::dispatch_tree(&super::super::Dispatch::Linear(vec![])),
-                        ),
-                    ]))]),
-                );
-            });
-            assert_eq!(decode(&forged), Err(err(detail)));
-        }
+                    fields::dispatch_tree(&super::super::Dispatch::Linear(vec![])),
+                ),
+            ]))]));
+        });
+        assert_eq!(decode(&graph_handler), Err(err("Node body")));
+
+        let child_activation = mutate_package_body(&package, |body| {
+            let Cbor::Array(nodes) = body.get_mut(&12).expect("nodes") else {
+                panic!("nodes")
+            };
+            let Cbor::Map(operator) = &mut nodes[1] else {
+                panic!("operator")
+            };
+            let Cbor::Array(operator) = operator.get_mut(&7).expect("body") else {
+                panic!("Operator body")
+            };
+            let Cbor::Array(handlers) = &mut operator[2] else {
+                panic!("handlers")
+            };
+            handlers.push(Cbor::Map(BTreeMap::from([
+                (
+                    2,
+                    Cbor::Array(vec![
+                        Cbor::Uint(4),
+                        Cbor::Text(text("child")),
+                        Cbor::Text(text("out")),
+                    ]),
+                ),
+                (
+                    4,
+                    fields::dispatch_tree(&super::super::Dispatch::Linear(vec![])),
+                ),
+            ])));
+        });
+        assert_eq!(decode(&child_activation), Err(err("activation")));
         assert!(
             extension_spec_from(&Cbor::Array(vec![
                 Cbor::Uint(1),
@@ -3489,8 +3353,21 @@ mod tests {
         );
     }
 
+    fn ports_mut(body: &mut BTreeMap<u64, Cbor>, index: usize) -> &mut Vec<Cbor> {
+        let Cbor::Array(nodes) = body.get_mut(&12).expect("nodes") else {
+            panic!("Node table")
+        };
+        let Cbor::Map(node) = &mut nodes[index] else {
+            panic!("Node row")
+        };
+        let Cbor::Array(ports) = node.get_mut(&3).expect("ports") else {
+            panic!("port table")
+        };
+        ports
+    }
+
     fn instance_mut(body: &mut BTreeMap<u64, Cbor>) -> &mut BTreeMap<u64, Cbor> {
-        let Cbor::Array(owners) = body.get_mut(&9).expect("owners") else {
+        let Cbor::Array(owners) = body.get_mut(&12).expect("owners") else {
             panic!("owner table");
         };
         let Cbor::Map(owner) = owners.get_mut(1).expect("Node owner") else {
@@ -3545,10 +3422,10 @@ mod tests {
         };
         assert_eq!(attr_from(&attr_tree(&setting)).unwrap(), setting);
 
-        let owner = Owner {
+        let owner = Node {
             path: node::OwnerPath::new(["workspace"]).unwrap(),
-            parent: Some(node::OwnerSlot::new(0)),
-            kind: OwnerKind::Graph,
+            parent: Some(node::NodeIndex::new(0)),
+            body: NodeKind::Graph,
             ports: vec![],
             extensions: vec![],
             instance: instance::InstanceSpec {
@@ -3570,7 +3447,7 @@ mod tests {
                 annotations: AnnotationTable::empty(),
             }],
         };
-        assert_eq!(owner_from(&owner_tree(&owner)).unwrap(), owner);
+        assert_eq!(node_from(&node_tree(&owner)).unwrap(), owner);
     }
 
     #[test]
@@ -3732,8 +3609,8 @@ mod tests {
         ExecutionPlan {
             boundary_routes: Vec::new(),
             routes: vec![],
-            owners: vec![
-                Owner {
+            nodes: vec![
+                Node {
                     ports: vec![
                         PortDecl {
                             port: port("entry"),
@@ -3745,13 +3622,8 @@ mod tests {
                     ],
                     ..root_owner()
                 },
-                node_owner("relay", 0),
-                node_owner("shell", 1),
-            ],
-            nodes: vec![
                 Node {
-                    path: node::Path::new(["relay"]).unwrap(),
-                    execution: NodeExecution::Operator { vars, handlers },
+                    body: NodeKind::Operator(Box::new(Operator { vars, handlers })),
                     ports: vec![
                         PortDecl::untyped(port("extra"), node::PortDirection::Output),
                         PortDecl {
@@ -3762,11 +3634,10 @@ mod tests {
                             annotations: AnnotationTable::empty(),
                         },
                     ],
-                    owner: node::OwnerSlot::new(1),
+                    ..node_owner("relay")
                 },
                 Node {
-                    path: node::Path::new(["shell"]).unwrap(),
-                    execution: NodeExecution::Connector(ConnectorSpec {
+                    body: NodeKind::Connector(Box::new(ConnectorSpec {
                         contract: crate::connector::ContractId::parse(
                             crate::connector::PROCESS_CONNECTOR_ID,
                         )
@@ -3782,27 +3653,27 @@ mod tests {
                             (text("cmd"), AttrSetting::Value(map_value)),
                             (text("codec"), AttrSetting::Word(text("lines"))),
                         ],
-                    }),
+                    })),
                     ports: vec![],
-                    owner: node::OwnerSlot::new(2),
+                    ..node_owner("shell")
                 },
             ],
             edges: vec![
                 Edge {
-                    owner: node::OwnerSlot::new(0),
+                    owner: node::NodeIndex::new(0),
                     from: EdgeEnd {
-                        node: None,
+                        node: crate::node::NodeIndex::ROOT,
                         port: port("in"),
                     },
                     to: Some(EdgeEnd {
-                        node: Some(NodeIndex::new(0)),
+                        node: NodeIndex::new(1),
                         port: port("in"),
                     }),
                 },
                 Edge {
-                    owner: node::OwnerSlot::new(0),
+                    owner: node::NodeIndex::new(0),
                     from: EdgeEnd {
-                        node: Some(NodeIndex::new(0)),
+                        node: NodeIndex::new(1),
                         port: port("extra"),
                     },
                     to: None,
@@ -3820,24 +3691,25 @@ mod tests {
         ExecutionPlan {
             boundary_routes: Vec::new(),
             routes: vec![],
-            owners: vec![root_owner(), node_owner("o", 0)],
-            nodes: vec![Node {
-                path: node::Path::new(["o"]).unwrap(),
-                execution: NodeExecution::Operator {
-                    vars: vec![],
-                    handlers: vec![Handler {
-                        activation: node::HandlerActivation::Port(port("in")),
-                        guard: None,
-                        dispatch: crate::plan::Dispatch::Linear(vec![DispatchStep::Let {
-                            name: text("x"),
-                            value: tree(root),
-                            annotations: AnnotationTable::empty(),
-                        }]),
-                    }],
+            nodes: vec![
+                root_owner(),
+                Node {
+                    body: NodeKind::Operator(Box::new(Operator {
+                        vars: vec![],
+                        handlers: vec![Handler {
+                            activation: node::HandlerActivation::Port(port("in")),
+                            guard: None,
+                            dispatch: crate::plan::Dispatch::Linear(vec![DispatchStep::Let {
+                                name: text("x"),
+                                value: tree(root),
+                                annotations: AnnotationTable::empty(),
+                            }]),
+                        }],
+                    })),
+                    ports: vec![],
+                    ..node_owner("o")
                 },
-                ports: vec![],
-                owner: node::OwnerSlot::new(1),
-            }],
+            ],
             edges: vec![],
             app_schema: vec![],
             ext_schema: vec![],
@@ -4185,8 +4057,7 @@ mod tests {
         let validated = ValidatedExecutionPlan::try_new(ExecutionPlan {
             boundary_routes: Vec::new(),
             routes: vec![],
-            owners: vec![root_owner()],
-            nodes: vec![],
+            nodes: vec![root_owner()],
             edges: vec![],
             app_schema: vec![],
             ext_schema: vec![],
@@ -4309,7 +4180,7 @@ mod tests {
                 8,
                 Cbor::Array(vec![
                     Cbor::Array(vec![]),
-                    Cbor::Array(vec![Cbor::Array(vec![])]),
+                    Cbor::Array(vec![Cbor::Array(vec![]), Cbor::Array(vec![])]),
                 ]),
             );
         });
@@ -4338,7 +4209,7 @@ mod tests {
             nested_type = DataType::text_map(nested_type);
         }
         let mut deep_type_plan = one_step_plan(expr::Expr::Literal(Value::Null));
-        deep_type_plan.nodes[0].handlers_mut()[0].dispatch =
+        deep_type_plan.nodes[1].handlers_mut()[0].dispatch =
             super::super::Dispatch::Linear(vec![DispatchStep::Let {
                 name: text("x"),
                 value: expr::Tree {
@@ -4387,15 +4258,15 @@ mod tests {
         )])
         .unwrap_or_else(|error| panic!("one policy row: {error}"));
         let mut categorical = rich_plan();
-        categorical.owners[0].instance.key = Some(tree(expr::Expr::Literal(Value::Int(7))));
-        categorical.owners[0].vals = vec![OwnerValue {
+        categorical.nodes[0].instance.key = Some(tree(expr::Expr::Literal(Value::Int(7))));
+        categorical.nodes[0].vals = vec![OwnerValue {
             name: text("answer"),
             site: EvaluationSite::Plan,
             expr: tree(expr::Expr::Literal(Value::Int(42))),
             resolved: Some(Value::Int(42)),
             annotations: policy.clone(),
         }];
-        let NodeExecution::Connector(spec) = &mut categorical.nodes[1].execution else {
+        let NodeKind::Connector(spec) = &mut categorical.nodes[2].body else {
             panic!("the rich plan's second node is a connector");
         };
         spec.attributes.push((
@@ -4406,14 +4277,14 @@ mod tests {
             },
         ));
         spec.attributes.sort_by(|left, right| left.0.cmp(&right.0));
-        categorical.owners[0].ports.push(PortDecl {
+        categorical.nodes[0].ports.push(PortDecl {
             port: port("deep"),
             direction: node::PortDirection::Input,
 
             ty: Some(nested_type.clone()),
             annotations: policy.clone(),
         });
-        categorical.owners[0].extensions = vec![ExtensionSpec::Loop(Box::new(LoopSpec {
+        categorical.nodes[0].extensions = vec![ExtensionSpec::Loop(Box::new(LoopSpec {
             entry: port("in"),
             terminals: vec![port("out")],
             expired: Some(crate::plan::LoopExpiredOutput {
@@ -4441,8 +4312,7 @@ mod tests {
             ExecutionPlan {
                 boundary_routes: Vec::new(),
                 routes: vec![],
-                owners: vec![root_owner()],
-                nodes: vec![],
+                nodes: vec![root_owner()],
                 edges: vec![],
                 app_schema: vec![],
                 ext_schema: vec![],
@@ -4494,7 +4364,7 @@ mod tests {
                 DispatchStep::LoopCommand(super::super::LoopCommand::Done),
             ] {
                 let mut raw = one_step_plan(expr::Expr::Literal(Value::Null));
-                raw.nodes[0].handlers_mut()[0].dispatch =
+                raw.nodes[1].handlers_mut()[0].dispatch =
                     super::super::Dispatch::Linear(vec![statement]);
                 assert_eq!(deepest_level(&raw), levels(&plan_tree(&raw)));
                 assert!(
@@ -4511,7 +4381,7 @@ mod tests {
         let resolved_plan = ExecutionPlan {
             boundary_routes: Vec::new(),
             routes: vec![],
-            owners: vec![Owner {
+            nodes: vec![Node {
                 ports: vec![PortDecl {
                     port: port("deep"),
                     direction: node::PortDirection::Input,
@@ -4520,7 +4390,6 @@ mod tests {
                 }],
                 ..root_owner()
             }],
-            nodes: vec![],
             edges: vec![],
             app_schema: vec![],
             ext_schema: vec![],

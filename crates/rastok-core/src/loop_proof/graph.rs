@@ -6,7 +6,7 @@ use crate::expr;
 use crate::node;
 use crate::plan::{
     Dispatch, DispatchStep, Endpoint, EndpointOwner, ExecutionPlan, LoopCommand, LoopCommandKind,
-    Owner, RouteDestination, RouteSelection,
+    Node, RouteDestination, RouteSelection,
 };
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec;
@@ -23,7 +23,7 @@ pub fn derive_graph(
     measure: expr::Tree,
     invariant: Option<expr::Tree>,
     plan: &ExecutionPlan,
-    owner: &Owner,
+    owner: &Node,
 ) -> Result<Certificate, Error> {
     let spec = owner.loop_spec().ok_or(Error::UnsupportedActivation)?;
     let mut inputs = BTreeSet::new();
@@ -70,7 +70,9 @@ pub fn derive_graph(
             .filter(|port| port.direction == node::PortDirection::Output)
         {
             let source = Endpoint {
-                owner: EndpointOwner::Node(node.path.clone()),
+                owner: node
+                    .endpoint_owner()
+                    .map_err(|_| Error::UnsupportedActivation)?,
                 port: port.port.clone(),
             };
             if recurs(plan, owner, &source)? {
@@ -87,13 +89,16 @@ pub fn derive_graph(
         let Some(node) = plan.nodes.get(handler_owner.index()) else {
             return Err(Error::UnsupportedActivation);
         };
+        let producer = node
+            .endpoint_owner()
+            .map_err(|_| Error::UnsupportedActivation)?;
         let keys: BTreeSet<_> = handler
             .dispatch
             .steps()
             .flat_map(DispatchStep::emissions)
             .filter(|(_, value)| !matches!(value, crate::plan::EmitValue::Nothing))
             .map(|(port, _)| Endpoint {
-                owner: EndpointOwner::Node(node.path.clone()),
+                owner: producer.clone(),
                 port: port.clone(),
             })
             .filter(|source| producers.contains_key(source))
@@ -105,13 +110,13 @@ pub fn derive_graph(
             return Err(Error::UnsupportedActivation);
         };
         if !inputs.contains(&Endpoint {
-            owner: EndpointOwner::Node(node.path.clone()),
+            owner: producer.clone(),
             port: port.clone(),
         }) {
             return Err(Error::UnsupportedActivation);
         }
         let input = Endpoint {
-            owner: EndpointOwner::Node(node.path.clone()),
+            owner: producer.clone(),
             port: port.clone(),
         };
         // A direct path is not enough: every possible producer of this
@@ -149,7 +154,7 @@ pub fn derive_graph(
     Ok(result)
 }
 
-fn recurs(plan: &ExecutionPlan, owner: &Owner, source: &Endpoint) -> Result<bool, Error> {
+fn recurs(plan: &ExecutionPlan, owner: &Node, source: &Endpoint) -> Result<bool, Error> {
     let mut pending = vec![source.clone()];
     let mut visited = BTreeSet::new();
     let mut found = false;

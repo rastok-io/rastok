@@ -18,7 +18,7 @@ use crate::boundary::{
 use crate::connector::{ConnectorDirection, ContractId};
 use crate::plan::ValidatedExecutionPlan;
 #[cfg(feature = "hosted-http12")]
-use crate::plan::{AttrSetting, NodeExecution};
+use crate::plan::{AttrSetting, NodeKind};
 #[cfg(feature = "hosted-http12")]
 use crate::value::Value;
 
@@ -160,9 +160,9 @@ pub(crate) fn bind_routes(
             .nodes
             .iter()
             .find(|node| &node.path == path)
-            .and_then(|node| match &node.execution {
-                NodeExecution::Connector(spec) => Some(spec),
-                NodeExecution::Operator { .. } => None,
+            .and_then(|node| match &node.body {
+                NodeKind::Connector(spec) => Some(spec),
+                NodeKind::Graph | NodeKind::Operator(_) => None,
             })
             .ok_or_else(|| {
                 super::DriverFactoryError::new(format!(
@@ -384,7 +384,7 @@ impl super::ConnectorDriverFactory for HttpServerLabFactory {
                     spec.contract.as_str() == crate::connector::HTTP_SERVER_CONNECTOR_ID
                 })
             })
-            .map(|node| &node.path)
+            .filter_map(|node| node.executor_path())
             .collect();
         if expected != actual {
             return Err(super::DriverFactoryError::new(

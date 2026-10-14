@@ -16,10 +16,8 @@ impl Execution<'_> {
             .instances
             .get(&record.instance)
             .ok_or_else(|| invalid(index, "a Retry manager has no admitted owner"))?;
-        let owner = &self.plan.owners[instance.owner.index()];
-        let OwnerKind::Node(slot) = owner.kind else {
-            return Err(invalid(index, "a Retry manager requires a Call Connector"));
-        };
+        let owner = &self.plan.nodes[instance.owner.index()];
+        let slot = instance.owner;
         let spec = owner
             .retry_spec()
             .ok_or_else(|| invalid(index, "the original owner has no Retry"))?;
@@ -80,7 +78,7 @@ impl Execution<'_> {
             let settings = self.resolve_invocation_settings(
                 &record.instance,
                 connector,
-                &self.plan.nodes[slot.index()].path,
+                self.executor_path(slot)?,
                 &delivery.envelope,
             )?;
             if pin.settings != settings {
@@ -212,7 +210,7 @@ impl Execution<'_> {
                 self.scheduler.schedule(
                     deadline.due_at,
                     Obligation::DeliveryBudget {
-                        connector: self.plan.nodes[slot.index()].path.clone(),
+                        connector: self.executor_path(slot)?.clone(),
                         edge: edge.clone(),
                         delivery: envelope.meta().sys().id(),
                         instance: record.instance.clone(),

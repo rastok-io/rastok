@@ -52,7 +52,7 @@ impl Execution<'_> {
             {
                 return Err(invalid(index, "a Call opens before its owner starts"));
             }
-            if self.plan.owners[self.plan.nodes[slot.index()].owner.index()]
+            if self.plan.nodes[slot.index()]
                 .loop_spec()
                 .is_some_and(|spec| spec.entry == delivery.port)
                 && self.loop_application(&instance, &delivery).is_none()
@@ -77,9 +77,7 @@ impl Execution<'_> {
             if retry.is_some() {
                 self.retry_call_opened(retry, intent)?;
             } else {
-                if self.plan.owners[self.plan.nodes[slot.index()].owner.index()]
-                    .retry_spec()
-                    .is_some()
+                if self.plan.nodes[slot.index()].retry_spec().is_some()
                     && !self.closing.contains(&instance)
                 {
                     return Err(invalid(
