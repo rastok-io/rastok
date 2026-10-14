@@ -368,7 +368,11 @@ fn nesting_is_bounded_before_typed_recursion_and_at_combined_encoding() {
     for _ in 1..canonical_cbor::MAX_NESTING {
         tree = Cbor::Array(vec![tree]);
     }
-    assert!(encode_field(&tree).is_ok());
+    let bytes = encode_field(&tree).expect("the deepest field is accepted");
+    assert_eq!(
+        canonical_cbor::decode(&bytes),
+        Ok((tree.clone(), bytes.len()))
+    );
     tree = Cbor::Array(vec![tree]);
     assert_eq!(encode_field(&tree), Err(FieldError::Nesting));
     assert!(matches!(
@@ -396,7 +400,9 @@ fn individually_shallow_values_can_exceed_the_combined_decision_budget() {
     let signature = expr::Signature::new();
     let mut ty = DataType::Bool;
     let mut value = Value::Bool(true);
-    for _ in 0..20 {
+    // Both components stay below their independent type/decision bounds;
+    // their combined serialized depth exceeds the reader's larger budget.
+    for _ in 0..(crate::datatype::MAX_TYPE_NESTING - MAX_DISPATCH_DEPTH) {
         ty = DataType::array(ty);
         value = Value::Array(vec![value]);
     }

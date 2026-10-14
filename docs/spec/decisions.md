@@ -5,6 +5,49 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-10-14-1 — Separate the format reader budget from expression and type bounds
+
+Yoann decides (2026-10-14) that format 21 fixes its own reader budget, while
+the language's expression and type bounds remain unchanged:
+
+1. `canonical_cbor::MAX_NESTING = 256` is the transport bound. With the root
+   at level zero, the reader accepts levels 0–255 and refuses level 256.
+   `decode_at`, the plan validator's exact serialized-depth checks and
+   `fields::encode_field` use this same bound, so every accepted encoding
+   can be read back. The Cortex-M33 release measurement is 240 bytes per
+   reader frame: 61,440 bytes for 256 reader frames alone. The complete
+   boundary-case package path is measured separately, alongside the unchanged
+   heap and code gates, in the Node-realignment qualification.
+2. `expr::MAX_EXPRESSION_DEPTH = 128` bounds expression structure, with the
+   root counting as one level. The parser's recursion, its post-parse
+   structural walk and the independent plan-side expression check use this
+   bound. `datatype::MAX_TYPE_NESTING` remains 128; Dispatch remains bounded
+   at 32 decisions. The language's smaller bounds do not follow changes to
+   the transport reader.
+
+The source-visible expression refusal is `E-PLAN-DEPTH` at Check, including
+flat chains that do not consume parser recursion. The Plan-phase refusal
+remains the totality guard for the exact serialized body: individually valid
+expressions, literals, types and decisions can compose beyond 256 levels.
+Raw plans and foreign bytes must not bypass either check.
+
+The reader bound is dimensioned by measured embedded stack use. It is not
+defined as a previous format's bound plus the depth of a Node body, and is
+not recomputed when a representation changes. In D-2026-08-10-8, the historical
+parenthesis “MAX_NESTING (128, the existing format budget)” now designates the
+type bound, `MAX_TYPE_NESTING`, not the reader's independent bound.
+
+Format 21 remains the sole readable package format; diagnostic recording 4
+is unchanged. This decision adds no compatibility reader, new format number,
+key or tag. It changes no semantic hash, journal record, trace or existing
+package byte, and requires no witness regeneration. The separately approved
+Node-table representation retains its own package-only inventory.
+
+Rejected: reducing the accepted expression depth to fit a representation;
+raising expression or type limits with the reader; retaining one shared
+budget for source structure and serialized containment; or treating the
+reader-only frame estimate as a measurement of the complete decoder path.
+
 ## D-2026-10-11-1 — Realign the plan and the runtime on the specification's Node ontology before the opening
 
 Yoann decides (2026-10-11) that the executable plan and the runtime

@@ -109,8 +109,15 @@ of the contract, in order:
 The canonical reader is itself strict and bounded: success means
 the bytes were canonical (minimal heads, strictly increasing unique
 map keys, the one canonical NaN), and nesting beyond its documented
-budget (`canonical_cbor::MAX_NESTING`, 128) refuses as a typed
-error, never a stack overflow. The budget cuts both ways:
+budget (`canonical_cbor::MAX_NESTING`, 256, root at level 0) refuses as a typed
+error, never a stack overflow. Expression and type budgets are distinct and
+smaller: `expr::MAX_EXPRESSION_DEPTH` and `datatype::MAX_TYPE_NESTING` are both
+128. The parser bounds its recursion and the structural expression tree at
+that expression limit; plan validation independently rechecks expressions
+before recursive type checking. The reader bound is the format's transport
+contract, not an offset from another format or a particular container layout.
+It is backed by the [embedded stack qualification](node-realignment-qualification.md).
+The transport budget cuts both ways:
 `ValidatedExecutionPlan` refuses any plan whose body would nest
 beyond it (`NestingExceeded`, measured without recursion), and
 the compiler surfaces that refusal as the user diagnostic
@@ -359,7 +366,7 @@ dispatch   := [1, [step*]]                         — Linear
             | [3, [pure_let*], [[tree, dispatch]*], dispatch] — OpenMatch + fallback
 case_set   := [case_name (text)+]                  — canonical, disjoint
               // Closed arms cover the source domain; open arms keep source
-              // order. Decisions <=32 deep, combined CBOR depth <=128.
+              // order. Decisions <=32 deep; combined CBOR levels stay below 256.
 lifecycle  := uint: 1 start · 2 stop · 3 next · 4 timeout · 5 evict ·
                     6 recover · 7 closing · 8 reply · 9 exit · 10 retry
               // Only start/stop activate authored lifecycle handlers.

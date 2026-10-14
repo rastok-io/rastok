@@ -29,6 +29,12 @@ use crate::datatype::{
 };
 use crate::value::Value;
 
+/// Maximum expression depth, counting the root as one level. The parser's
+/// recursion and the parsed tree use this same bound; plan validation checks
+/// it independently before recursive type checking. Serialized containment
+/// has a separate budget in [`crate::canonical_cbor::MAX_NESTING`].
+pub const MAX_EXPRESSION_DEPTH: usize = 128;
+
 /// Names refused explicitly: admitted by full CEL, outside this build.
 const UNSUPPORTED_FUNCTIONS: &[&str] = &["exists", "exists_one", "all", "map", "filter"];
 
@@ -732,7 +738,7 @@ pub enum DiagnosticKind {
     /// this to the asset diagnostic family rather than a generic expression
     /// fault.
     AssetCall,
-    /// An expression nesting beyond the format budget — refused at
+    /// An expression nesting beyond [`MAX_EXPRESSION_DEPTH`] — refused at
     /// the gate, before any recursive pass rides the machine stack.
     /// Carries the measured depth: the STRUCTURED payload the
     /// registered diagnostic emits, never the human sentence.
@@ -960,18 +966,16 @@ pub fn compile(text: &str, signature: &Signature) -> Result<Tree, Vec<Diagnostic
     // lowering recurse over it on the machine stack. The parser's own
     // recursion is guarded above, but a left-fold chain (`1 + 1 + …`)
     // builds depth with no parser recursion at all; it is caught
-    // here, iteratively. Structural depth beyond the reader's budget
-    // can never serialize anyway — every level costs at least one
-    // CBOR level — so the refusal is the same named diagnostic, and
-    // the refused tree is dismantled iteratively, never dropped
+    // here, iteratively. This expression bound is independent of serialized
+    // containment. The refused tree is dismantled iteratively, never dropped
     // through a recursive `Drop`.
     let depth = structural_depth(&root);
-    if depth > crate::canonical_cbor::MAX_NESTING {
+    if depth > MAX_EXPRESSION_DEPTH {
         let range = 0..text.len();
         dismantle(root);
         return Err(vec![Diagnostic {
             kind: DiagnosticKind::TooDeep { depth },
-            message: String::from("the expression nests deeper than the format budget"),
+            message: String::from("the expression nests deeper than the expression budget"),
             range,
         }]);
     }
@@ -1448,7 +1452,7 @@ struct ExprParser<'t, 'a> {
     text: &'a str,
     signature: &'t Signature,
     /// Production-nesting depth — the recursion guard. Bounded at
-    /// the format budget so a parenthesis tower or a unary chain
+    /// the expression budget so a parenthesis tower or a unary chain
     /// refuses by name instead of overflowing the parser's stack;
     /// grouping does not create AST depth, so the bound is
     /// conservative for adversarial shapes, never for real programs.
@@ -1506,10 +1510,10 @@ impl<'a> ExprParser<'_, 'a> {
     /// nests, so the visible budget is the real one.
     fn descend(&mut self) -> Result<(), Diagnostic> {
         self.depth += 1;
-        if self.depth > crate::canonical_cbor::MAX_NESTING {
+        if self.depth > MAX_EXPRESSION_DEPTH {
             return Err(Diagnostic {
                 kind: DiagnosticKind::TooDeep { depth: self.depth },
-                message: String::from("the expression nests deeper than the format budget"),
+                message: String::from("the expression nests deeper than the expression budget"),
                 range: self
                     .tokens
                     .get(self.pos)

@@ -381,12 +381,30 @@ fn the_depth_budget_counts_decisions_including_empty_fallback_only_matches() {
 fn hostile_expressions_are_refused_before_recursive_type_checking() {
     let signature = Signature::new();
     let mut deep = Expr::Literal(Value::Bool(true));
-    for _ in 0..crate::canonical_cbor::MAX_NESTING {
+    for _ in 1..expr::MAX_EXPRESSION_DEPTH {
         deep = Expr::Unary {
             op: expr::UnaryOp::Not,
             expr: Box::new(deep),
         };
     }
+    assert_eq!(
+        validate_dispatch(
+            &open(
+                Tree {
+                    root: deep.clone(),
+                    ty: DataType::Bool,
+                },
+                empty(),
+                empty(),
+            ),
+            &signature,
+        ),
+        Ok(())
+    );
+    deep = Expr::Unary {
+        op: expr::UnaryOp::Not,
+        expr: Box::new(deep),
+    };
     for root in [
         Expr::Path(Vec::new()),
         Expr::Path(vec!["absent".into()]),

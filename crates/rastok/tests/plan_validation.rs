@@ -2301,57 +2301,113 @@ fn an_unbound_asset_call_has_its_own_plan_refusal() {
 
 #[test]
 fn what_the_type_accepts_the_format_reads_back() {
-    // The reviewer's counter-example, generalized into the property
-    // it violated: grow an expression one level per turn; every plan
-    // the type accepts must ride the full round trip, and the first
-    // refusal must be the typed budget, exactly at the reader's
-    // bound. `encode ⇒ decode` is total — no gap at the boundary.
-    let hash = compile(
-        &[PROBE],
-        &ContractCatalog::try_m0().expect("the standard catalogue holds"),
-    )
-    .expect("a valid plan")
-    .hash;
-    let mut plan = raw_probe();
-    let mut last_accepted = None;
-    let mut refused = false;
-    for _ in 0..(MAX_NESTING + 16) {
-        let relay_steps = linear_statements(&mut operator_handlers(&mut plan, 1)[0]);
-        for step in relay_steps {
-            if let DispatchStep::SetVar { value: expr, .. } = step {
-                let previous = core::mem::replace(
-                    &mut expr.root,
-                    expr::Expr::Literal(rastok::value::Value::Int(0)),
-                );
-                expr.root = expr::Expr::Binary {
-                    op: expr::BinaryOp::Add,
-                    left: Box::new(previous),
-                    right: Box::new(expr::Expr::Literal(rastok::value::Value::Int(0))),
+    // The combined boundary exceeds the default 2 MiB test-thread stack in
+    // an unoptimized host build. Give this stress test explicit stack space;
+    // the optimized Cortex-M33 decoder is measured independently in the spike.
+    // No assertion or production bound depends on this test-only allocation.
+    std::thread::Builder::new()
+        .name(String::from("package-depth-boundary"))
+        .stack_size(8 * 1024 * 1024)
+        .spawn(|| {
+            // Keep the expression at its own 128-level bound, then grow its literal
+            // leaf by one serialized level at a time. Arrays add two CBOR levels;
+            // a one-field struct adds three, so alternating these shapes also visits
+            // the odd depths. The literal's logical type remains below its own bound.
+            // This reaches the independent reader budget without weakening either
+            // smaller bound. Every accepted plan must read back, including level 255;
+            // the first refusal must name exactly level 256.
+            let hash = compile(
+                &[PROBE],
+                &ContractCatalog::try_m0().expect("the standard catalogue holds"),
+            )
+            .expect("a valid plan")
+            .hash;
+            let mut plan = raw_probe();
+            let mut last_accepted = None;
+            let mut refused = false;
+            for literal_levels in 2..MAX_NESTING {
+                let mut literal = rastok::value::Value::Int(0);
+                let arrays = if literal_levels % 2 == 0 {
+                    literal_levels / 2
+                } else {
+                    literal = rastok::value::Value::Struct(vec![(String::from("nested"), literal)]);
+                    (literal_levels - 3) / 2
                 };
+                for _ in 0..arrays {
+                    literal = rastok::value::Value::Array(vec![literal]);
+                }
+                // The outer array gives size() the same accepted argument category
+                // for both literal shapes; each surrounding addition adds one level.
+                let mut root = expr::Expr::Call {
+                    function: expr::Function::Size,
+                    args: vec![expr::Expr::Literal(rastok::value::Value::Array(vec![
+                        literal,
+                    ]))],
+                };
+                for _ in 2..expr::MAX_EXPRESSION_DEPTH {
+                    root = expr::Expr::Binary {
+                        op: expr::BinaryOp::Add,
+                        left: Box::new(root),
+                        right: Box::new(expr::Expr::Literal(rastok::value::Value::Int(0))),
+                    };
+                }
+                let steps = linear_statements(&mut operator_handlers(&mut plan, 1)[0]);
+                let DispatchStep::SetVar { value, .. } = &mut steps[0] else {
+                    panic!("the fixture starts with the measured assignment");
+                };
+                value.root = root;
+                match ValidatedExecutionPlan::try_new(plan.clone()) {
+                    Ok(validated) => {
+                        let bytes = plan::encode(&validated, &hash);
+                        assert_eq!(
+                            plan::decode(&bytes).expect("every accepted plan reads back"),
+                            (validated.clone(), hash)
+                        );
+                        last_accepted = Some(validated);
+                    }
+                    Err(error) => {
+                        assert_eq!(
+                            error,
+                            PlanValidationError::NestingExceeded {
+                                depth: MAX_NESTING,
+                                bound: MAX_NESTING,
+                            },
+                            "the first refusal sits exactly at the reader's bound"
+                        );
+                        refused = true;
+                        break;
+                    }
+                }
             }
-        }
-        match ValidatedExecutionPlan::try_new(plan.clone()) {
-            Ok(validated) => last_accepted = Some(validated),
-            Err(error) => {
-                assert_eq!(
-                    error,
-                    PlanValidationError::NestingExceeded {
-                        depth: MAX_NESTING,
-                        bound: MAX_NESTING,
-                    },
-                    "the first refusal sits exactly at the reader's bound"
+            assert!(refused, "the composite package crossed the reader budget");
+            let deepest = last_accepted.expect("a deepest accepted plan");
+            let bytes = plan::encode(&deepest, &hash);
+            let (decoded, declared) = plan::decode(&bytes).expect("the boundary case reads back");
+            assert_eq!(decoded, deepest, "the deepest accepted plan round-trips");
+            assert_eq!(declared, hash);
+
+            // Explicit qualification output, never an implicitly replaced witness.
+            // The embedded stack probe reads this exact boundary-case package.
+            if let Some(path) = std::env::var_os("RASTOK_DEPTH_PACKAGE") {
+                use std::io::Write;
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(path)
+                    .expect("a new qualification package path")
+                    .write_all(&bytes)
+                    .expect("the qualification package is written");
+                println!(
+                    "DEPTH_PACKAGE: {} bytes, expression depth {}, serialized level {}",
+                    bytes.len(),
+                    expr::MAX_EXPRESSION_DEPTH,
+                    MAX_NESTING - 1
                 );
-                refused = true;
-                break;
             }
-        }
-    }
-    assert!(refused, "the chain crossed the budget");
-    let deepest = last_accepted.expect("a deepest accepted plan");
-    let bytes = plan::encode(&deepest, &hash);
-    let (decoded, declared) = plan::decode(&bytes).expect("the boundary case reads back");
-    assert_eq!(decoded, deepest, "the deepest accepted plan round-trips");
-    assert_eq!(declared, hash);
+        })
+        .expect("the depth qualification thread starts")
+        .join()
+        .expect("all depth-boundary assertions hold");
 }
 
 #[test]

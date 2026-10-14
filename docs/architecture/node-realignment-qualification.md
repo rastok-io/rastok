@@ -1145,3 +1145,66 @@ layout review, the inventoried package regeneration and documentation
 alignment, then a complete workspace run without the remaining version or
 package-pin failures. Inspection-module separation and the hosted Worker
 remain lot 2.
+
+## Independent depth budgets — 14–15 October 2026
+
+D-2026-10-14-1 fixes the format-21 reader bound at 256, with the root at
+level zero. Expression structure and parser recursion remain bounded at
+128; types remain bounded at 128 and Dispatch at 32. The source tests
+exercise the last accepted addition chain and parenthesis tower, then a
+Check refusal with depth 129. The independent raw-plan test combines an
+expression at its own bound with a growing structured literal: serialized
+level 255 reads back, and the first refusal names exactly level 256.
+
+The combined raw-plan stress test needs an explicit 8 MiB test-thread stack
+in an unoptimized host build; its first run exceeded the default 2 MiB test
+stack. This allocation belongs only to that test harness. It does not change
+an expression, type, transport or runtime bound, and no assertion is removed.
+The optimized embedded decoder is measured separately below.
+
+The optional `stack-qualification` feature of the non-shipping Cortex-M33
+spike implements Fable's watermark method: paint unused word-aligned RAM
+between `__sheap` and MSP minus 32 bytes, then scan for the lowest overwritten
+word. Every unsafe access states its invariant. Interrupts are disabled
+during painting; the image runs one core. Each section is repainted before
+measurement. Static allocation and the heap arena are below the painted
+range. The result includes the caller's `main` frame, which differs across
+images; only differences within the same image measure a per-level cost.
+
+| Instrumented release image | Complete package decode stack | Execution/recovery stack | Package-load heap peak | Complete heap peak |
+|---|---:|---:|---:|---:|
+| Echo, 32 admissions | 13,840 B | 17,144 B | 36,160 B | 111,404 B |
+| Retry, three Calls and full recovery | 9,960 B | 18,236 B | 30,684 B | 129,188 B |
+| Deepest accepted combined package, decode only | **79,168 B** | not executed | 107,328 B | 107,328 B |
+
+The combined package has 2,193 bytes and expression depth 128. It is generated
+by the exact-boundary property test, not by a different source approximation.
+The `decode-only` feature exits after decoding and does not claim execution of
+that program. All three images finish with `SPIKE_OK`. The two workload heap
+peaks are identical with and without the probe.
+
+Within each image, the raw CBOR reader grows by **60,960 B** from level 1 to
+level 255: **240 B per level**. Level 256 refuses with
+`NestingLimitExceeded`. This reproduces the frame measurement behind the
+decision; the measured 79,168 B complete path replaces the earlier 100–120 KiB
+estimate for this constructed boundary case. It is below the approximately
+257 KiB stack space discussed in the review, but the run is on QEMU
+`mps2-an505` with the spike's 4 MiB RAM map, not on a physical RP2350.
+Neither the 128 KiB heap gate nor the 1 MiB code gate is raised.
+
+To reproduce, set `RASTOK_DEPTH_PACKAGE` to a new path when running only
+`what_the_type_accepts_the_format_reads_back`; existing files are not
+overwritten. Build the spike with `RASTOK_SPIKE_PACKAGE` pointing at that
+file and `--features decode-only`. Echo uses `stack-qualification`; Retry
+uses `retry-qualification,stack-qualification` with the unchanged one-operation,
+sixteen-frames-per-channel, four-bytes-per-frame environment. All builds use
+the pinned toolchain, release optimization and `-D warnings`; execution uses
+Cortex-M33 QEMU with `-icount shift=0`.
+
+Normal images, without the stack feature, still meet both gates. Echo uses
+969,012 B of `.text + .rodata`, unchanged. Retry uses 1,040,912 B, eight bytes
+more than the preceding bound-128 image, leaving **7,664 B** of code margin.
+Its heap margin stays **1,884 B**. These bounds change no existing package,
+journal record, causal seal or semantic hash; no witness is regenerated for
+this decision. The separately inventoried Node-table package movement is
+recorded in the [identity inventory](node-realignment-identity.md).

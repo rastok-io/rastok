@@ -34,6 +34,8 @@ use rastok_core::runtime::execution::Execution;
 mod retry;
 #[cfg(feature = "node-layout-probe")]
 mod node_layout;
+#[cfg(feature = "stack-qualification")]
+mod stack;
 
 /// The allocator, wrapped to record a true high-water mark: the
 /// peak is updated inside every successful allocation, so no
@@ -161,8 +163,12 @@ fn main() -> ! {
     );
 
     // 1. Open the sealed package.
+    #[cfg(feature = "stack-qualification")]
+    stack::paint();
     let (open_ticks, opened) = ticks.measure(|| rastok_core::plan::decode(ECHO_PACKAGE));
     let (plan, hash) = opened.expect("the package opens");
+    #[cfg(feature = "stack-qualification")]
+    stack::report("pkg_decode");
     hprintln!("pkg_decode: {} ticks", open_ticks);
     hprintln!("semantic_hash: {}", hash);
     hprintln!("heap_after_open: {} bytes", HEAP.inner.used());
@@ -178,11 +184,20 @@ fn main() -> ! {
         core::mem::size_of::<journal::EgressRecord>()
     );
 
+    #[cfg(feature = "stack-qualification")]
+    stack::reader_boundaries();
+
+    if cfg!(feature = "decode-only") {
+        finish(0);
+    }
+
     #[cfg(feature = "node-layout-probe")]
     node_layout::compare(plan.plan());
 
     #[cfg(feature = "retry-qualification")]
     if plan.nodes.iter().any(|owner| owner.retry_spec().is_some()) {
+        #[cfg(feature = "stack-qualification")]
+        stack::paint();
         let records = retry::run(&plan, hash);
         finish(records);
     }
@@ -192,6 +207,8 @@ fn main() -> ! {
     //    lazy lifecycle transaction; those turns are real work but are not a
     //    relay sample, so the journal actor/trigger identifies the measured
     //    turn instead of assuming that one `step` has one static role.
+    #[cfg(feature = "stack-qualification")]
+    stack::paint();
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Execution::new(&plan, GraphVersion(1));
     let relay_owner = node::OwnerPath::new(["relay"]).expect("the measured owner path is valid");
@@ -244,6 +261,8 @@ fn main() -> ! {
 }
 
 fn finish(records: usize) -> ! {
+    #[cfg(all(feature = "stack-qualification", not(feature = "decode-only")))]
+    stack::report("execution");
     let peak = HEAP.peak.load(core::sync::atomic::Ordering::Relaxed);
     hprintln!(
         "heap_watermark: {} bytes of {} (allocator-tracked peak)",

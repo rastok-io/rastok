@@ -1543,7 +1543,7 @@ graph_body        ::= ( port_decl | operator_decl | connector_decl
                        | attribute )*                          // Graph has no var or handler
 
 type_decl         ::= "type" IDENT "=" type_ref                   // TOP-LEVEL only ; one namespace per unit ; duplicates refuse ;
-                                                                  //   recursion refuses (v1) ; budgets: depth ≤ MAX_NESTING, expanded
+                                                                  //   recursion refuses (v1) ; budgets: depth ≤ MAX_TYPE_NESTING (128), expanded
                                                                   //   tree ≤ 4096 nodes, ≤ 256 fields/struct, ≤ 64 KiB (D-2026-08-10-8)
 
 // A Node carrying `: Loop` uses ordinary qualified attributes:

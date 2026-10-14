@@ -1291,33 +1291,34 @@ fn the_depth_boundaries_are_exact() {
         depth.fields()
     );
 
-    // The v16 Dispatch tag adds one enclosing level. 118 additions
-    // reach level 127 and ride the round trip; the 119th reaches the
-    // reader's exact budget and refuses at PLAN, same payload.
-    let deep_ok = nested_additions(118);
+    // A flat addition chain reaches the expression budget before the larger
+    // reader budget. With the scalar leaf, 127 additions make 128 expression
+    // levels. That deepest accepted chain must encode and read back; the next
+    // addition refuses at Check, just like the parenthesis tower above.
+    let deep_ok = nested_additions(rastok::expr::MAX_EXPRESSION_DEPTH - 1);
     let compilation = compile(
         &[deep_ok.as_str()],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
-    .expect("118 additions fit");
+    .expect("127 additions fit the expression budget");
     let bytes = plan::encode(&compilation.plan, &compilation.hash);
     plan::decode(&bytes).expect("the deepest accepted program reads back");
     let bag = compile(
-        &[nested_additions(119).as_str()],
+        &[nested_additions(rastok::expr::MAX_EXPRESSION_DEPTH).as_str()],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
-    .expect_err("the 119th refuses");
+    .expect_err("the 128th addition refuses");
     let depth = bag
         .diagnostics()
         .iter()
         .find(|diagnostic| diagnostic.code().as_str() == "E-PLAN-DEPTH")
         .expect("refused by name");
-    assert_eq!(depth.phase(), rastok::diagnostics::Phase::Plan);
+    assert_eq!(depth.phase(), rastok::diagnostics::Phase::Check);
     assert!(
         depth
             .fields()
             .iter()
-            .any(|(name, value)| *name == "depth" && value == "128"),
+            .any(|(name, value)| *name == "depth" && value == "129"),
         "{:?}",
         depth.fields()
     );

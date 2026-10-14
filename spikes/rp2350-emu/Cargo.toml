@@ -12,6 +12,8 @@ publish = false
 [features]
 retry-qualification = []
 node-layout-probe = []
+stack-qualification = []
+decode-only = ["stack-qualification"]
 
 [dependencies]
 rastok-core = { path = "../../crates/rastok-core" }

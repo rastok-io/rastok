@@ -281,7 +281,7 @@ fn decision_at(
 
 fn tree_at(tree: &Tree, signature: &Signature, path: &str) -> Result<(), DispatchValidationError> {
     // Check the iterative depth bound before either recursive expression walk.
-    if expr::structural_depth(&tree.root) > crate::canonical_cbor::MAX_NESTING
+    if expr::structural_depth(&tree.root) > expr::MAX_EXPRESSION_DEPTH
         || tree.ty.check_bounds().is_err()
         || super::validation::expr_canonical(&tree.root).is_err()
         || !expression_has_type(&tree.root, &tree.ty, signature, false)
