@@ -1,8 +1,9 @@
-# Node realignment — package-21 candidate inventory
+# Node realignment — package-21 identity inventory
 
-Date: 14 October 2026. Authority: D-2026-10-11-1. This is review material
-prepared **before** regenerating package witnesses, not an approval of the
-candidate or an amendment to the current-format heading in `identity.md`.
+Date: 14 October 2026. Authority: D-2026-10-11-1. This inventory was committed
+as `54c2b3e` **before** regenerating package witnesses. Yoann subsequently
+instructed completion of lot 1, including the measured layout and these
+package-only updates. The final gate is recorded in the qualification report.
 The measured implementation is `dd5bda4`, following the indexed-endpoint
 checkpoint `59f1ddf`.
 The implementation and measurements are in
@@ -45,7 +46,7 @@ The indexed-delivery step makes no further package movement.
 All body lengths below exclude the package envelope. The existing
 `package_ledger` example compiled the sources, encoded and independently
 decoded each candidate, then compared its declared identity to the tracked
-witness. No tracked file was overwritten.
+witness. No tracked file was overwritten during that inventory step.
 
 | Witness | Format | Body bytes | Semantic hash |
 |---|---|---|---|
@@ -53,7 +54,7 @@ witness. No tracked file was overwritten.
 | JSONL | 20 → 21 | 1,005 → 979 | `0aeff047b9efde5c6dc4efd6f411c5541a786fb24f816108e110eb29d00e026f`, unchanged |
 | Gauge | 20 → 21 | 249 → 230 | `0d3ad43d9fb09c8626146342f6a50d1f4c387a8de52a47a3134a408cf74cb22e`, unchanged |
 
-| Witness | Format-20 checksum | Candidate checksum |
+| Witness | Format-20 checksum | Format-21 checksum |
 |---|---|---|
 | Echo | `a9f7b7c5c11f68ccedc4463edb803774681b3125d695fa67889e83228fbc964d` | `c24806e6918130b4d8d35c6660d3f254c598d17c41aac9930f6545d4cf748dc0` |
 | JSONL | `801f64797fd51a698de7cbaefe1e06e4281f0b92d9441b396a6a85d894cf5148` | `6d03694522f95d6ea2b8cf3654938ee73f65e5fa75c6dae8bcfc83943ed733d6` |
@@ -64,24 +65,27 @@ contracts, values, ordering or behavior. Gauge also changes package bytes:
 even its small pure graph now uses the unified Node table and Graph-owned
 wiring. Its semantic hash and trace remain the negative witnesses.
 
-Files to regenerate after approval:
+The approved regeneration is limited to:
 
 - `crates/rastok/tests/golden/echo.rkp`
 - `crates/rastok/tests/golden/jsonl.rkp`
 - `crates/rastok/tests/golden/gauge.rkp`
 - `spikes/rp2350-emu/echo.rkp`, the binary copy of the echo package.
 
-The current spike file was checked byte-for-byte against the decoded hex
-golden: both contain the same 1,042-byte format-20 package. Its replacement
-must come from the newly compiled source, not from editing the old bytes.
+The preceding spike file was checked byte-for-byte against the decoded hex
+golden: both contained the same 1,042-byte format-20 package. The regenerated
+format-21 file contains 1,015 bytes and is byte-identical to the new hex
+golden. It came from compiling the source, not from editing the old bytes.
 The explicit version assertions in `plan_fields`, `instance_stop` and
-`retry_plan` must move to 21 in the same approval change. Their functional
+`retry_plan` move to 21 in the same approval change. The hostile-header test
+in `plan_package` also spells version 21, including its deliberately nonminimal
+CBOR encoding; reordered and nonminimal headers still refuse. Their functional
 assertions are not relaxed.
 
 The format heading and representation descriptions in `identity.md`,
 `plan-package.md` and the spec-to-code map must be aligned at the same
-checkpoint. In particular, the separate owner/executor tables described
-by the current package document are not the candidate representation.
+checkpoint. In particular, separate owner/executor tables no longer describe
+the current package representation.
 This is documentation of the accepted ontology, not a semantic amendment;
 the human-review registers and decision entries remain with their owners.
 
@@ -113,18 +117,24 @@ The echo semantic hash in CI stays unchanged. No source example, Contract
 identifier, deadline tag, identity domain, annotation or runtime command
 changes as part of this approval.
 
-## Review boundary
+## Layout decision and closure boundary
 
 The measured candidate uses boxed nature-specific Node bodies. On the fixed
 Cortex-M33 Retry workload with recovery it leaves **1,884 B** below the
-128 KiB heap gate and **7,672 B** below the 1 MiB code gate; echo leaves
+128 KiB heap gate and **7,664 B** below the 1 MiB code gate; echo leaves
 19,668 B and 79,564 B respectively. These are measured workloads, not bounds
 for every valid program. The qualification report retains the alternatives,
 load peaks and resident costs rather than inferring them from package size.
 
-Recommendation: retain this layout, then regenerate only the four package
-files and update the three explicit version pins above. The complete
-workspace gate must subsequently pass without exceptions before lot 1 is
-called complete. Layout approval, package regeneration and that final green
-gate have **not** been claimed by this inventory. No push, tag or publication
-is part of the work.
+The approved layout retains boxed Node bodies. Only the four package files
+and explicit version pins above are regenerated. The final workspace gate
+passes without exceptions: 1,591 tests across 61 groups, none failed or ignored.
+Lot 1's closure and the other checks are recorded in the qualification report;
+the earlier measurements remain dated checkpoints.
+D-2026-10-14-1 separates the format-21 reader budget (256) from expression
+and type bounds (128). That depth correction changes no package byte and
+requires no witness regeneration; the four package movements above belong
+only to the Node-table representation. Exact-boundary tests and the complete
+decoder's embedded stack measurement are recorded in the qualification.
+Inspection-module separation and the hosted Worker remain lot 2. No push, tag
+or publication is part of this closure.

@@ -106,7 +106,7 @@ fn retry_roundtrips_without_any_command_port_or_expired_wrapper() {
     let bytes = plan::encode(&validated, &ordinary.hash);
     let (decoded, _) = plan::decode(&bytes).unwrap();
     assert_eq!(decoded, validated);
-    assert_eq!(plan::FORMAT_VERSION, 20);
+    assert_eq!(plan::FORMAT_VERSION, 21);
     // This VM has no bound Call dispatcher: a valid policy cannot bypass
     // the execution gate or reach an unbound Driver.
     let mut vm = rastok::runtime::execution::Execution::new(&validated, plan::GraphVersion(1));
