@@ -60,7 +60,7 @@ pub(super) struct Indexes {
     routes: Vec<RouteRule>,
     edges: Vec<Edge>,
     execution_order: Vec<NodeIndex>,
-    scope_chains: Vec<Option<Vec<NodeIndex>>>,
+    scope_chains: Vec<Vec<NodeIndex>>,
 }
 
 fn owner(plan: &ExecutionPlan, segments: &[String]) -> NodeIndex {
@@ -214,18 +214,16 @@ pub(super) fn reference(
     rules
 }
 
-pub(super) fn scope_chains(plan: &ExecutionPlan) -> Vec<Option<Vec<NodeIndex>>> {
-    // Reproduce the current VM allocation policy, including spare capacity.
-    // This experiment does not claim a saving from a different chain cache.
-    let mut chains: Vec<Option<Vec<NodeIndex>>> = Vec::with_capacity(plan.owners.len());
-    for (index, owner) in plan.owners.iter().enumerate() {
-        let mut chain = match owner.parent {
-            None => Some(Vec::new()),
-            Some(parent) => chains[parent.index()].clone(),
-        };
-        if let Some(chain) = &mut chain {
-            chain.push(NodeIndex(u32::try_from(index).unwrap()));
+pub(super) fn scope_chains(plan: &ExecutionPlan) -> Vec<Vec<NodeIndex>> {
+    // Mirror the validated plan's index for every candidate, including
+    // the control. These copies do not measure the production loader's peak.
+    let mut chains: Vec<Vec<NodeIndex>> = Vec::with_capacity(plan.owners.len());
+    for (owner, index) in plan.owners.iter().zip(0..) {
+        let mut chain = Vec::with_capacity(owner.path.segments().len() + 1);
+        if let Some(parent) = owner.parent {
+            chain.extend_from_slice(&chains[parent.index()]);
         }
+        chain.push(NodeIndex(index));
         chains.push(chain);
     }
     chains

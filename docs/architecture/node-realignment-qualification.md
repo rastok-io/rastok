@@ -5,8 +5,9 @@ Status: 14 October 2026. This records the preparation for lot 1 of
 The vocabulary follow-up is `2259fd4` and `beabf68`; the Execution interface
 is named in `90c646f` and `9218779`. The executable package remains format 20.
 The Operator-containment step (`5513883`) moves state and handlers into the
-Operator body. The following step puts the App's port declarations on its
-root Graph. Neither changes the package tables. Graph and executor
+Operator body. `dabda8e` puts the App's port declarations on its
+root Graph. Scope chains now belong to the validated plan rather than each
+Execution. These steps preserve the package tables. Graph and executor
 tables are not yet merged. The isolated allocation measurements below
 describe the preceding representation; no final Node layout has been selected.
 
@@ -536,3 +537,138 @@ was regenerated. The human-review ledgers and `decisions.md` are untouched.
 Lot 1 remains open for the single Node table, private derived routing indexes,
 indexed mailbox deliveries, package cutover and differential qualification.
 No push, tag or publication is performed.
+
+## Shared validated scope chains — 14 October
+
+This step implements the scope-chain part of the private derived indexes
+in D-2026-10-11-1. `ValidatedExecutionPlan` derives each complete path from
+App through the containing Graphs to its owner, after structural validation
+has proved the parent tree. Live execution and recovery borrow the same
+read-only index. No scope is skipped and no dynamic instance generation is
+stored there. Admission, direct inbound Call responses, Graph Loops and
+Closing use the same chains and order as before.
+
+The former per-Execution `Vec<Option<Vec<OwnerSlot>>>` disappears. A missing
+chain is no longer an internal state of a validated owner. The derived
+index is private, absent from the raw plan and package, and does not enter
+any journal field or identity recipe. RustRover performed the scope-chain
+symbol renames; structural edits moved the derivation into validation.
+
+Two focused tests cover complete nested chains and sibling separation,
+package round-trip reconstruction, out-of-range queries, and rejection of
+self, forward and invalid parents before index construction. Existing
+instance, Graph Loop, Closing and recovery tests remain unchanged.
+
+### Measured representation choice
+
+Two implementations were compared on the normal Cortex-M33 images, against
+`dabda8e`. The first stored all chain elements in one boxed slice plus an
+offset slice. It reduced the Retry peak by 32 B, but added 1,224 B of code.
+The retained implementation uses a `Vec` of chains, each allocated at its
+exact validated path length. It reduces the Retry peak by 16 B and code by
+144 B. Packing would save only another 16 B of heap while costing 1,368 B
+of code relative to this simpler representation. It is not retained.
+This comparison does **not** select the future unified Node-body layout.
+
+The same unchanged echo package and temporary three-attempt Retry package
+were executed with `-D warnings`, no probe instrumentation, and the existing
+QEMU instruction-count configuration. The Retry workload still has one
+operation, 16 frames per channel and 4 bytes per frame, with full recovery.
+
+| Normal image | Echo, 32 admissions | Retry, 3 attempts + recovery |
+|---|---:|---:|
+| Heap after package decoding | 6,884 B | 5,660 B |
+| Decoder peak | 35,556 B | 30,392 B |
+| Whole-run allocator peak | 112,092 B | 130,512 B |
+| Heap change from `dabda8e` | −24 B | −16 B |
+| Heap margin below 128 KiB | 18,980 B | 560 B |
+| `.text` | 902,628 B | 962,876 B |
+| `.rodata` | 70,340 B | 81,112 B |
+| Code total | 972,968 B | 1,043,988 B |
+| Code change from `dabda8e` | −40 B | −144 B |
+| Code margin below 1 MiB | 75,608 B | 4,588 B |
+| Decode ticks, instruction-count proxy | 21,827 | 16,067 |
+| Journal records | 67 | 17 |
+| QEMU result | `SPIKE_OK` | `SPIKE_OK` |
+
+The index now exists at package load, so resident plan and decoder peak
+grow by 60 B for echo and 40 B for Retry. Those allocations replace, rather
+than supplement, the per-Execution cache; the whole-run peaks fall as shown.
+Retry's live heap is 93,416 B, and its recovered heap is 93,280 B. Both gates
+hold without changing either limit. The semantic hashes remain
+`562396de22b068ef874b8d7273bf972ee1b08b8dcb6dab8902d6b816b1c90813`
+and `d8e89d6dc345e7c6199ee5ffc5664b682e09040a8589c6e934016bbe1c32581f`.
+
+Both updated `node-layout-probe` images also build with `-D warnings` and
+finish in `SPIKE_OK`. All candidates and the control now use the same exact
+chain allocation policy. Their declaration-only measurements are unchanged.
+
+| Declarations + wiring + indexes, resident / construction peak | Echo | Retry |
+|---|---:|---:|
+| Owner and executor tables | 3,560 / 3,560 B | 2,800 / 2,800 B |
+| Inline bodies | 4,060 / 4,892 B | 3,252 / 3,984 B |
+| Boxed bodies | 3,912 / 4,744 B | 3,176 / 3,908 B |
+| Compact side tables | 3,912 / 4,744 B | 3,176 / 3,908 B |
+
+These remain allocation experiments, not executions of a unified plan. In
+particular, the boxed candidate still costs 352 B more than the current echo
+control and 376 B more than the Retry control; updating the shared index
+does not remove the need for complete decoder/execution/recovery qualification.
+
+### Verification
+
+Workspace formatting, strict all-target/all-feature Clippy, rustdoc without
+warnings, and the three `no_std` checks pass (`thumbv7m-none-eabi`,
+`riscv32imac-unknown-none-elf`, `thumbv8m.main-none-eabihf`). RustRover's
+project build succeeds and its inspections find no error in validation or
+Execution. The rustdoc-link check covers 213 Rust files with no relative
+Markdown links; its four regression tests pass. The edited spike module
+passes its standalone formatting check.
+
+The final complete workspace test run passes: **1,582 tests, 61 groups,
+zero failures and zero ignored tests**, two tests more than `dabda8e`.
+The initial run had 1,580 passes and the two failures described below.
+No code changed between the two runs and no compilation overlapped the
+network probes. Fresh host binaries again took minutes before entering
+their test harnesses. A one-second
+`/usr/bin/sample` of the waiting `agent_chat --list` process showed only
+`_dyld_start`, with no Rust frame. This identifies the observed wait as
+pre-harness startup, not its operating-system cause. Listing the 59 compiled
+executables is only startup preparation, not test execution or a passing gate.
+No test timeout or system protection is changed.
+
+The initial run encountered one startup failure in the chat's local-network
+test: its child CLI had not bound the listener within the unchanged 30 s
+limit, with empty stdout/stderr. The same newly built CLI, started separately
+with `--help`, was sampled at `_dyld_start` more than 30 s after launch, before
+any graph or Rust handler ran. After the CLI reached its argument parser, the
+same chat test passed in 1.25 s with no rebuild, source edit or timeout change.
+The second complete run passes all four chat tests. The first failure is
+not counted as a pass.
+
+The same initial run also exceeded the existing 20 s conformance deadline
+for Process's `DecodeFailed` case, whose external command is
+`perl -e 'print chr(255)'`. Repeating the unchanged full Process battery
+passed in 0.42 s. There is no sample of that failed child, so its exact cause
+is not established; the successful rerun does not erase the initial failure.
+The second complete run passes all four Process conformance tests as well.
+
+The final host and target checks were:
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+cargo doc --locked --workspace --no-deps
+env -u RASTOK_SAVE_GOLDENS cargo test --locked --workspace --all-features --no-fail-fast -- --quiet
+cargo check --locked -p rastok-core --no-default-features --target thumbv7m-none-eabi
+cargo check --locked -p rastok-core --no-default-features --target riscv32imac-unknown-none-elf
+cargo check --locked -p rastok-core --no-default-features --target thumbv8m.main-none-eabihf
+node tools/ci/check-rustdoc-links.mjs
+node --test tools/ci/check-rustdoc-links.test.mjs
+git diff --check
+```
+
+No example, fixture, golden, package, trace or diagnostic recording changed.
+The human-review registers and decisions are untouched. Lot 1 remains open:
+the unified Node table, reference wiring, indexed mailbox deliveries and
+the package cutover still need implementation and end-to-end qualification.

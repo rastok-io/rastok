@@ -1013,6 +1013,9 @@ pub struct ValidatedExecutionPlan {
     plan: ExecutionPlan,
     resolved_ports: super::type_resolution::ResolvedPortTable,
     handler_context: Vec<HandlerContextUse>,
+    // Complete root-to-owner chains, derived after parent validation. Shared
+    // by live and recovered executions, never serialized or mutated by them.
+    scope_chains: Vec<Vec<node::OwnerSlot>>,
 }
 
 /// Derived context demand for one handler. It never travels in a package:
@@ -1117,10 +1120,20 @@ impl ValidatedExecutionPlan {
             .handlers()
             .map(|(_, handler)| handler_context_use(handler))
             .collect();
+        let mut scope_chains: Vec<Vec<node::OwnerSlot>> = Vec::with_capacity(plan.owners.len());
+        for (owner, index) in plan.owners.iter().zip(0..) {
+            let mut chain = Vec::with_capacity(owner.path.segments().len() + 1);
+            if let Some(parent) = owner.parent {
+                chain.extend_from_slice(&scope_chains[parent.index()]);
+            }
+            chain.push(node::OwnerSlot::new(index));
+            scope_chains.push(chain);
+        }
         Ok(Self {
             plan,
             resolved_ports,
             handler_context,
+            scope_chains,
         })
     }
 
@@ -1146,6 +1159,13 @@ impl ValidatedExecutionPlan {
     #[must_use]
     pub(crate) fn handler_context(&self) -> &[HandlerContextUse] {
         &self.handler_context
+    }
+
+    /// Complete lexical chain, from App through each containing Graph to the
+    /// requested owner. Execution borrows it for instance admission, Closing
+    /// and Loop contexts; no live generation or scheduler state belongs here.
+    pub(crate) fn scope_chain(&self, owner: node::OwnerSlot) -> Option<&[node::OwnerSlot]> {
+        self.scope_chains.get(owner.index()).map(Vec::as_slice)
     }
 
     /// Gives the raw plan back — the validity claim does not travel
@@ -4991,6 +5011,94 @@ fn narrow_target_canonical(target: &expr::NarrowTarget) -> Result<(), PlanValida
     };
     ty.check_bounds()
         .map_err(|_| PlanValidationError::UnrepresentableConstant)
+}
+
+#[cfg(test)]
+mod scope_chain_tests {
+    use super::*;
+    use crate::plan::{ExtensionSpec, Owner};
+
+    fn nested_plan() -> ExecutionPlan {
+        let declarations: &[(&[&str], Option<u32>)] = &[
+            (&[], None),
+            (&["alpha"], Some(0)),
+            (&["alpha", "inner"], Some(1)),
+            (&["alpha", "inner", "leaf"], Some(2)),
+            (&["beta"], Some(0)),
+            (&["beta", "leaf"], Some(4)),
+        ];
+        ExecutionPlan {
+            owners: declarations
+                .iter()
+                .map(|(path, parent)| Owner {
+                    path: node::OwnerPath::new(path.iter().copied()).unwrap(),
+                    parent: parent.map(node::OwnerSlot::new),
+                    kind: OwnerKind::Graph,
+                    ports: vec![],
+                    extensions: if parent.is_none() {
+                        vec![ExtensionSpec::App]
+                    } else {
+                        vec![]
+                    },
+                    instance: instance::InstanceSpec {
+                        key: None,
+                        lifetime: instance::Lifetime::Persistent,
+                        closing: None,
+                    },
+                    vals: vec![],
+                })
+                .collect(),
+            nodes: vec![],
+            edges: vec![],
+            routes: vec![],
+            boundary_routes: vec![],
+            app_schema: vec![],
+            ext_schema: vec![],
+            assets: vec![],
+        }
+    }
+
+    #[test]
+    fn scope_chains_include_every_parent_and_never_a_sibling() {
+        let plan = ValidatedExecutionPlan::try_new(nested_plan()).unwrap();
+        let expected: &[&[u32]] = &[
+            &[0],
+            &[0, 1],
+            &[0, 1, 2],
+            &[0, 1, 2, 3],
+            &[0, 4],
+            &[0, 4, 5],
+        ];
+        let hash = crate::plan::SemanticHash::from_bytes([0; 32]);
+        let package = crate::plan::encode(&plan, &hash);
+        let (decoded, decoded_hash) = crate::plan::decode(&package).unwrap();
+        assert_eq!(decoded_hash, hash);
+        assert_eq!(crate::plan::encode(&decoded, &hash), package);
+        for (expected, index) in expected.iter().zip(0..) {
+            let expected: Vec<_> = expected.iter().copied().map(node::OwnerSlot::new).collect();
+            for plan in [&plan, &decoded] {
+                assert_eq!(
+                    plan.scope_chain(node::OwnerSlot::new(index)),
+                    Some(expected.as_slice())
+                );
+            }
+        }
+        assert_eq!(plan.scope_chain(node::OwnerSlot::new(6)), None);
+        assert_eq!(plan.scope_chain(node::OwnerSlot::new(u32::MAX)), None);
+    }
+
+    #[test]
+    fn invalid_parents_are_rejected_before_scope_chains_are_derived() {
+        for parent in [1, 2, u32::MAX] {
+            let mut plan = nested_plan();
+            plan.owners[1].parent = Some(node::OwnerSlot::new(parent));
+            assert!(matches!(
+                ValidatedExecutionPlan::try_new(plan),
+                Err(PlanValidationError::InvalidOwnerTree { owner })
+                    if owner == node::OwnerSlot::new(1)
+            ));
+        }
+    }
 }
 
 #[cfg(test)]

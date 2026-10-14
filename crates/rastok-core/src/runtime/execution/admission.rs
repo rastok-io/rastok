@@ -267,7 +267,7 @@ impl Execution<'_> {
         candidates: &mut BTreeMap<instance::Generation, InstanceCandidate>,
     ) -> Result<PreparedTarget, ExecutionFault> {
         let owner = self.plan.nodes[source.index()].owner;
-        let scope = self.owner_chain(owner)?.first().copied().ok_or_else(|| {
+        let scope = self.scope_chain(owner)?.first().copied().ok_or_else(|| {
             ExecutionFault::PlanInvariant {
                 node: self.plan.nodes[source.index()].path.clone(),
                 reason: match endpoint.exchange {

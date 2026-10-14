@@ -51,8 +51,9 @@ impl Execution<'_> {
                 let node = &self.plan.nodes[slot.index()];
                 // Once a product leaves the closing scope, a later return is
                 // external admission, not work for this old generation.
-                if !self.owner_chains[node.owner.index()]
-                    .as_deref()
+                if !self
+                    .plan
+                    .scope_chain(node.owner)
                     .is_some_and(|chain| chain.contains(&scope_owner))
                 {
                     continue;

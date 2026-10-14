@@ -343,7 +343,7 @@ impl Execution<'_> {
         candidates: &mut BTreeMap<instance::Generation, InstanceCandidate>,
     ) -> Result<PreparedTarget, ExecutionFault> {
         let scope = self
-            .owner_chain(self.plan.nodes[slot.index()].owner)?
+            .scope_chain(self.plan.nodes[slot.index()].owner)?
             .first()
             .copied()
             .ok_or_else(|| invalid(index, "an inbound source has no owner chain"))?;

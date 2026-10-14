@@ -221,8 +221,8 @@ impl Execution<'_> {
         let source_owner = self.endpoint_owner(source)?;
         for destination in destinations {
             let target_owner = self.endpoint_owner(&destination)?;
-            let source_chain = self.owner_chain(source_owner)?;
-            let target_chain = self.owner_chain(target_owner)?;
+            let source_chain = self.scope_chain(source_owner)?;
+            let target_chain = self.scope_chain(target_owner)?;
             let scope = source_chain
                 .iter()
                 .zip(target_chain)

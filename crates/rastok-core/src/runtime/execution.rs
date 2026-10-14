@@ -987,9 +987,6 @@ pub struct Execution<'plan> {
     /// secret bytes are absent; only provider coordinates and versions live
     /// here.
     expected_deployment: Option<crate::deployment::DeploymentAttestation>,
-    /// Plan-derived owner chains, indexed once so route selection allocates
-    /// only the dynamic reference chain it must commit.
-    owner_chains: Vec<Option<Vec<node::OwnerSlot>>>,
     /// Whether any activation can retain a partial presence set. The common
     /// no-join plan can keep FIFO dispatch on its original direct path.
     has_join_activations: bool,
@@ -1340,19 +1337,6 @@ impl<'plan> Execution<'plan> {
         logical_time: i64,
         boot: Option<&crate::deployment::BootBindings>,
     ) -> Self {
-        let mut owner_chains: Vec<Option<Vec<node::OwnerSlot>>> =
-            Vec::with_capacity(plan.owners.len());
-        for (index, owner) in plan.owners.iter().enumerate() {
-            let slot = node::OwnerSlot::new(u32::try_from(index).unwrap_or(u32::MAX));
-            let mut chain = match owner.parent {
-                None => Some(Vec::new()),
-                Some(parent) => owner_chains.get(parent.index()).cloned().flatten(),
-            };
-            if let Some(chain) = &mut chain {
-                chain.push(slot);
-            }
-            owner_chains.push(chain);
-        }
         Self {
             plan,
             original_hash: None,
@@ -1365,7 +1349,6 @@ impl<'plan> Execution<'plan> {
             missing_deployment_binding: first_missing_deployment_binding(plan, boot),
             requires_personal_retention: personal_data_requirements(plan).personal,
             expected_deployment: boot.map(|boot| boot.attestation().clone()),
-            owner_chains,
             has_join_activations: plan.handlers().any(|(_, handler)| {
                 matches!(&handler.activation, node::HandlerActivation::Join { .. })
             }),
@@ -5398,14 +5381,14 @@ impl<'plan> Execution<'plan> {
             return Ok(None);
         }
 
-        let owner_chain = self.owner_chain(self.plan.nodes[target.index()].owner)?;
-        let Some(scope_index) = owner_chain.iter().position(|owner| *owner == edge_scope) else {
+        let scope_chain = self.scope_chain(self.plan.nodes[target.index()].owner)?;
+        let Some(scope_index) = scope_chain.iter().position(|owner| *owner == edge_scope) else {
             return Err(ExecutionFault::PlanInvariant {
                 node: self.plan.nodes[target.index()].path.clone(),
                 reason: "the response edge scope is not an ancestor of its inbound Call target",
             });
         };
-        let mut selected = Vec::with_capacity(owner_chain.len());
+        let mut selected = Vec::with_capacity(scope_chain.len());
         let mut cursor = Some(pending.instance.clone());
         while let Some(reference) = cursor {
             let instance =
@@ -5419,10 +5402,10 @@ impl<'plan> Execution<'plan> {
             cursor = instance.parent.clone();
         }
         selected.reverse();
-        if selected.len() != owner_chain.len()
+        if selected.len() != scope_chain.len()
             || selected
                 .iter()
-                .zip(owner_chain)
+                .zip(scope_chain)
                 .any(|((actual, _), expected)| actual != expected)
         {
             return Err(ExecutionFault::PlanInvariant {
@@ -5607,7 +5590,7 @@ impl<'plan> Execution<'plan> {
                 reason,
             },
         };
-        let chain = self.owner_chain(target_owner)?;
+        let chain = self.scope_chain(target_owner)?;
         let Some(scope_index) = chain.iter().position(|owner| *owner == scope) else {
             return Err(refusal(
                 "the edge scope is not an ancestor of its target owner",
@@ -5652,10 +5635,9 @@ impl<'plan> Execution<'plan> {
         })
     }
 
-    fn owner_chain(&self, owner: node::OwnerSlot) -> Result<&[node::OwnerSlot], ExecutionFault> {
-        self.owner_chains
-            .get(owner.index())
-            .and_then(Option::as_deref)
+    fn scope_chain(&self, owner: node::OwnerSlot) -> Result<&[node::OwnerSlot], ExecutionFault> {
+        self.plan
+            .scope_chain(owner)
             .ok_or_else(|| ExecutionFault::PlanInvariant {
                 node: node::Path::new(["owner"])
                     .unwrap_or_else(|_| unreachable!("a literal path is valid")),
