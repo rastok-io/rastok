@@ -69,6 +69,8 @@ pub enum Fault {
     /// A caller-supplied Node index outside the plan's table. Plan validation
     /// proves only its stored indices; public APIs also check caller inputs.
     UnknownNodeIndex(NodeIndex),
+    /// A caller-supplied delivery index outside this execution's route table.
+    UnknownEdgeIndex(envelope::EdgeIndex),
     /// The indexed Node is a Graph, not an application Executor.
     NotExecutor(NodeIndex),
 }
@@ -88,6 +90,13 @@ impl fmt::Display for Fault {
             Self::NotExecutor(index) => write!(f, "Node {} is not an Executor", index.index()),
             Self::UnknownNodeIndex(slot) => {
                 write!(f, "the plan has no Node at index {}", slot.index())
+            }
+            Self::UnknownEdgeIndex(index) => {
+                write!(
+                    f,
+                    "the execution has no delivery route at index {}",
+                    index.0
+                )
             }
         }
     }
@@ -211,6 +220,54 @@ impl State {
     }
 }
 
+/// Immutable route descriptions shared by deliveries in one execution.
+/// Spatial crossings and temporal readmissions retain their existing text
+/// identities here. Only that text enters the journal; indices are rebuilt
+/// when recovery applies the recorded routing decisions.
+#[derive(Debug, Default)]
+pub struct DeliveryRoutes {
+    entries: Vec<(String, node::Port)>,
+}
+
+impl DeliveryRoutes {
+    /// Registers a checked route. The canonical path determines its arrival
+    /// port; callers obtain both from the same validated routing decision.
+    pub fn insert(&mut self, text: String, port: node::Port) -> envelope::EdgeIndex {
+        if let Some(index) = self.entries.iter().position(|(path, _)| path == &text) {
+            return envelope::EdgeIndex(index);
+        }
+        let index = envelope::EdgeIndex(self.entries.len());
+        self.entries.push((text, port));
+        index
+    }
+
+    /// Canonical cursor path and arrival port for an index in this table.
+    /// The index is local to one execution and must not be reused in another.
+    #[must_use]
+    pub fn get(&self, index: envelope::EdgeIndex) -> Option<(&str, &node::Port)> {
+        self.entries
+            .get(index.0)
+            .map(|(text, port)| (text.as_str(), port))
+    }
+
+    fn text(&self, index: envelope::EdgeIndex) -> &str {
+        &self.entries[index.0].0
+    }
+
+    fn port(&self, index: envelope::EdgeIndex) -> &node::Port {
+        &self.entries[index.0].1
+    }
+
+    /// Resolves a recorded cursor path without creating a new route.
+    #[must_use]
+    pub fn find(&self, text: &str) -> Option<envelope::EdgeIndex> {
+        self.entries
+            .iter()
+            .position(|(path, _)| path == text)
+            .map(envelope::EdgeIndex)
+    }
+}
+
 /// Bounded per-`(node, instance-ref)` FIFO queues — one mailbox per node
 /// instance, all ports in arrival order, per the execution model.
 /// A claimed mailbox stays claimed while its node awaits an external
@@ -221,7 +278,8 @@ pub struct Mailboxes {
     capacity: usize,
     queues: BTreeMap<(NodeIndex, instance::Generation), VecDeque<envelope::Delivery>>,
     claimed: alloc::collections::BTreeSet<(NodeIndex, instance::Generation)>,
-    edge_seq: BTreeMap<(String, instance::Generation), u64>,
+    edge_seq: BTreeMap<(envelope::EdgeIndex, instance::Generation), u64>,
+    routes: DeliveryRoutes,
 }
 
 impl Mailboxes {
@@ -233,7 +291,14 @@ impl Mailboxes {
             queues: BTreeMap::new(),
             claimed: alloc::collections::BTreeSet::new(),
             edge_seq: BTreeMap::new(),
+            routes: DeliveryRoutes::default(),
         }
+    }
+
+    /// Route descriptions for deliveries belonging to these mailboxes.
+    #[must_use]
+    pub fn routes(&self) -> &DeliveryRoutes {
+        &self.routes
     }
 
     /// Whether one more delivery fits the `(slot, key)` queue after
@@ -273,13 +338,13 @@ impl Mailboxes {
         if queue.len() >= self.capacity {
             return Err(Box::new(envelope));
         }
+        let edge = self.routes.insert(edge, port);
         let seq = self
             .edge_seq
-            .entry((edge.clone(), source_instance.clone()))
+            .entry((edge, source_instance.clone()))
             .or_insert(0);
         *seq += 1;
         queue.push_back(envelope::Delivery {
-            port,
             edge,
             seq: *seq,
             source_instance: source_instance.clone(),
@@ -400,6 +465,7 @@ impl Mailboxes {
         edge: &str,
         id: crate::envelope::Id,
     ) -> Option<&envelope::Delivery> {
+        let edge = self.routes.find(edge)?;
         self.queues
             .get(&(slot, instance.clone()))?
             .iter()
@@ -417,6 +483,7 @@ impl Mailboxes {
         edge: &str,
         id: crate::envelope::Id,
     ) -> Option<(instance::Generation, &envelope::Delivery)> {
+        let edge = self.routes.find(edge)?;
         self.queues
             .iter()
             .filter(|((candidate, _), _)| *candidate == slot)
@@ -440,6 +507,17 @@ impl Mailboxes {
         edge: &str,
         id: crate::envelope::Id,
     ) -> Option<envelope::Delivery> {
+        let edge = self.routes.find(edge)?;
+        self.remove_by_index(slot, instance, edge, id)
+    }
+
+    fn remove_by_index(
+        &mut self,
+        slot: NodeIndex,
+        instance: &instance::Generation,
+        edge: envelope::EdgeIndex,
+        id: crate::envelope::Id,
+    ) -> Option<envelope::Delivery> {
         let queue = self.queues.get_mut(&(slot, instance.clone()))?;
         let position = queue.iter().position(|delivery| {
             delivery.edge == edge && delivery.envelope.meta().sys().id() == id
@@ -455,6 +533,7 @@ impl Mailboxes {
         edge: &str,
         id: crate::envelope::Id,
     ) -> Option<(instance::Generation, envelope::Delivery)> {
+        let edge_index = self.routes.find(edge)?;
         let key = self
             .queues
             .iter()
@@ -463,11 +542,11 @@ impl Mailboxes {
                 queue
                     .iter()
                     .any(|delivery| {
-                        delivery.edge == edge && delivery.envelope.meta().sys().id() == id
+                        delivery.edge == edge_index && delivery.envelope.meta().sys().id() == id
                     })
                     .then(|| key.clone())
             })?;
-        self.remove_by_ref(slot, &key, edge, id)
+        self.remove_by_index(slot, &key, edge_index, id)
             .map(|delivery| (key, delivery))
     }
 
@@ -604,6 +683,7 @@ pub(crate) struct JoinCandidate<'a> {
 #[derive(Debug)]
 pub struct TransactionPreparer<'plan> {
     plan: &'plan ValidatedExecutionPlan,
+    routes: &'plan DeliveryRoutes,
     graph_version: GraphVersion,
     logical_time: i64,
 }
@@ -613,9 +693,14 @@ impl<'plan> TransactionPreparer<'plan> {
     /// plan's invariants, so validation must precede this constructor; no
     /// public path wraps an unvalidated plan.
     #[must_use]
-    pub fn new(plan: &'plan ValidatedExecutionPlan, graph_version: GraphVersion) -> Self {
+    pub fn new(
+        plan: &'plan ValidatedExecutionPlan,
+        graph_version: GraphVersion,
+        routes: &'plan DeliveryRoutes,
+    ) -> Self {
         Self {
             plan,
+            routes,
             graph_version,
             logical_time: 0,
         }
@@ -629,9 +714,11 @@ impl<'plan> TransactionPreparer<'plan> {
         plan: &'plan ValidatedExecutionPlan,
         graph_version: GraphVersion,
         logical_time: i64,
+        routes: &'plan DeliveryRoutes,
     ) -> Self {
         Self {
             plan,
+            routes,
             graph_version,
             logical_time,
         }
@@ -651,6 +738,9 @@ impl<'plan> TransactionPreparer<'plan> {
         delivery: &envelope::Delivery,
         state: &BTreeMap<String, Value>,
     ) -> Result<TransactionOutcome, Fault> {
+        if self.routes.get(delivery.edge).is_none() {
+            return Err(Fault::UnknownEdgeIndex(delivery.edge));
+        }
         self.fire_with_bindings(slot, instance, delivery, state, &BTreeMap::new())
     }
 
@@ -669,10 +759,10 @@ impl<'plan> TransactionPreparer<'plan> {
         // *selected* by its activation pattern, while the committed
         // record carries the *causal* trigger. They coincide for a
         // single-port activation and will not for a join.
-        let activation = node::HandlerActivation::Port(delivery.port.clone());
-        let trigger = node::Trigger::Port(delivery.port.clone());
+        let activation = node::HandlerActivation::Port(self.routes.port(delivery.edge).clone());
+        let trigger = node::Trigger::Port(self.routes.port(delivery.edge).clone());
         let consumed = vec![ConsumedPosition {
-            edge: delivery.edge.clone(),
+            edge: self.routes.text(delivery.edge).to_string(),
             source: delivery.source_instance.clone(),
             seq: delivery.seq,
         }];
@@ -703,26 +793,25 @@ impl<'plan> TransactionPreparer<'plan> {
         instance_values: &BTreeMap<String, Value>,
         application: LoopFiring<'_>,
     ) -> Result<TransactionOutcome, Fault> {
-        let mut named = vec![];
         let mut extra = BTreeMap::new();
-        bind_loop_state(instance, &application, &mut named, &mut extra)?;
+        bind_loop_state(&application, &mut extra);
         self.fire_activation(
             slot,
             instance,
-            &node::HandlerActivation::Port(delivery.port.clone()),
-            &node::Trigger::Port(delivery.port.clone()),
+            &node::HandlerActivation::Port(self.routes.port(delivery.edge).clone()),
+            &node::Trigger::Port(self.routes.port(delivery.edge).clone()),
             &delivery.envelope,
             None,
             None,
             vec![ConsumedPosition {
-                edge: delivery.edge.clone(),
+                edge: self.routes.text(delivery.edge).to_string(),
                 source: delivery.source_instance.clone(),
                 seq: delivery.seq,
             }],
             state,
             instance_values,
             &extra,
-            &named,
+            &[],
             Some(application),
         )
     }
@@ -744,7 +833,12 @@ impl<'plan> TransactionPreparer<'plan> {
         let Some(guard) = &handler.guard else {
             return Ok(true);
         };
-        let (input, extra) = join_context(self.plan.plan(), candidate.trigger, candidate.inputs);
+        let (input, extra) = join_context(
+            self.plan.plan(),
+            self.routes,
+            candidate.trigger,
+            candidate.inputs,
+        );
         let mut base = expr::value_bindings(state);
         for (name, value) in instance_values {
             base.insert(name.clone(), expr::EvalValue::from(value.clone()));
@@ -761,9 +855,11 @@ impl<'plan> TransactionPreparer<'plan> {
         let payloads = PayloadSlots::new(
             &input,
             candidate.inputs,
+            self.routes,
             self.plan,
             slot,
-            &node::Trigger::Port(candidate.trigger.port.clone()),
+            &node::Trigger::Port(self.routes.port(candidate.trigger.edge).clone()),
+            None,
         );
         let verdict = resolve_payload_with_slots(
             eval_with_slots(guard, &base, &payloads, &self.plan.assets)?,
@@ -795,17 +891,20 @@ impl<'plan> TransactionPreparer<'plan> {
         instance_values: &BTreeMap<String, Value>,
         application: Option<LoopFiring<'_>>,
     ) -> Result<TransactionOutcome, Fault> {
-        let (input, mut extra) =
-            join_context(self.plan.plan(), candidate.trigger, candidate.inputs);
-        let mut named = candidate.inputs.to_vec();
+        let (input, mut extra) = join_context(
+            self.plan.plan(),
+            self.routes,
+            candidate.trigger,
+            candidate.inputs,
+        );
         if let Some(application) = &application {
-            bind_loop_state(instance, application, &mut named, &mut extra)?;
+            bind_loop_state(application, &mut extra);
         }
         let consumed = candidate
             .inputs
             .iter()
             .map(|delivery| ConsumedPosition {
-                edge: delivery.edge.clone(),
+                edge: self.routes.text(delivery.edge).to_string(),
                 source: delivery.source_instance.clone(),
                 seq: delivery.seq,
             })
@@ -814,7 +913,7 @@ impl<'plan> TransactionPreparer<'plan> {
             slot,
             instance,
             candidate.activation,
-            &node::Trigger::Port(candidate.trigger.port.clone()),
+            &node::Trigger::Port(self.routes.port(candidate.trigger.edge).clone()),
             &input,
             None,
             None,
@@ -822,7 +921,7 @@ impl<'plan> TransactionPreparer<'plan> {
             state,
             instance_values,
             &extra,
-            &named,
+            candidate.inputs,
             application,
         )?;
         outcome.record.join_inputs = candidate
@@ -880,7 +979,7 @@ impl<'plan> TransactionPreparer<'plan> {
                 trigger,
                 cause: Some(delivery.envelope.meta().sys().id()),
                 consumed: vec![ConsumedPosition {
-                    edge: delivery.edge.clone(),
+                    edge: self.routes.text(delivery.edge).to_string(),
                     source: delivery.source_instance.clone(),
                     seq: delivery.seq,
                 }],
@@ -1027,7 +1126,15 @@ impl<'plan> TransactionPreparer<'plan> {
         // an identity emission, or a short-circuited branch never
         // forces an opaque payload to decode (envelope.md §5:
         // opacity is a property, not an ambush).
-        let payloads = PayloadSlots::new(input, named_inputs, self.plan, slot, trigger);
+        let payloads = PayloadSlots::new(
+            input,
+            named_inputs,
+            self.routes,
+            self.plan,
+            slot,
+            trigger,
+            application.as_ref().map(|application| application.state),
+        );
         if let Some(guard) = &handler.guard {
             let verdict = resolve_payload_with_slots(
                 eval_with_slots(guard, &base(&scratch, &lets), &payloads, &self.plan.assets)?,
@@ -1412,6 +1519,9 @@ impl<'plan> TransactionPreparer<'plan> {
         trigger: &node::Trigger,
         completion: &Completion,
     ) -> Result<TransactionOutcome, Fault> {
+        if self.routes.get(delivery.edge).is_none() {
+            return Err(Fault::UnknownEdgeIndex(delivery.edge));
+        }
         let Some(planned) = self.plan.nodes.get(slot.index()) else {
             return Err(Fault::UnknownNodeIndex(slot));
         };
@@ -1434,7 +1544,7 @@ impl<'plan> TransactionPreparer<'plan> {
                 trigger: trigger.clone(),
                 cause: None,
                 consumed: vec![ConsumedPosition {
-                    edge: delivery.edge.clone(),
+                    edge: self.routes.text(delivery.edge).to_string(),
                     source: delivery.source_instance.clone(),
                     seq: delivery.seq,
                 }],
@@ -1511,10 +1621,13 @@ impl<'plan> TransactionPreparer<'plan> {
         call_id: InboundCallId,
         completion: &Completion,
     ) -> Result<TransactionOutcome, Fault> {
+        if self.routes.get(response.edge).is_none() {
+            return Err(Fault::UnknownEdgeIndex(response.edge));
+        }
         let mut outcome =
             self.inbound_call_completion(slot, instance, request, call_id, completion)?;
         outcome.record.consumed.push(ConsumedPosition {
-            edge: response.edge.clone(),
+            edge: self.routes.text(response.edge).to_string(),
             source: response.source_instance.clone(),
             seq: response.seq,
         });
@@ -1540,6 +1653,11 @@ impl<'plan> TransactionPreparer<'plan> {
         completion: &Completion,
         consumed: &[&envelope::Delivery],
     ) -> Result<TransactionOutcome, Fault> {
+        for delivery in consumed {
+            if self.routes.get(delivery.edge).is_none() {
+                return Err(Fault::UnknownEdgeIndex(delivery.edge));
+            }
+        }
         let Some(planned) = self.plan.nodes.get(slot.index()) else {
             return Err(Fault::UnknownNodeIndex(slot));
         };
@@ -1574,7 +1692,7 @@ impl<'plan> TransactionPreparer<'plan> {
                 consumed: consumed
                     .iter()
                     .map(|delivery| crate::journal::ConsumedPosition {
-                        edge: delivery.edge.clone(),
+                        edge: self.routes.text(delivery.edge).to_string(),
                         source: delivery.source_instance.clone(),
                         seq: delivery.seq,
                     })
@@ -2157,9 +2275,11 @@ impl<'a> PayloadSlots<'a> {
     fn new(
         input: &'a Envelope,
         named: &'a [envelope::Delivery],
+        routes: &'a DeliveryRoutes,
         plan: &'a ValidatedExecutionPlan,
         slot: NodeIndex,
         trigger: &node::Trigger,
+        loop_state: Option<&'a Envelope>,
     ) -> Self {
         let payload = |data, port: &node::Port| {
             plan.resolved_ports()
@@ -2168,32 +2288,41 @@ impl<'a> PayloadSlots<'a> {
         };
         let mut sources = BTreeMap::new();
         for delivery in named {
-            let mut data = payload(delivery.envelope.data(), &delivery.port);
-            if delivery.port.name() == "@Loop.state" {
-                let mut ancestor = Some(slot);
-                while let Some(owner_slot) = ancestor {
-                    let owner = &plan.nodes[owner_slot.index()];
-                    if let Some(spec) = owner.loop_spec() {
-                        let ty = if owner_slot == slot {
-                            plan.resolved_ports().node_port_type(slot, &spec.entry)
-                        } else {
-                            plan.graph_ports(owner_slot)
-                                .and_then(|ports| ports.iter().find(|port| port.port == spec.entry))
-                                .and_then(|port| port.ty.as_ref())
-                        };
-                        if let Some(ty) = ty {
-                            data = DataSlot::typed(delivery.envelope.data(), ty);
-                        }
-                        break;
-                    }
-                    ancestor = owner.parent;
-                }
-            }
+            let data = payload(delivery.envelope.data(), routes.port(delivery.edge));
             sources.insert(
-                delivery.port.name().to_string(),
+                routes.port(delivery.edge).name().to_string(),
                 PayloadSource {
                     data,
                     meta: Some(delivery.envelope.meta()),
+                },
+            );
+        }
+        if let Some(state) = loop_state {
+            let mut data = DataSlot::new(state.data());
+            let mut ancestor = Some(slot);
+            while let Some(owner_index) = ancestor {
+                let owner = &plan.nodes[owner_index.index()];
+                if let Some(spec) = owner.loop_spec() {
+                    let ty = if owner_index == slot {
+                        plan.resolved_ports().node_port_type(slot, &spec.entry)
+                    } else {
+                        plan.graph_ports(owner_index)
+                            .and_then(|ports| ports.iter().find(|port| port.port == spec.entry))
+                            .and_then(|port| port.ty.as_ref())
+                    };
+                    if let Some(ty) = ty {
+                        data = DataSlot::typed(state.data(), ty);
+                    }
+                    break;
+                }
+                ancestor = owner.parent;
+            }
+            // Loop.state is a lexical payload binding, not a mailbox delivery.
+            sources.insert(
+                String::from("@Loop.state"),
+                PayloadSource {
+                    data,
+                    meta: Some(state.meta()),
                 },
             );
         }
@@ -2545,6 +2674,7 @@ fn decode_encoded(encoding: envelope::Encoding, bytes: &[u8]) -> Result<envelope
 /// Each declared port also receives a complete named envelope binding.
 fn join_context(
     plan: &crate::plan::ExecutionPlan,
+    routes: &DeliveryRoutes,
     trigger: &envelope::Delivery,
     inputs: &[envelope::Delivery],
 ) -> (Envelope, BTreeMap<String, expr::EvalValue>) {
@@ -2571,7 +2701,7 @@ fn join_context(
     let input = Envelope::new(meta, trigger.envelope.data().clone());
     let mut bindings = BTreeMap::new();
     for delivery in inputs {
-        let name = delivery.port.name();
+        let name = routes.port(delivery.edge).name();
         let meta = meta_value(delivery.envelope.meta());
         let payload = expr::EvalValue::Payload(expr::PayloadSource::Named(name.to_string()));
         bindings.insert(format!("{name}.data"), payload.clone());
@@ -2587,22 +2717,9 @@ fn join_context(
     (input, bindings)
 }
 
-fn bind_loop_state(
-    instance: &instance::Generation,
-    application: &LoopFiring<'_>,
-    named: &mut Vec<envelope::Delivery>,
-    bindings: &mut BTreeMap<String, expr::EvalValue>,
-) -> Result<(), Fault> {
+fn bind_loop_state(application: &LoopFiring<'_>, bindings: &mut BTreeMap<String, expr::EvalValue>) {
     // This payload slot cannot collide with an authored join input name.
     let binding = String::from("@Loop.state");
-    named.push(envelope::Delivery {
-        port: node::Port::new(binding.clone())
-            .map_err(|error| Fault::Unrepresentable(error.to_string()))?,
-        edge: String::from("@loop.state"),
-        seq: 0,
-        source_instance: instance.clone(),
-        envelope: application.state.clone(),
-    });
     let data = expr::EvalValue::Payload(expr::PayloadSource::Named(binding));
     let meta = expr::EvalValue::from(meta_value(application.state.meta()));
     let state = expr::EvalValue::Struct(vec![
@@ -2618,7 +2735,6 @@ fn bind_loop_state(
             expr::EvalValue::Struct(vec![(String::from("state"), state)]),
         ),
     ]);
-    Ok(())
 }
 
 /// The handler-facing logical view of an envelope's metadata: the full

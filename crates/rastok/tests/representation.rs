@@ -8,7 +8,7 @@ use rastok::instance;
 use rastok::node::NodeIndex;
 use rastok::node::{OwnerPath, Port};
 use rastok::plan::GraphVersion;
-use rastok::runtime::{Fault, TransactionPreparer};
+use rastok::runtime::{DeliveryRoutes, Fault, TransactionPreparer};
 use std::collections::BTreeMap;
 
 fn count(ty: &str, data: Data) -> Result<Value, Fault> {
@@ -20,14 +20,14 @@ fn count(ty: &str, data: Data) -> Result<Value, Fault> {
     let compiled = compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap();
     let owner = OwnerPath::new(["count"]).unwrap();
     let generation = instance::Generation::new(instance::InstanceAddress::singleton(&owner), 0);
+    let mut routes = DeliveryRoutes::default();
     let delivery = Delivery {
-        port: Port::new("in").unwrap(),
-        edge: ".in>count.in".into(),
+        edge: routes.insert(".in>count.in".into(), Port::new("in").unwrap()),
         seq: 1,
         source_instance: generation.clone(),
         envelope: Envelope::new(Meta::new(MetaSys::root(Id::from_bytes([1; 16]), 1)), data),
     };
-    let result = TransactionPreparer::new(&compiled.plan, GraphVersion(1)).fire(
+    let result = TransactionPreparer::new(&compiled.plan, GraphVersion(1), &routes).fire(
         NodeIndex::new(1),
         &generation,
         &delivery,

@@ -54,7 +54,9 @@ impl Execution<'_> {
             }
             if self.plan.nodes[slot.index()]
                 .loop_spec()
-                .is_some_and(|spec| spec.entry == delivery.port)
+                .is_some_and(|spec| {
+                    &spec.entry == self.scheduler.mailboxes.routes.port(delivery.edge)
+                })
                 && self.loop_application(&instance, &delivery).is_none()
             {
                 return Err(invalid(
@@ -121,7 +123,7 @@ impl Execution<'_> {
             .ok_or_else(|| invalid(index, "a Call closure has no retained opening"))?;
         if journal.find_call(&intent.call_id).as_ref() != Some(intent)
             || pending.slot != slot
-            || pending.delivery.edge != intent.edge
+            || self.scheduler.mailboxes.routes.text(pending.delivery.edge) != intent.edge
             || pending.delivery.envelope.meta().sys().id() != intent.emitting_id
             || self
                 .settled
@@ -136,7 +138,13 @@ impl Execution<'_> {
         let (completion, trigger) = match &record.status {
             CallStatus::Closed(Closure::Response(completion)) => (
                 completion.clone(),
-                node::Trigger::Port(pending.delivery.port.clone()),
+                node::Trigger::Port(
+                    self.scheduler
+                        .mailboxes
+                        .routes
+                        .port(pending.delivery.edge)
+                        .clone(),
+                ),
             ),
             CallStatus::Closed(Closure::Timeout) | CallStatus::Abandoned => {
                 let terminal = if record.status == CallStatus::Abandoned {
@@ -198,7 +206,7 @@ impl Execution<'_> {
             .find(|(_, pending)| {
                 pending.slot == slot
                     && pending.instance == record.instance
-                    && pending.delivery.edge == consumed.edge
+                    && self.scheduler.mailboxes.routes.text(pending.delivery.edge) == consumed.edge
                     && pending.delivery.source_instance == consumed.source
                     && pending.delivery.seq == consumed.seq
             })
@@ -212,15 +220,20 @@ impl Execution<'_> {
             .position(|entry| entry.event.call_id == call)
             .ok_or_else(|| invalid(index, "a Call transaction consumes an unsettled request"))?;
         let entry = &self.settled[settled];
-        let mut expected = TransactionPreparer::at(self.plan, self.graph_version, self.now)
-            .connector_completion(
-                slot,
-                &pending.instance,
-                &pending.delivery,
-                &entry.trigger,
-                &entry.event.completion,
-            )
-            .map_err(ExecutionFault::Fault)?;
+        let mut expected = TransactionPreparer::at(
+            self.plan,
+            self.graph_version,
+            self.now,
+            self.scheduler.mailboxes.routes(),
+        )
+        .connector_completion(
+            slot,
+            &pending.instance,
+            &pending.delivery,
+            &entry.trigger,
+            &entry.event.completion,
+        )
+        .map_err(ExecutionFault::Fault)?;
         if record.trigger != entry.trigger
             || record.consumed != expected.record.consumed
             || record.emissions != expected.record.emissions

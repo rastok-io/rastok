@@ -14,7 +14,6 @@
 //! [`envelope.md`]: https://github.com/rastok-io/rastok/blob/main/docs/spec/envelope.md
 
 use crate::instance;
-use crate::node;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -526,14 +525,18 @@ impl Envelope {
     }
 }
 
-/// One delivery waiting in a mailbox.
+/// An execution-local index into the delivery-route table. It is not a
+/// journal identity or necessarily a spatial edge: temporal readmissions
+/// have their own cursor paths without entering the plan's DAG.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct EdgeIndex(pub(crate) usize);
+
+/// One delivery waiting in a mailbox. Its route supplies the arrival port
+/// and canonical cursor path; neither string is copied into each delivery.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Delivery {
-    /// The arrival port — part of the delivery, because one node
-    /// mailbox carries every port in one FIFO.
-    pub port: node::Port,
-    /// The canonical edge text the envelope traveled.
-    pub edge: String,
+    /// The route in this execution's delivery-route table.
+    pub edge: EdgeIndex,
     /// The position on that edge — the consumed cursor.
     pub seq: u64,
     /// The complete upstream instance reference that owns this cursor.

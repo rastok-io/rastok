@@ -68,8 +68,10 @@ impl Execution<'_> {
                     .into_iter()
                     .flatten()
                     .find(|delivery| {
-                        ids::delivery_id(&delivery.edge, delivery.envelope.meta().sys().id())
-                            == *reference
+                        ids::delivery_id(
+                            self.scheduler.mailboxes.routes.text(delivery.edge),
+                            delivery.envelope.meta().sys().id(),
+                        ) == *reference
                     })
                     .ok_or_else(|| invalid(index, "a Loop Open has no exact queued admission"))?;
                 let expected_fuel = match spec.fuel.as_ref().map(|fuel| &fuel.resolved) {
@@ -91,7 +93,7 @@ impl Execution<'_> {
                 if instance != &record.instance
                     || *run != protocol::run_ref(instance, opening)
                     || entry != &spec.entry
-                    || entry != &delivery.port
+                    || entry != self.scheduler.mailboxes.routes.port(delivery.edge)
                     || expected_fuel != Some(*fuel)
                     || state != &delivery.envelope
                     || record.cause != Some(state.meta().sys().id())

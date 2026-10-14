@@ -385,7 +385,7 @@ impl Execution<'_> {
                 .queued(slot, &record.instance)
                 .and_then(|queue| {
                     queue.iter().find(|delivery| {
-                        delivery.edge == consumed.edge
+                        self.scheduler.mailboxes.routes.text(delivery.edge) == consumed.edge
                             && delivery.source_instance == consumed.source
                             && delivery.seq == consumed.seq
                     })
@@ -393,14 +393,17 @@ impl Execution<'_> {
                 .ok_or_else(|| invalid(index, "a consumed cursor has no pending delivery"))?
                 .clone();
             if record.close_scope.is_some()
-                && record.trigger == node::Trigger::Port(delivery.port.clone())
+                && record.trigger
+                    == node::Trigger::Port(
+                        self.scheduler.mailboxes.routes.port(delivery.edge).clone(),
+                    )
             {
                 consumed_cause = Some(delivery.envelope.clone());
             }
-            self.scheduler.mailboxes.remove_by_ref(
+            self.scheduler.mailboxes.remove_by_index(
                 slot,
                 &record.instance,
-                &delivery.edge,
+                delivery.edge,
                 delivery.envelope.meta().sys().id(),
             );
         }
@@ -609,7 +612,7 @@ impl Execution<'_> {
             .enumerate()
         {
             let matches = |delivery: &&envelope::Delivery| {
-                delivery.edge == consumed.edge
+                self.scheduler.mailboxes.routes.text(delivery.edge) == consumed.edge
                     && delivery.source_instance == consumed.source
                     && delivery.seq == consumed.seq
             };
@@ -634,7 +637,9 @@ impl Execution<'_> {
             let application = self.loop_application(&record.instance, delivery);
             let entry = self.plan.nodes[slot.index()]
                 .loop_spec()
-                .is_some_and(|spec| spec.entry == delivery.port);
+                .is_some_and(|spec| {
+                    &spec.entry == self.scheduler.mailboxes.routes.port(delivery.edge)
+                });
             if entry && application.is_none() {
                 return Err(invalid(
                     index,
@@ -706,7 +711,12 @@ impl Execution<'_> {
             .into_iter()
             .flat_map(|instance| &instance.residual)
             .map(|delivery| crate::journal::ConsumedPosition {
-                edge: delivery.edge.clone(),
+                edge: self
+                    .scheduler
+                    .mailboxes
+                    .routes
+                    .text(delivery.edge)
+                    .to_string(),
                 source: delivery.source_instance.clone(),
                 seq: delivery.seq,
             })

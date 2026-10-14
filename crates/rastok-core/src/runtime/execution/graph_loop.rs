@@ -25,7 +25,7 @@ struct Admission {
 #[derive(Debug, Default)]
 pub(super) struct GraphLoops {
     admissions: BTreeMap<Id, Admission>,
-    sequences: BTreeMap<(String, instance::Generation), u64>,
+    sequences: BTreeMap<(envelope::EdgeIndex, instance::Generation), u64>,
     contexts: BTreeMap<Id, Vec<LoopRunId>>,
 }
 
@@ -272,14 +272,16 @@ impl Execution<'_> {
         let edge = self.prepared_edge_text(route);
         self.apply_instance_admissions(target, candidates, envelope);
         let source = source.unwrap_or(&target.scope).clone();
+        let reference = ids::delivery_id(&edge, envelope.meta().sys().id());
+        let edge = self
+            .scheduler
+            .mailboxes
+            .routes
+            .insert(edge, to.port.clone());
         let Some(graph) = self.graph_loops.as_deref_mut() else {
             return false;
         };
-        let reference = ids::delivery_id(&edge, envelope.meta().sys().id());
-        let seq = graph
-            .sequences
-            .entry((edge.clone(), source.clone()))
-            .or_default();
+        let seq = graph.sequences.entry((edge, source.clone())).or_default();
         *seq += 1;
         graph.admissions.insert(
             reference,
@@ -295,7 +297,6 @@ impl Execution<'_> {
                     OpeningAdmissionId::Delivery(reference)
                 },
                 delivery: envelope::Delivery {
-                    port: to.port.clone(),
                     edge,
                     seq: *seq,
                     source_instance: source,
@@ -323,7 +324,7 @@ impl Execution<'_> {
 
     pub(super) fn graph_context(&self, delivery: &envelope::Delivery) -> &[LoopRunId] {
         self.graph_context_for(ids::delivery_id(
-            &delivery.edge,
+            self.scheduler.mailboxes.routes.text(delivery.edge),
             delivery.envelope.meta().sys().id(),
         ))
     }
@@ -392,7 +393,12 @@ impl Execution<'_> {
             .flat_map(|graph| graph.admissions.values())
             .filter(|admission| admission.instance == *instance)
             .map(|admission| crate::journal::ConsumedPosition {
-                edge: admission.delivery.edge.clone(),
+                edge: self
+                    .scheduler
+                    .mailboxes
+                    .routes
+                    .text(admission.delivery.edge)
+                    .to_string(),
                 source: admission.delivery.source_instance.clone(),
                 seq: admission.delivery.seq,
             })
@@ -457,7 +463,12 @@ impl Execution<'_> {
                     run: protocol::run_ref(&admission.instance, &admission.opening),
                     instance: admission.instance.clone(),
                     opening: admission.opening,
-                    entry: admission.delivery.port,
+                    entry: self
+                        .scheduler
+                        .mailboxes
+                        .routes
+                        .port(admission.delivery.edge)
+                        .clone(),
                     fuel,
                     state: admission.delivery.envelope,
                 }],
@@ -579,7 +590,12 @@ impl Execution<'_> {
                     )
                 })?;
             record.consumed.push(crate::journal::ConsumedPosition {
-                edge: admission.1.delivery.edge.clone(),
+                edge: self
+                    .scheduler
+                    .mailboxes
+                    .routes
+                    .text(admission.1.delivery.edge)
+                    .to_string(),
                 source: admission.1.delivery.source_instance.clone(),
                 seq: admission.1.delivery.seq,
             });
@@ -872,7 +888,12 @@ impl Execution<'_> {
             .values()
             .flatten()
             .chain(self.pending.values().map(|pending| &pending.delivery))
-            .map(|delivery| ids::delivery_id(&delivery.edge, delivery.envelope.meta().sys().id()))
+            .map(|delivery| {
+                ids::delivery_id(
+                    self.scheduler.mailboxes.routes.text(delivery.edge),
+                    delivery.envelope.meta().sys().id(),
+                )
+            })
             .collect();
         // Consuming an attempt releases its mailbox delivery, not the enclosing
         // Loop obligation. Keep the opening context until the operation closes.
@@ -1062,7 +1083,12 @@ impl Execution<'_> {
                 if *run != protocol::run_ref(instance, opening)
                     || packet.context != self.graph_context(&admission.delivery)
                     || expected != Some(*fuel)
-                    || *entry != admission.delivery.port
+                    || entry
+                        != self
+                            .scheduler
+                            .mailboxes
+                            .routes
+                            .port(admission.delivery.edge)
                     || *state != admission.delivery.envelope
                     || record.cause != Some(state.meta().sys().id())
                     || !record.consumed.is_empty()
@@ -1126,7 +1152,12 @@ impl Execution<'_> {
                             invalid("a Graph Admit has no unconsumed boundary delivery")
                         })?;
                     let expected = crate::journal::ConsumedPosition {
-                        edge: opening.1.delivery.edge.clone(),
+                        edge: self
+                            .scheduler
+                            .mailboxes
+                            .routes
+                            .text(opening.1.delivery.edge)
+                            .to_string(),
                         source: opening.1.delivery.source_instance.clone(),
                         seq: opening.1.delivery.seq,
                     };

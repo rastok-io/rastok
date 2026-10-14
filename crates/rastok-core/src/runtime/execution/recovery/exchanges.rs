@@ -52,10 +52,10 @@ impl Execution<'_> {
                         "an outbound Session instance already has an opening",
                     ));
                 }
-                self.scheduler.mailboxes.remove_by_ref(
+                self.scheduler.mailboxes.remove_by_index(
                     slot,
                     &instance,
-                    &delivery.edge,
+                    delivery.edge,
                     intent.emitting_id,
                 );
                 self.scheduler.mailboxes.claim(slot, &instance);
@@ -130,10 +130,10 @@ impl Execution<'_> {
                         "a Session write crosses its source instance or correlator",
                     ));
                 }
-                self.scheduler.mailboxes.remove_by_ref(
+                self.scheduler.mailboxes.remove_by_index(
                     slot,
                     &instance,
-                    &delivery.edge,
+                    delivery.edge,
                     intent.emitting_id,
                 );
                 self.session_writes.insert(
@@ -242,7 +242,12 @@ impl Execution<'_> {
         PlanCompletionCheck { plan: self.plan }
             .admit(self.executor_path(slot)?, &completion)
             .map_err(|_| invalid(index, "an exchange terminal violates its Contract"))?;
-        let executor = TransactionPreparer::at(self.plan, self.graph_version, self.now);
+        let executor = TransactionPreparer::at(
+            self.plan,
+            self.graph_version,
+            self.now,
+            self.scheduler.mailboxes.routes(),
+        );
         let mut held = Vec::new();
         let expected = match exchange {
             InboundExchangeExitRecord::Call(reference) => {
@@ -369,10 +374,10 @@ impl Execution<'_> {
             ));
         }
         for delivery in held {
-            self.scheduler.mailboxes.remove_by_ref(
+            self.scheduler.mailboxes.remove_by_index(
                 slot,
                 &record.instance,
-                &delivery.edge,
+                delivery.edge,
                 delivery.envelope.meta().sys().id(),
             );
         }
@@ -401,7 +406,7 @@ impl Execution<'_> {
             .into_iter()
             .flatten()
             .find(|delivery| {
-                delivery.edge == cursor.edge
+                self.scheduler.mailboxes.routes.text(delivery.edge) == cursor.edge
                     && delivery.source_instance == cursor.source
                     && delivery.seq == cursor.seq
             })
@@ -443,10 +448,10 @@ impl Execution<'_> {
             }) else {
                 continue;
             };
-            self.scheduler.mailboxes.remove_by_ref(
+            self.scheduler.mailboxes.remove_by_index(
                 slot,
                 &instance,
-                &delivery.edge,
+                delivery.edge,
                 delivery.envelope.meta().sys().id(),
             );
             self.scheduler.mailboxes.claim(slot, &instance);

@@ -25,9 +25,13 @@ impl Execution<'_> {
             let Some(spec) = self.plan.nodes[slot.index()].loop_spec() else {
                 continue;
             };
-            for delivery in queue.iter().filter(|delivery| delivery.port == spec.entry) {
-                let reference =
-                    ids::delivery_id(&delivery.edge, delivery.envelope.meta().sys().id());
+            for delivery in queue.iter().filter(|delivery| {
+                self.scheduler.mailboxes.routes.port(delivery.edge) == &spec.entry
+            }) {
+                let reference = ids::delivery_id(
+                    self.scheduler.mailboxes.routes.text(delivery.edge),
+                    delivery.envelope.meta().sys().id(),
+                );
                 let retained = fold.is_some_and(|fold| {
                     fold.runs().any(|(run, state)| {
                         live(state)
@@ -35,7 +39,8 @@ impl Execution<'_> {
                             && ((state.iteration == 0 && state.admission == reference)
                                 || (state.iteration > 0
                                     && state.admission == delivery.envelope.meta().sys().id()
-                                    && delivery.edge == manager_edge(*run, &state.entry)))
+                                    && self.scheduler.mailboxes.routes.text(delivery.edge)
+                                        == manager_edge(*run, &state.entry)))
                     })
                 });
                 if !retained {
@@ -108,7 +113,10 @@ impl Execution<'_> {
         delivery: &envelope::Delivery,
     ) -> Option<(LoopRunId, &protocol::RunState)> {
         let fold = self.loop_manager.as_deref()?;
-        let reference = ids::delivery_id(&delivery.edge, delivery.envelope.meta().sys().id());
+        let reference = ids::delivery_id(
+            self.scheduler.mailboxes.routes.text(delivery.edge),
+            delivery.envelope.meta().sys().id(),
+        );
         fold.runs()
             .find_map(|(run, state)| {
                 (state.instance == *instance
@@ -116,7 +124,8 @@ impl Execution<'_> {
                     && ((state.iteration == 0 && state.admission == reference)
                         || (state.iteration > 0
                             && state.admission == delivery.envelope.meta().sys().id()
-                            && delivery.edge == manager_edge(*run, &state.entry))))
+                            && self.scheduler.mailboxes.routes.text(delivery.edge)
+                                == manager_edge(*run, &state.entry))))
                 .then_some((*run, state))
             })
             .or_else(|| {
@@ -138,7 +147,7 @@ impl Execution<'_> {
         let Some(spec) = owner.loop_spec() else {
             return Ok(false);
         };
-        if spec.entry != delivery.port
+        if &spec.entry != self.scheduler.mailboxes.routes.port(delivery.edge)
             || self
                 .loop_application(instance, delivery)
                 .is_some_and(|(_, state)| state.instance == *instance)
@@ -146,7 +155,7 @@ impl Execution<'_> {
             return Ok(false);
         }
         let opening = protocol::OpeningAdmissionId::Delivery(ids::delivery_id(
-            &delivery.edge,
+            self.scheduler.mailboxes.routes.text(delivery.edge),
             delivery.envelope.meta().sys().id(),
         ));
         let run = protocol::run_ref(instance, &opening);

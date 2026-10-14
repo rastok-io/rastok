@@ -817,7 +817,23 @@ pub struct MailboxInspection {
     /// Whether execution has reserved the mailbox head for an open protocol.
     pub claimed: bool,
     /// Current FIFO contents in delivery order.
-    pub deliveries: Vec<envelope::Delivery>,
+    pub deliveries: Vec<DeliveryInspection>,
+}
+
+/// A queued delivery projected for a reader outside the execution. Route
+/// indices are resolved here so a snapshot never depends on a live table.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeliveryInspection {
+    /// Arrival port, resolved from the delivery route.
+    pub port: node::Port,
+    /// Canonical cursor path, not the execution-local route index.
+    pub edge: String,
+    /// Position in the source instance's stream on this route.
+    pub seq: u64,
+    /// Exact upstream instance generation.
+    pub source_instance: instance::Generation,
+    /// Queued envelope.
+    pub envelope: Envelope,
 }
 
 /// Direction of one retained Call obligation.
@@ -1883,7 +1899,7 @@ impl<'plan> Execution<'plan> {
                                 matches!(
                                     &handler.activation,
                                     node::HandlerActivation::Join { ports, .. }
-                                        if ports.contains(&delivery.port)
+                                        if ports.contains(self.scheduler.mailboxes.routes.port(delivery.edge))
                                 )
                             });
                     let work = if join_owned {
@@ -2431,7 +2447,7 @@ impl<'plan> Execution<'plan> {
             .iter()
             .find(|(_, held)| {
                 held.instance == instance
-                    && held.delivery.edge == edge
+                    && self.scheduler.mailboxes.routes.text(held.delivery.edge) == edge
                     && held.delivery.envelope.meta().sys().id() == delivery
             })
             .map(|(call_id, _)| *call_id)
@@ -2555,11 +2571,19 @@ impl<'plan> Execution<'plan> {
                         let emitting_id = queued.envelope.meta().sys().id();
                         Ok(CallOpen {
                             call_id: ids::call_id(
-                                ids::delivery_id(&queued.edge, emitting_id),
+                                ids::delivery_id(
+                                    self.scheduler.mailboxes.routes.text(queued.edge),
+                                    emitting_id,
+                                ),
                                 prepared.digest(),
                             ),
                             emitting_id,
-                            edge: queued.edge.clone(),
+                            edge: self
+                                .scheduler
+                                .mailboxes
+                                .routes
+                                .text(queued.edge)
+                                .to_string(),
                             connector_path: self.executor_path(slot)?.clone(),
                             prepared,
                             idempotency_key: None,
@@ -2586,8 +2610,15 @@ impl<'plan> Execution<'plan> {
                     else {
                         return Ok(());
                     };
-                    let executor = TransactionPreparer::at(self.plan, self.graph_version, self.now);
-                    let trigger = node::Trigger::Port(queued.port.clone());
+                    let executor = TransactionPreparer::at(
+                        self.plan,
+                        self.graph_version,
+                        self.now,
+                        self.scheduler.mailboxes.routes(),
+                    );
+                    let trigger = node::Trigger::Port(
+                        self.scheduler.mailboxes.routes.port(queued.edge).clone(),
+                    );
                     let mut outcome = executor
                         .connector_completion(slot, &instance, queued, &trigger, &completion)
                         .map_err(ExecutionFault::Fault)?;
@@ -3044,7 +3075,21 @@ impl<'plan> Execution<'plan> {
                 node: self.plan.nodes[slot.index()].path.clone(),
                 instance,
                 claimed,
-                deliveries,
+                deliveries: deliveries
+                    .into_iter()
+                    .map(|delivery| DeliveryInspection {
+                        port: self.scheduler.mailboxes.routes.port(delivery.edge).clone(),
+                        edge: self
+                            .scheduler
+                            .mailboxes
+                            .routes
+                            .text(delivery.edge)
+                            .to_string(),
+                        seq: delivery.seq,
+                        source_instance: delivery.source_instance,
+                        envelope: delivery.envelope,
+                    })
+                    .collect(),
             })
             .collect();
         ExecutionInspection {
@@ -3128,7 +3173,7 @@ impl<'plan> Execution<'plan> {
                     matches!(
                         &handler.activation,
                         node::HandlerActivation::Join { ports, .. }
-                            if ports.contains(&delivery.port)
+                            if ports.contains(self.scheduler.mailboxes.routes.port(delivery.edge))
                     )
                 });
             if !join_owned || !matches!(self.operator_work(slot, &instance), Ok(None)) {
@@ -3227,7 +3272,7 @@ impl<'plan> Execution<'plan> {
                     matches!(
                         &handler.activation,
                         node::HandlerActivation::Join { ports, .. }
-                            if ports.contains(&delivery.port)
+                            if ports.contains(self.scheduler.mailboxes.routes.port(delivery.edge))
                     )
                 });
             if !join_owned || !matches!(self.operator_work(slot, &instance), Ok(None)) {
@@ -3824,7 +3869,12 @@ impl<'plan> Execution<'plan> {
                 let state = self
                     .state
                     .cell_unchecked(self.plan.plan(), slot, &work.instance);
-                let executor = TransactionPreparer::at(self.plan, self.graph_version, self.now);
+                let executor = TransactionPreparer::at(
+                    self.plan,
+                    self.graph_version,
+                    self.now,
+                    self.scheduler.mailboxes.routes(),
+                );
                 let outcome = executor
                     .fire_lifecycle(
                         slot,
@@ -3855,16 +3905,18 @@ impl<'plan> Execution<'plan> {
         {
             record
                 .consumed
-                .extend(
-                    bundle
-                        .residual
-                        .iter()
-                        .map(|delivery| crate::journal::ConsumedPosition {
-                            edge: delivery.edge.clone(),
-                            source: delivery.source_instance.clone(),
-                            seq: delivery.seq,
-                        }),
-                );
+                .extend(bundle.residual.iter().map(|delivery| {
+                    crate::journal::ConsumedPosition {
+                        edge: self
+                            .scheduler
+                            .mailboxes
+                            .routes
+                            .text(delivery.edge)
+                            .to_string(),
+                        source: delivery.source_instance.clone(),
+                        seq: delivery.seq,
+                    }
+                }));
         }
         if work.lifecycle == node::Lifecycle::Stop {
             record
@@ -3986,7 +4038,12 @@ impl<'plan> Execution<'plan> {
         let Some(request) = self.pending.get(&event.call_id).cloned() else {
             return Err(ExecutionFault::MissingPending(event.call_id));
         };
-        let executor = TransactionPreparer::at(self.plan, self.graph_version, self.now);
+        let executor = TransactionPreparer::at(
+            self.plan,
+            self.graph_version,
+            self.now,
+            self.scheduler.mailboxes.routes(),
+        );
         // The completion check validated every materialized draft before the
         // closure committed. This also checks runtime-constructed
         // completions (timeouts) and completions supplied by in-memory callers.
@@ -4079,7 +4136,12 @@ impl<'plan> Execution<'plan> {
         event: InboundCallObservation,
         pending: PendingInboundCall,
     ) -> Result<(), ExecutionFault> {
-        let executor = TransactionPreparer::at(self.plan, self.graph_version, self.now);
+        let executor = TransactionPreparer::at(
+            self.plan,
+            self.graph_version,
+            self.now,
+            self.scheduler.mailboxes.routes(),
+        );
         let mut outcome = match pending.response.as_ref() {
             Some(response) => executor.inbound_call_response_completion(
                 pending.slot,
@@ -4142,7 +4204,12 @@ impl<'plan> Execution<'plan> {
                 reason: "a terminal Session observation lost its logical session",
             });
         };
-        let executor = TransactionPreparer::at(self.plan, self.graph_version, self.now);
+        let executor = TransactionPreparer::at(
+            self.plan,
+            self.graph_version,
+            self.now,
+            self.scheduler.mailboxes.routes(),
+        );
         let consumed = session
             .opening_delivery
             .iter()
@@ -4211,16 +4278,21 @@ impl<'plan> Execution<'plan> {
             let has_single = handlers.iter().any(|handler| {
                 matches!(
                     &handler.activation,
-                    node::HandlerActivation::Port(port) if port == &delivery.port
+                    node::HandlerActivation::Port(port) if port == self.scheduler.mailboxes.routes.port(delivery.edge)
                 )
             });
-            if has_single || !join_owns(&delivery.port) {
+            if has_single || !join_owns(self.scheduler.mailboxes.routes.port(delivery.edge)) {
                 consider_operator_work(&mut best, index, 2, OperatorWork::Single(delivery.clone()));
                 break;
             }
         }
 
-        let executor = TransactionPreparer::at(self.plan, self.graph_version, self.now);
+        let executor = TransactionPreparer::at(
+            self.plan,
+            self.graph_version,
+            self.now,
+            self.scheduler.mailboxes.routes(),
+        );
         let state = self.state.cell_unchecked(self.plan.plan(), slot, instance);
         let values = self
             .instances
@@ -4241,7 +4313,9 @@ impl<'plan> Execution<'plan> {
                     let candidates: Vec<_> = queue
                         .iter()
                         .enumerate()
-                        .filter(|(_, delivery)| &delivery.port == port)
+                        .filter(|(_, delivery)| {
+                            self.scheduler.mailboxes.routes.port(delivery.edge) == port
+                        })
                         .collect();
                     if candidates.len() > *limit as usize {
                         let overflow_at = candidates[*limit as usize].0;
@@ -4256,7 +4330,10 @@ impl<'plan> Execution<'plan> {
             }
 
             for (trigger_index, trigger) in queue.iter().enumerate() {
-                let Some(trigger_port) = ports.iter().position(|port| port == &trigger.port) else {
+                let Some(trigger_port) = ports
+                    .iter()
+                    .position(|port| port == self.scheduler.mailboxes.routes.port(trigger.edge))
+                else {
                     continue;
                 };
                 let mut options: Vec<Vec<envelope::Delivery>> = Vec::with_capacity(ports.len());
@@ -4268,7 +4345,7 @@ impl<'plan> Execution<'plan> {
                             .iter()
                             .take(trigger_index)
                             .filter(|delivery| {
-                                &delivery.port == port
+                                self.scheduler.mailboxes.routes.port(delivery.edge) == port
                                     && self.graph_context(delivery) == self.graph_context(trigger)
                             })
                             .cloned()
@@ -4350,7 +4427,12 @@ impl<'plan> Execution<'plan> {
         instance: &instance::Generation,
         delivery: &envelope::Delivery,
     ) -> Result<(), ExecutionFault> {
-        let executor = TransactionPreparer::at(self.plan, self.graph_version, self.now);
+        let executor = TransactionPreparer::at(
+            self.plan,
+            self.graph_version,
+            self.now,
+            self.scheduler.mailboxes.routes(),
+        );
         let state = self.state.cell_unchecked(self.plan.plan(), slot, instance);
         let values = self
             .instances
@@ -4482,7 +4564,12 @@ impl<'plan> Execution<'plan> {
             });
         }
         let application = self.loop_application(instance, trigger);
-        let executor = TransactionPreparer::at(self.plan, self.graph_version, self.now);
+        let executor = TransactionPreparer::at(
+            self.plan,
+            self.graph_version,
+            self.now,
+            self.scheduler.mailboxes.routes(),
+        );
         let state = self.state.cell_unchecked(self.plan.plan(), slot, instance);
         let values = self
             .instances
@@ -4534,10 +4621,10 @@ impl<'plan> Execution<'plan> {
             if self
                 .scheduler
                 .mailboxes
-                .remove_by_ref(
+                .remove_by_index(
                     slot,
                     instance,
-                    &delivery.edge,
+                    delivery.edge,
                     delivery.envelope.meta().sys().id(),
                 )
                 .is_none()
@@ -4570,7 +4657,12 @@ impl<'plan> Execution<'plan> {
         instance: &instance::Generation,
         delivery: &envelope::Delivery,
     ) -> Result<(), ExecutionFault> {
-        let executor = TransactionPreparer::at(self.plan, self.graph_version, self.now);
+        let executor = TransactionPreparer::at(
+            self.plan,
+            self.graph_version,
+            self.now,
+            self.scheduler.mailboxes.routes(),
+        );
         let mut outcome = executor
             .join_expired(slot, instance, delivery)
             .map_err(ExecutionFault::Fault)?;
@@ -4583,10 +4675,10 @@ impl<'plan> Execution<'plan> {
         if self
             .scheduler
             .mailboxes
-            .remove_by_ref(
+            .remove_by_index(
                 slot,
                 instance,
-                &delivery.edge,
+                delivery.edge,
                 delivery.envelope.meta().sys().id(),
             )
             .is_none()
@@ -4683,7 +4775,9 @@ impl<'plan> Execution<'plan> {
             instance: instance.clone(),
             parent_instance: None,
             close_scope: None,
-            trigger: node::Trigger::Port(delivery.port.clone()),
+            trigger: node::Trigger::Port(
+                self.scheduler.mailboxes.routes.port(delivery.edge).clone(),
+            ),
             cause: Some(delivery.envelope.meta().sys().id()),
             exchange_exit: None,
             retry_record: None,
@@ -4692,7 +4786,12 @@ impl<'plan> Execution<'plan> {
             deadlines: None,
             instance_commands: None,
             consumed: vec![crate::journal::ConsumedPosition {
-                edge: delivery.edge.clone(),
+                edge: self
+                    .scheduler
+                    .mailboxes
+                    .routes
+                    .text(delivery.edge)
+                    .to_string(),
                 source: delivery.source_instance.clone(),
                 seq: delivery.seq,
             }],
@@ -5064,8 +5163,14 @@ impl<'plan> Execution<'plan> {
         delivery: &envelope::Delivery,
         completion: &Completion,
     ) -> Result<(), ExecutionFault> {
-        let executor = TransactionPreparer::at(self.plan, self.graph_version, self.now);
-        let trigger = node::Trigger::Port(delivery.port.clone());
+        let executor = TransactionPreparer::at(
+            self.plan,
+            self.graph_version,
+            self.now,
+            self.scheduler.mailboxes.routes(),
+        );
+        let trigger =
+            node::Trigger::Port(self.scheduler.mailboxes.routes.port(delivery.edge).clone());
         let mut outcome = executor
             .connector_completion(slot, instance, delivery, &trigger, completion)
             .map_err(ExecutionFault::Fault)?;
@@ -5109,7 +5214,7 @@ impl<'plan> Execution<'plan> {
         // to the Driver, even when the caller drains before `advance`.
         let overdue = self.scheduler.dated.range(..=(self.now, u64::MAX)).find(|(_, payload)| {
             matches!(payload, Obligation::DeliveryBudget { edge, delivery: id, instance: target, .. }
-                if edge == &delivery.edge && *id == delivery.envelope.meta().sys().id() && target == instance)
+                if edge == self.scheduler.mailboxes.routes.text(delivery.edge) && *id == delivery.envelope.meta().sys().id() && target == instance)
         }).map(|(key, payload)| (*key, payload.clone()));
         if let Some((key, payload)) = overdue {
             self.expire(journal, bindings, payload)?;
@@ -5152,8 +5257,15 @@ impl<'plan> Execution<'plan> {
         {
             RequestPreparation::Prepared(prepared) => prepared,
             RequestPreparation::Rejected(completion) => {
-                let executor = TransactionPreparer::at(self.plan, self.graph_version, self.now);
-                let trigger = node::Trigger::Port(delivery.port.clone());
+                let executor = TransactionPreparer::at(
+                    self.plan,
+                    self.graph_version,
+                    self.now,
+                    self.scheduler.mailboxes.routes(),
+                );
+                let trigger = node::Trigger::Port(
+                    self.scheduler.mailboxes.routes.port(delivery.edge).clone(),
+                );
                 let mut outcome = executor
                     .connector_completion(slot, instance, delivery, &trigger, &completion)
                     .map_err(ExecutionFault::Fault)?;
@@ -5182,11 +5294,19 @@ impl<'plan> Execution<'plan> {
         // the digest says what.
         let intent = CallOpen {
             call_id: ids::call_id(
-                ids::delivery_id(&delivery.edge, emitting_id),
+                ids::delivery_id(
+                    self.scheduler.mailboxes.routes.text(delivery.edge),
+                    emitting_id,
+                ),
                 prepared.digest(),
             ),
             emitting_id,
-            edge: delivery.edge.clone(),
+            edge: self
+                .scheduler
+                .mailboxes
+                .routes
+                .text(delivery.edge)
+                .to_string(),
             connector_path: self.executor_path(slot)?.clone(),
             prepared,
             idempotency_key: None,

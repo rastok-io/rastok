@@ -64,12 +64,16 @@ impl Execution<'_> {
                 .into_iter()
                 .flatten()
                 .find(|delivery| {
-                    ids::delivery_id(&delivery.edge, delivery.envelope.meta().sys().id())
-                        == *opening
+                    ids::delivery_id(
+                        self.scheduler.mailboxes.routes.text(delivery.edge),
+                        delivery.envelope.meta().sys().id(),
+                    ) == *opening
                 })
                 .ok_or_else(|| invalid(index, "Retry opening has no exact queued admission"))?
                 .clone();
-            if delivery.port != spec.entry || pin.opened_at != self.now {
+            if self.scheduler.mailboxes.routes.port(delivery.edge) != &spec.entry
+                || pin.opened_at != self.now
+            {
                 return Err(invalid(
                     index,
                     "Retry opening changed its entry or preparation instant",
@@ -131,7 +135,10 @@ impl Execution<'_> {
         let policy = super::super::retry_manager::policy(connector, spec)?;
         let authority = opening_delivery.as_ref().map(|delivery| retry::Opening {
             instance: &record.instance,
-            delivery: ids::delivery_id(&delivery.edge, delivery.envelope.meta().sys().id()),
+            delivery: ids::delivery_id(
+                self.scheduler.mailboxes.routes.text(delivery.edge),
+                delivery.envelope.meta().sys().id(),
+            ),
             plan: hash,
             contract: &connector.contract,
             call,

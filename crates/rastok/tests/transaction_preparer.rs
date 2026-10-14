@@ -15,7 +15,7 @@ use rastok::node;
 use rastok::journal::ids;
 use rastok::node::NodeIndex;
 use rastok::plan::{GraphVersion, ValidatedExecutionPlan};
-use rastok::runtime::{Fault, Mailboxes, State, TransactionPreparer, meta_value};
+use rastok::runtime::{DeliveryRoutes, Fault, Mailboxes, State, TransactionPreparer, meta_value};
 use std::collections::BTreeMap;
 
 use rastok::compiler::compile;
@@ -65,7 +65,15 @@ fn probe() -> (ValidatedExecutionPlan, NodeIndex) {
     (compilation.plan, slot)
 }
 
-fn input(text: &str) -> envelope::Delivery {
+fn input_routes() -> DeliveryRoutes {
+    let mut routes = DeliveryRoutes::default();
+    for name in [".in>shout.in", ".in>relay.in", ".in>o.in"] {
+        routes.insert(name.into(), node::Port::new("in").unwrap());
+    }
+    routes
+}
+
+fn input(text: &str, routes: &DeliveryRoutes) -> envelope::Delivery {
     let mut data = BTreeMap::new();
     data.insert(
         String::from("text"),
@@ -76,8 +84,7 @@ fn input(text: &str) -> envelope::Delivery {
         &[b"inbound", &0u64.to_le_bytes()],
     );
     envelope::Delivery {
-        port: node::Port::new("in").unwrap(),
-        edge: String::from(".in>shout.in"),
+        edge: routes.find(".in>shout.in").unwrap(),
         seq: 1,
         source_instance: singleton(),
         envelope: Envelope::new(
@@ -111,14 +118,96 @@ fn trigger_in() -> node::Trigger {
 }
 
 #[test]
+fn delivery_route_indices_do_not_enter_transaction_records() {
+    let (plan, slot) = probe();
+    let first = input_routes();
+    let mut reordered = DeliveryRoutes::default();
+    reordered.insert(
+        "another.out>target.in".into(),
+        node::Port::new("in").unwrap(),
+    );
+    reordered.insert(".in>shout.in".into(), node::Port::new("in").unwrap());
+    let left = input("same payload", &first);
+    let right = input("same payload", &reordered);
+    assert_ne!(left.edge, right.edge, "execution-local indices may differ");
+    let generation = singleton();
+    let state = State::new().cell(&plan, slot, &generation).unwrap();
+    let left = TransactionPreparer::new(&plan, GraphVersion(1), &first)
+        .fire(slot, &generation, &left, &state)
+        .unwrap();
+    let right = TransactionPreparer::new(&plan, GraphVersion(1), &reordered)
+        .fire(slot, &generation, &right, &state)
+        .unwrap();
+    assert_eq!(left.record, right.record);
+    assert_eq!(
+        rastok::journal::codec::encode(&rastok::journal::Record::Transaction(Box::new(
+            left.record
+        ))),
+        rastok::journal::codec::encode(&rastok::journal::Record::Transaction(Box::new(
+            right.record
+        ))),
+    );
+}
+
+#[test]
+fn shared_delivery_routes_keep_per_source_instance_cursors() {
+    let (_, slot) = probe();
+    let routes = input_routes();
+    let mut mailboxes = Mailboxes::new(4);
+    let target = singleton();
+    let alice = text_key("alice");
+    let bob = text_key("bob");
+    let envelope = input("same route", &routes).envelope;
+    for source in [&alice, &bob, &alice, &bob] {
+        mailboxes
+            .deliver(
+                slot,
+                &target,
+                source,
+                node::Port::new("in").unwrap(),
+                "source.out>target.in".into(),
+                envelope.clone(),
+            )
+            .unwrap();
+    }
+    let route = mailboxes.routes().find("source.out>target.in").unwrap();
+    for (source, seq) in [(&alice, 1), (&bob, 1), (&alice, 2), (&bob, 2)] {
+        let delivery = mailboxes.pop(slot, &target).unwrap();
+        assert_eq!(delivery.edge, route);
+        assert_eq!(
+            mailboxes.routes().get(delivery.edge).unwrap().1.name(),
+            "in"
+        );
+        assert_eq!(&delivery.source_instance, source);
+        assert_eq!(delivery.seq, seq);
+    }
+}
+
+#[test]
+fn a_delivery_index_from_another_execution_refuses_when_absent() {
+    let (plan, slot) = probe();
+    let routes = input_routes();
+    let delivery = input("wrong table", &routes);
+    let empty = DeliveryRoutes::default();
+    assert!(empty.get(delivery.edge).is_none());
+    assert_eq!(
+        TransactionPreparer::new(&plan, GraphVersion(1), &empty)
+            .fire(slot, &singleton(), &delivery, &BTreeMap::new())
+            .unwrap_err(),
+        Fault::UnknownEdgeIndex(delivery.edge),
+    );
+}
+
+#[test]
 fn an_identity_emission_inherits_everything_but_its_sys_fields() {
+    let routes = input_routes();
     let source = "graph g : App {\n  input in: variant\n  operator relay {\n    on in { out = . }\n  }\n  in -> relay -> out\n}\n";
     let compilation = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
-    let executor = TransactionPreparer::new(&compilation.plan, GraphVersion(1));
+    let executor = TransactionPreparer::new(&compilation.plan, GraphVersion(1), &routes);
     let slot = NodeIndex::new(1);
     let state = State::new()
         .cell(&compilation.plan, slot, &singleton())
@@ -147,8 +236,7 @@ fn an_identity_emission_inherits_everything_but_its_sys_fields() {
         .with_app(app.clone())
         .with_ext(ext.clone());
     let delivery = envelope::Delivery {
-        port: node::Port::new("in").unwrap(),
-        edge: String::from(".in>relay.in"),
+        edge: routes.find(".in>relay.in").unwrap(),
         seq: 1,
         source_instance: singleton(),
         envelope: Envelope::new(meta, Data::encoded(Encoding::Raw, *b"salut")),
@@ -223,8 +311,9 @@ fn the_meta_projection_carries_all_sys_fields() {
 
 #[test]
 fn the_activation_pattern_is_not_the_causal_trigger() {
+    let routes = input_routes();
     let (plan, slot) = probe();
-    let executor = TransactionPreparer::new(&plan, GraphVersion(1));
+    let executor = TransactionPreparer::new(&plan, GraphVersion(1), &routes);
     let state = State::new().cell(&plan, slot, &singleton()).unwrap();
     // A handler is *selected* by its declared activation pattern…
     let activation = node::HandlerActivation::Port(node::Port::new("in").unwrap());
@@ -235,7 +324,7 @@ fn the_activation_pattern_is_not_the_causal_trigger() {
     // divergence: no activation declares `l:timeout`, yet the
     // record fires under it.)
     let outcome = executor
-        .fire(slot, &singleton(), &input("salut"), &state)
+        .fire(slot, &singleton(), &input("salut", &routes), &state)
         .unwrap();
     assert_eq!(
         outcome.record.trigger,
@@ -284,6 +373,7 @@ fn the_projection_has_exactly_three_roots() {
 
 #[test]
 fn metadata_writes_land_where_the_spec_says() {
+    let routes = input_routes();
     // The three-zone model (D-2026-08-10-1/-4): `meta.app.flag`
     // lands in the app zone as a flat dotted key,
     // `meta.ext.content_type` is the standard ext field, and a
@@ -294,7 +384,7 @@ fn metadata_writes_land_where_the_spec_says() {
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
     )
     .expect("a valid plan");
-    let executor = TransactionPreparer::new(&compilation.plan, GraphVersion(1));
+    let executor = TransactionPreparer::new(&compilation.plan, GraphVersion(1), &routes);
     let slot = NodeIndex::new(1);
     let state = State::new()
         .cell(&compilation.plan, slot, &singleton())
@@ -304,8 +394,7 @@ fn metadata_writes_land_where_the_spec_says() {
         &[b"inbound", &0u64.to_le_bytes()],
     );
     let delivery = envelope::Delivery {
-        port: node::Port::new("in").unwrap(),
-        edge: String::from(".in>o.in"),
+        edge: routes.find(".in>o.in").unwrap(),
         seq: 1,
         source_instance: singleton(),
         envelope: Envelope::new(
@@ -348,11 +437,12 @@ fn metadata_writes_land_where_the_spec_says() {
 
 #[test]
 fn a_transaction_commits_everything_together() {
+    let routes = input_routes();
     let (plan, slot) = probe();
-    let executor = TransactionPreparer::new(&plan, GraphVersion(1));
+    let executor = TransactionPreparer::new(&plan, GraphVersion(1), &routes);
     let state = State::new().cell(&plan, slot, &singleton()).unwrap();
     assert_eq!(state.get("count"), Some(&rastok::value::Value::Int(0)));
-    let delivery = input("salut");
+    let delivery = input("salut", &routes);
     let outcome = executor
         .fire(slot, &singleton(), &delivery, &state)
         .unwrap();
@@ -385,10 +475,11 @@ fn a_transaction_commits_everything_together() {
 
 #[test]
 fn execution_is_deterministic() {
+    let routes = input_routes();
     let (plan, slot) = probe();
-    let executor = TransactionPreparer::new(&plan, GraphVersion(1));
+    let executor = TransactionPreparer::new(&plan, GraphVersion(1), &routes);
     let state = State::new().cell(&plan, slot, &singleton()).unwrap();
-    let delivery = input("salut");
+    let delivery = input("salut", &routes);
     let once = executor
         .fire(slot, &singleton(), &delivery, &state)
         .unwrap();
@@ -400,11 +491,12 @@ fn execution_is_deterministic() {
 
 #[test]
 fn a_false_guard_consumes_without_effect() {
+    let routes = input_routes();
     let (plan, slot) = probe();
-    let executor = TransactionPreparer::new(&plan, GraphVersion(1));
+    let executor = TransactionPreparer::new(&plan, GraphVersion(1), &routes);
     let state = State::new().cell(&plan, slot, &singleton()).unwrap();
     let outcome = executor
-        .fire(slot, &singleton(), &input(""), &state)
+        .fire(slot, &singleton(), &input("", &routes), &state)
         .unwrap();
     assert!(outcome.record.emissions.is_empty());
     assert!(outcome.record.state_delta.is_empty());
@@ -417,14 +509,14 @@ fn a_false_guard_consumes_without_effect() {
 
 #[test]
 fn a_faulted_transaction_changes_nothing() {
+    let routes = input_routes();
     let (plan, slot) = probe();
-    let executor = TransactionPreparer::new(&plan, GraphVersion(1));
+    let executor = TransactionPreparer::new(&plan, GraphVersion(1), &routes);
     let state = State::new().cell(&plan, slot, &singleton()).unwrap();
     // Avro payloads cannot be materialized in this build: the
     // handler faults, and the caller applies nothing.
     let delivery = envelope::Delivery {
-        port: node::Port::new("in").unwrap(),
-        edge: String::from(".in>shout.in"),
+        edge: routes.find(".in>shout.in").unwrap(),
         seq: 1,
         source_instance: singleton(),
         envelope: Envelope::new(
@@ -470,11 +562,12 @@ fn state_is_isolated_between_keys() {
 
 #[test]
 fn mailboxes_are_fifo_bounded_and_edge_sequenced() {
+    let routes = input_routes();
     let (plan, slot) = probe();
     let _ = &plan;
     let mut mailboxes = Mailboxes::new(2);
     let port = node::Port::new("in").unwrap();
-    let envelope = input("a").envelope;
+    let envelope = input("a", &routes).envelope;
     let key = singleton();
     let source = singleton();
     mailboxes
@@ -524,12 +617,13 @@ fn mailboxes_are_fifo_bounded_and_edge_sequenced() {
 
 #[test]
 fn the_delivery_reference_selects_among_same_envelope_deliveries() {
+    let routes = input_routes();
     // One envelope, two edges into one node: (edge, id) is the
     // reference — find and remove touch only their own delivery.
     let (plan, slot) = probe();
     let _ = &plan;
     let mut mailboxes = Mailboxes::new(8);
-    let envelope = input("x").envelope;
+    let envelope = input("x", &routes).envelope;
     let id = envelope.meta().sys().id();
     let a = node::Port::new("a").unwrap();
     let b = node::Port::new("b").unwrap();
@@ -559,12 +653,15 @@ fn the_delivery_reference_selects_among_same_envelope_deliveries() {
     let removed = mailboxes
         .remove_by_ref(slot, &key, "s.out>n.b", id)
         .expect("the b delivery");
-    assert_eq!(removed.edge, "s.out>n.b");
+    assert_eq!(mailboxes.routes().get(removed.edge).unwrap().0, "s.out>n.b");
     // The sibling on edge a is untouched.
     let survivor = mailboxes
         .find_by_ref(slot, &key, "s.out>n.a", id)
         .expect("the a delivery survives");
-    assert_eq!(survivor.edge, "s.out>n.a");
+    assert_eq!(
+        mailboxes.routes().get(survivor.edge).unwrap().0,
+        "s.out>n.a"
+    );
     assert!(
         mailboxes
             .remove_by_ref(slot, &key, "s.out>n.b", id)
@@ -574,12 +671,13 @@ fn the_delivery_reference_selects_among_same_envelope_deliveries() {
 
 #[test]
 fn one_node_mailbox_keeps_arrival_order_across_ports() {
+    let routes = input_routes();
     let (plan, slot) = probe();
     let _ = &plan;
     let mut mailboxes = Mailboxes::new(8);
     let z = node::Port::new("z").unwrap();
     let a = node::Port::new("a").unwrap();
-    let envelope = input("x").envelope;
+    let envelope = input("x", &routes).envelope;
     let key = singleton();
     let source = singleton();
     mailboxes
@@ -604,12 +702,15 @@ fn one_node_mailbox_keeps_arrival_order_across_ports() {
         .unwrap();
     // One FIFO per node instance: `z` arrived first, `z` fires
     // first — the port never reorders shared-state work.
-    assert_eq!(mailboxes.pop(slot, &key).unwrap().port, z);
-    assert_eq!(mailboxes.pop(slot, &key).unwrap().port, a);
+    let first = mailboxes.pop(slot, &key).unwrap();
+    let second = mailboxes.pop(slot, &key).unwrap();
+    assert_eq!(mailboxes.routes().get(first.edge).unwrap().1, &z);
+    assert_eq!(mailboxes.routes().get(second.edge).unwrap().1, &a);
 }
 
 #[test]
 fn a_claimed_mailbox_is_skipped_until_released() {
+    let routes = input_routes();
     let (plan, slot) = probe();
     let _ = &plan;
     let mut mailboxes = Mailboxes::new(8);
@@ -623,7 +724,7 @@ fn a_claimed_mailbox_is_skipped_until_released() {
             &source,
             port,
             String::from("e"),
-            input("x").envelope,
+            input("x", &routes).envelope,
         )
         .unwrap();
     mailboxes.claim(slot, &key);
@@ -637,9 +738,10 @@ fn a_claimed_mailbox_is_skipped_until_released() {
 
 #[test]
 fn the_connector_completion_matches_the_reference_trace() {
+    let routes = input_routes();
     let (plan, _) = probe();
-    let executor = TransactionPreparer::new(&plan, GraphVersion(1));
-    let request = input("salut");
+    let executor = TransactionPreparer::new(&plan, GraphVersion(1), &routes);
+    let request = input("salut", &routes);
     let connector_path = node::Path::new(["echo"]).unwrap();
     let connector_slot = NodeIndex::new(
         u32::try_from(
@@ -707,9 +809,10 @@ fn the_connector_completion_matches_the_reference_trace() {
 
 #[test]
 fn a_connector_output_overlays_only_its_external_observations() {
+    let routes = input_routes();
     let (plan, _) = probe();
-    let executor = TransactionPreparer::new(&plan, GraphVersion(1));
-    let mut request = input("salut");
+    let executor = TransactionPreparer::new(&plan, GraphVersion(1), &routes);
+    let mut request = input("salut", &routes);
     let mut app = Namespace::new();
     app.insert(
         String::from("tenant"),
@@ -780,6 +883,7 @@ fn a_connector_output_overlays_only_its_external_observations() {
 
 #[test]
 fn a_caller_supplied_slot_is_verified_not_trusted() {
+    let routes = input_routes();
     // NodeIndex is freely constructible; the validated plan proves only
     // its OWN references. The reviewer's one-liner panicked here —
     // every public door now verifies and refuses typed.
@@ -795,10 +899,15 @@ fn a_caller_supplied_slot_is_verified_not_trusted() {
             .unwrap_err(),
         Fault::UnknownNodeIndex(ghost)
     );
-    let executor = TransactionPreparer::new(&plan, GraphVersion(1));
+    let executor = TransactionPreparer::new(&plan, GraphVersion(1), &routes);
     assert_eq!(
         executor
-            .fire(ghost, &singleton(), &input("salut"), &BTreeMap::new())
+            .fire(
+                ghost,
+                &singleton(),
+                &input("salut", &routes),
+                &BTreeMap::new()
+            )
             .unwrap_err(),
         Fault::UnknownNodeIndex(ghost)
     );

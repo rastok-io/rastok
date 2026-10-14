@@ -21,7 +21,10 @@ impl Execution<'_> {
         instance: &instance::Generation,
         delivery: &envelope::Delivery,
     ) -> Option<AttemptId> {
-        let reference = ids::delivery_id(&delivery.edge, delivery.envelope.meta().sys().id());
+        let reference = ids::delivery_id(
+            self.scheduler.mailboxes.routes.text(delivery.edge),
+            delivery.envelope.meta().sys().id(),
+        );
         self.retry_manager
             .as_deref()?
             .operations()
@@ -49,7 +52,12 @@ impl Execution<'_> {
         Some(CallOpen {
             call_id: ids::call_id(state.delivery, state.pin.prepared.digest()),
             emitting_id: delivery.envelope.meta().sys().id(),
-            edge: delivery.edge.clone(),
+            edge: self
+                .scheduler
+                .mailboxes
+                .routes
+                .text(delivery.edge)
+                .to_string(),
             connector_path: node::Path::new(instance.address().owner().segments().iter().cloned())
                 .ok()?,
             prepared: state.pin.prepared.clone(),
@@ -89,7 +97,10 @@ impl Execution<'_> {
         let plan = self
             .original_hash
             .ok_or_else(|| error(protocol::Error::OriginalBinding))?;
-        let opening = ids::delivery_id(&delivery.edge, delivery.envelope.meta().sys().id());
+        let opening = ids::delivery_id(
+            self.scheduler.mailboxes.routes.text(delivery.edge),
+            delivery.envelope.meta().sys().id(),
+        );
         let operation = protocol::operation_ref(instance, &spec.entry, opening);
         let packet = RetryRecord {
             context: None,
@@ -341,7 +352,7 @@ impl Execution<'_> {
                 queue
                     .iter()
                     .filter(|delivery| {
-                        delivery.port == spec.entry
+                        self.scheduler.mailboxes.routes.port(delivery.edge) == &spec.entry
                             && self.retry_attempt(instance, delivery).is_none()
                     })
                     .count(),

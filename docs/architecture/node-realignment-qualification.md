@@ -1043,3 +1043,105 @@ end of the lot. After compiling every workspace test target with
 binaries ran in four workers with `--test-threads=4`, without fixture-saving
 variables. An earlier serial invocation was stopped and replaced by this
 complete focused run; it is not counted a second time.
+
+## Indexed mailbox deliveries — 14 October
+
+The mailbox representation now stores `Delivery.edge: EdgeIndex`; the
+arrival port and canonical cursor path live once in an execution-local
+`DeliveryRoutes` table. Queue positions remain per route and exact source
+generation. Registration happens when committed delivery work is applied,
+and recovery reconstructs the table from the same recorded decisions.
+
+This is not an index into the plan's spatial DAG. Graph boundary admissions
+and Loop/Retry readmissions also need cursor paths, but are not physical
+back-edges. The table shares those existing descriptions without adding an
+edge, command, port or journal field. Every identity recipe and consumed
+position still receives the original path text. A regression registers the
+same route at different indices and compares the complete resulting records
+and their canonical encodings. Other regressions cover shared routes with
+independent source cursors and typed rejection of an absent caller-supplied
+index.
+
+`Loop.state` is now a direct lazy payload binding, not a fabricated delivery
+with an `@loop.state` edge. Join inputs remain borrowed during preparation;
+their metadata merge, materialization rules and consumed positions do not
+change. The hosted mailbox projection resolves the route into a
+`DeliveryInspection` before creating a snapshot, so the debugger retains
+standalone text and ports rather than exposing execution-local indices.
+The broader inspection-module separation remains lot 2.
+
+Route-name lookup is linear in the number of registered routes. This small
+table is execution state, not a durable-journal index or a new recovery
+authority. Like the existing per-route sequence map, it is retained for
+the life of the M1 execution. No long-history scalability claim is made.
+
+### Embedded measurements
+
+Both unchanged Cortex-M33 workloads finish with `SPIKE_OK`, the same
+semantic hashes and 67/17 records. The input packages are the preceding
+indexed-endpoint candidates: this mailbox step changes no package bytes.
+
+| Cortex-M33 measurement | Echo, 32 admissions | Retry with recovery |
+|---|---:|---:|
+| Heap immediately after package decoding | 7,692 B | 5,708 B |
+| Package-load peak | 36,160 B | 30,684 B |
+| Complete execution/recovery peak | 111,404 B | 129,188 B |
+| Margin below 128 KiB | 19,668 B | 1,884 B |
+| Live heap after execution | not sampled | 93,252 B |
+| Live heap after recovery | not sampled | 93,116 B |
+| `.text` | 898,748 B | 959,884 B |
+| `.rodata` | 70,264 B | 81,020 B |
+| `.text + .rodata` | 969,012 B | 1,040,904 B |
+| Margin below 1 MiB | 79,564 B | 7,672 B |
+
+Against `59f1ddf`, the complete heap peak decreases by 1,464 B for echo and
+316 B for Retry. Echo code shrinks by 108 B; Retry code grows by 244 B.
+The workload, allocator instrumentation and both acceptance gates remain
+unchanged. Final format-21 package inventory and approval remain separate.
+
+### Verification of indexed deliveries
+
+Workspace formatting, strict all-target/all-feature Clippy, compilation of
+all workspace tests, and rustdoc pass. The three `no_std` checks pass for
+`thumbv7m-none-eabi`, `riscv32imac-unknown-none-elf` and
+`thumbv8m.main-none-eabihf`. RustRover's project build reports success with
+no problem. The rustdoc-link lint checks 214 Rust files without a relative
+Markdown link; its four tests pass.
+
+All 28 gallery scenarios retain their record counts and causal seals. The
+three package candidates have exactly the body lengths and checksums listed
+in the indexed-endpoint inventory above: this delivery representation does
+not change their bytes. The HTTP scenarios use synthetic canaries and Lab
+responses, never a real model or partner.
+
+All 16 graph-layout tests and all 35 browser tests pass. The successful
+browser run uses the already-installed Playwright **1.61.1** and Google
+Chrome, takes 54.6 seconds, and has no skipped test. No dependency was
+installed. An initial run with the global Playwright 1.49.0 passed 26 tests
+and failed nine: five CLI startup timeouts and four string-evaluation errors
+against the page's Content Security Policy. The complete rerun used the
+newer installation after the CLI had reached its argument parser. No code,
+timeout, assertion or security policy was changed. The initial failures are
+not counted as passes, and their exact startup cause was not established.
+
+While the focused Rust suites were starting, a one-second sample of
+`loop_host_exit` showed only `_dyld_start`, a 112 KiB footprint and no Rust
+frame. This observation distinguishes that wait from an executing test; it
+does not establish the operating-system cause or qualify an unrun test.
+
+The focused all-features run is complete: **1,306 passed, three failed,
+none ignored, across 25 test binaries**. It includes all three new delivery
+regressions, journal codec and prefix-recovery checks, Loop/Retry, joins,
+Closing, Contracts and representation tests. The only failures are the
+unchanged `FORMAT_VERSION == 20` assertions in `plan_fields`, `instance_stop`
+and `retry_plan`; each reports actual 21 versus expected 20. No behavioral
+assertion failed. This is a focused run, not the final complete workspace
+gate. The independent echo recording-tuple pin was also rerun successfully;
+it is already included in the library count, not an additional test.
+
+No tracked example, fixture, golden, package, trace or recording changes.
+The human-review ledgers and decisions are untouched. Lot 1 still needs the
+layout review, the inventoried package regeneration and documentation
+alignment, then a complete workspace run without the remaining version or
+package-pin failures. Inspection-module separation and the hosted Worker
+remain lot 2.
