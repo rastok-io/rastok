@@ -909,3 +909,26 @@ therefore removed rather than reported as a layout saving.
 The updated probe compiled with `retry-qualification,node-layout-probe`;
 its Rust formatting check passed. This checkpoint does not claim a new
 allocation-probe run.
+
+### Browser rerun — 14 October
+
+The earlier `MODULE_NOT_FOUND` was a module-resolution failure, not evidence
+that Playwright was absent. Node does not automatically search global module
+installations, and `RASTOK_PLAYWRIGHT` was unset in that first command.
+The existing local installation was used explicitly; no package or browser
+was installed and no repository dependency was added.
+
+After `cargo build --locked -p rastok --features hosted-ui,hosted-websocket`,
+the full `browser.test.cjs` suite passed **35 tests, zero failures, zero
+skipped**, in 61.7 seconds against `271de9d`. The run used Playwright **1.62.1**
+from the local Codex runtime and the installed Google Chrome executable,
+selected through `RASTOK_PLAYWRIGHT` and `RASTOK_CHROME`. This is local-browser
+qualification, not a claim that the CI-pinned Playwright 1.58.2 environment
+or the independent reviewer gate has run.
+
+The cases cover graph and mailbox inspection, original App emissions,
+causality, Loop/Retry state, LIVE/HISTORY/REPLAY navigation, keyboard use,
+secret masking, and recording/replay of a local `cat` execution. HTTP and
+agent scenarios used Lab responses and explicit synthetic canaries; they
+did not invoke an external model or partner. No timeout, assertion, trace,
+recording fixture, package pin or application code changed for this rerun.
