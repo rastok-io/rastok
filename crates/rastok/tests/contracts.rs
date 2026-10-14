@@ -1505,15 +1505,12 @@ fn an_unreachable_process_still_carries_one_valid_sheet() {
         )
         .expect("the plan is small"),
     );
-    let target = plan.nodes[connector_slot.index()]
-        .executor_path()
-        .unwrap()
-        .clone();
+    let target = connector_slot;
     for node in &mut plan.nodes {
         if let rastok::plan::NodeKind::Graph(graph) = &mut node.body {
             graph.wiring.retain(|rule| !matches!(&rule.selection, rastok::plan::RouteSelection::All(set)
-                if set.iter().any(|destination| matches!(destination, rastok::plan::RouteDestination::Port(endpoint)
-                    if endpoint.owner == rastok::plan::EndpointOwner::Node(target.clone())))));
+                if set.iter().any(|destination| matches!(destination, rastok::plan::Destination::Port(endpoint)
+                    if endpoint.node == target))));
         }
     }
     plan.nodes[0].ports.retain(|port| port.port.name() != "in");
@@ -1630,12 +1627,12 @@ fn the_global_binder_requires_callable_connectors_but_skips_pure_outbound_source
         )
         .expect("a small plan"),
     );
-    let target = plan.nodes[slot.index()].executor_path().unwrap().clone();
+    let target = slot;
     for node in &mut plan.nodes {
         if let rastok::plan::NodeKind::Graph(graph) = &mut node.body {
             graph.wiring.retain(|rule| !matches!(&rule.selection, rastok::plan::RouteSelection::All(set)
-                if set.iter().any(|destination| matches!(destination, rastok::plan::RouteDestination::Port(endpoint)
-                    if endpoint.owner == rastok::plan::EndpointOwner::Node(target.clone())))));
+                if set.iter().any(|destination| matches!(destination, rastok::plan::Destination::Port(endpoint)
+                    if endpoint.node == target))));
         }
     }
     plan.nodes[0].ports.retain(|port| port.port.name() != "in");

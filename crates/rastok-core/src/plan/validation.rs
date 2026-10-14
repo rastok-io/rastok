@@ -14,7 +14,7 @@ use crate::expr;
 use crate::node;
 use crate::node::NodeIndex;
 use crate::plan::{
-    DispatchStep, EdgeEnd, EmitValue, EvaluationSite, ExecutionPlan, Node, NodeKind,
+    DispatchStep, EmitValue, Endpoint, EvaluationSite, ExecutionPlan, Node, NodeKind,
 };
 use crate::schema_annotation::{AnnotationTable, SchemaAnnotationError};
 
@@ -3074,14 +3074,11 @@ fn owners_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                     .steps()
                     .any(|step| matches!(step, DispatchStep::Stop))
         }) || plan.routes.iter().any(|rule| {
-            let matches_target = |destination: &super::RouteDestination| {
-                let super::RouteDestination::InstanceStop(target) = destination else {
+            let matches_target = |destination: &super::Destination| {
+                let super::Destination::InstanceStop(target) = destination else {
                     return false;
                 };
-                match &target.owner {
-                    super::EndpointOwner::Graph(path) => path == &owner.path,
-                    super::EndpointOwner::Node(path) => path.segments() == owner.path.segments(),
-                }
+                target.owner == slot
             };
             match &rule.selection {
                 super::RouteSelection::All(set) => set.iter().any(matches_target),
@@ -3193,7 +3190,7 @@ fn owners_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
         ) {
             return Err(PlanValidationError::InvalidEdgeScope { owner: edge.owner });
         }
-        let endpoint_is_scoped = |endpoint: &EdgeEnd| {
+        let endpoint_is_scoped = |endpoint: &Endpoint| {
             endpoint.node == NodeIndex::ROOT
                 || plan.nodes.get(endpoint.node.index()).is_some_and(|node| {
                     node.kind() != node::Kind::Graph && is_descendant(endpoint.node, edge.owner)
@@ -3923,7 +3920,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     // edge targeting the boundary feeds a graph OUTPUT — the same
     // rule the checker applies to the surface language.
     let endpoint_ok =
-        |endpoint: &EdgeEnd, position: node::PortDirection| -> Result<(), PlanValidationError> {
+        |endpoint: &Endpoint, position: node::PortDirection| -> Result<(), PlanValidationError> {
             match endpoint.node {
                 slot if slot != NodeIndex::ROOT => {
                     let node = node_at(slot)?;
@@ -4034,7 +4031,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     // Two PINNED edge ends must agree — the same rule the checker
     // holds the surface to; endpoint slots are proven above, so the
     // lookups dereference safely.
-    let pin_of = |endpoint: &EdgeEnd| -> Option<DataType> {
+    let pin_of = |endpoint: &Endpoint| -> Option<DataType> {
         plan.nodes[endpoint.node.index()]
             .ports
             .iter()

@@ -8,9 +8,7 @@ use crate::journal::{
     ConsumedPosition, DeadlineKind, TransactionRecord, loop_protocol as protocol,
 };
 use crate::node::{HandlerActivation, Lifecycle, Trigger};
-use crate::plan::{
-    Dispatch, DispatchStep, Endpoint, EndpointOwner, RouteDestination, RouteSelection,
-};
+use crate::plan::{Destination, Dispatch, DispatchStep, RouteSelection};
 use crate::runtime::{DataSlot, LazyBindings, State};
 
 pub(super) fn future(inspection: &ExecutionInspection, records: &[Record]) -> JsonValue {
@@ -110,28 +108,21 @@ pub(super) fn future(inspection: &ExecutionInspection, records: &[Record]) -> Js
     json!(result)
 }
 
-pub(super) fn endpoint_owner(owner: &EndpointOwner) -> String {
-    match owner {
-        EndpointOwner::Node(path) => path.to_string(),
-        EndpointOwner::Graph(path) => path.to_string(),
-    }
-}
-
-fn destination(value: &RouteDestination) -> String {
+fn destination(plan: &crate::plan::ExecutionPlan, value: &Destination) -> String {
     match value {
-        RouteDestination::Discard => "nothing".into(),
-        RouteDestination::Port(endpoint) => format!(
+        Destination::Discard => "nothing".into(),
+        Destination::Port(endpoint) => format!(
             "{}.{}",
-            display_owner(&endpoint_owner(&endpoint.owner)),
+            display_owner(&plan.nodes[endpoint.node.index()].path.to_string()),
             endpoint.port
         ),
-        RouteDestination::InstanceStop(target) => format!(
+        Destination::InstanceStop(target) => format!(
             "⇢ {}.instance.stop",
-            display_owner(&endpoint_owner(&target.owner)),
+            display_owner(&plan.nodes[target.owner.index()].path.to_string()),
         ),
-        RouteDestination::LoopCommand(command) => format!(
+        Destination::LoopCommand(command) => format!(
             "⇢ {}.Loop.{}",
-            display_owner(&endpoint_owner(&command.owner)),
+            display_owner(&plan.nodes[command.owner.index()].path.to_string()),
             match command.kind {
                 crate::plan::LoopCommandKind::Next => "next",
                 crate::plan::LoopCommandKind::Again => "again",
@@ -148,23 +139,11 @@ fn display_owner(owner: &str) -> &str {
 pub(super) fn routes(plan: &crate::plan::ExecutionPlan) -> JsonValue {
     json!(plan.reference_routes().map(|rule| {
         let arms = match &rule.selection {
-            RouteSelection::All(destinations) => vec![json!({ "cases": [], "destinations": destinations.iter().map(destination).collect::<Vec<_>>() })],
-            RouteSelection::Cases(arms) => arms.iter().map(|arm| json!({ "cases": arm.cases, "destinations": arm.destinations.iter().map(destination).collect::<Vec<_>>() })).collect(),
+            RouteSelection::All(destinations) => vec![json!({ "cases": [], "destinations": destinations.iter().map(|value| destination(plan, value)).collect::<Vec<_>>() })],
+            RouteSelection::Cases(arms) => arms.iter().map(|arm| json!({ "cases": arm.cases, "destinations": arm.destinations.iter().map(|value| destination(plan, value)).collect::<Vec<_>>() })).collect(),
         };
-        json!({ "owner": endpoint_owner(&rule.source.owner), "port": rule.source.port.name(), "arms": arms })
+        json!({ "owner": plan.nodes[rule.source.node.index()].path.to_string(), "port": rule.source.port.name(), "arms": arms })
     }).collect::<Vec<_>>())
-}
-
-fn physical_matches(
-    plan: &crate::plan::ExecutionPlan,
-    logical: &Endpoint,
-    physical: &crate::plan::EdgeEnd,
-) -> bool {
-    logical.port == physical.port
-        && match &logical.owner {
-            EndpointOwner::Node(path) => plan.nodes[physical.node.index()].path == *path,
-            EndpointOwner::Graph(path) => plan.nodes[physical.node.index()].path == *path,
-        }
 }
 
 pub(super) fn edge_cases(
@@ -172,19 +151,13 @@ pub(super) fn edge_cases(
     edge: &crate::plan::Edge,
 ) -> Vec<String> {
     let mut cases = BTreeSet::new();
-    for rule in plan
-        .routes()
-        .iter()
-        .filter(|rule| physical_matches(plan, &rule.source, &edge.from))
-    {
-        let selected = |destinations: &[RouteDestination]| {
+    for rule in plan.routes().iter().filter(|rule| rule.source == edge.from) {
+        let selected = |destinations: &[Destination]| {
             destinations
                 .iter()
                 .any(|destination| match (destination, &edge.to) {
-                    (RouteDestination::Discard, None) => true,
-                    (RouteDestination::Port(logical), Some(physical)) => {
-                        physical_matches(plan, logical, physical)
-                    }
+                    (Destination::Discard, None) => true,
+                    (Destination::Port(logical), Some(physical)) => logical == physical,
                     _ => false,
                 })
         };

@@ -35,7 +35,7 @@ use crate::journal::{Emission, Journal, LoopRunId, RouteTarget, RoutedDelivery, 
 use crate::node;
 use crate::node::NodeIndex;
 use crate::plan::{
-    AttrSetting, Edge, EdgeEnd, EvaluationSite, GraphVersion, NodeKind, ValidatedExecutionPlan,
+    AttrSetting, Edge, Endpoint, EvaluationSite, GraphVersion, NodeKind, ValidatedExecutionPlan,
 };
 use crate::runtime::{
     DataSlot, Fault, JoinCandidate, LifecycleFiring, Mailboxes, State, TransactionPreparer,
@@ -203,7 +203,7 @@ pub enum ExecutionFault {
         ingress: node::Port,
         /// The endpoint whose pin actually refused — the ingress
         /// itself, or a fan-out destination.
-        rejected_at: EdgeEnd,
+        rejected_at: Endpoint,
         /// The SEMANTIC judgement: expected type, found kind, and
         /// the reason — a tool matches, `Display` renders.
         violation: Box<crate::runtime::ConformanceViolation>,
@@ -722,7 +722,7 @@ impl crate::boundary::CompletionCheck for PlanCompletionCheck<'_> {
                 ));
             }
             if let Data::Materialized(value) = &output.data {
-                let from = EdgeEnd {
+                let from = Endpoint {
                     node: slot,
                     port: output.port.clone(),
                 };
@@ -1385,13 +1385,13 @@ impl<'plan> Execution<'plan> {
                 .iter()
                 .any(|rule| match &rule.selection {
                     crate::plan::RouteSelection::All(set) => set.iter().any(|destination| {
-                        matches!(destination, crate::plan::RouteDestination::InstanceStop(_))
+                        matches!(destination, crate::plan::Destination::InstanceStop(_))
                     }),
                     crate::plan::RouteSelection::Cases(arms) => arms
                         .iter()
                         .flat_map(|arm| &arm.destinations)
                         .any(|destination| {
-                            matches!(destination, crate::plan::RouteDestination::InstanceStop(_))
+                            matches!(destination, crate::plan::Destination::InstanceStop(_))
                         }),
                 })
                 .then(VecDeque::new),
@@ -3994,7 +3994,7 @@ impl<'plan> Execution<'plan> {
             let Data::Materialized(value) = &output.data else {
                 continue;
             };
-            let from = EdgeEnd {
+            let from = Endpoint {
                 node: slot,
                 port: output.port.clone(),
             };
@@ -5277,20 +5277,20 @@ impl<'plan> Execution<'plan> {
                 value.check_consistency().map_err(|error| {
                     ExecutionFault::Fault(crate::runtime::Fault::InvalidValue(error))
                 })?;
-                let from = EdgeEnd {
+                let from = Endpoint {
                     node: slot,
                     port: emission.port.clone(),
                 };
                 crate::runtime::crossing_pins_hold(self.plan, &from, value)
                     .map_err(|violation| ExecutionFault::Fault(violation.into_fault()))?;
             }
-            let from = EdgeEnd {
+            let from = Endpoint {
                 node: slot,
                 port: emission.port.clone(),
             };
             commands.extend(self.prepare_instance_commands(
                 journal,
-                &self.graph_endpoint(&from)?,
+                &from,
                 Some(source_instance),
                 &emission.envelope,
             )?);
@@ -5326,7 +5326,7 @@ impl<'plan> Execution<'plan> {
     fn prepare_routes(
         &self,
         journal: &dyn InstanceAdmissions,
-        from: &EdgeEnd,
+        from: &Endpoint,
         source_instance: Option<&instance::Generation>,
         envelope: &Envelope,
         candidates: &mut BTreeMap<instance::Generation, InstanceCandidate>,
@@ -5334,7 +5334,7 @@ impl<'plan> Execution<'plan> {
         if self.graph_loops.is_some() {
             return self.prepare_graph_routes(
                 journal,
-                &self.graph_endpoint(from)?,
+                from,
                 source_instance,
                 envelope,
                 candidates,
@@ -5606,7 +5606,7 @@ impl<'plan> Execution<'plan> {
         journal: &dyn InstanceAdmissions,
         scope: node::NodeIndex,
         source_instance: Option<&instance::Generation>,
-        target: &EdgeEnd,
+        target: &Endpoint,
         envelope: &Envelope,
         candidates: &mut BTreeMap<instance::Generation, InstanceCandidate>,
     ) -> Result<PreparedTarget, ExecutionFault> {

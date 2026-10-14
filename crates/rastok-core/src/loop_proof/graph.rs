@@ -5,8 +5,8 @@ use super::{Certificate, Error, derive_dispatch};
 use crate::expr;
 use crate::node;
 use crate::plan::{
-    Dispatch, DispatchStep, Endpoint, EndpointOwner, ExecutionPlan, LoopCommand, LoopCommandKind,
-    Node, RouteDestination, RouteSelection,
+    Destination, Dispatch, DispatchStep, Endpoint, ExecutionPlan, LoopCommand, LoopCommandKind,
+    Node, RouteSelection,
 };
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec;
@@ -28,7 +28,12 @@ pub fn derive_graph(
     let spec = owner.loop_spec().ok_or(Error::UnsupportedActivation)?;
     let mut inputs = BTreeSet::new();
     let mut pending = vec![Endpoint {
-        owner: EndpointOwner::Graph(owner.path.clone()),
+        node: node::NodeIndex::new(
+            plan.nodes
+                .iter()
+                .position(|candidate| candidate.path == owner.path)
+                .ok_or(Error::UnsupportedActivation)? as u32,
+        ),
         port: spec.entry.clone(),
     }];
     let mut visited = BTreeSet::new();
@@ -41,22 +46,22 @@ pub fn derive_graph(
                 return Err(Error::UnsupportedActivation);
             };
             for target in destinations {
-                if let RouteDestination::Port(target) = target {
-                    match &target.owner {
-                        EndpointOwner::Node(_) => {
+                if let Destination::Port(target) = target {
+                    match plan.nodes[target.node.index()].kind() {
+                        node::Kind::Operator | node::Kind::Connector => {
                             inputs.insert(target.clone());
                         }
-                        EndpointOwner::Graph(path) if path != &owner.path => {
-                            pending.push(target.clone())
+                        node::Kind::Graph if plan.nodes[target.node.index()].path != owner.path => {
+                            pending.push(target.clone());
                         }
-                        _ => {}
+                        node::Kind::Graph => {}
                     }
                 }
             }
         }
     }
     let mut producers = BTreeMap::new();
-    for node in &plan.nodes {
+    for (index, node) in plan.nodes.iter().enumerate() {
         if !node.path.segments().starts_with(owner.path.segments()) {
             continue;
         }
@@ -66,9 +71,7 @@ pub fn derive_graph(
             .filter(|port| port.direction == node::PortDirection::Output)
         {
             let source = Endpoint {
-                owner: node
-                    .endpoint_owner()
-                    .map_err(|_| Error::UnsupportedActivation)?,
+                node: node::NodeIndex::new(index as u32),
                 port: port.port.clone(),
             };
             if recurs(plan, owner, &source)? {
@@ -82,19 +85,14 @@ pub fn derive_graph(
         &Dispatch::Linear(vec![]),
     )?;
     for (handler_owner, handler) in plan.handlers() {
-        let Some(node) = plan.nodes.get(handler_owner.index()) else {
-            return Err(Error::UnsupportedActivation);
-        };
-        let producer = node
-            .endpoint_owner()
-            .map_err(|_| Error::UnsupportedActivation)?;
+        let producer = handler_owner;
         let keys: BTreeSet<_> = handler
             .dispatch
             .steps()
             .flat_map(DispatchStep::emissions)
             .filter(|(_, value)| !matches!(value, crate::plan::EmitValue::Nothing))
             .map(|(port, _)| Endpoint {
-                owner: producer.clone(),
+                node: producer,
                 port: port.clone(),
             })
             .filter(|source| producers.contains_key(source))
@@ -106,13 +104,13 @@ pub fn derive_graph(
             return Err(Error::UnsupportedActivation);
         };
         if !inputs.contains(&Endpoint {
-            owner: producer.clone(),
+            node: producer,
             port: port.clone(),
         }) {
             return Err(Error::UnsupportedActivation);
         }
         let input = Endpoint {
-            owner: producer.clone(),
+            node: producer,
             port: port.clone(),
         };
         // A direct path is not enough: every possible producer of this
@@ -128,7 +126,7 @@ pub fn derive_graph(
             if targets
                 .into_iter()
                 .flatten()
-                .any(|target| matches!(target, RouteDestination::Port(target) if *target == input))
+                .any(|target| matches!(target, Destination::Port(target) if *target == input))
                 && !visited.contains(&route.source)
             {
                 return Err(Error::UnsupportedActivation);
@@ -168,8 +166,8 @@ fn recurs(plan: &ExecutionPlan, owner: &Node, source: &Endpoint) -> Result<bool,
             for destinations in selections {
                 for destination in destinations {
                     match destination {
-                        RouteDestination::LoopCommand(command)
-                            if command.owner == EndpointOwner::Graph(owner.path.clone()) =>
+                        Destination::LoopCommand(command)
+                            if plan.nodes[command.owner.index()].path == owner.path =>
                         {
                             match command.kind {
                                 LoopCommandKind::Again => {
@@ -184,9 +182,13 @@ fn recurs(plan: &ExecutionPlan, owner: &Node, source: &Endpoint) -> Result<bool,
                                 LoopCommandKind::Done => {}
                             }
                         }
-                        RouteDestination::Port(target)
-                            if matches!(&target.owner, EndpointOwner::Graph(path)
-                            if path != &owner.path && path.segments().starts_with(owner.path.segments())) =>
+                        Destination::Port(target)
+                            if plan.nodes[target.node.index()].kind() == node::Kind::Graph
+                                && plan.nodes[target.node.index()].path != owner.path
+                                && plan.nodes[target.node.index()]
+                                    .path
+                                    .segments()
+                                    .starts_with(owner.path.segments()) =>
                         {
                             pending.push(target.clone())
                         }

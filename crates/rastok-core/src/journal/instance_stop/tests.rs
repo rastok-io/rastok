@@ -91,11 +91,8 @@ fn initial() -> (
     )
 }
 
-fn target(path: &str) -> InstanceStopTarget {
-    InstanceStopTarget {
-        scope: owner("conversation"),
-        owner: EndpointOwner::Graph(owner(path)),
-    }
+fn target(path: &str) -> node::OwnerPath {
+    owner(path)
 }
 
 fn production(
@@ -107,10 +104,8 @@ fn production(
     let port = Port::new("end").unwrap();
     let cause = Id::derive(crate::envelope::IdKind::Root, &[&[seed]]);
     let command = Command::new(
-        Endpoint {
-            owner: EndpointOwner::Node(Path::new(source.address().owner().segments()).unwrap()),
-            port: port.clone(),
-        },
+        SourceKind::Executor,
+        port.clone(),
         source.clone(),
         scope.clone(),
         target.clone(),
@@ -148,16 +143,25 @@ fn target_selection_follows_parent_instance_not_the_connector_path() {
     let (records, alice, worker, decide) = initial();
     let fold = InstanceCommandView::from_records(&records).unwrap();
     assert_eq!(
-        fold.resolve(&decide, &target("conversation.worker"))
-            .unwrap(),
+        fold.resolve(
+            &decide,
+            &owner("conversation"),
+            &target("conversation.worker")
+        )
+        .unwrap(),
         (alice.clone(), worker)
     );
     assert_eq!(
-        fold.resolve(&decide, &target("conversation")).unwrap(),
+        fold.resolve(&decide, &owner("conversation"), &target("conversation"))
+            .unwrap(),
         (alice.clone(), alice)
     );
     assert_eq!(
-        fold.resolve(&decide, &target("conversation.absent")),
+        fold.resolve(
+            &decide,
+            &owner("conversation"),
+            &target("conversation.absent")
+        ),
         Err(Error::MissingTarget)
     );
 }
@@ -244,12 +248,20 @@ fn multiple_keyed_children_require_an_exact_source_binding() {
     records.push(start(&second, Some(&alice)));
     let fold = InstanceCommandView::from_records(&records).unwrap();
     assert_eq!(
-        fold.resolve(&decide, &target("conversation.worker")),
+        fold.resolve(
+            &decide,
+            &owner("conversation"),
+            &target("conversation.worker")
+        ),
         Err(Error::AmbiguousTarget)
     );
     assert_eq!(
-        fold.resolve(&second, &target("conversation.worker"))
-            .unwrap(),
+        fold.resolve(
+            &second,
+            &owner("conversation"),
+            &target("conversation.worker")
+        )
+        .unwrap(),
         (alice, second)
     );
 }
@@ -330,7 +342,7 @@ fn command_identity_includes_cause_scope_target_and_generation() {
     command.scope = instance("conversation", "alice", 1);
     variants.push(command);
     let mut command = original.clone();
-    command.source.port = Port::new("other").unwrap();
+    command.source = Port::new("other").unwrap();
     variants.push(command);
     for command in variants {
         assert_ne!(command.derived_id(), original.id);
@@ -373,4 +385,54 @@ fn codec_round_trip_rejects_changed_authority_and_empty_commands() {
         ),
         Err(Error::CommandIdentity)
     );
+}
+
+#[test]
+fn command_encoding_depends_on_paths_and_source_kind_not_plan_indices() {
+    use crate::canonical_cbor::{Value as Cbor, encode};
+    let (_, scope, target, source) = initial();
+    let cause = Id::derive(crate::envelope::IdKind::Root, &[b"closure"]);
+    for (kind, tag) in [(SourceKind::Graph, 1_u8), (SourceKind::Executor, 2)] {
+        let command = Command::new(
+            kind,
+            Port::new("end").unwrap(),
+            source.clone(),
+            scope.clone(),
+            target.clone(),
+            cause,
+        );
+        let expected_id = Id::derive(
+            crate::envelope::IdKind::InstanceStop,
+            &[
+                &[tag],
+                b"end",
+                source.address().as_bytes(),
+                &source.generation().to_le_bytes(),
+                scope.address().as_bytes(),
+                &scope.generation().to_le_bytes(),
+                target.address().as_bytes(),
+                &target.generation().to_le_bytes(),
+                cause.as_bytes(),
+            ],
+        );
+        assert_eq!(command.id, expected_id);
+        let expected = Cbor::Map(BTreeMap::from([(
+            1,
+            Cbor::Array(vec![Cbor::Array(vec![
+                Cbor::Bytes(expected_id.as_bytes().to_vec()),
+                Cbor::Uint(u64::from(tag)),
+                Cbor::Text("end".into()),
+                source.tree(),
+                scope.tree(),
+                target.tree(),
+                Cbor::Bytes(cause.as_bytes().to_vec()),
+            ])]),
+        )]));
+        let commands = InstanceCommands {
+            produced: vec![command],
+            consumed: None,
+        };
+        assert_eq!(encode(&commands.tree()), encode(&expected));
+        assert_eq!(InstanceCommands::from_tree(&expected).unwrap(), commands);
+    }
 }

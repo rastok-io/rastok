@@ -20,15 +20,12 @@ pub(super) fn validate(
             {
                 continue;
             }
-            let source = EdgeEnd {
+            let source = Endpoint {
                 node: slot,
                 port: decl.port().clone(),
             };
             if plan.edges.iter().any(|edge| edge.from == source)
-                || plan
-                    .routes
-                    .iter()
-                    .any(|rule| plan.endpoint_matches(&rule.source, &source))
+                || plan.routes.iter().any(|rule| rule.source == source)
             {
                 // Selection validation proves every row nonempty and every
                 // closed case covered. A command may have no physical edge.
@@ -112,16 +109,7 @@ pub(super) fn live_owners(plan: &ExecutionPlan) -> Vec<bool> {
             }
         }
         for rule in plan.reference_routes() {
-            let source_path = match &rule.source.owner {
-                EndpointOwner::Node(path) => node::OwnerPath::from(path),
-                EndpointOwner::Graph(path) => path.clone(),
-            };
-            if !plan
-                .nodes
-                .iter()
-                .enumerate()
-                .any(|(index, owner)| owner.path == source_path && live[index])
-            {
+            if !live[rule.source.node.index()] {
                 continue;
             }
             let sets: Vec<_> = match &rule.selection {
@@ -129,13 +117,10 @@ pub(super) fn live_owners(plan: &ExecutionPlan) -> Vec<bool> {
                 RouteSelection::Cases(arms) => arms.iter().map(|arm| &arm.destinations).collect(),
             };
             for target in sets.into_iter().flatten() {
-                if let RouteDestination::Port(Endpoint {
-                    owner: EndpointOwner::Graph(path),
-                    ..
-                }) = target
-                    && let Some(index) = plan.nodes.iter().position(|owner| owner.path == *path)
+                if let Destination::Port(endpoint) = target
+                    && plan.nodes[endpoint.node.index()].kind() == node::Kind::Graph
                 {
-                    changed |= activate(node::NodeIndex::new(index as u32), &mut live);
+                    changed |= activate(endpoint.node, &mut live);
                 }
             }
         }

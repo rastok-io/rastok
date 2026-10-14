@@ -7,7 +7,6 @@ use crate::instance;
 use crate::node;
 
 use crate::node::{Lifecycle, Trigger};
-use crate::plan::{Endpoint, EndpointOwner, InstanceStopTarget};
 use alloc::collections::BTreeMap;
 use alloc::string::ToString;
 use alloc::vec;
@@ -17,13 +16,25 @@ use core::fmt;
 /// Extend-only field in the canonical causal projection.
 pub const CAUSAL_KEY: u64 = 42;
 
+/// The two source forms recorded by an instance-closure command. The owner
+/// path is carried by the exact source generation, never by a plan index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceKind {
+    /// A port on a Graph boundary.
+    Graph,
+    /// An Operator or Connector emission.
+    Executor,
+}
+
 /// Authority fixed by the producer, never resolved again by the consumer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Command {
     /// Derived from every authority and cause field below.
     pub id: Id,
-    /// Actual source emission (before transparent boundary composition).
-    pub source: Endpoint,
+    /// Source port before transparent boundary composition.
+    pub source: node::Port,
+    /// Graph boundary or Executor; preserves the recorded source distinction.
+    pub source_kind: SourceKind,
     /// Exact emitting owner generation.
     pub source_instance: instance::Generation,
     /// Exact lexical wiring Graph generation.
@@ -39,7 +50,8 @@ impl Command {
     /// against the plan and the journal prefix before acceptance.
     #[must_use]
     pub fn new(
-        source: Endpoint,
+        source_kind: SourceKind,
+        source: node::Port,
         source_instance: instance::Generation,
         scope: instance::Generation,
         target: instance::Generation,
@@ -48,6 +60,7 @@ impl Command {
         let mut command = Self {
             id: cause,
             source,
+            source_kind,
             source_instance,
             scope,
             target,
@@ -58,15 +71,15 @@ impl Command {
     }
 
     fn derived_id(&self) -> Id {
-        let kind = match self.source.owner {
-            EndpointOwner::Graph(_) => 1,
-            EndpointOwner::Node(_) => 2,
+        let kind = match self.source_kind {
+            SourceKind::Graph => 1,
+            SourceKind::Executor => 2,
         };
         Id::derive(
             crate::envelope::IdKind::InstanceStop,
             &[
                 &[kind],
-                self.source.port.name().as_bytes(),
+                self.source.name().as_bytes(),
                 self.source_instance.address().as_bytes(),
                 &self.source_instance.generation().to_le_bytes(),
                 self.scope.address().as_bytes(),
@@ -104,11 +117,11 @@ impl InstanceCommands {
                         .map(|command| {
                             Cbor::Array(vec![
                                 id_tree(command.id),
-                                Cbor::Uint(match command.source.owner {
-                                    EndpointOwner::Graph(_) => 1,
-                                    EndpointOwner::Node(_) => 2,
+                                Cbor::Uint(match command.source_kind {
+                                    SourceKind::Graph => 1,
+                                    SourceKind::Executor => 2,
                                 }),
-                                Cbor::Text(command.source.port.name().to_string()),
+                                Cbor::Text(command.source.name().to_string()),
                                 command.source_instance.tree(),
                                 command.scope.tree(),
                                 command.target.tree(),
@@ -169,19 +182,15 @@ impl InstanceCommands {
                 return Err(Error::CommandsShape);
             };
             let source_instance = read_instance(source)?;
-            let path = source_instance.address().owner().clone();
-            let source = Endpoint {
-                owner: match kind {
-                    1 => EndpointOwner::Graph(path),
-                    2 => EndpointOwner::Node(
-                        crate::node::Path::new(path.segments()).map_err(|_| Error::Source)?,
-                    ),
-                    _ => return Err(Error::CommandsShape),
-                },
-                port: crate::node::Port::new(port).map_err(|_| Error::Source)?,
+            let source_kind = match kind {
+                1 => SourceKind::Graph,
+                2 if !source_instance.address().owner().is_root() => SourceKind::Executor,
+                2 => return Err(Error::Source),
+                _ => return Err(Error::CommandsShape),
             };
             let command = Command::new(
-                source,
+                source_kind,
+                node::Port::new(port).map_err(|_| Error::Source)?,
                 source_instance,
                 read_instance(scope)?,
                 read_instance(target)?,
@@ -313,13 +322,6 @@ impl fmt::Display for Error {
 
 impl core::error::Error for Error {}
 
-fn owner_path(owner: &EndpointOwner) -> node::OwnerPath {
-    match owner {
-        EndpointOwner::Graph(path) => path.clone(),
-        EndpointOwner::Node(path) => node::OwnerPath::from(path),
-    }
-}
-
 impl InstanceCommandView {
     /// Reconstructs the complete supplied prefix or rejects it.
     ///
@@ -366,28 +368,28 @@ impl InstanceCommandView {
     pub fn resolve(
         &self,
         source: &instance::Generation,
-        target: &InstanceStopTarget,
+        scope_owner: &node::OwnerPath,
+        target_owner: &node::OwnerPath,
     ) -> Result<(instance::Generation, instance::Generation), Error> {
         let mut cursor = source;
         let scope = loop {
             let instance = self.instances.get(cursor).ok_or(Error::Source)?;
-            if cursor.address().owner() == &target.scope {
+            if cursor.address().owner() == scope_owner {
                 break cursor;
             }
             cursor = instance.parent.as_ref().ok_or(Error::Source)?;
         };
-        let target_owner = owner_path(&target.owner);
-        if target_owner == target.scope {
+        if target_owner == scope_owner {
             return Ok((scope.clone(), scope.clone()));
         }
-        if target_owner.parent().as_ref() != Some(&target.scope) {
+        if target_owner.parent().as_ref() != Some(scope_owner) {
             return Err(Error::Target);
         }
         // A producing child (or its descendant) supplies its own exact
         // instance, even when the parent owns other keys at the same path.
         let mut cursor = source;
         while cursor != scope {
-            if cursor.address().owner() == &target_owner {
+            if cursor.address().owner() == target_owner {
                 return Ok((scope.clone(), cursor.clone()));
             }
             cursor = self
@@ -400,7 +402,7 @@ impl InstanceCommandView {
             .instances
             .iter()
             .filter(|(reference, instance)| {
-                reference.address().owner() == &target_owner
+                reference.address().owner() == target_owner
                     && instance.parent.as_ref() == Some(scope)
             })
             .collect();
@@ -534,7 +536,8 @@ impl InstanceCommandView {
             return Err(Error::CommandsShape);
         }
         for command in &packet.produced {
-            if owner_path(&command.source.owner) != *command.source_instance.address().owner()
+            if (command.source_kind == SourceKind::Executor
+                && command.source_instance.address().owner().is_root())
                 || command.derived_id() != command.id
             {
                 return Err(Error::CommandIdentity);
@@ -554,11 +557,11 @@ impl InstanceCommandView {
             {
                 return Err(Error::DuplicateCommand);
             }
-            let target = InstanceStopTarget {
-                scope: command.scope.address().owner().clone(),
-                owner: EndpointOwner::Graph(command.target.address().owner().clone()),
-            };
-            let (scope, target) = self.resolve(&command.source_instance, &target)?;
+            let (scope, target) = self.resolve(
+                &command.source_instance,
+                command.scope.address().owner(),
+                command.target.address().owner(),
+            )?;
             if scope != command.scope || target != command.target {
                 return Err(Error::Target);
             }
@@ -619,18 +622,18 @@ impl InstanceCommandView {
 fn transaction_source(record: &TransactionRecord, command: &Command) -> bool {
     command.source_instance == record.instance
         && record.emissions.iter().any(|emission| {
-            emission.port == command.source.port
-                && emission.envelope.meta().sys().id() == command.cause
+            emission.port == command.source && emission.envelope.meta().sys().id() == command.cause
         })
 }
 
 fn inbound_source(record: &IngressRecord, command: &Command) -> bool {
-    let owner = record.connector_path.as_ref().map_or_else(
-        || EndpointOwner::Graph(node::OwnerPath::root()),
-        |path| EndpointOwner::Node(path.clone()),
+    let (kind, owner) = record.connector_path.as_ref().map_or_else(
+        || (SourceKind::Graph, node::OwnerPath::root()),
+        |path| (SourceKind::Executor, node::OwnerPath::from(path)),
     );
-    command.source.owner == owner
-        && command.source.port == record.port
+    command.source_kind == kind
+        && *command.source_instance.address().owner() == owner
+        && command.source == record.port
         && command.cause == record.envelope.meta().sys().id()
 }
 

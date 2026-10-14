@@ -1985,8 +1985,7 @@ fn the_validator_reads_the_table_and_gates_the_capability() {
     use rastok::datatype::DataType;
     use rastok::node::PortDirection;
     use rastok::plan::{
-        Endpoint, EndpointOwner, NodeKind, PortDecl, RouteDestination, RouteSelection,
-        ValidatedExecutionPlan,
+        Destination, Endpoint, NodeKind, PortDecl, RouteSelection, ValidatedExecutionPlan,
     };
     let source = "graph g : App {\n  input in: text\n  output out: text\n  connector probe : Process {\n    mode = job ; command = \"cat\"\n    codec = lines\n    idempotent = true; behavior = deterministic\n  }\n  in -> probe -> out\n  probe.err -> nothing\n  probe.exit -> nothing\n}\n";
     let mut plan = compile(
@@ -2012,7 +2011,6 @@ fn the_validator_reads_the_table_and_gates_the_capability() {
     probe
         .ports
         .sort_by(|left, right| left.key().cmp(&right.key()));
-    let probe_path = plan.nodes[probe_slot].executor_path().unwrap().clone();
     let NodeKind::Graph(graph) = &mut plan.nodes[0].body else {
         panic!("App Graph")
     };
@@ -2024,8 +2022,8 @@ fn the_validator_reads_the_table_and_gates_the_capability() {
     let RouteSelection::All(destinations) = &mut input.selection else {
         panic!("unconditional input")
     };
-    destinations.push(RouteDestination::Port(Endpoint {
-        owner: EndpointOwner::Node(probe_path),
+    destinations.push(Destination::Port(Endpoint {
+        node: rastok::node::NodeIndex::new(probe_slot as u32),
         port: rastok::node::Port::new("request").unwrap(),
     }));
     destinations.sort();
@@ -2051,7 +2049,7 @@ fn the_validator_reads_the_table_and_gates_the_capability() {
     let ghost = destinations
         .iter_mut()
         .find_map(|destination| match destination {
-            RouteDestination::Port(endpoint) if endpoint.port.name() == "request" => Some(endpoint),
+            Destination::Port(endpoint) if endpoint.port.name() == "request" => Some(endpoint),
             _ => None,
         })
         .expect("the spliced destination");

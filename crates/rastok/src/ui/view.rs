@@ -673,16 +673,13 @@ fn topology(
 }
 
 fn manager_commands(plan: &crate::plan::ExecutionPlan) -> Vec<JsonValue> {
-    use crate::plan::{EndpointOwner, LoopCommandKind, RouteDestination, RouteSelection};
-    let owner_path = |owner: &EndpointOwner| match owner {
-        EndpointOwner::Node(path) => path.to_string(),
-        EndpointOwner::Graph(path) => path.to_string(),
-    };
+    use crate::plan::{Destination, LoopCommandKind, RouteSelection};
+    let owner_path = |owner: crate::node::NodeIndex| plan.nodes[owner.index()].path.to_string();
     let mut commands = Vec::new();
     for rule in plan.routes() {
-        let mut project = |cases: &[String], destinations: &[RouteDestination]| {
+        let mut project = |cases: &[String], destinations: &[Destination]| {
             for destination in destinations {
-                let RouteDestination::LoopCommand(target) = destination else {
+                let Destination::LoopCommand(target) = destination else {
                     continue;
                 };
                 let command = match target.kind {
@@ -691,9 +688,9 @@ fn manager_commands(plan: &crate::plan::ExecutionPlan) -> Vec<JsonValue> {
                     LoopCommandKind::Done => "Loop.done",
                 };
                 commands.push(json!({
-                    "source_owner": owner_path(&rule.source.owner),
+                    "source_owner": owner_path(rule.source.node),
                     "source_port": rule.source.port.name(),
-                    "owner": owner_path(&target.owner),
+                    "owner": owner_path(target.owner),
                     "command": command,
                     "cases": cases,
                 }));
@@ -910,7 +907,7 @@ fn loop_spec_json(owner: &crate::plan::Node) -> JsonValue {
     }))
 }
 
-fn endpoint_json(endpoint: &crate::plan::EdgeEnd, source: bool) -> JsonValue {
+fn endpoint_json(endpoint: &crate::plan::Endpoint, source: bool) -> JsonValue {
     match endpoint.node {
         slot if slot != crate::node::NodeIndex::ROOT => json!({
             "id": format!("node:{}", slot.index()),

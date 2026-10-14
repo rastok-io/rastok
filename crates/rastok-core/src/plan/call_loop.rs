@@ -45,8 +45,8 @@ pub(super) fn validate(
             "a Connector-dependent recurrence requires explicit fuel, not a measure proof",
         ));
     }
-    let owner = node.endpoint_owner()?;
-    let rules = || plan.routes.iter().filter(|rule| rule.source.owner == owner);
+    let owner = slot;
+    let rules = || plan.routes.iter().filter(|rule| rule.source.node == owner);
     for rule in rules() {
         let sets: Vec<_> = match &rule.selection {
             RouteSelection::All(destinations) => alloc::vec![(None, destinations.as_slice())],
@@ -57,7 +57,7 @@ pub(super) fn validate(
         };
         for (cases, destinations) in sets {
             for destination in destinations {
-                let RouteDestination::LoopCommand(command) = destination else {
+                let Destination::LoopCommand(command) = destination else {
                     continue;
                 };
                 let path = format!("{} -> {:?}", rule.source.port, command.kind);
@@ -120,10 +120,10 @@ pub(super) fn validate(
             if !produces {
                 continue;
             }
-            let count = |destinations: &[RouteDestination]| {
+            let count = |destinations: &[Destination]| {
                 destinations
                     .iter()
-                    .filter(|destination| matches!(destination, RouteDestination::LoopCommand(_)))
+                    .filter(|destination| matches!(destination, Destination::LoopCommand(_)))
                     .count()
             };
             commands += match &rule.selection {

@@ -932,3 +932,114 @@ secret masking, and recording/replay of a local `cat` execution. HTTP and
 agent scenarios used Lab responses and explicit synthetic canaries; they
 did not invoke an external model or partner. No timeout, assertion, trace,
 recording fixture, package pin or application code changed for this rerun.
+
+## Indexed reference endpoints — 14 October
+
+The candidate plan now uses one `Endpoint { node: NodeIndex, port }` for
+reference wiring and derived physical edges. `Destination` distinguishes
+a port, explicit discard, a Loop command and an exact-instance closure.
+Command owners and closure scopes refer to the same Node table. The Graph
+containing a rule still determines the face of each boundary port.
+
+The validator checks every referenced index before composing routes or
+indexing the Node table. A hostile-plan regression covers source ports,
+destination ports, Loop owners, closure scopes and closure targets. Port
+direction, containment and command authority remain separate checks; an
+in-range number is not proof that a destination is allowed.
+
+The source HIR keeps its path-based types and semantic-hash writer. Lowering
+resolves those paths only after constructing the complete Node index, so a
+Graph can name children emitted later in the table. The checker uses a
+temporary index to reuse the core composition proof, and translates its
+diagnostics back to source paths. No compatibility alias is introduced.
+
+Node indices are not causal identities or scheduling order. Runtime route
+selection preserves the existing path order, including Executor destinations
+before Graph boundaries. The instance-stop journal fact now owns its source
+port and Graph/Executor distinction directly; its exact generation already
+carries the source path. Its encoding and identity recipe are unchanged and
+contain no Node index. An independent construction test checks both source
+forms against the existing canonical tuple and identity recipe.
+
+This is still the same format-21 candidate, not another format bump or a
+package approval. Indexed mailbox deliveries and the final package witness
+inventory remain to be completed. No trace, recording, golden, conformance
+fixture, example or human-review ledger is changed by this step.
+
+### Trace and embedded results
+
+The 28 gallery scenarios pass, with identical old/new record counts and
+causal seals. Echo, JSONL, gauge and the Retry spike also keep their semantic
+hashes. The first gallery invocation omitted the synthetic secret-version
+variables and stopped at attestation; the successful rerun supplied both
+fixture tokens and their `fixture-v1` versions. All HTTP results came from
+the Lab; no external model or partner was called.
+
+Candidate packages were regenerated only in a temporary directory. These
+are measurements for the final inventory, not approved package witnesses:
+
+| Witness | Tracked format-20 body | Indexed candidate body | Candidate checksum |
+|---|---:|---:|---|
+| Echo | 961 B | 934 B | `c24806e6918130b4d8d35c6660d3f254c598d17c41aac9930f6545d4cf748dc0` |
+| JSONL | 1,005 B | 979 B | `6d03694522f95d6ea2b8cf3654938ee73f65e5fa75c6dae8bcfc83943ed733d6` |
+| Gauge | 249 B | 230 B | `3acf7c7f98b481b4d779f99a234ccea6173136e6e2a79417da99164f968b0196` |
+
+Both normal Cortex-M33 workloads finish with `SPIKE_OK`. Neither the
+128 KiB heap gate, the 1 MiB code gate nor the workload has been relaxed.
+The optional layout-probe feature is absent from these measurements.
+
+| Cortex-M33 measurement | Echo, 32 admissions | Retry with recovery |
+|---|---:|---:|
+| Heap immediately after package decoding | 7,692 B | 5,708 B |
+| Package-load peak | 36,160 B | 30,684 B |
+| Complete execution/recovery peak | 112,868 B | 129,504 B |
+| Margin below 128 KiB | 18,204 B | 1,568 B |
+| Live heap after execution | not sampled | 93,464 B |
+| Live heap after recovery | not sampled | 93,328 B |
+| `.text` | 898,900 B | 959,732 B |
+| `.rodata` | 70,220 B | 80,928 B |
+| `.text + .rodata` | 969,120 B | 1,040,660 B |
+| Margin below 1 MiB | 79,456 B | 7,916 B |
+| Journal records | 67 | 17 |
+
+Against the preceding reference-wiring checkpoint, indexed endpoints reduce
+the complete heap peak by 768 B for echo and 512 B for Retry. Code grows by
+472 B for echo and shrinks by 296 B for Retry. These are separate linked
+images, not an assumed common delta. The remaining Retry margin still
+requires measuring the mailbox-delivery step before accepting its layout.
+
+### Verification of the indexed checkpoint
+
+- Workspace test compilation with all features passed. Strict Clippy for
+  all workspace targets and features passed after removing one unnecessary
+  reference. Workspace formatting and rustdoc passed without warnings.
+- The three `no_std` checks passed: `thumbv7m-none-eabi`,
+  `riscv32imac-unknown-none-elf`, `thumbv8m.main-none-eabihf`.
+- RustRover's final build succeeded with no reported problem. Its semantic
+  renames handled `EdgeEnd` and `RouteDestination`; structural conversions
+  and the verified out-of-workspace probe references use ordinary patches.
+- The modified layout probe passes release compilation with
+  `retry-qualification,node-layout-probe` and `-D warnings`, and its own
+  Rust formatting check. No new allocation-probe run is claimed.
+- The citation lint checked 213 Rust files with no relative Markdown links;
+  all four tests of the lint passed.
+- All 16 graph-layout JavaScript tests and all 35 browser tests passed,
+  with no failure or skipped test. The browser run took 53.7 seconds using
+  the existing local Playwright 1.62.1 and Chrome, not the CI-pinned 1.58.2
+  environment. No browser dependency, timeout or assertion changed.
+- The public CLI checks echo with the same semantic hash. No tracked
+  package, recording, trace, fixture or example was overwritten, and no
+  push, tag or publication was performed.
+
+The focused all-features run covers 25 compiled test binaries: **1,303
+passed, three failed, none ignored**. The three failures are the unchanged
+format-20 assertions in `plan_fields`, `instance_stop` and `retry_plan`;
+the candidate reports format 21. Their package-version assertions remain
+unchanged until the final inventory and package approval. No behavioral
+assertion failed. This is not a claim that the complete workspace suite is
+green: the remaining package witnesses still require regeneration at the
+end of the lot. After compiling every workspace test target with
+`cargo test --locked --workspace --all-features --no-run`, the focused
+binaries ran in four workers with `--test-threads=4`, without fixture-saving
+variables. An earlier serial invocation was stopped and replaced by this
+complete focused run; it is not counted a second time.

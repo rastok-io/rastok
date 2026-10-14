@@ -143,17 +143,25 @@ pub(super) fn validate(
             ));
         }
     }
+    let owner_index = plan
+        .nodes
+        .iter()
+        .position(|candidate| candidate.path == owner.path)
+        .map(|index| NodeIndex::new(index as u32))
+        .ok_or(PlanValidationError::MissingRootOwner)?;
     let entry = Endpoint {
-        owner: EndpointOwner::Graph(owner.path.clone()),
+        node: owner_index,
         port: spec.entry.clone(),
     };
-    let in_scope = |endpoint: &Endpoint| match &endpoint.owner {
-        EndpointOwner::Node(path) => path.segments().starts_with(owner.path.segments()),
-        EndpointOwner::Graph(path) => path.segments().starts_with(owner.path.segments()),
+    let in_scope = |endpoint: &Endpoint| {
+        plan.nodes[endpoint.node.index()]
+            .path
+            .segments()
+            .starts_with(owner.path.segments())
     };
     for route in plan.reference_routes() {
         for destination in sets(&route.selection).into_iter().flatten() {
-            if let RouteDestination::Port(target) = destination
+            if let Destination::Port(target) = destination
                 && in_scope(target)
                 && *target != entry
                 && !in_scope(&route.source)
@@ -190,7 +198,7 @@ pub(super) fn validate(
                 .loop_spec()
                 .is_some_and(|spec| spec.proof.is_none() || spec.fuel.is_some())
         {
-            dependencies.insert(expiry_work(nested)?);
+            dependencies.insert(expiry_work(plan, nested)?);
         }
         match &work {
             Work::Source(source, case) => {
@@ -199,7 +207,9 @@ pub(super) fn validate(
                     .filter(|rule| rule.source == *source)
                 {
                     for destination in sets(&rule.selection).into_iter().flatten() {
-                        if let Some(next) = dependency(destination, &owner.path, case.as_deref()) {
+                        if let Some(next) =
+                            dependency(plan, destination, &owner.path, case.as_deref())
+                        {
                             dependencies.insert(next);
                         }
                     }
@@ -214,7 +224,7 @@ pub(super) fn validate(
                         {
                             dependencies.insert(Work::Source(
                                 Endpoint {
-                                    owner: input.owner.clone(),
+                                    node: input.node,
                                     port: port.port.clone(),
                                 },
                                 None,
@@ -224,7 +234,7 @@ pub(super) fn validate(
                     for (case, _) in call.terminal_cases() {
                         dependencies.insert(Work::Source(
                             Endpoint {
-                                owner: input.owner.clone(),
+                                node: input.node,
                                 port: node::Port::new(call.terminal()).map_err(|_| {
                                     error("terminal".into(), "a Call terminal must be a port")
                                 })?,
@@ -249,7 +259,7 @@ pub(super) fn validate(
                             if !matches!(expression, EmitValue::Nothing) {
                                 dependencies.insert(Work::Source(
                                     Endpoint {
-                                        owner: input.owner.clone(),
+                                        node: input.node,
                                         port: port.clone(),
                                     },
                                     None,
@@ -296,18 +306,18 @@ pub(super) fn validate(
                         let mut arm = empty();
                         for destination in destinations {
                             let next = match destination {
-                                RouteDestination::InstanceStop(target)
-                                    if target.owner == EndpointOwner::Graph(owner.path.clone()) => {
+                                Destination::InstanceStop(target)
+                                    if target.owner == owner_index => {
                                     BTreeSet::from([Outcome { terminal: false, other: 1, again: BTreeSet::new(),
                                         visible_calls: BTreeSet::new(), joins: BTreeMap::new(), retries: BTreeSet::new() }])
                                 }
-                                RouteDestination::InstanceStop(_) => return Err(error(
+                                Destination::InstanceStop(_) => return Err(error(
                                     "routing".into(),
                                     "a child-only closure inside a Loop application requires the deferred lifecycle-dependent control proof; close the Loop scope or route closure from its enclosing Graph",
                                 )),
-                                RouteDestination::Discard => empty(),
-                                RouteDestination::LoopCommand(command)
-                                    if command.owner == EndpointOwner::Graph(owner.path.clone()) =>
+                                Destination::Discard => empty(),
+                                Destination::LoopCommand(command)
+                                    if command.owner == owner_index =>
                                 {
                                     BTreeSet::from([Outcome {
                                         terminal: false, other: 1,
@@ -317,11 +327,8 @@ pub(super) fn validate(
                                         retries: BTreeSet::new(),
                                     }])
                                 }
-                                RouteDestination::LoopCommand(command) => {
-                                    let target = match &command.owner {
-                                        EndpointOwner::Graph(path) => path.clone(),
-                                        EndpointOwner::Node(path) => node::OwnerPath::from(path),
-                                    };
+                                Destination::LoopCommand(command) => {
+                                    let target = plan.nodes[command.owner.index()].path.clone();
                                     if !target.segments().starts_with(owner.path.segments()) {
                                         return Err(error("command".into(), "a command escapes its active Loop context"));
                                     }
@@ -330,8 +337,8 @@ pub(super) fn validate(
                                         outcome
                                     }).collect()
                                 }
-                                RouteDestination::Port(target)
-                                    if target.owner == EndpointOwner::Graph(owner.path.clone()) =>
+                                Destination::Port(target)
+                                    if target.node == owner_index =>
                                 {
                                     if target.port == spec.entry {
                                         return Err(error(
@@ -348,7 +355,7 @@ pub(super) fn validate(
                                         retries: BTreeSet::new(),
                                     }])
                                 }
-                                RouteDestination::Port(_) => dependency(destination, &owner.path, case.as_deref())
+                                Destination::Port(_) => dependency(plan, destination, &owner.path, case.as_deref())
                                     .and_then(|work| cache.get(&work))
                                     .cloned()
                                     .ok_or_else(|| {
@@ -416,7 +423,7 @@ pub(super) fn validate(
                                 }) {
                                     let source = Work::Source(
                                         Endpoint {
-                                            owner: input.owner.clone(),
+                                            node: input.node,
                                             port: port.clone(),
                                         },
                                         None,
@@ -461,7 +468,7 @@ pub(super) fn validate(
             }
         };
         let outcomes = if let Some(nested) = nested {
-            nested_outcomes(nested, &outcomes, &cache)?
+            nested_outcomes(plan, nested, &outcomes, &cache)?
         } else {
             outcomes
         };
@@ -493,7 +500,7 @@ pub(super) fn validate(
             };
             if ports.iter().any(|port| {
                 outcome.joins.get(&Endpoint {
-                    owner: input.owner.clone(),
+                    node: input.node,
                     port: port.clone(),
                 }) != Some(&1)
             }) {
@@ -519,7 +526,7 @@ pub(super) fn validate(
     Ok(warnings.into_iter().collect())
 }
 
-fn sets(selection: &RouteSelection) -> Vec<&[RouteDestination]> {
+fn sets(selection: &RouteSelection) -> Vec<&[Destination]> {
     match selection {
         RouteSelection::All(set) => vec![set],
         RouteSelection::Cases(arms) => arms.iter().map(|arm| arm.destinations.as_slice()).collect(),
@@ -527,31 +534,29 @@ fn sets(selection: &RouteSelection) -> Vec<&[RouteDestination]> {
 }
 
 fn dependency(
-    destination: &RouteDestination,
+    plan: &ExecutionPlan,
+    destination: &Destination,
     scope: &node::OwnerPath,
     case: Option<&str>,
 ) -> Option<Work> {
-    let RouteDestination::Port(target) = destination else {
+    let Destination::Port(target) = destination else {
         return None;
     };
-    match &target.owner {
-        EndpointOwner::Node(path) if path.segments().starts_with(scope.segments()) => {
-            Some(Work::Input(target.clone()))
-        }
-        EndpointOwner::Graph(path)
-            if path != scope && path.segments().starts_with(scope.segments()) =>
-        {
+    let owner = &plan.nodes[target.node.index()];
+    if !owner.path.segments().starts_with(scope.segments()) {
+        return None;
+    }
+    match owner.kind() {
+        node::Kind::Operator | node::Kind::Connector => Some(Work::Input(target.clone())),
+        node::Kind::Graph if owner.path != *scope => {
             Some(Work::Source(target.clone(), case.map(String::from)))
         }
-        _ => None,
+        node::Kind::Graph => None,
     }
 }
 
 fn input_call<'a>(plan: &'a ExecutionPlan, input: &Endpoint) -> Option<(&'a Node, CallSemantics)> {
-    let EndpointOwner::Node(path) = &input.owner else {
-        return None;
-    };
-    let node = plan.nodes.iter().find(|node| node.path == *path)?;
+    let node = plan.nodes.get(input.node.index())?;
     let call = node.connector()?.call_semantics()?;
     (input.port.name() == call.request()).then_some((node, call))
 }
@@ -568,7 +573,7 @@ fn call_outcomes(
     for (case, visibility) in call.terminal_cases() {
         let terminal = Work::Source(
             Endpoint {
-                owner: input.owner.clone(),
+                node: input.node,
                 port: node::Port::new(call.terminal()).ok()?,
             },
             Some((*case).into()),
@@ -577,7 +582,7 @@ fn call_outcomes(
         for port in &node.ports {
             let source = Work::Source(
                 Endpoint {
-                    owner: input.owner.clone(),
+                    node: input.node,
                     port: port.port.clone(),
                 },
                 None,
@@ -631,10 +636,7 @@ fn input_handler<'a>(
     plan: &'a ExecutionPlan,
     input: &Endpoint,
 ) -> Option<(NodeIndex, &'a Handler)> {
-    let EndpointOwner::Node(path) = &input.owner else {
-        return None;
-    };
-    let slot = NodeIndex::new(plan.nodes.iter().position(|node| node.path == *path)? as u32);
+    let slot = input.node;
     plan.nodes[slot.index()]
         .handlers()
         .iter()
@@ -648,25 +650,24 @@ fn input_handler<'a>(
 
 fn nested_host<'a>(plan: &'a ExecutionPlan, scope: &Node, work: &Work) -> Option<&'a Node> {
     let endpoint = match work {
-        Work::Source(endpoint, _) if matches!(endpoint.owner, EndpointOwner::Graph(_)) => endpoint,
+        Work::Source(endpoint, _)
+            if plan.nodes[endpoint.node.index()].kind() == node::Kind::Graph =>
+        {
+            endpoint
+        }
         Work::Input(endpoint) => endpoint,
         _ => return None,
     };
-    let path = match &endpoint.owner {
-        EndpointOwner::Graph(path) => path.clone(),
-        EndpointOwner::Node(path) => node::OwnerPath::from(path),
-    };
-    plan.nodes.iter().find(|owner| {
-        owner.path == path
-            && owner.path != scope.path
-            && owner.path.segments().starts_with(scope.path.segments())
-            && owner
-                .loop_spec()
-                .is_some_and(|spec| spec.entry == endpoint.port)
-    })
+    let owner = &plan.nodes[endpoint.node.index()];
+    (owner.path != scope.path
+        && owner.path.segments().starts_with(scope.path.segments())
+        && owner
+            .loop_spec()
+            .is_some_and(|spec| spec.entry == endpoint.port))
+    .then_some(owner)
 }
 
-fn expiry_work(owner: &Node) -> Result<Work, PlanValidationError> {
+fn expiry_work(plan: &ExecutionPlan, owner: &Node) -> Result<Work, PlanValidationError> {
     let port = owner
         .loop_spec()
         .and_then(|spec| spec.expired.as_ref())
@@ -676,21 +677,14 @@ fn expiry_work(owner: &Node) -> Result<Work, PlanValidationError> {
             path: "Loop.expired".into(),
             detail: "invalid expiry port",
         })?;
-    let endpoint = match owner.kind() {
-        node::Kind::Graph => EndpointOwner::Graph(owner.path.clone()),
-        node::Kind::Operator | node::Kind::Connector => EndpointOwner::Node(
-            node::Path::new(owner.path.segments().iter().cloned()).map_err(|_| {
-                PlanValidationError::InvalidLoopControl {
-                    owner: owner.path.to_string(),
-                    path: "owner".into(),
-                    detail: "an Executor cannot be the root scope",
-                }
-            })?,
-        ),
-    };
+    let index = plan
+        .nodes
+        .iter()
+        .position(|candidate| candidate.path == owner.path)
+        .ok_or(PlanValidationError::MissingRootOwner)?;
     Ok(Work::Source(
         Endpoint {
-            owner: endpoint,
+            node: NodeIndex::new(index as u32),
             port,
         },
         Some(String::from("LoopExpired")),
@@ -698,6 +692,7 @@ fn expiry_work(owner: &Node) -> Result<Work, PlanValidationError> {
 }
 
 fn nested_outcomes(
+    plan: &ExecutionPlan,
     owner: &Node,
     application: &Outcomes,
     cache: &BTreeMap<Work, Outcomes>,
@@ -716,10 +711,7 @@ fn nested_outcomes(
         // Inner join cardinality is proved in its own application, not summed
         // over that run when proving the enclosing application.
         outcome.joins.retain(|input, _| {
-            let path = match &input.owner {
-                EndpointOwner::Graph(path) => path.segments(),
-                EndpointOwner::Node(path) => path.segments(),
-            };
+            let path = plan.nodes[input.node.index()].path.segments();
             !path.starts_with(owner.path.segments())
         });
         if outcome.retries.remove(&owner.path) {
@@ -741,7 +733,7 @@ fn nested_outcomes(
         if fuel == Some(iteration) || next == accumulated || next.is_empty() {
             if fuel.is_some()
                 && !next.is_empty()
-                && let Some(expired) = cache.get(&expiry_work(owner)?)
+                && let Some(expired) = cache.get(&expiry_work(plan, owner)?)
             {
                 result.extend(combine(&next, expired).ok_or_else(|| proof_limit(owner))?);
                 if result.len() > MAX_GRAPH_LOOP_OUTCOMES {

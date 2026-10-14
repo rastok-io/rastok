@@ -6,7 +6,7 @@ use crate::envelope;
 use crate::instance;
 use crate::journal::loop_protocol::{self as protocol, Fact, LoopRecord, OpeningAdmissionId};
 use crate::node;
-use crate::plan::{Endpoint, EndpointOwner, LoopCommandTarget, RouteDestination, RouteSelection};
+use crate::plan::{Destination, Endpoint, LoopCommandTarget, RouteSelection};
 
 #[derive(Debug, Clone)]
 pub(super) struct BoundaryRoute {
@@ -37,55 +37,13 @@ struct Selection {
 }
 
 impl Execution<'_> {
-    pub(super) fn graph_endpoint(&self, physical: &EdgeEnd) -> Result<Endpoint, ExecutionFault> {
-        Ok(Endpoint {
-            owner: match self.plan.nodes[physical.node.index()].kind() {
-                node::Kind::Graph => {
-                    EndpointOwner::Graph(self.plan.nodes[physical.node.index()].path.clone())
-                }
-                node::Kind::Operator | node::Kind::Connector => {
-                    EndpointOwner::Node(self.executor_path(physical.node)?.clone())
-                }
-            },
-            port: physical.port.clone(),
-        })
-    }
-
-    fn endpoint_owner(&self, endpoint: &Endpoint) -> Result<node::NodeIndex, ExecutionFault> {
-        let path = match &endpoint.owner {
-            EndpointOwner::Node(path) => node::OwnerPath::from(path),
-            EndpointOwner::Graph(path) => path.clone(),
-        };
-        self.plan
-            .nodes
-            .iter()
-            .position(|owner| owner.path == path)
-            .map(|index| node::NodeIndex::new(index as u32))
-            .ok_or_else(|| graph_error(&path, "a routed endpoint lost its declared owner"))
-    }
-
-    fn endpoint_ref(&self, endpoint: &Endpoint) -> Result<EdgeEnd, ExecutionFault> {
-        Ok(EdgeEnd {
-            node: self.endpoint_owner(endpoint)?,
-            port: endpoint.port.clone(),
-        })
-    }
-
     fn graph_entry(&self, endpoint: &Endpoint) -> Option<node::NodeIndex> {
-        let EndpointOwner::Graph(path) = &endpoint.owner else {
-            return None;
-        };
-        self.plan
-            .nodes
-            .iter()
-            .enumerate()
-            .find_map(|(index, owner)| {
-                (owner.path == *path
-                    && owner
-                        .loop_spec()
-                        .is_some_and(|spec| spec.entry == endpoint.port))
-                .then_some(node::NodeIndex::new(index as u32))
-            })
+        let owner = &self.plan.nodes[endpoint.node.index()];
+        (owner.kind() == node::Kind::Graph
+            && owner
+                .loop_spec()
+                .is_some_and(|spec| spec.entry == endpoint.port))
+        .then_some(endpoint.node)
     }
 
     fn select_graph_routes(
@@ -135,18 +93,22 @@ impl Execution<'_> {
                             })?
                     }
                 };
+                // A Node-table index is a lookup, not delivery order. Keep the
+                // canonical path order used by source routing and identities.
+                let mut destinations: Vec<_> = destinations.iter().collect();
+                destinations.sort_by(|left, right| destination_order(self.plan, left, right));
                 for destination in destinations {
                     match destination {
-                        RouteDestination::InstanceStop(target) => {
-                            selected.instance_stops.push(*target.clone())
+                        Destination::InstanceStop(target) => {
+                            selected.instance_stops.push(target.clone())
                         }
-                        RouteDestination::Discard => {}
-                        RouteDestination::LoopCommand(command) => {
+                        Destination::Discard => {}
+                        Destination::LoopCommand(command) => {
                             selected.commands.push(command.clone())
                         }
-                        RouteDestination::Port(target) => {
-                            let owner = self.endpoint_owner(target)?;
-                            if matches!(target.owner, EndpointOwner::Graph(_)) {
+                        Destination::Port(target) => {
+                            let owner = target.node;
+                            if self.plan.nodes[owner.index()].kind() == node::Kind::Graph {
                                 if self.graph_entry(target).is_some() {
                                     if !selected.destinations.insert(target.clone()) {
                                         return Err(graph_error(
@@ -204,10 +166,14 @@ impl Execution<'_> {
             } else {
                 self.select_graph_routes(source, envelope)?.destinations
             };
+        let mut destinations: Vec<_> = destinations.into_iter().collect();
+        destinations.sort_by(|left, right| {
+            endpoint_order(self.plan, left).cmp(&endpoint_order(self.plan, right))
+        });
         let mut prepared = Vec::new();
-        let source_owner = self.endpoint_owner(source)?;
+        let source_owner = source.node;
         for destination in destinations {
-            let target_owner = self.endpoint_owner(&destination)?;
+            let target_owner = destination.node;
             let source_chain = self.scope_chain(source_owner)?;
             let target_chain = self.scope_chain(target_owner)?;
             let scope = source_chain
@@ -219,12 +185,14 @@ impl Execution<'_> {
                 .ok_or_else(|| {
                     graph_error(&node::OwnerPath::root(), "a route has no common scope")
                 })?;
-            let from = self.endpoint_ref(source)?;
-            let to = self.endpoint_ref(&destination)?;
+            let from = source.clone();
+            let to = destination.clone();
             let data = DataSlot {
-                ty: match &destination.owner {
-                    EndpointOwner::Node(_) => self.plan.resolved_ports().endpoint_type(&to),
-                    EndpointOwner::Graph(_) => self
+                ty: match self.plan.nodes[destination.node.index()].kind() {
+                    node::Kind::Operator | node::Kind::Connector => {
+                        self.plan.resolved_ports().endpoint_type(&to)
+                    }
+                    node::Kind::Graph => self
                         .plan
                         .graph_ports(target_owner)
                         .and_then(|ports| ports.iter().find(|port| port.port == destination.port))
@@ -273,8 +241,8 @@ impl Execution<'_> {
         }
         format!(
             "{}>{}",
-            endpoint_text(&boundary.source),
-            endpoint_text(&boundary.destination)
+            endpoint_text(self.plan, &boundary.source),
+            endpoint_text(self.plan, &boundary.destination)
         )
     }
 
@@ -561,7 +529,7 @@ impl Execution<'_> {
         envelope: Envelope,
     ) -> Result<bool, ExecutionFault> {
         let source = Endpoint {
-            owner: EndpointOwner::Graph(self.plan.nodes[owner.index()].path.clone()),
+            node: owner,
             port: current.entry.clone(),
         };
         let mut candidates = BTreeMap::new();
@@ -724,21 +692,19 @@ impl Execution<'_> {
             .loop_protocol()
             .map_or(&[][..], |packet| packet.context.as_slice())
             .to_vec();
-        let owner = self
+        let producer = self
             .plan
             .nodes
             .iter()
-            .find(|owner| owner.path == record.owner_path)
+            .position(|owner| owner.path == record.owner_path)
+            .map(|index| node::NodeIndex::new(index as u32))
             .ok_or_else(|| graph_error(&record.owner_path, "a producer has no declared owner"))?;
-        let producer = owner
-            .endpoint_owner()
-            .map_err(|_| graph_error(&owner.path, "a producer has no valid Node address"))?;
         let produced = self.graph_verdicts(
             &context,
             record.emissions.iter().map(|emission| {
                 (
                     Endpoint {
-                        owner: producer.clone(),
+                        node: producer,
                         port: emission.port.clone(),
                     },
                     &emission.envelope,
@@ -767,21 +733,23 @@ impl Execution<'_> {
         for (source, envelope) in sources {
             let selected = self.select_graph_routes(&source, envelope)?;
             for command in selected.commands {
-                let EndpointOwner::Graph(owner) = command.owner else {
+                let target = &self.plan.nodes[command.owner.index()];
+                if target.kind() != node::Kind::Graph {
                     continue;
-                };
+                }
+                let owner = &target.path;
                 let (run, state) = context
                     .iter()
                     .find_map(|run| {
                         self.loop_manager
                             .as_deref()
                             .and_then(|fold| fold.run(*run))
-                            .filter(|state| *state.instance.address().owner() == owner)
+                            .filter(|state| state.instance.address().owner() == owner)
                             .map(|state| (*run, state))
                     })
                     .ok_or_else(|| {
                         graph_error(
-                            &owner,
+                            owner,
                             "a manager command has no exact consumed Loop context",
                         )
                     })?;
@@ -860,7 +828,18 @@ impl Execution<'_> {
             &context,
             core::iter::once((
                 Endpoint {
-                    owner: EndpointOwner::Graph(current.instance.address().owner().clone()),
+                    node: node::NodeIndex::new(
+                        self.plan
+                            .nodes
+                            .iter()
+                            .position(|owner| owner.path == *current.instance.address().owner())
+                            .ok_or_else(|| {
+                                graph_error(
+                                    current.instance.address().owner(),
+                                    "a run has no declared owner",
+                                )
+                            })? as u32,
+                    ),
                     port: current.entry.clone(),
                 },
                 &current.state,
@@ -927,7 +906,7 @@ impl Execution<'_> {
         let mut commands = Vec::new();
         for emission in &record.emissions {
             let source = Endpoint {
-                owner: EndpointOwner::Graph(self.plan.nodes[owner.index()].path.clone()),
+                node: owner,
                 port: emission.port.clone(),
             };
             commands.extend(self.prepare_instance_commands(
@@ -1166,7 +1145,7 @@ impl Execution<'_> {
                     None
                 };
                 let source = Endpoint {
-                    owner: EndpointOwner::Graph(self.plan.nodes[owner.index()].path.clone()),
+                    node: owner,
                     port: current.entry.clone(),
                 };
                 let mut candidates = BTreeMap::new();
@@ -1322,12 +1301,47 @@ impl Execution<'_> {
     }
 }
 
-fn endpoint_text(endpoint: &Endpoint) -> String {
-    match &endpoint.owner {
-        EndpointOwner::Node(path) => format!("{path}.{}", endpoint.port),
-        EndpointOwner::Graph(path) if path.is_root() => format!(".{}", endpoint.port),
-        EndpointOwner::Graph(path) => format!("{path}.{}", endpoint.port),
+// Source routing orders Executors before Graph boundaries, then by path and
+// port. This order remains stable when the Node table is laid out differently.
+fn endpoint_order<'a>(
+    plan: &'a crate::plan::ExecutionPlan,
+    endpoint: &'a Endpoint,
+) -> (bool, &'a node::OwnerPath, &'a node::Port) {
+    let node = &plan.nodes[endpoint.node.index()];
+    (node.kind() == node::Kind::Graph, &node.path, &endpoint.port)
+}
+
+fn destination_order(
+    plan: &crate::plan::ExecutionPlan,
+    left: &Destination,
+    right: &Destination,
+) -> core::cmp::Ordering {
+    let owner = |index: node::NodeIndex| {
+        let node = &plan.nodes[index.index()];
+        (node.kind() == node::Kind::Graph, &node.path)
+    };
+    match (left, right) {
+        (Destination::Port(left), Destination::Port(right)) => {
+            endpoint_order(plan, left).cmp(&endpoint_order(plan, right))
+        }
+        (Destination::LoopCommand(left), Destination::LoopCommand(right)) => {
+            (owner(left.owner), left.kind).cmp(&(owner(right.owner), right.kind))
+        }
+        (Destination::InstanceStop(left), Destination::InstanceStop(right)) => {
+            (&plan.nodes[left.scope.index()].path, owner(left.owner))
+                .cmp(&(&plan.nodes[right.scope.index()].path, owner(right.owner)))
+        }
+        // Different destination variants keep their explicit canonical order.
+        _ => left.cmp(right),
     }
+}
+
+fn endpoint_text(plan: &crate::plan::ExecutionPlan, endpoint: &Endpoint) -> String {
+    format!(
+        "{}.{}",
+        plan.nodes[endpoint.node.index()].path,
+        endpoint.port
+    )
 }
 
 fn graph_error(owner: &node::OwnerPath, reason: &'static str) -> ExecutionFault {

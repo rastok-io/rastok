@@ -1,35 +1,44 @@
 use super::*;
 use crate::datatype::{EnumType, StructType, TaggedCase, TaggedUnionType};
 use crate::node;
-use crate::plan::{EndpointOwner, LoopCommandKind, LoopCommandTarget, RouteArm};
+use crate::plan::{LoopCommandKind, LoopCommandTarget, RouteArm};
 use alloc::vec;
 
 fn endpoint(name: &str, port: &str) -> Endpoint {
     Endpoint {
-        owner: EndpointOwner::Node(node::Path::new([name]).unwrap()),
+        node: node::NodeIndex::new(
+            [
+                "a", "audit", "b", "failed", "left", "no", "ok", "one", "other", "ready", "right",
+                "sink", "source", "two", "yes", "z",
+            ]
+            .iter()
+            .position(|candidate| *candidate == name)
+            .unwrap() as u32
+                + 1,
+        ),
         port: node::Port::new(port).unwrap(),
     }
 }
 
-fn port(name: &str) -> RouteDestination {
-    RouteDestination::Port(endpoint(name, "in"))
+fn port(name: &str) -> Destination {
+    Destination::Port(endpoint(name, "in"))
 }
 
-fn command(kind: LoopCommandKind) -> RouteDestination {
-    RouteDestination::LoopCommand(LoopCommandTarget {
-        owner: EndpointOwner::Graph(node::OwnerPath::root()),
+fn command(kind: LoopCommandKind) -> Destination {
+    Destination::LoopCommand(LoopCommandTarget {
+        owner: node::NodeIndex::ROOT,
         kind,
     })
 }
 
-fn all(destinations: Vec<RouteDestination>) -> RouteRule {
+fn all(destinations: Vec<Destination>) -> RouteRule {
     RouteRule {
         source: endpoint("source", "out"),
         selection: RouteSelection::All(destinations),
     }
 }
 
-fn cases(rows: &[(&[&str], Vec<RouteDestination>)]) -> RouteRule {
+fn cases(rows: &[(&[&str], Vec<Destination>)]) -> RouteRule {
     RouteRule {
         source: endpoint("source", "out"),
         selection: RouteSelection::Cases(
@@ -51,7 +60,7 @@ fn verify(rules: &[RouteRule], ty: &DataType) -> Result<(), RouteValidationError
 fn unconditional_routes_need_no_closed_type_or_case_lookup() {
     for destinations in [
         vec![port("left"), port("right")],
-        vec![RouteDestination::Discard],
+        vec![Destination::Discard],
         vec![command(LoopCommandKind::Next)],
         vec![port("audit"), command(LoopCommandKind::Again)],
     ] {
@@ -74,7 +83,7 @@ fn case_source_types_are_looked_up_by_exact_endpoint() {
             source: endpoint("other", "exit"),
             selection: RouteSelection::Cases(vec![RouteArm {
                 cases: vec!["Ok".into()],
-                destinations: vec![RouteDestination::Discard],
+                destinations: vec![Destination::Discard],
             }]),
         },
     ];
@@ -163,8 +172,8 @@ fn destination_sets_are_nonempty_canonical_and_never_repaired() {
             RouteErrorKind::DuplicateDestination(port("a")),
         ),
         (
-            vec![RouteDestination::Discard, RouteDestination::Discard],
-            RouteErrorKind::DuplicateDestination(RouteDestination::Discard),
+            vec![Destination::Discard, Destination::Discard],
+            RouteErrorKind::DuplicateDestination(Destination::Discard),
         ),
         (
             vec![
@@ -174,11 +183,11 @@ fn destination_sets_are_nonempty_canonical_and_never_repaired() {
             RouteErrorKind::DuplicateDestination(command(LoopCommandKind::Done)),
         ),
         (
-            vec![port("a"), RouteDestination::Discard],
+            vec![port("a"), Destination::Discard],
             RouteErrorKind::MixedDiscard,
         ),
         (
-            vec![RouteDestination::Discard, command(LoopCommandKind::Again)],
+            vec![Destination::Discard, command(LoopCommandKind::Again)],
             RouteErrorKind::MixedDiscard,
         ),
     ] {
@@ -219,7 +228,7 @@ fn discard_is_exclusive_across_declarations_in_either_order() {
         all(vec![command(LoopCommandKind::Done)]),
     ] {
         let conditional = cases(&[
-            (&["false"], vec![RouteDestination::Discard]),
+            (&["false"], vec![Destination::Discard]),
             (&["true"], vec![port("ok")]),
         ]);
         for rules in [
@@ -238,10 +247,7 @@ fn discard_is_exclusive_across_declarations_in_either_order() {
         }
     }
     let error = verify(
-        &[
-            all(vec![RouteDestination::Discard]),
-            all(vec![port("sink")]),
-        ],
+        &[all(vec![Destination::Discard]), all(vec![port("sink")])],
         &DataType::INT,
     )
     .unwrap_err();
@@ -279,7 +285,7 @@ fn duplicate_destinations_are_rejected_only_for_overlapping_values() {
             );
         }
     }
-    for destination in [port("sink"), RouteDestination::Discard] {
+    for destination in [port("sink"), Destination::Discard] {
         assert_eq!(
             verify(
                 &[
@@ -315,12 +321,12 @@ fn a_second_case_match_is_not_merged_even_if_destinations_are_disjoint() {
 
 #[test]
 fn identical_destinations_on_distinct_source_ports_or_owners_do_not_conflict() {
-    let mut other_port = all(vec![RouteDestination::Discard]);
+    let mut other_port = all(vec![Destination::Discard]);
     other_port.source.port = node::Port::new("err").unwrap();
-    let mut other_node = all(vec![RouteDestination::Discard]);
-    other_node.source.owner = EndpointOwner::Node(node::Path::new(["other"]).unwrap());
-    let mut graph_port = all(vec![RouteDestination::Discard]);
-    graph_port.source.owner = EndpointOwner::Graph(node::OwnerPath::new(["source"]).unwrap());
+    let mut other_node = all(vec![Destination::Discard]);
+    other_node.source.node = endpoint("other", "out").node;
+    let mut graph_port = all(vec![Destination::Discard]);
+    graph_port.source.node = node::NodeIndex::new(99);
     assert_eq!(
         verify(
             &[all(vec![port("sink")]), other_port, other_node, graph_port],
@@ -333,8 +339,8 @@ fn identical_destinations_on_distinct_source_ports_or_owners_do_not_conflict() {
 #[test]
 fn manager_command_identity_is_not_a_port_with_a_similar_spelling() {
     let done = command(LoopCommandKind::Done);
-    let ordinary = RouteDestination::Port(Endpoint {
-        owner: EndpointOwner::Graph(node::OwnerPath::root()),
+    let ordinary = Destination::Port(Endpoint {
+        node: node::NodeIndex::ROOT,
         port: node::Port::new("Loop.done").unwrap(),
     });
     assert_ne!(done, ordinary);
@@ -351,10 +357,10 @@ fn exhaustive_small_tables_agree_with_a_selected_value_oracle() {
     let vocabulary = [
         port("a"),
         port("b"),
-        RouteDestination::Discard,
+        Destination::Discard,
         command(LoopCommandKind::Again),
     ];
-    let set = |mask: usize| -> Vec<RouteDestination> {
+    let set = |mask: usize| -> Vec<Destination> {
         vocabulary
             .iter()
             .enumerate()
@@ -362,9 +368,9 @@ fn exhaustive_small_tables_agree_with_a_selected_value_oracle() {
             .map(|(_, destination)| destination.clone())
             .collect()
     };
-    let valid_set = |destinations: &[RouteDestination]| {
+    let valid_set = |destinations: &[Destination]| {
         if destinations.is_empty()
-            || (destinations.contains(&RouteDestination::Discard) && destinations.len() != 1)
+            || (destinations.contains(&Destination::Discard) && destinations.len() != 1)
         {
             return false;
         }

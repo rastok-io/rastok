@@ -39,8 +39,8 @@ pub use dispatch_validation::{DispatchErrorKind, DispatchValidationError, valida
 pub use emit_value::{EmitValue, FieldWrite};
 pub use retry::LoopRepeatWarning;
 pub use routing::{
-    Endpoint, EndpointOwner, InstanceStopTarget, LoopCommandKind, LoopCommandTarget, RouteArm,
-    RouteDestination, RouteRule, RouteSelection,
+    Destination, InstanceStopTarget, LoopCommandKind, LoopCommandTarget, RouteArm, RouteRule,
+    RouteSelection,
 };
 pub use routing_validation::{
     RouteConflict, RouteConflictKind, RouteErrorKind, RouteValidationError, route_conflict,
@@ -457,45 +457,23 @@ impl ExecutionPlan {
         })
     }
 
-    pub(crate) fn endpoint_matches(&self, endpoint: &Endpoint, physical: &EdgeEnd) -> bool {
-        endpoint.port == physical.port
-            && self
-                .nodes
-                .get(physical.node.index())
-                .is_some_and(|node| match &endpoint.owner {
-                    EndpointOwner::Node(path) => {
-                        node.path == *path && node.kind() != node::Kind::Graph
-                    }
-                    EndpointOwner::Graph(path) => {
-                        node.path == *path && node.kind() == node::Kind::Graph
-                    }
-                })
-    }
-
-    fn route_destination_matches(&self, destination: &RouteDestination, edge: &Edge) -> bool {
+    fn route_destination_matches(&self, destination: &Destination, edge: &Edge) -> bool {
         match (destination, &edge.to) {
-            (RouteDestination::Port(endpoint), Some(physical)) => {
-                self.endpoint_matches(endpoint, physical)
-            }
-            (RouteDestination::Discard, None) => true,
+            (Destination::Port(endpoint), Some(physical)) => endpoint == physical,
+            (Destination::Discard, None) => true,
             _ => false,
         }
     }
 
-    pub(crate) fn has_case_routes(&self, source: &EdgeEnd) -> bool {
+    pub(crate) fn has_case_routes(&self, source: &Endpoint) -> bool {
         self.routes.iter().any(|route| {
-            self.endpoint_matches(&route.source, source)
-                && matches!(route.selection, RouteSelection::Cases(_))
+            &route.source == source && matches!(route.selection, RouteSelection::Cases(_))
         })
     }
 
     pub(crate) fn edge_is_selected(&self, edge: &Edge, value: &Value) -> bool {
         let mut constrained = false;
-        for route in self
-            .routes
-            .iter()
-            .filter(|route| self.endpoint_matches(&route.source, &edge.from))
-        {
+        for route in self.routes.iter().filter(|route| route.source == edge.from) {
             constrained = true;
             let selected = route.selection.selected(value);
             if selected.is_some_and(|destinations| {
@@ -511,11 +489,7 @@ impl ExecutionPlan {
 
     pub(crate) fn edge_cases(&self, edge: &Edge) -> Option<Vec<String>> {
         let mut cases = None;
-        for route in self
-            .routes
-            .iter()
-            .filter(|route| self.endpoint_matches(&route.source, &edge.from))
-        {
+        for route in self.routes.iter().filter(|route| route.source == edge.from) {
             match &route.selection {
                 RouteSelection::All(destinations) => {
                     if destinations
@@ -576,7 +550,7 @@ impl ExecutionPlan {
     /// consumed cursors and the budget obligations seal.
     #[must_use]
     pub fn edge_text(&self, edge: &Edge) -> String {
-        let end = |endpoint: &EdgeEnd| {
+        let end = |endpoint: &Endpoint| {
             format!(
                 "{}.{}",
                 self.nodes[endpoint.node.index()].path,
@@ -664,19 +638,6 @@ impl Node {
             node::Kind::Graph => None,
             node::Kind::Operator | node::Kind::Connector => self.path.as_node_path(),
         }
-    }
-
-    /// Path-based routing identity used by the journal. The App root is a
-    /// Graph; a raw plan cannot disguise its empty address as an Executor.
-    pub(crate) fn endpoint_owner(&self) -> Result<EndpointOwner, PlanValidationError> {
-        if self.kind() == node::Kind::Graph {
-            return Ok(EndpointOwner::Graph(self.path.clone()));
-        }
-        self.path
-            .as_node_path()
-            .cloned()
-            .map(EndpointOwner::Node)
-            .ok_or(PlanValidationError::MissingRootOwner)
     }
 
     /// The node's structural semantic kind.
@@ -1025,17 +986,19 @@ pub struct Handler {
 /// One planned edge.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Edge {
-    /// Lexical Graph owner in which this route was declared.
+    /// Common Graph scope of the composed source and destination.
     pub owner: node::NodeIndex,
     /// The emitting end.
-    pub from: EdgeEnd,
+    pub from: Endpoint,
     /// The receiving end; `None` is the explicit discard.
-    pub to: Option<EdgeEnd>,
+    pub to: Option<Endpoint>,
 }
 
-/// One resolved edge end. The App boundary names the root Graph explicitly.
-#[derive(Debug, Clone, PartialEq)]
-pub struct EdgeEnd {
+/// A port on a declared Node, including the root App Graph. In reference
+/// wiring, the Graph containing the rule determines the boundary's face:
+/// its own inputs are sources and its own outputs are destinations.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Endpoint {
     /// The Node owning the port, including the root App Graph.
     pub node: NodeIndex,
     /// The port.

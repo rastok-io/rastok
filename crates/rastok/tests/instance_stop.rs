@@ -44,8 +44,9 @@ fn instance_closure_is_not_a_spatial_edge_or_port() {
         assert_eq!(hir.app.edges.len(), 1);
         assert_eq!(hir.app.nodes[0].ports.len(), 2);
         assert!(hir.app.routes.iter().any(|rule| matches!(&rule.selection,
-            plan::RouteSelection::All(set) if set.iter().any(|destination| matches!(destination, plan::RouteDestination::InstanceStop(_))))));
-        let mut routes = hir.app.routes;
+            compiler::hir::RouteSelection::All(set) if set.iter().any(|destination| matches!(destination, compiler::hir::RouteDestination::InstanceStop(_))))));
+        let (plan, _) = compiler::lower::lower(&hir).unwrap();
+        let mut routes: Vec<_> = plan.reference_routes().cloned().collect();
         routes.sort_by_key(plan::RouteRule::canonical_order_key);
         let bytes = plan::fields::encode_routing(&routes, |_| None).unwrap();
         assert_eq!(
@@ -104,16 +105,17 @@ fn closure_commits_its_request_before_the_exact_target_closes() {
 fn forged_packages_cannot_omit_the_lexical_scope_proof() {
     let compilation = compile(&source("nothing")).unwrap();
     let commands = checked(&source("instance.stop"));
+    let (commands, _) = compiler::lower::lower(&commands).unwrap();
     let mut forged = compilation.plan.clone().into_inner();
     let plan::NodeKind::Graph(graph) = &mut forged.nodes[0].body else {
         panic!("App Graph")
     };
-    graph.wiring = commands.app.routes.clone();
+    graph.wiring = commands.reference_routes().cloned().collect();
     for rule in &mut graph.wiring {
         if let plan::RouteSelection::All(destinations) = &mut rule.selection {
             for destination in destinations {
-                if let plan::RouteDestination::InstanceStop(target) = destination {
-                    target.scope = node::OwnerPath::new(["worker"]).unwrap();
+                if let plan::Destination::InstanceStop(target) = destination {
+                    target.scope = node::NodeIndex::new(1);
                 }
             }
         }
@@ -459,6 +461,7 @@ fn recovery_rederives_command_presence_and_target_from_the_plan() {
         } else {
             let command = &mut record.instance_commands.as_deref_mut().unwrap().produced[0];
             *command = Command::new(
+                command.source_kind,
                 command.source.clone(),
                 command.source_instance.clone(),
                 command.scope.clone(),
@@ -744,11 +747,11 @@ fn a_nested_closure_retains_the_lexical_graph_not_the_app() {
             .routes
             .iter()
             .find_map(|rule| {
-                let plan::RouteSelection::All(set) = &rule.selection else {
+                let compiler::hir::RouteSelection::All(set) = &rule.selection else {
                     return None;
                 };
                 set.iter().find_map(|destination| {
-                    let plan::RouteDestination::InstanceStop(target) = destination else {
+                    let compiler::hir::RouteDestination::InstanceStop(target) = destination else {
                         return None;
                     };
                     Some(target)
@@ -759,9 +762,9 @@ fn a_nested_closure_retains_the_lexical_graph_not_the_app() {
         assert_eq!(
             target.owner,
             if destination == "instance.stop" {
-                plan::EndpointOwner::Graph(graph.path.clone())
+                compiler::hir::EndpointOwner::Graph(graph.path.clone())
             } else {
-                plan::EndpointOwner::Node(graph.nodes[0].path.clone())
+                compiler::hir::EndpointOwner::Node(graph.nodes[0].path.clone())
             }
         );
     }
@@ -810,6 +813,13 @@ fn a_forged_boundary_input_cannot_supply_a_nested_closure_context() {
     ))
     .unwrap();
     let mut forged = compiled.plan.into_inner();
+    let conversation = node::NodeIndex::new(
+        forged
+            .nodes
+            .iter()
+            .position(|node| node.path.to_string() == "conversation")
+            .unwrap() as u32,
+    );
     let owner = forged
         .nodes
         .iter_mut()
@@ -820,10 +830,10 @@ fn a_forged_boundary_input_cannot_supply_a_nested_closure_context() {
     };
     let command = graph.wiring.iter_mut()
         .find(|rule| matches!(&rule.selection, plan::RouteSelection::All(set)
-            if set.iter().any(|destination| matches!(destination, plan::RouteDestination::InstanceStop(_)))))
+            if set.iter().any(|destination| matches!(destination, plan::Destination::InstanceStop(_)))))
         .unwrap();
     command.source = plan::Endpoint {
-        owner: plan::EndpointOwner::Graph(node::OwnerPath::new(["conversation"]).unwrap()),
+        node: conversation,
         port: rastok::node::Port::new("in").unwrap(),
     };
     graph

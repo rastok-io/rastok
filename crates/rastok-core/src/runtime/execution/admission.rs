@@ -5,7 +5,7 @@ use super::*;
 use crate::journal::{CommittedIngress, PreparedIngress, SessionIngressRecord};
 
 struct IngressEndpoint {
-    from: EdgeEnd,
+    from: Endpoint,
     exchange: Option<ConnectorExchange>,
 }
 
@@ -131,7 +131,7 @@ impl Execution<'_> {
         } else {
             self.prepare_instance_commands(
                 &journal,
-                &self.graph_endpoint(&endpoint.from)?,
+                &endpoint.from,
                 exchange.source_instance(),
                 ingress.envelope(),
             )?
@@ -181,7 +181,7 @@ impl Execution<'_> {
             let (source, exchange) = source.ok_or_else(unknown)?;
             let source = NodeIndex::new(u32::try_from(source).map_err(|_| unknown())?);
             Ok(IngressEndpoint {
-                from: EdgeEnd {
+                from: Endpoint {
                     node: source,
                     port: submission.draft.port.clone(),
                 },
@@ -196,7 +196,7 @@ impl Execution<'_> {
                 ));
             }
             Ok(IngressEndpoint {
-                from: EdgeEnd {
+                from: Endpoint {
                     node: crate::node::NodeIndex::ROOT,
                     port: submission.draft.port.clone(),
                 },
@@ -239,7 +239,7 @@ impl Execution<'_> {
     fn judge_ingress_pins(
         &self,
         submission: &IngressProposal,
-        from: &EdgeEnd,
+        from: &Endpoint,
     ) -> Result<(), ExecutionFault> {
         if let Data::Materialized(value) = &submission.draft.data {
             value.check_consistency().map_err(|error| {

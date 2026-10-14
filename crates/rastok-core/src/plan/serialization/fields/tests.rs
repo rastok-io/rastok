@@ -436,23 +436,29 @@ fn redundant_annotation_encoding_is_not_silently_canonicalized() {
     ));
 }
 
-fn endpoint(owner: EndpointOwner, port: &str) -> Endpoint {
+fn endpoint(owner: node::NodeIndex, port: &str) -> Endpoint {
     Endpoint {
-        owner,
+        node: owner,
         port: node::Port::new(port).unwrap(),
     }
 }
-fn node_owner(name: &str) -> EndpointOwner {
-    EndpointOwner::Node(node::Path::new([name]).unwrap())
+fn node_owner(name: &str) -> node::NodeIndex {
+    node::NodeIndex::new(
+        ["audit", "other", "pay", "sink"]
+            .iter()
+            .position(|candidate| *candidate == name)
+            .unwrap() as u32
+            + 1,
+    )
 }
 fn source() -> Endpoint {
     endpoint(node_owner("pay"), "exit")
 }
-fn sink(name: &str) -> RouteDestination {
-    RouteDestination::Port(endpoint(node_owner(name), "in"))
+fn sink(name: &str) -> Destination {
+    Destination::Port(endpoint(node_owner(name), "in"))
 }
-fn command(kind: LoopCommandKind) -> RouteDestination {
-    RouteDestination::LoopCommand(LoopCommandTarget {
+fn command(kind: LoopCommandKind) -> Destination {
+    Destination::LoopCommand(LoopCommandTarget {
         owner: node_owner("pay"),
         kind,
     })
@@ -487,16 +493,13 @@ fn routing_roundtrip_keeps_graph_boundaries_and_commands_distinct() {
         },
     ];
     rules.push(RouteRule {
-        source: endpoint(EndpointOwner::Graph(node::OwnerPath::root()), "in"),
+        source: endpoint(node::NodeIndex::ROOT, "in"),
         selection: RouteSelection::All(vec![sink("pay")]),
     });
     rules.push(RouteRule {
-        source: endpoint(
-            EndpointOwner::Graph(node::OwnerPath::new(["inner"]).unwrap()),
-            "out",
-        ),
-        selection: RouteSelection::All(vec![RouteDestination::Port(endpoint(
-            EndpointOwner::Graph(node::OwnerPath::root()),
+        source: endpoint(node::NodeIndex::new(5), "out"),
+        selection: RouteSelection::All(vec![Destination::Port(endpoint(
+            node::NodeIndex::ROOT,
             "out",
         ))]),
     });
@@ -529,17 +532,17 @@ fn manager_commands_and_explicit_discard_have_separate_wire_tags() {
             tree,
             Cbor::Array(vec![Cbor::Array(vec![
                 Cbor::Uint(3),
-                Cbor::Array(vec![Cbor::Uint(1), Cbor::Text("pay".into())]),
+                Cbor::Uint(node_owner("pay").index() as u64),
                 Cbor::Uint(tag)
             ])])
         );
         assert_eq!(destinations_from(&tree).unwrap(), vec![destination]);
     }
-    let discard = destinations_tree(&[RouteDestination::Discard]);
+    let discard = destinations_tree(&[Destination::Discard]);
     assert_eq!(discard, Cbor::Array(vec![Cbor::Array(vec![Cbor::Uint(2)])]));
     assert_eq!(
         destinations_from(&discard).unwrap(),
-        vec![RouteDestination::Discard]
+        vec![Destination::Discard]
     );
 }
 
@@ -555,7 +558,7 @@ fn routing_refuses_inventory_conflicts_even_when_rows_are_separately_valid() {
             selection: RouteSelection::Cases(vec![
                 RouteArm {
                     cases: vec!["false".into()],
-                    destinations: vec![RouteDestination::Discard],
+                    destinations: vec![Destination::Discard],
                 },
                 RouteArm {
                     cases: vec!["true".into()],
@@ -584,7 +587,7 @@ fn neither_rows_nor_destination_sets_are_repaired_by_the_decoder() {
         },
         RouteRule {
             source: endpoint(node_owner("other"), "out"),
-            selection: RouteSelection::All(vec![RouteDestination::Discard]),
+            selection: RouteSelection::All(vec![Destination::Discard]),
         },
     ];
     sort_rules(&mut rules);
@@ -609,19 +612,22 @@ fn neither_rows_nor_destination_sets_are_repaired_by_the_decoder() {
 }
 
 #[test]
-fn malformed_endpoint_owners_and_command_tags_refuse() {
+fn malformed_endpoint_indices_and_command_tags_refuse() {
     for owner in [
+        Cbor::Null,
+        Cbor::Uint(u64::from(u32::MAX) + 1),
+        Cbor::Uint(u64::MAX),
         Cbor::Array(vec![Cbor::Uint(1), Cbor::Text(String::new())]),
         Cbor::Array(vec![Cbor::Uint(1), Cbor::Text("a..b".into())]),
         Cbor::Array(vec![Cbor::Uint(2), Cbor::Text(".a".into())]),
         Cbor::Array(vec![Cbor::Uint(9), Cbor::Text("pay".into())]),
     ] {
-        assert!(owner_from(&owner).is_err());
+        assert!(node_from(&owner).is_err());
     }
     for tag in [0, 4, 256, 257, u64::MAX] {
         let tree = Cbor::Array(vec![Cbor::Array(vec![
             Cbor::Uint(3),
-            owner_tree(&node_owner("pay")),
+            Cbor::Uint(node_owner("pay").index() as u64),
             Cbor::Uint(tag),
         ])]);
         assert!(destinations_from(&tree).is_err());

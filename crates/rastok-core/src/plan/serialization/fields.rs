@@ -12,10 +12,10 @@ use core::fmt;
 
 use super::{Cbor, array_of, emission_from, err, step_from, step_tree, tree_from, tree_tree};
 use crate::plan::{
-    ClosedArm, DecodeError, Dispatch, DispatchStep, DispatchValidationError, Endpoint,
-    EndpointOwner, InstanceStopTarget, LoopCommand, LoopCommandKind, LoopCommandTarget,
-    MAX_DISPATCH_DEPTH, MultiEmitValues, OpenArm, RouteArm, RouteDestination, RouteRule,
-    RouteSelection, RouteValidationError, validate_dispatch, validate_routing,
+    ClosedArm, DecodeError, Destination, Dispatch, DispatchStep, DispatchValidationError, Endpoint,
+    InstanceStopTarget, LoopCommand, LoopCommandKind, LoopCommandTarget, MAX_DISPATCH_DEPTH,
+    MultiEmitValues, OpenArm, RouteArm, RouteRule, RouteSelection, RouteValidationError,
+    validate_dispatch, validate_routing,
 };
 use crate::{canonical_cbor, datatype::DataType, expr, node};
 
@@ -339,71 +339,50 @@ pub(super) fn route_tree(rule: &RouteRule) -> Cbor {
     ])
 }
 
-fn destinations_tree(destinations: &[RouteDestination]) -> Cbor {
+fn destinations_tree(destinations: &[Destination]) -> Cbor {
     Cbor::Array(
         destinations
             .iter()
             .map(|destination| match destination {
-                RouteDestination::Port(endpoint) => {
+                Destination::Port(endpoint) => {
                     Cbor::Array(vec![Cbor::Uint(1), endpoint_tree(endpoint)])
                 }
-                RouteDestination::Discard => Cbor::Array(vec![Cbor::Uint(2)]),
-                RouteDestination::LoopCommand(command) => Cbor::Array(vec![
+                Destination::Discard => Cbor::Array(vec![Cbor::Uint(2)]),
+                Destination::LoopCommand(command) => Cbor::Array(vec![
                     Cbor::Uint(3),
-                    owner_tree(&command.owner),
+                    Cbor::Uint(command.owner.index() as u64),
                     Cbor::Uint(u64::from(command.kind.tag())),
                 ]),
-                RouteDestination::InstanceStop(target) => Cbor::Array(vec![
+                Destination::InstanceStop(target) => Cbor::Array(vec![
                     Cbor::Uint(4),
-                    owner_tree(&EndpointOwner::Graph(target.scope.clone())),
-                    owner_tree(&target.owner),
+                    Cbor::Uint(target.scope.index() as u64),
+                    Cbor::Uint(target.owner.index() as u64),
                 ]),
             })
             .collect(),
     )
 }
 
-fn owner_tree(owner: &EndpointOwner) -> Cbor {
-    let (tag, path) = match owner {
-        EndpointOwner::Node(path) => (1, alloc::string::ToString::to_string(path)),
-        EndpointOwner::Graph(path) => (2, alloc::string::ToString::to_string(path)),
-    };
-    Cbor::Array(vec![Cbor::Uint(tag), Cbor::Text(path)])
-}
-
 fn endpoint_tree(endpoint: &Endpoint) -> Cbor {
     Cbor::Array(vec![
-        owner_tree(&endpoint.owner),
+        Cbor::Uint(endpoint.node.index() as u64),
         Cbor::Text(endpoint.port.name().into()),
     ])
 }
 
-fn owner_from(tree: &Cbor) -> Result<EndpointOwner, DecodeError> {
-    let parts = array_of(tree, "endpoint owner")?;
-    match parts {
-        [Cbor::Uint(1), Cbor::Text(path)] => {
-            node::Path::new(path.split('.').map(String::from).collect::<Vec<_>>())
-                .map(EndpointOwner::Node)
-                .map_err(|_| err("Node owner path"))
-        }
-        [Cbor::Uint(2), Cbor::Text(path)] => {
-            let segments = if path.is_empty() {
-                Vec::new()
-            } else {
-                path.split('.').map(String::from).collect()
-            };
-            node::OwnerPath::new(segments)
-                .map(EndpointOwner::Graph)
-                .map_err(|_| err("Graph owner path"))
-        }
-        _ => Err(err("endpoint owner")),
-    }
+fn node_from(tree: &Cbor) -> Result<node::NodeIndex, DecodeError> {
+    let Cbor::Uint(index) = tree else {
+        return Err(err("Node index"));
+    };
+    u32::try_from(*index)
+        .map(node::NodeIndex::new)
+        .map_err(|_| err("Node index"))
 }
 
 fn endpoint_from(tree: &Cbor) -> Result<Endpoint, DecodeError> {
     match array_of(tree, "route endpoint")? {
         [owner, Cbor::Text(port)] => Ok(Endpoint {
-            owner: owner_from(owner)?,
+            node: node_from(owner)?,
             port: node::Port::new(port.clone()).map_err(|_| err("route port"))?,
         }),
         _ => Err(err("route endpoint")),
@@ -437,29 +416,24 @@ pub(super) fn route_from(tree: &Cbor) -> Result<RouteRule, DecodeError> {
     })
 }
 
-fn destinations_from(tree: &Cbor) -> Result<Vec<RouteDestination>, DecodeError> {
+fn destinations_from(tree: &Cbor) -> Result<Vec<Destination>, DecodeError> {
     array_of(tree, "route destinations")?
         .iter()
         .map(
             |destination| match array_of(destination, "route destination")? {
-                [Cbor::Uint(1), endpoint] => Ok(RouteDestination::Port(endpoint_from(endpoint)?)),
-                [Cbor::Uint(2)] => Ok(RouteDestination::Discard),
+                [Cbor::Uint(1), endpoint] => Ok(Destination::Port(endpoint_from(endpoint)?)),
+                [Cbor::Uint(2)] => Ok(Destination::Discard),
                 [Cbor::Uint(3), owner, Cbor::Uint(kind)] => {
-                    Ok(RouteDestination::LoopCommand(LoopCommandTarget {
-                        owner: owner_from(owner)?,
+                    Ok(Destination::LoopCommand(LoopCommandTarget {
+                        owner: node_from(owner)?,
                         kind: command_kind_from(*kind)?,
                     }))
                 }
                 [Cbor::Uint(4), scope, owner] => {
-                    let EndpointOwner::Graph(scope) = owner_from(scope)? else {
-                        return Err(err("instance closure requires a Graph wiring scope"));
-                    };
-                    Ok(RouteDestination::InstanceStop(Box::new(
-                        InstanceStopTarget {
-                            scope,
-                            owner: owner_from(owner)?,
-                        },
-                    )))
+                    Ok(Destination::InstanceStop(InstanceStopTarget {
+                        scope: node_from(scope)?,
+                        owner: node_from(owner)?,
+                    }))
                 }
                 _ => Err(err("route destination")),
             },

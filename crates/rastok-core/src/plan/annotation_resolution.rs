@@ -19,8 +19,8 @@ use crate::schema_annotation::{
 
 use super::type_resolution::ResolvedPortTable;
 use super::{
-    DispatchStep, EmitValue, Endpoint, EndpointOwner, ExecutionPlan, Handler, LoopCommand,
-    LoopCommandKind, NodeIndex, RouteDestination, RouteSelection,
+    Destination, DispatchStep, EmitValue, Endpoint, ExecutionPlan, Handler, LoopCommand,
+    LoopCommandKind, NodeIndex, RouteSelection,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -307,16 +307,16 @@ impl<'a> Solver<'a> {
                 };
                 for destination in destinations {
                     match destination {
-                        RouteDestination::Port(target) => {
+                        Destination::Port(target) => {
                             ports
                                 .entry(self.scoped_endpoint_key(target)?)
                                 .or_default()
                                 .push(table.clone());
                         }
-                        RouteDestination::LoopCommand(command)
+                        Destination::LoopCommand(command)
                             if command.kind != LoopCommandKind::Done =>
                         {
-                            let owner = self.endpoint_owner(&command.owner)?;
+                            let owner = command.owner;
                             let input = self.loop_input_key(owner)?;
                             let next = if command.kind == LoopCommandKind::Next {
                                 table.clone()
@@ -854,24 +854,8 @@ impl<'a> Solver<'a> {
         self.owner_port_key(owner, spec.entry.name())
     }
 
-    fn endpoint_owner(&self, endpoint: &EndpointOwner) -> Result<node::NodeIndex, ResolutionError> {
-        let path = match endpoint {
-            EndpointOwner::Node(path) => crate::node::OwnerPath::from(path),
-            EndpointOwner::Graph(path) => path.clone(),
-        };
-        self.plan
-            .nodes
-            .iter()
-            .position(|owner| owner.path == path)
-            .map(|index| node::NodeIndex::new(index as u32))
-            .ok_or_else(|| ResolutionError {
-                location: path.to_string(),
-                reason: PropagationError::UnknownBinding(path.to_string()),
-            })
-    }
-
     fn scoped_endpoint_key(&self, endpoint: &Endpoint) -> Result<PortKey, ResolutionError> {
-        self.owner_port_key(self.endpoint_owner(&endpoint.owner)?, endpoint.port.name())
+        self.owner_port_key(endpoint.node, endpoint.port.name())
     }
 
     fn owner_port_key(

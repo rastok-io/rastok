@@ -50,7 +50,7 @@ impl Execution<'_> {
         {
             return Err(invalid(index, "the retained ingress names no App input"));
         }
-        let from = EdgeEnd {
+        let from = Endpoint {
             node: source.map_or(NodeIndex::ROOT, |(slot, _)| slot),
             port: inbound.port.clone(),
         };
@@ -228,7 +228,7 @@ impl Execution<'_> {
         } else {
             self.prepare_instance_commands(
                 admissions,
-                &self.graph_endpoint(&from)?,
+                &from,
                 target.as_ref().map(|(_, target)| &target.reference),
                 &inbound.envelope,
             )?
@@ -351,7 +351,7 @@ impl Execution<'_> {
             admissions,
             scope,
             None,
-            &EdgeEnd {
+            &Endpoint {
                 node: slot,
                 port: port.clone(),
             },

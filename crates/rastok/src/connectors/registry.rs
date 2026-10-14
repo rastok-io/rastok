@@ -2410,26 +2410,18 @@ graph api : App {
         };
         spec.contract = ContractId::parse("org.rastok.test/inbound-call@1").unwrap();
 
-        let relay_path = raw.nodes[relay_slot.index()]
-            .executor_path()
-            .unwrap()
-            .clone();
-        let server_path = raw.nodes[server_slot.index()]
-            .executor_path()
-            .unwrap()
-            .clone();
         let crate::plan::NodeKind::Graph(graph) = &mut raw.nodes[0].body else {
             panic!("the App is a Graph")
         };
         let response = graph
             .wiring
             .iter_mut()
-            .find(|rule| rule.source.owner == crate::plan::EndpointOwner::Node(relay_path.clone()))
+            .find(|rule| rule.source.node == relay_slot)
             .expect("the relay boundary response exists");
         response.selection =
-            crate::plan::RouteSelection::All(vec![crate::plan::RouteDestination::Port(
+            crate::plan::RouteSelection::All(vec![crate::plan::Destination::Port(
                 crate::plan::Endpoint {
-                    owner: crate::plan::EndpointOwner::Node(server_path),
+                    node: server_slot,
                     port: node::Port::new("in").unwrap(),
                 },
             )]);

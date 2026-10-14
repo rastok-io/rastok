@@ -1043,9 +1043,9 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
     let mut stack: Vec<Item<'_>> = Vec::new();
     for route in plan.reference_routes() {
         // Nodes 1, Node 2, Graph body 3, wiring 4, rule 5, endpoint 6,
-        // owner 7, scalar 8.
-        max = max.max(8);
-        let (sets, level): (Vec<&[super::RouteDestination]>, usize) = match &route.selection {
+        // Node index and port name 7.
+        max = max.max(7);
+        let (sets, level): (Vec<&[super::Destination]>, usize) = match &route.selection {
             super::RouteSelection::All(destinations) => (vec![destinations], 7),
             super::RouteSelection::Cases(arms) => {
                 if !arms.is_empty() {
@@ -1066,10 +1066,10 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
             max = max.max(
                 level
                     + match destination {
-                        super::RouteDestination::Port(_) => 4,
-                        super::RouteDestination::Discard => 2,
-                        super::RouteDestination::LoopCommand(_) => 3,
-                        super::RouteDestination::InstanceStop(_) => 3,
+                        super::Destination::Port(_) => 3,
+                        super::Destination::Discard => 2,
+                        super::Destination::LoopCommand(_) => 2,
+                        super::Destination::InstanceStop(_) => 2,
                     },
             );
         }
@@ -3189,12 +3189,10 @@ mod tests {
     fn graph_wiring_names_the_app_root_and_rejects_an_absent_owner() {
         let rule = crate::plan::RouteRule {
             source: crate::plan::Endpoint {
-                owner: crate::plan::EndpointOwner::Graph(node::OwnerPath::root()),
+                node: node::NodeIndex::ROOT,
                 port: port("in"),
             },
-            selection: crate::plan::RouteSelection::All(vec![
-                crate::plan::RouteDestination::Discard,
-            ]),
+            selection: crate::plan::RouteSelection::All(vec![crate::plan::Destination::Discard]),
         };
         let encoded = fields::route_tree(&rule);
         assert_eq!(fields::route_from(&encoded).unwrap(), rule);
@@ -3204,7 +3202,7 @@ mod tests {
         fields[0] = Cbor::Array(vec![Cbor::Null, Cbor::Text(text("in"))]);
         assert_eq!(
             fields::route_from(&Cbor::Array(fields)),
-            Err(err("endpoint owner: not an array"))
+            Err(err("Node index"))
         );
     }
 
@@ -3559,29 +3557,23 @@ mod tests {
                         wiring: vec![
                             crate::plan::RouteRule {
                                 source: crate::plan::Endpoint {
-                                    owner: crate::plan::EndpointOwner::Graph(
-                                        node::OwnerPath::root(),
-                                    ),
+                                    node: node::NodeIndex::ROOT,
                                     port: port("in"),
                                 },
                                 selection: crate::plan::RouteSelection::All(vec![
-                                    crate::plan::RouteDestination::Port(crate::plan::Endpoint {
-                                        owner: crate::plan::EndpointOwner::Node(
-                                            node::Path::new(["relay"]).unwrap(),
-                                        ),
+                                    crate::plan::Destination::Port(crate::plan::Endpoint {
+                                        node: node::NodeIndex::new(1),
                                         port: port("in"),
                                     }),
                                 ]),
                             },
                             crate::plan::RouteRule {
                                 source: crate::plan::Endpoint {
-                                    owner: crate::plan::EndpointOwner::Node(
-                                        node::Path::new(["relay"]).unwrap(),
-                                    ),
+                                    node: node::NodeIndex::new(1),
                                     port: port("extra"),
                                 },
                                 selection: crate::plan::RouteSelection::All(vec![
-                                    crate::plan::RouteDestination::Discard,
+                                    crate::plan::Destination::Discard,
                                 ]),
                             },
                         ],

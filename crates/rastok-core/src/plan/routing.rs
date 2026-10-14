@@ -1,10 +1,10 @@
 //! Static routing decisions, distinct from physical delivery edges.
 
-use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use crate::node;
+use super::Endpoint;
+use crate::node::NodeIndex;
 
 /// Restrict a closed source type without unwrapping its values. A bool keeps
 /// its logical type: the type algebra has no singleton-boolean family.
@@ -69,13 +69,13 @@ impl RouteRule {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RouteSelection {
     /// The same destination set applies to every productible source case.
-    All(Vec<RouteDestination>),
+    All(Vec<Destination>),
     /// Exactly one exhaustive case arm applies.
     Cases(Vec<RouteArm>),
 }
 
 impl RouteSelection {
-    pub(crate) fn selected(&self, value: &crate::value::Value) -> Option<&[RouteDestination]> {
+    pub(crate) fn selected(&self, value: &crate::value::Value) -> Option<&[Destination]> {
         use crate::value::Value;
         match self {
             Self::All(destinations) => Some(destinations),
@@ -101,12 +101,12 @@ pub struct RouteArm {
     /// Sorted, non-empty source cases.
     pub cases: Vec<String>,
     /// Canonically sorted destinations selected for those cases.
-    pub destinations: Vec<RouteDestination>,
+    pub destinations: Vec<Destination>,
 }
 
 /// One destination selected before a producer transaction commits.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum RouteDestination {
+pub enum Destination {
     /// A spatial delivery endpoint.
     Port(Endpoint),
     /// Explicitly consume the source without a delivery.
@@ -116,25 +116,23 @@ pub enum RouteDestination {
     LoopCommand(LoopCommandTarget),
     /// Request closure of an exact instance in the lexical wiring scope.
     /// This disposition has no spatial edge and never creates its target.
-    /// The scope/target pair is boxed so ordinary routes and their error
-    /// payloads do not grow to carry an unused lifecycle authority.
-    InstanceStop(Box<InstanceStopTarget>),
+    InstanceStop(InstanceStopTarget),
 }
 
 /// Static authority for an instance closure, preserved through flattening.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct InstanceStopTarget {
     /// Graph in which the command was authored.
-    pub scope: crate::node::OwnerPath,
+    pub scope: NodeIndex,
     /// That Graph or one of its direct children; never an arbitrary path.
-    pub owner: EndpointOwner,
+    pub owner: NodeIndex,
 }
 
 /// Addressed Loop-manager command used as a wiring destination.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct LoopCommandTarget {
     /// Owner whose attached Loop manager receives the command.
-    pub owner: EndpointOwner,
+    pub owner: NodeIndex,
     /// Command kind; the routed envelope is the state/cause carrier.
     pub kind: LoopCommandKind,
 }
@@ -171,23 +169,4 @@ impl LoopCommandKind {
             _ => None,
         }
     }
-}
-
-/// One end of an edge, default ports made explicit.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Endpoint {
-    /// The executable Node or transparent Graph boundary named by this end.
-    pub owner: EndpointOwner,
-    /// The port.
-    pub port: node::Port,
-}
-
-/// What owns one checked edge endpoint. Graph boundaries survive checking so
-/// lowering can compose nested wiring without inventing a runtime pseudo-node.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum EndpointOwner {
-    /// One executable Operator or Connector.
-    Node(node::Path),
-    /// One Graph's input/output boundary, including the root App boundary.
-    Graph(crate::node::OwnerPath),
 }

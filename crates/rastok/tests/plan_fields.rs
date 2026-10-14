@@ -160,7 +160,8 @@ graph app : App {
 
 "#,
     );
-    let mut rules = hir.app.routes.clone();
+    let (raw, _) = compiler::lower::lower(&hir).unwrap();
+    let mut rules: Vec<_> = raw.reference_routes().cloned().collect();
     rules.sort_by_key(|rule| {
         plan::fields::encode_routing(std::slice::from_ref(rule), |_| Some(DataType::Bool)).unwrap()
     });
@@ -176,10 +177,11 @@ graph app : App {
         panic!("case routing")
     };
     assert_eq!(arms.len(), 2);
-    let is_sink = |endpoint: &plan::Endpoint| matches!(&endpoint.owner, plan::EndpointOwner::Node(path) if path.to_string() == "sink");
+    let is_sink =
+        |endpoint: &plan::Endpoint| raw.nodes[endpoint.node.index()].path.to_string() == "sink";
     assert!(arms.iter().all(|arm| {
         arm.destinations.iter().any(|destination| {
-            matches!(destination, plan::RouteDestination::Port(endpoint) if is_sink(endpoint))
+            matches!(destination, plan::Destination::Port(endpoint) if is_sink(endpoint))
         })
     }));
     assert_eq!(
@@ -187,12 +189,11 @@ graph app : App {
             .edges
             .iter()
             .filter(|edge| {
-                matches!(&edge.to, compiler::hir::EdgeTarget::Port(endpoint) if is_sink(endpoint))
+                matches!(&edge.to, compiler::hir::EdgeTarget::Port(endpoint) if matches!(&endpoint.owner, compiler::hir::EndpointOwner::Node(path) if path.to_string() == "sink"))
             })
             .count(),
         1,
     );
-    let (raw, _) = compiler::lower::lower(&hir).unwrap();
     assert_eq!(
         raw.reference_routes()
             .filter(|rule| matches!(rule.selection, plan::RouteSelection::Cases(_)))

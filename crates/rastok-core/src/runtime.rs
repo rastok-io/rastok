@@ -855,7 +855,7 @@ impl<'plan> TransactionPreparer<'plan> {
             case: String::from("JoinExpired"),
             payload: vec![],
         }));
-        let from = crate::plan::EdgeEnd {
+        let from = crate::plan::Endpoint {
             node: slot,
             port: port.clone(),
         };
@@ -1184,7 +1184,7 @@ impl<'plan> TransactionPreparer<'plan> {
                             // out-of-range int (or any wrong shape) into
                             // a pin, pass-through included. Encoded
                             // bytes are the codecs' door.
-                            let from = crate::plan::EdgeEnd {
+                            let from = crate::plan::Endpoint {
                                 node: slot,
                                 port: port.clone(),
                             };
@@ -1324,7 +1324,7 @@ impl<'plan> TransactionPreparer<'plan> {
     ) -> Result<Vec<(crate::journal::DeadlineKind, envelope::Id)>, Fault> {
         let mut deadline_ids = Vec::new();
         for emission in emissions {
-            let source = crate::plan::EdgeEnd {
+            let source = crate::plan::Endpoint {
                 node: slot,
                 port: emission.port.clone(),
             };
@@ -1949,7 +1949,7 @@ fn emitted_content(
 #[derive(Debug, Clone, PartialEq)]
 pub struct PinViolation {
     /// The endpoint whose pin refused.
-    pub at: crate::plan::EdgeEnd,
+    pub at: crate::plan::Endpoint,
     /// The conformance judgement — SEMANTIC: expected type, found
     /// kind, and the reason; text is `Display`'s business.
     pub violation: Box<ConformanceViolation>,
@@ -1973,7 +1973,7 @@ impl PinViolation {
 /// destination admits any valid materialized value.
 pub(crate) fn crossing_pins_hold(
     plan: &crate::plan::ValidatedExecutionPlan,
-    from: &crate::plan::EdgeEnd,
+    from: &crate::plan::Endpoint,
     value: &Value,
 ) -> Result<(), PinViolation> {
     let from_type = plan.resolved_ports().endpoint_type(from);

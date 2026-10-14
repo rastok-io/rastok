@@ -396,19 +396,20 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
             });
         }
         let unsupported_command =
-            |route: &crate::plan::RouteRule, destination: &RouteDestination| {
+            |route: &super::hir::RouteRule, destination: &RouteDestination| {
                 let RouteDestination::LoopCommand(command) = destination else {
                     return false;
                 };
-                if let crate::plan::EndpointOwner::Graph(owner) = &command.owner {
+                if let EndpointOwner::Graph(owner) = &command.owner {
                     return !sorted_graphs(hir)
                         .iter()
                         .any(|graph| graph.path == *owner && graph.loop_spec.is_some());
                 }
-                command.owner != route.source.owner || !nodes.iter().any(|node|
-                matches!(&route.source.owner, crate::plan::EndpointOwner::Node(path) if *path == node.path)
-                && matches!(node.semantics, NodeSemantics::Connector { .. })
-                && node.loop_spec.is_some())
+                command.owner != route.source.owner || !nodes.iter().any(|node| {
+                    matches!(&route.source.owner, EndpointOwner::Node(path) if *path == node.path)
+                        && matches!(node.semantics, NodeSemantics::Connector { .. })
+                        && node.loop_spec.is_some()
+                })
             };
         if graph.routes.iter().any(|route| match &route.selection {
             RouteSelection::All(destinations) => destinations
@@ -468,6 +469,18 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
             .iter()
             .map(|node| (node::OwnerPath::from(&node.path), CheckedOwner::Node(node))),
     );
+    let owner_indices: std::collections::BTreeMap<_, _> = checked_owners
+        .iter()
+        .enumerate()
+        .map(|(index, (path, _))| {
+            u32::try_from(index)
+                .map(|index| (path.clone(), node::NodeIndex::new(index)))
+                .map_err(|_| LowerError {
+                    owner: path.to_string(),
+                    detail: "the Node table exceeds its u32 index domain",
+                })
+        })
+        .collect::<Result<_, _>>()?;
     let mut owner_slots = std::collections::BTreeMap::new();
     for (index, (path, checked)) in checked_owners.into_iter().enumerate() {
         let owner_index = u32::try_from(index).map_err(|_| LowerError {
@@ -513,7 +526,7 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
                 }
                 (
                     NodeKind::Graph(Box::new(crate::plan::Graph {
-                        wiring: routing::wiring(graph),
+                        wiring: routing::wiring(graph, &owner_indices)?,
                     })),
                     ports,
                     extensions,

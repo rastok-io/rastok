@@ -10,8 +10,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use super::{
-    EdgeEnd, Endpoint, EndpointOwner, ExecutionPlan, NodeIndex, ResolvedPortTable, RouteArm,
-    RouteDestination, RouteErrorKind, RouteRule, RouteSelection, RouteValidationError,
+    Destination, Endpoint, ExecutionPlan, NodeIndex, ResolvedPortTable, RouteArm, RouteErrorKind,
+    RouteRule, RouteSelection, RouteValidationError,
 };
 use crate::datatype::DataType;
 use crate::node::PortDirection;
@@ -33,7 +33,7 @@ impl From<RouteCompositionError> for RouteValidationError {
         Self {
             path: format!(
                 "composition {:?}.{} case {:?}",
-                error.source.owner, error.source.port, error.case
+                error.source.node, error.source.port, error.case
             ),
             kind: error.kind,
         }
@@ -58,24 +58,39 @@ impl core::error::Error for RouteCompositionError {}
 /// composed selection is trusted, even when validating a clone of an old plan.
 pub(super) fn derive(plan: &mut ExecutionPlan) -> Result<(), super::PlanValidationError> {
     let inventory: Vec<_> = plan.reference_routes().cloned().collect();
-    let mut routes = compose_routing(&inventory).map_err(RouteValidationError::from)?;
-    let endpoint = |value: &Endpoint| -> Result<EdgeEnd, super::PlanValidationError> {
-        let index = plan
-            .nodes
-            .iter()
-            .position(|node| match &value.owner {
-                EndpointOwner::Node(path) => node.path == *path && node.kind() != node::Kind::Graph,
-                EndpointOwner::Graph(path) => {
-                    node.path == *path && node.kind() == node::Kind::Graph
-                }
-            })
-            .ok_or_else(|| failure("Graph wiring", RouteErrorKind::UnknownEndpoint))?;
-        Ok(EdgeEnd {
-            node: NodeIndex::new(index as u32),
-            port: value.port.clone(),
-        })
-    };
-    let scope = |end: &EdgeEnd| {
+    // Validate every index before composition or any table lookup, including
+    // commands whose targets do not become physical edges.
+    for rule in &inventory {
+        let valid = plan.nodes.get(rule.source.node.index()).is_some()
+            && destinations(&rule.selection)
+                .iter()
+                .all(|destination| match destination {
+                    Destination::Port(endpoint) => plan.nodes.get(endpoint.node.index()).is_some(),
+                    Destination::Discard => true,
+                    Destination::LoopCommand(command) => {
+                        plan.nodes.get(command.owner.index()).is_some()
+                    }
+                    Destination::InstanceStop(target) => {
+                        plan.nodes.get(target.scope.index()).is_some()
+                            && plan.nodes.get(target.owner.index()).is_some()
+                    }
+                });
+        if !valid {
+            return Err(failure("Graph wiring", RouteErrorKind::UnknownEndpoint).into());
+        }
+    }
+    let mut routes = compose_routing(
+        &inventory,
+        |index| is_boundary(plan, index),
+        |source, scope| {
+            plan.nodes[source.index()]
+                .path
+                .segments()
+                .starts_with(plan.nodes[scope.index()].path.segments())
+        },
+    )
+    .map_err(RouteValidationError::from)?;
+    let scope = |end: &Endpoint| {
         let node = &plan.nodes[end.node.index()];
         if node.kind() == node::Kind::Graph {
             node.path.clone()
@@ -85,12 +100,12 @@ pub(super) fn derive(plan: &mut ExecutionPlan) -> Result<(), super::PlanValidati
     };
     let mut edges = Vec::new();
     for rule in &routes {
-        let from = endpoint(&rule.source)?;
+        let from = rule.source.clone();
         for destination in destinations(&rule.selection) {
             let to = match destination {
-                RouteDestination::Port(value) => Some(endpoint(value)?),
-                RouteDestination::Discard => None,
-                RouteDestination::LoopCommand(_) | RouteDestination::InstanceStop(_) => continue,
+                Destination::Port(value) => Some(value.clone()),
+                Destination::Discard => None,
+                Destination::LoopCommand(_) | Destination::InstanceStop(_) => continue,
             };
             let owner_path = to.as_ref().map_or_else(
                 || scope(&from),
@@ -114,7 +129,7 @@ pub(super) fn derive(plan: &mut ExecutionPlan) -> Result<(), super::PlanValidati
         RouteSelection::All(set) => set.iter().any(|destination| {
             matches!(
                 destination,
-                RouteDestination::LoopCommand(_) | RouteDestination::InstanceStop(_)
+                Destination::LoopCommand(_) | Destination::InstanceStop(_)
             )
         }),
         RouteSelection::Cases(_) => true,
@@ -128,7 +143,8 @@ pub(super) fn validate(
     plan: &ExecutionPlan,
     ports: &ResolvedPortTable,
 ) -> Result<(), super::PlanValidationError> {
-    for owner in &plan.nodes {
+    for (owner_index, owner) in plan.nodes.iter().enumerate() {
+        let owner_index = NodeIndex::new(owner_index as u32);
         let Some(graph) = owner.graph() else { continue };
         let mut sources = BTreeSet::new();
         for pair in graph.wiring.windows(2) {
@@ -152,13 +168,9 @@ pub(super) fn validate(
                 let Some((direction, _)) = port(plan, ports, endpoint) else {
                     return false;
                 };
-                let endpoint_path = match &endpoint.owner {
-                    EndpointOwner::Node(path) => path.segments(),
-                    EndpointOwner::Graph(path) => path.segments(),
-                };
-                let own_boundary =
-                    matches!(&endpoint.owner, EndpointOwner::Graph(path) if path == &owner.path);
-                endpoint_path.starts_with(owner.path.segments())
+                let endpoint_path = &plan.nodes[endpoint.node.index()].path;
+                let own_boundary = endpoint.node == owner_index;
+                endpoint_path.segments().starts_with(owner.path.segments())
                     && direction
                         == if source == own_boundary {
                             PortDirection::Input
@@ -171,8 +183,8 @@ pub(super) fn validate(
             }
             for destination in destinations(&rule.selection) {
                 match destination {
-                    RouteDestination::InstanceStop(target) => {
-                        if target.scope != owner.path
+                    Destination::InstanceStop(target) => {
+                        if target.scope != owner_index
                             || !super::routing_validation::valid_instance_stop_target(plan, target)
                         {
                             return Err(
@@ -180,44 +192,32 @@ pub(super) fn validate(
                             );
                         }
                     }
-                    RouteDestination::LoopCommand(command) => {
-                        let valid = match (&command.owner, &rule.source.owner) {
-                            (EndpointOwner::Graph(target), source) => {
-                                let source = match source {
-                                    EndpointOwner::Graph(path) => path.segments(),
-                                    EndpointOwner::Node(path) => path.segments(),
-                                };
-                                source.starts_with(target.segments())
-                                    && plan.nodes.iter().any(|candidate| {
-                                        candidate.path == *target && candidate.loop_spec().is_some()
-                                    })
-                            }
-                            (EndpointOwner::Node(target), EndpointOwner::Node(source))
-                                if target == source =>
-                            {
-                                plan.nodes
-                                    .iter()
-                                    .find(|node| node.path == *target)
-                                    .is_some_and(|node| {
-                                        node.loop_spec().is_some()
-                                            && node
-                                                .connector()
-                                                .and_then(super::ConnectorSpec::call_semantics)
-                                                .is_some()
-                                    })
-                            }
-                            _ => false,
-                        };
+                    Destination::LoopCommand(command) => {
+                        let target = &plan.nodes[command.owner.index()];
+                        let source = &plan.nodes[rule.source.node.index()];
+                        let valid = target.loop_spec().is_some()
+                            && match target.kind() {
+                                node::Kind::Graph => {
+                                    source.path.segments().starts_with(target.path.segments())
+                                }
+                                node::Kind::Operator | node::Kind::Connector => {
+                                    command.owner == rule.source.node
+                                        && target
+                                            .connector()
+                                            .and_then(super::ConnectorSpec::call_semantics)
+                                            .is_some()
+                                }
+                            };
                         if !valid {
                             return Err(
                                 failure(&path, RouteErrorKind::InvalidManagerCommand).into()
                             );
                         }
                     }
-                    RouteDestination::Port(endpoint) if !scoped(endpoint, false) => {
+                    Destination::Port(endpoint) if !scoped(endpoint, false) => {
                         return Err(failure(&path, RouteErrorKind::UnknownEndpoint).into());
                     }
-                    RouteDestination::Port(_) | RouteDestination::Discard => {}
+                    Destination::Port(_) | Destination::Discard => {}
                 }
             }
         }
@@ -227,26 +227,13 @@ pub(super) fn validate(
     for source in plan
         .reference_routes()
         .map(|rule| &rule.source)
-        .filter(|source| concrete(source))
+        .filter(|source| !is_boundary(plan, source.node))
     {
-        if let EndpointOwner::Node(path) = &source.owner {
-            let Some((index, _)) = plan
-                .nodes
-                .iter()
-                .enumerate()
-                .find(|(_, node)| node.path == *path)
-            else {
-                return Err(failure("Graph wiring", RouteErrorKind::UnknownEndpoint).into());
-            };
-            if !live[index]
-                || !super::productibility::may_produce(
-                    plan,
-                    NodeIndex::new(index as u32),
-                    &source.port,
-                )
-            {
-                continue;
-            }
+        if plan.nodes[source.node.index()].kind() != node::Kind::Graph
+            && (!live[source.node.index()]
+                || !super::productibility::may_produce(plan, source.node, &source.port))
+        {
+            continue;
         }
         let (_, Some(ty)) = port(plan, ports, source)
             .ok_or_else(|| failure("Graph wiring", RouteErrorKind::UnknownEndpoint))?
@@ -278,7 +265,7 @@ fn failure(path: &str, kind: RouteErrorKind) -> RouteValidationError {
     }
 }
 
-fn destinations(selection: &RouteSelection) -> Vec<&RouteDestination> {
+fn destinations(selection: &RouteSelection) -> Vec<&Destination> {
     match selection {
         RouteSelection::All(set) => set.iter().collect(),
         RouteSelection::Cases(arms) => arms.iter().flat_map(|arm| &arm.destinations).collect(),
@@ -290,30 +277,22 @@ fn port<'a>(
     ports: &'a ResolvedPortTable,
     endpoint: &Endpoint,
 ) -> Option<(PortDirection, Option<&'a DataType>)> {
-    match &endpoint.owner {
-        EndpointOwner::Node(path) => {
-            let index = plan.nodes.iter().position(|node| node.path == *path)?;
-            ports
-                .node(NodeIndex::new(u32::try_from(index).ok()?))?
-                .iter()
-                .find(|port| port.port() == &endpoint.port)
-                .map(|port| (port.direction(), Some(port.ty())))
-        }
-        EndpointOwner::Graph(path) if path.is_root() => ports
-            .boundary()
+    let owner = plan.nodes.get(endpoint.node.index())?;
+    if owner.kind() == node::Kind::Graph && endpoint.node != NodeIndex::ROOT {
+        owner
+            .ports
             .iter()
+            .find(|port| port.port == endpoint.port)
+            .map(|port| (port.direction, port.ty.as_ref()))
+    } else {
+        let row = if endpoint.node == NodeIndex::ROOT {
+            ports.boundary()
+        } else {
+            ports.node(endpoint.node)?
+        };
+        row.iter()
             .find(|port| port.port() == &endpoint.port)
-            .map(|port| (port.direction(), Some(port.ty()))),
-        EndpointOwner::Graph(path) => {
-            let index = plan
-                .nodes
-                .iter()
-                .position(|owner| owner.path == *path && owner.kind() == node::Kind::Graph)?;
-            plan.graph_ports(node::NodeIndex::new(u32::try_from(index).ok()?))?
-                .iter()
-                .find(|port| port.port == endpoint.port)
-                .map(|port| (port.direction, port.ty.as_ref()))
-        }
+            .map(|port| (port.direction(), Some(port.ty())))
     }
 }
 
@@ -344,31 +323,28 @@ fn check_crossings(
             };
             for destination in selected.into_iter().flatten() {
                 has_disposition = true;
-                if let RouteDestination::Port(target) = destination {
+                if let Destination::Port(target) = destination {
                     if let Some((_, Some(pin))) = port(plan, ports, target)
                         && !ty.is_assignable_to(pin)
                     {
                         return Err(failure(
-                            &format!("boundary {:?}.{}", target.owner, target.port),
+                            &format!("boundary {:?}.{}", target.node, target.port),
                             RouteErrorKind::BoundaryTypeMismatch,
                         ));
                     }
-                    if !concrete(target) {
+                    if is_boundary(plan, target.node) {
                         pending.push(target);
                     }
                 }
             }
         }
         if !has_disposition
-            && matches!(&source.owner, EndpointOwner::Graph(path) if !path.is_root())
+            && is_boundary(plan, source.node)
             && port(plan, ports, source)
                 .is_some_and(|(direction, _)| direction == PortDirection::Output)
         {
             return Err(failure(
-                &format!(
-                    "boundary {:?}.{} case {:?}",
-                    source.owner, source.port, case
-                ),
+                &format!("boundary {:?}.{} case {:?}", source.node, source.port, case),
                 RouteErrorKind::EmptyDestinations,
             ));
         }
@@ -387,7 +363,11 @@ fn check_crossings(
 /// A boundary cycle, duplicate selected destination, or a composed selection
 /// mixing `nothing` with another destination. Instance closure also requires
 /// the actual emitter to belong to its lexical scope. No declarations are repaired.
-pub fn compose_routing(rules: &[RouteRule]) -> Result<Vec<RouteRule>, Box<RouteCompositionError>> {
+pub fn compose_routing(
+    rules: &[RouteRule],
+    is_boundary: impl Fn(NodeIndex) -> bool,
+    in_scope: impl Fn(NodeIndex, NodeIndex) -> bool,
+) -> Result<Vec<RouteRule>, Box<RouteCompositionError>> {
     let mut inventory = BTreeMap::<&Endpoint, Vec<&RouteSelection>>::new();
     for rule in rules {
         inventory
@@ -418,7 +398,7 @@ pub fn compose_routing(rules: &[RouteRule]) -> Result<Vec<RouteRule>, Box<RouteC
                     pending.extend(
                         destinations(selection)
                             .into_iter()
-                            .filter_map(boundary)
+                            .filter_map(|destination| boundary(destination, &is_boundary))
                             .map(|target| (target, false)),
                     );
                 }
@@ -426,7 +406,11 @@ pub fn compose_routing(rules: &[RouteRule]) -> Result<Vec<RouteRule>, Box<RouteC
         }
     }
     let mut result = Vec::new();
-    for source in inventory.keys().copied().filter(|source| concrete(source)) {
+    for source in inventory
+        .keys()
+        .copied()
+        .filter(|source| !is_boundary(source.node))
+    {
         let mut cases = BTreeSet::new();
         let mut pending = vec![source];
         let mut visited = BTreeSet::new();
@@ -437,12 +421,20 @@ pub fn compose_routing(rules: &[RouteRule]) -> Result<Vec<RouteRule>, Box<RouteC
             for selection in inventory.get(endpoint).into_iter().flatten() {
                 match selection {
                     RouteSelection::All(destinations) => {
-                        pending.extend(destinations.iter().filter_map(boundary));
+                        pending.extend(
+                            destinations
+                                .iter()
+                                .filter_map(|destination| boundary(destination, &is_boundary)),
+                        );
                     }
                     RouteSelection::Cases(arms) => {
                         for arm in arms {
                             cases.extend(arm.cases.iter().cloned());
-                            pending.extend(arm.destinations.iter().filter_map(boundary));
+                            pending.extend(
+                                arm.destinations
+                                    .iter()
+                                    .filter_map(|destination| boundary(destination, &is_boundary)),
+                            );
                         }
                     }
                 }
@@ -456,7 +448,14 @@ pub fn compose_routing(rules: &[RouteRule]) -> Result<Vec<RouteRule>, Box<RouteC
         let mut arms = Vec::new();
         for case in selected_cases {
             let mut destinations = BTreeSet::new();
-            resolve(source, case.as_deref(), &inventory, &mut destinations).map_err(|kind| {
+            resolve(
+                source,
+                case.as_deref(),
+                &inventory,
+                &mut destinations,
+                &is_boundary,
+            )
+            .map_err(|kind| {
                 Box::new(RouteCompositionError {
                     source: source.clone(),
                     case: case.clone(),
@@ -466,14 +465,9 @@ pub fn compose_routing(rules: &[RouteRule]) -> Result<Vec<RouteRule>, Box<RouteC
             // Transparent inputs do not establish an emitting instance in the
             // crossed Graph. Closure can only follow the emitter's retained
             // ancestry, never select a descendant from this envelope's key.
-            let source_path = match &source.owner {
-                EndpointOwner::Graph(path) => path.segments(),
-                EndpointOwner::Node(path) => path.segments(),
-            };
             if destinations.iter().any(|destination| {
-                matches!(destination,
-                RouteDestination::InstanceStop(target)
-                    if !source_path.starts_with(target.scope.segments()))
+                matches!(destination, Destination::InstanceStop(target)
+                    if !in_scope(source.node, target.scope))
             }) {
                 return Err(Box::new(RouteCompositionError {
                     source: source.clone(),
@@ -481,7 +475,7 @@ pub fn compose_routing(rules: &[RouteRule]) -> Result<Vec<RouteRule>, Box<RouteC
                     kind: RouteErrorKind::InstanceCommandScope,
                 }));
             }
-            if destinations.len() > 1 && destinations.contains(&RouteDestination::Discard) {
+            if destinations.len() > 1 && destinations.contains(&Destination::Discard) {
                 return Err(Box::new(RouteCompositionError {
                     source: source.clone(),
                     case,
@@ -512,14 +506,16 @@ pub fn compose_routing(rules: &[RouteRule]) -> Result<Vec<RouteRule>, Box<RouteC
     Ok(result)
 }
 
-fn concrete(endpoint: &Endpoint) -> bool {
-    matches!(&endpoint.owner, EndpointOwner::Node(_))
-        || matches!(&endpoint.owner, EndpointOwner::Graph(path) if path.is_root())
+fn is_boundary(plan: &ExecutionPlan, index: NodeIndex) -> bool {
+    index != NodeIndex::ROOT && plan.nodes[index.index()].kind() == node::Kind::Graph
 }
 
-fn boundary(destination: &RouteDestination) -> Option<&Endpoint> {
+fn boundary<'a>(
+    destination: &'a Destination,
+    is_boundary: &impl Fn(NodeIndex) -> bool,
+) -> Option<&'a Endpoint> {
     match destination {
-        RouteDestination::Port(endpoint) if !concrete(endpoint) => Some(endpoint),
+        Destination::Port(endpoint) if is_boundary(endpoint.node) => Some(endpoint),
         _ => None,
     }
 }
@@ -528,7 +524,8 @@ fn resolve(
     source: &Endpoint,
     case: Option<&str>,
     inventory: &BTreeMap<&Endpoint, Vec<&RouteSelection>>,
-    output: &mut BTreeSet<RouteDestination>,
+    output: &mut BTreeSet<Destination>,
+    is_boundary: &impl Fn(NodeIndex) -> bool,
 ) -> Result<(), RouteErrorKind> {
     // Heap work, not call-stack depth, bounds an untrusted boundary chain.
     // Exit frames retain path-local visitation: a shared seam is revisited
@@ -553,7 +550,7 @@ fn resolve(
                     .map(|arm| &arm.destinations),
             };
             for destination in destinations.into_iter().flatten() {
-                if let Some(endpoint) = boundary(destination) {
+                if let Some(endpoint) = boundary(destination, is_boundary) {
                     pending.push((endpoint, false));
                 } else if !output.insert(destination.clone()) {
                     return Err(RouteErrorKind::DuplicateDestination(destination.clone()));
@@ -569,13 +566,9 @@ mod tests {
     use super::*;
     use crate::node::Port;
 
-    fn graph(name: &str, port: &str) -> Endpoint {
+    fn graph(index: u32, port: &str) -> Endpoint {
         Endpoint {
-            owner: EndpointOwner::Graph(if name.is_empty() {
-                node::OwnerPath::root()
-            } else {
-                node::OwnerPath::new([name]).unwrap()
-            }),
+            node: NodeIndex::new(index),
             port: Port::new(port).unwrap(),
         }
     }
@@ -583,33 +576,35 @@ mod tests {
     fn link(source: Endpoint, target: Endpoint) -> RouteRule {
         RouteRule {
             source,
-            selection: RouteSelection::All(vec![RouteDestination::Port(target)]),
+            selection: RouteSelection::All(vec![Destination::Port(target)]),
         }
     }
 
     #[test]
     fn deep_boundary_chains_use_explicit_work_not_recursive_stack_frames() {
-        let input = graph("", "in");
-        let output = graph("", "out");
-        let mut rules = vec![link(input.clone(), graph("g0", "in"))];
+        let input = graph(0, "in");
+        let output = graph(0, "out");
+        let mut rules = vec![link(input.clone(), graph(1, "in"))];
         for index in 0..2048 {
-            rules.push(link(
-                graph(&format!("g{index}"), "in"),
-                graph(&format!("g{}", index + 1), "in"),
-            ));
+            rules.push(link(graph(index + 1, "in"), graph(index + 2, "in")));
         }
-        rules.push(link(graph("g2048", "in"), output.clone()));
-        assert_eq!(compose_routing(&rules).unwrap(), vec![link(input, output)]);
+        rules.push(link(graph(2049, "in"), output.clone()));
+        assert_eq!(
+            compose_routing(&rules, |index| index != NodeIndex::ROOT, |_, _| true).unwrap(),
+            vec![link(input, output)]
+        );
     }
 
     #[test]
     fn even_an_unreachable_boundary_cycle_refuses() {
         let rules = vec![
-            link(graph("left", "in"), graph("right", "in")),
-            link(graph("right", "in"), graph("left", "in")),
+            link(graph(1, "in"), graph(2, "in")),
+            link(graph(2, "in"), graph(1, "in")),
         ];
         assert_eq!(
-            compose_routing(&rules).unwrap_err().kind,
+            compose_routing(&rules, |index| index != NodeIndex::ROOT, |_, _| true)
+                .unwrap_err()
+                .kind,
             RouteErrorKind::BoundaryCycle
         );
     }

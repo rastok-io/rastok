@@ -253,7 +253,7 @@ fn deleting_a_discard_from_a_package_cannot_turn_it_into_an_implicit_sink() {
     let plan::NodeKind::Graph(graph) = &mut forged.nodes[0].body else {
         panic!("App Graph")
     };
-    graph.wiring.retain(|rule| !matches!(&rule.selection, plan::RouteSelection::All(set) if set == &[plan::RouteDestination::Discard]));
+    graph.wiring.retain(|rule| !matches!(&rule.selection, plan::RouteSelection::All(set) if set == &[plan::Destination::Discard]));
     let error = plan::ValidatedExecutionPlan::try_new(forged).unwrap_err();
     assert!(error.to_string().contains("worker.out"), "{error}");
 }
@@ -315,14 +315,20 @@ fn nested_dispositions_are_rederived_even_after_flattening() {
     );
     assert!(decoded.reference_routes().next().is_some());
 
+    let inner = rastok::node::NodeIndex::new(
+        decoded
+            .nodes
+            .iter()
+            .position(|node| node.path.to_string() == "inner")
+            .unwrap() as u32,
+    );
     let mut forged = decoded.clone().into_inner();
     let plan::NodeKind::Graph(graph) = &mut forged.nodes[0].body else {
         panic!("App Graph")
     };
-    graph.wiring.retain(|rule| {
-        !(matches!(&rule.source.owner, plan::EndpointOwner::Graph(path) if path.to_string() == "inner")
-            && rule.source.port.name() == "second")
-    });
+    graph
+        .wiring
+        .retain(|rule| !(rule.source.node == inner && rule.source.port.name() == "second"));
     // Derived indexes are rebuilt from the changed reference wiring.
     let error = plan::ValidatedExecutionPlan::try_new(forged).unwrap_err();
     assert!(

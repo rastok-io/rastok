@@ -75,48 +75,38 @@ fn owner(plan: &ExecutionPlan, segments: &[String]) -> NodeIndex {
     )
 }
 
-fn endpoint_owner(plan: &ExecutionPlan, value: &plan::EndpointOwner) -> NodeIndex {
-    owner(
-        plan,
-        match value {
-            plan::EndpointOwner::Node(path) => path.segments(),
-            plan::EndpointOwner::Graph(path) => path.segments(),
-        },
-    )
-}
-
-fn endpoint(plan: &ExecutionPlan, value: &plan::Endpoint) -> Endpoint {
-    Endpoint {
-        node: endpoint_owner(plan, &value.owner),
-        port: value.port.clone(),
-    }
-}
-
-fn physical_endpoint(_plan: &ExecutionPlan, value: &plan::EdgeEnd) -> Endpoint {
+fn endpoint(_plan: &ExecutionPlan, value: &plan::Endpoint) -> Endpoint {
     Endpoint {
         node: NodeIndex::from(value.node),
         port: value.port.clone(),
     }
 }
 
-fn destination(plan: &ExecutionPlan, value: &plan::RouteDestination) -> Destination {
+fn physical_endpoint(_plan: &ExecutionPlan, value: &plan::Endpoint) -> Endpoint {
+    Endpoint {
+        node: NodeIndex::from(value.node),
+        port: value.port.clone(),
+    }
+}
+
+fn destination(plan: &ExecutionPlan, value: &plan::Destination) -> Destination {
     match value {
-        plan::RouteDestination::Port(value) => Destination::Port(endpoint(plan, value)),
-        plan::RouteDestination::Discard => Destination::Discard,
-        plan::RouteDestination::LoopCommand(command) => Destination::LoopCommand {
-            owner: endpoint_owner(plan, &command.owner),
+        plan::Destination::Port(value) => Destination::Port(endpoint(plan, value)),
+        plan::Destination::Discard => Destination::Discard,
+        plan::Destination::LoopCommand(command) => Destination::LoopCommand {
+            owner: NodeIndex::from(command.owner),
             kind: command.kind,
         },
-        plan::RouteDestination::InstanceStop(command) => Destination::InstanceStop {
-            scope: owner(plan, command.scope.segments()),
-            target: endpoint_owner(plan, &command.owner),
+        plan::Destination::InstanceStop(command) => Destination::InstanceStop {
+            scope: NodeIndex::from(command.scope),
+            target: NodeIndex::from(command.owner),
         },
     }
 }
 
 fn rule(plan: &ExecutionPlan, value: &plan::RouteRule) -> RouteRule {
     let destinations =
-        |set: &[plan::RouteDestination]| set.iter().map(|value| destination(plan, value)).collect();
+        |set: &[plan::Destination]| set.iter().map(|value| destination(plan, value)).collect();
     RouteRule {
         source: endpoint(plan, &value.source),
         selection: match &value.selection {
@@ -139,7 +129,7 @@ pub(super) fn inventory(plan: &ExecutionPlan) -> Vec<plan::RouteRule> {
 }
 
 fn graph(plan: &ExecutionPlan, rule: &plan::RouteRule) -> usize {
-    let source = endpoint_owner(plan, &rule.source.owner).0 as usize;
+    let source = rule.source.node.index();
     let declaration = &plan.nodes[source];
     // A validated root source is always an input, including implicit ports
     // absent from the declaration table. Nested boundaries are explicit.
@@ -206,7 +196,20 @@ impl Indexes {
     pub(super) fn derive(plan: &ExecutionPlan, inventory: &[plan::RouteRule]) -> Self {
         // Exercise the existing, checked composition algorithm; do not write
         // a second one just for measurement. Its temporary allocations count.
-        let composed = plan::compose_routing(inventory).unwrap();
+        let composed = plan::compose_routing(
+            inventory,
+            |index| {
+                let node = &plan.nodes[index.index()];
+                node.kind() == rastok_core::node::Kind::Graph && !node.path.is_root()
+            },
+            |source, scope| {
+                plan.nodes[source.index()]
+                    .path
+                    .segments()
+                    .starts_with(plan.nodes[scope.index()].path.segments())
+            },
+        )
+        .unwrap();
         let routes: Vec<_> = composed.iter().map(|value| rule(plan, value)).collect();
         drop(composed);
         let mut edges = Vec::new();
@@ -246,7 +249,20 @@ impl Indexes {
     }
 
     pub(super) fn check(&self, plan: &ExecutionPlan, inventory: &[plan::RouteRule]) {
-        let expected = plan::compose_routing(inventory).unwrap();
+        let expected = plan::compose_routing(
+            inventory,
+            |index| {
+                let node = &plan.nodes[index.index()];
+                node.kind() == rastok_core::node::Kind::Graph && !node.path.is_root()
+            },
+            |source, scope| {
+                plan.nodes[source.index()]
+                    .path
+                    .segments()
+                    .starts_with(plan.nodes[scope.index()].path.segments())
+            },
+        )
+        .unwrap();
         assert_eq!(
             self.routes,
             expected

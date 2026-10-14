@@ -133,7 +133,7 @@ impl ValidatedExecutionPlan {
     pub fn loop_repeat_warnings(&self) -> Result<Vec<LoopRepeatWarning>, PlanValidationError> {
         let plan = self.plan();
         let mut warnings = alloc::collections::BTreeSet::new();
-        for owner in &plan.nodes {
+        for (index, owner) in plan.nodes.iter().enumerate() {
             if owner.loop_spec().is_none() {
                 continue;
             }
@@ -147,22 +147,21 @@ impl ValidatedExecutionPlan {
                     let Some(call) = connector.call_semantics() else {
                         continue;
                     };
-                    let target = node.endpoint_owner()?;
+                    let target = NodeIndex::new(index as u32);
                     for rule in plan
                         .reference_routes()
-                        .filter(|rule| rule.source.owner == target)
+                        .filter(|rule| rule.source.node == target)
                     {
-                        let repeats =
-                            |cases: Option<&[String]>, destinations: &[RouteDestination]| {
-                                destinations.iter().any(|destination| matches!(destination,
-                                RouteDestination::LoopCommand(command)
+                        let repeats = |cases: Option<&[String]>, destinations: &[Destination]| {
+                            destinations.iter().any(|destination| matches!(destination,
+                                Destination::LoopCommand(command)
                                 if command.owner == target && command.kind == LoopCommandKind::Again))
                                 && if rule.source.port.name() == call.terminal() {
                                     call.terminal_cases().iter().any(|(case, visibility)|
                                         cases.is_none_or(|cases| cases.iter().any(|selected| selected == case))
                                             && !visibility.allows_repetition(connector.is_idempotent()))
                                 } else { !connector.is_idempotent() }
-                            };
+                        };
                         let repeats = match &rule.selection {
                             RouteSelection::All(destinations) => repeats(None, destinations),
                             RouteSelection::Cases(arms) => arms

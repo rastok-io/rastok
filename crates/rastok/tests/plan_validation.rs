@@ -16,7 +16,7 @@ use rastok::instance;
 use rastok::node::NodeIndex;
 use rastok::node::{self, Port, PortDirection};
 use rastok::plan::{
-    self, DispatchStep, EdgeEnd, ExecutionPlan, PlanValidationError, ValidatedExecutionPlan,
+    self, DispatchStep, Endpoint, ExecutionPlan, PlanValidationError, ValidatedExecutionPlan,
 };
 
 fn linear_statements(handler: &mut plan::Handler) -> &mut Vec<DispatchStep> {
@@ -41,24 +41,9 @@ fn wiring(plan: &mut ExecutionPlan) -> &mut Vec<plan::RouteRule> {
 }
 
 // Construct an authored destination, not a forged derived edge.
-fn add_route(plan: &mut ExecutionPlan, from: EdgeEnd, to: Option<EdgeEnd>) {
-    let endpoint = |end: EdgeEnd| plan::Endpoint {
-        owner: if plan.nodes[end.node.index()].kind() == node::Kind::Graph {
-            plan::EndpointOwner::Graph(plan.nodes[end.node.index()].path.clone())
-        } else {
-            plan::EndpointOwner::Node(
-                plan.nodes[end.node.index()]
-                    .executor_path()
-                    .unwrap()
-                    .clone(),
-            )
-        },
-        port: end.port,
-    };
-    let source = endpoint(from);
-    let destination = to.map_or(plan::RouteDestination::Discard, |to| {
-        plan::RouteDestination::Port(endpoint(to))
-    });
+fn add_route(plan: &mut ExecutionPlan, from: Endpoint, to: Option<Endpoint>) {
+    let source = from;
+    let destination = to.map_or(plan::Destination::Discard, plan::Destination::Port);
     if let Some(rule) = wiring(plan).iter_mut().find(|rule| rule.source == source) {
         let plan::RouteSelection::All(set) = &mut rule.selection else {
             panic!("unconditional fixture");
@@ -917,15 +902,12 @@ fn validation_rebuilds_indexes_from_changed_reference_wiring() {
         .find(|decl| decl.port.name() == "out")
         .unwrap()
         .ty = Some(DataType::Text);
+    let shell = owner_slot(&changed, "shell");
     let rule = wiring(&mut changed)
         .iter_mut()
-        .find(|rule| {
-            matches!(&rule.source.owner, plan::EndpointOwner::Node(path)
-            if path.to_string() == "shell")
-                && rule.source.port.name() == "out"
-        })
+        .find(|rule| rule.source.node == shell && rule.source.port.name() == "out")
         .unwrap();
-    rule.selection = plan::RouteSelection::All(vec![plan::RouteDestination::Discard]);
+    rule.selection = plan::RouteSelection::All(vec![plan::Destination::Discard]);
     wiring(&mut changed).sort_by_key(plan::RouteRule::canonical_order_key);
     let changed = ValidatedExecutionPlan::try_new(changed).unwrap();
     let shell_output = |edge: &&plan::Edge| {
@@ -956,14 +938,12 @@ fn one_graph_cannot_supply_two_rules_for_the_same_source() {
     let mut raw = raw_probe();
     let mut duplicate = wiring(&mut raw)
         .iter()
-        .find(
-            |rule| matches!(&rule.source.owner, plan::EndpointOwner::Graph(path) if path.is_root()),
-        )
+        .find(|rule| rule.source.node == NodeIndex::ROOT)
         .unwrap()
         .clone();
     duplicate.selection =
-        plan::RouteSelection::All(vec![plan::RouteDestination::Port(plan::Endpoint {
-            owner: plan::EndpointOwner::Node(node::Path::new(["shell"]).unwrap()),
+        plan::RouteSelection::All(vec![plan::Destination::Port(plan::Endpoint {
+            node: owner_slot(&raw, "shell"),
             port: port("in"),
         })]);
     wiring(&mut raw).push(duplicate);
@@ -974,6 +954,59 @@ fn one_graph_cannot_supply_two_rules_for_the_same_source() {
             collection: "Graph wiring sources"
         }
     );
+}
+
+#[test]
+fn unknown_node_indices_refuse_before_routing_composition() {
+    let unknown = NodeIndex::new(u32::MAX);
+    for position in 0..5 {
+        let mut raw = raw_probe();
+        let rule = &mut wiring(&mut raw)[0];
+        match position {
+            0 => rule.source.node = unknown,
+            1 => {
+                rule.selection =
+                    plan::RouteSelection::All(vec![plan::Destination::Port(Endpoint {
+                        node: unknown,
+                        port: port("in"),
+                    })])
+            }
+            2 => {
+                rule.selection = plan::RouteSelection::All(vec![plan::Destination::LoopCommand(
+                    plan::LoopCommandTarget {
+                        owner: unknown,
+                        kind: plan::LoopCommandKind::Done,
+                    },
+                )])
+            }
+            3 | 4 => {
+                rule.selection = plan::RouteSelection::All(vec![plan::Destination::InstanceStop(
+                    plan::InstanceStopTarget {
+                        scope: if position == 3 {
+                            unknown
+                        } else {
+                            NodeIndex::ROOT
+                        },
+                        owner: if position == 4 {
+                            unknown
+                        } else {
+                            NodeIndex::ROOT
+                        },
+                    },
+                )])
+            }
+            _ => unreachable!("five index positions"),
+        }
+        wiring(&mut raw).sort_by_key(plan::RouteRule::canonical_order_key);
+        assert!(
+            matches!(
+                ValidatedExecutionPlan::try_new(raw),
+                Err(PlanValidationError::InvalidRouting(error))
+                    if error.kind == plan::RouteErrorKind::UnknownEndpoint
+            ),
+            "position {position}"
+        );
+    }
 }
 
 #[test]
@@ -1407,11 +1440,11 @@ fn a_boundary_input_cannot_be_an_edge_target() {
         .sort_by(|left, right| left.key().cmp(&right.key()));
     add_route(
         &mut plan,
-        EdgeEnd {
+        Endpoint {
             node: NodeIndex::new(1),
             port: port("out"),
         },
-        Some(EdgeEnd {
+        Some(Endpoint {
             node: rastok_core::node::NodeIndex::ROOT,
             port: port("request"),
         }),
@@ -1441,11 +1474,11 @@ fn a_boundary_output_cannot_be_an_edge_source() {
         .sort_by(|left, right| left.key().cmp(&right.key()));
     add_route(
         &mut plan,
-        EdgeEnd {
+        Endpoint {
             node: rastok_core::node::NodeIndex::ROOT,
             port: port("response"),
         },
-        Some(EdgeEnd {
+        Some(Endpoint {
             node: NodeIndex::new(1),
             port: port("in"),
         }),
@@ -1468,11 +1501,11 @@ fn conventional_ports_hold_their_directions() {
     let mut plan = raw_probe();
     add_route(
         &mut plan,
-        EdgeEnd {
+        Endpoint {
             node: NodeIndex::new(1),
             port: port("out"),
         },
-        Some(EdgeEnd {
+        Some(Endpoint {
             node: rastok_core::node::NodeIndex::ROOT,
             port: port("in"),
         }),
@@ -1491,11 +1524,11 @@ fn conventional_ports_hold_their_directions() {
     let mut plan = raw_probe();
     add_route(
         &mut plan,
-        EdgeEnd {
+        Endpoint {
             node: rastok_core::node::NodeIndex::ROOT,
             port: port("out"),
         },
-        Some(EdgeEnd {
+        Some(Endpoint {
             node: NodeIndex::new(1),
             port: port("in"),
         }),
@@ -1735,7 +1768,7 @@ fn an_edge_to_an_unknown_port_refuses() {
     let mut plan = raw_probe();
     add_route(
         &mut plan,
-        EdgeEnd {
+        Endpoint {
             node: NodeIndex::new(1),
             port: port("ghost"),
         },
@@ -1754,7 +1787,7 @@ fn an_edge_to_an_unknown_port_refuses() {
     let mut plan = raw_probe();
     add_route(
         &mut plan,
-        EdgeEnd {
+        Endpoint {
             node: rastok_core::node::NodeIndex::ROOT,
             port: port("ghost"),
         },
@@ -1938,17 +1971,13 @@ fn a_forged_executable_cycle_never_earns_the_validated_type() {
         .position(|node| node.path.to_string() == "shell")
         .map(|index| NodeIndex::new(u32::try_from(index).unwrap()))
         .expect("the fixture has shell");
-    let source =
-        plan::EndpointOwner::Node(plan.nodes[shell.index()].executor_path().unwrap().clone());
-    let destination = plan::RouteDestination::Port(plan::Endpoint {
-        owner: plan::EndpointOwner::Node(
-            plan.nodes[relay.index()].executor_path().unwrap().clone(),
-        ),
+    let destination = plan::Destination::Port(plan::Endpoint {
+        node: relay,
         port: port("in"),
     });
     let rule = wiring(&mut plan)
         .iter_mut()
-        .find(|rule| rule.source.owner == source && rule.source.port.name() == "out")
+        .find(|rule| rule.source.node == shell && rule.source.port.name() == "out")
         .unwrap();
     rule.selection = plan::RouteSelection::All(vec![destination]);
     wiring(&mut plan).sort_by_key(plan::RouteRule::canonical_order_key);

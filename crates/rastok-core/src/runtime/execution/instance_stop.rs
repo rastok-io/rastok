@@ -3,9 +3,9 @@
 
 use super::*;
 use crate::instance;
-use crate::journal::instance_stop::{Command, Disposition, Error, InstanceCommands};
+use crate::journal::instance_stop::{Command, Disposition, Error, InstanceCommands, SourceKind};
 use crate::node;
-use crate::plan::{Endpoint, InstanceStopTarget, RouteDestination};
+use crate::plan::{Destination, Endpoint, InstanceStopTarget};
 
 impl Execution<'_> {
     pub(super) fn prepare_instance_commands(
@@ -48,7 +48,7 @@ impl Execution<'_> {
                     }
                 };
                 targets.extend(set.iter().filter_map(|destination| match destination {
-                    RouteDestination::InstanceStop(target) => Some(*target.clone()),
+                    Destination::InstanceStop(target) => Some(target.clone()),
                     _ => None,
                 }));
             }
@@ -60,17 +60,7 @@ impl Execution<'_> {
         let source_instance = if let Some(reference) = source_instance {
             reference.clone()
         } else {
-            let owner = match &source.owner {
-                crate::plan::EndpointOwner::Graph(path) => path.clone(),
-                crate::plan::EndpointOwner::Node(path) => node::OwnerPath::from(path),
-            };
-            let slot = self
-                .plan
-                .nodes
-                .iter()
-                .position(|entry| entry.path == owner)
-                .map(|index| node::NodeIndex::new(index as u32))
-                .ok_or_else(|| self.command_error(&owner, Error::Source))?;
+            let slot = source.node;
             // This is a pure selection. The bundle is not installed: a target
             // absent from the retained lifecycle prefix still refuses below.
             let data = DataSlot {
@@ -98,10 +88,21 @@ impl Execution<'_> {
         let mut commands = Vec::with_capacity(targets.len());
         for target in targets {
             let (scope, target_ref) = fold
-                .resolve(&source_instance, &target)
-                .map_err(|reason| self.command_error(&target.scope, reason))?;
+                .resolve(
+                    &source_instance,
+                    &self.plan.nodes[target.scope.index()].path,
+                    &self.plan.nodes[target.owner.index()].path,
+                )
+                .map_err(|reason| {
+                    self.command_error(&self.plan.nodes[target.scope.index()].path, reason)
+                })?;
             commands.push(Command::new(
-                source.clone(),
+                if self.plan.nodes[source.node.index()].kind() == node::Kind::Graph {
+                    SourceKind::Graph
+                } else {
+                    SourceKind::Executor
+                },
+                source.port.clone(),
                 source_instance.clone(),
                 scope,
                 target_ref,

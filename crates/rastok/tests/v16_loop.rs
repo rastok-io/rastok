@@ -141,7 +141,7 @@ fn a_forged_graph_next_cannot_change_the_entry_type() {
     {
         if let plan::RouteSelection::All(destinations) = &mut route.selection {
             for destination in destinations {
-                if let plan::RouteDestination::LoopCommand(command) = destination {
+                if let plan::Destination::LoopCommand(command) = destination {
                     command.kind = plan::LoopCommandKind::Next;
                 }
             }
@@ -1004,9 +1004,9 @@ lab app {
         .iter_mut()
         .find(|rule| rule.source.port.name() == "exit")
         .unwrap();
-    exit.selection = plan::RouteSelection::All(vec![plan::RouteDestination::LoopCommand(
+    exit.selection = plan::RouteSelection::All(vec![plan::Destination::LoopCommand(
         plan::LoopCommandTarget {
-            owner: exit.source.owner.clone(),
+            owner: exit.source.node,
             kind: plan::LoopCommandKind::Again,
         },
     )]);

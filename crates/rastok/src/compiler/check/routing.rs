@@ -1,8 +1,9 @@
 //! Static endpoint resolution, case routes and destination validation.
 
 use super::*;
+use crate::compiler::hir::InstanceStopTarget;
+use crate::compiler::routing::{indexed, named_destination, named_endpoint};
 use crate::node;
-use crate::plan::InstanceStopTarget;
 
 impl Checker<'_, '_> {
     pub(super) fn verify_composed_routing(&mut self, graph: &Graph, span: Span) {
@@ -11,13 +12,13 @@ impl Checker<'_, '_> {
         if self.bag.has_errors() {
             return;
         }
-        let Err(error) = crate::compiler::routing::flatten(graph) else {
+        let Err((owners, error)) = crate::compiler::routing::flatten(graph) else {
             return;
         };
         let (code, detail) = match &error.kind {
             RouteErrorKind::DuplicateDestination(destination) => (
                 E_ROUTE_DUPLICATE,
-                format!("destination `{}` is selected twice through Graph boundaries for the same source case", route_destination_display(destination)),
+                format!("destination `{}` is selected twice through Graph boundaries for the same source case", route_destination_display(&named_destination(&owners, destination))),
             ),
             RouteErrorKind::MixedDiscard => (
                 E_ROUTE_MIXED,
@@ -31,14 +32,18 @@ impl Checker<'_, '_> {
         self.bag.push(
             Diagnostic::new(code, Phase::Check, detail)
                 .with_span(span)
-                .with_field("source", endpoint_display(&error.source))
+                .with_field(
+                    "source",
+                    endpoint_display(&named_endpoint(&owners, &error.source)),
+                )
                 .with_field("case", error.case.unwrap_or_else(|| "all".to_owned())),
         );
     }
 
     pub(super) fn verify_routing(&mut self, graph: &Graph, span: Span) {
-        if let Err(error) = crate::plan::validate_routing(&graph.routes, |endpoint| {
-            endpoint_pinned_type(endpoint, graph)
+        let (owners, rules) = indexed(&graph.routes);
+        if let Err(error) = crate::plan::validate_routing(&rules, |endpoint| {
+            endpoint_pinned_type(&named_endpoint(&owners, endpoint), graph)
         }) {
             self.bag.push(
                 Diagnostic::new(
@@ -1303,7 +1308,8 @@ pub(super) fn route_conflict(
 ) -> Option<(Code, String, String)> {
     use crate::plan::RouteConflictKind;
 
-    let conflict = crate::plan::route_conflict(existing, candidate)?;
+    let (owners, rules) = indexed(&[existing.clone(), candidate.clone()]);
+    let conflict = crate::plan::route_conflict(&rules[0], &rules[1])?;
     let case = conflict
         .cases
         .map_or_else(|| String::from("all"), |cases| cases.join("|"));
@@ -1322,7 +1328,7 @@ pub(super) fn route_conflict(
             E_ROUTE_DUPLICATE,
             format!(
                 "destination `{}` is selected twice for the same source case",
-                route_destination_display(&destination)
+                route_destination_display(&named_destination(&owners, &destination))
             ),
         ),
     };

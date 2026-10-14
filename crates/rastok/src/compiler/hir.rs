@@ -364,7 +364,8 @@ pub enum EdgeTarget {
     Discard,
 }
 
-pub use crate::plan::{
+mod routing;
+pub use routing::{
     Endpoint, EndpointOwner, InstanceStopTarget, LoopCommandKind, LoopCommandTarget, RouteArm,
     RouteDestination, RouteRule, RouteSelection,
 };

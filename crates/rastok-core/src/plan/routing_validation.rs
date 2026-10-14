@@ -7,8 +7,7 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use super::{
-    CasePartitionError, Endpoint, RouteDestination, RouteRule, RouteSelection,
-    validate_case_partition,
+    CasePartitionError, Destination, Endpoint, RouteRule, RouteSelection, validate_case_partition,
 };
 use crate::datatype::DataType;
 
@@ -23,7 +22,7 @@ pub enum RouteConflictKind {
     /// Explicit discard and a real destination select the same value.
     MixedDiscard,
     /// One destination is selected twice for the same value.
-    DuplicateDestination(RouteDestination),
+    DuplicateDestination(Destination),
 }
 
 /// An additive conflict, with the affected cases rather than a source span.
@@ -59,7 +58,7 @@ pub enum RouteErrorKind {
     /// The destination set is not in strictly canonical order.
     DestinationOrder,
     /// A destination occurs twice within one selected set.
-    DuplicateDestination(RouteDestination),
+    DuplicateDestination(Destination),
     /// A selected set contains both discard and a real destination.
     MixedDiscard,
     /// Two declarations for one source conflict.
@@ -145,20 +144,12 @@ pub(super) fn validate_plan_routing(
     plan: &super::ExecutionPlan,
     ports: &super::ResolvedPortTable,
 ) -> Result<(), super::PlanValidationError> {
-    let physical = |endpoint: &Endpoint| -> Option<super::EdgeEnd> {
-        let node = match &endpoint.owner {
-            super::EndpointOwner::Graph(path) if path.is_root() => super::NodeIndex::ROOT,
-            super::EndpointOwner::Node(path) => super::NodeIndex::new(
-                u32::try_from(plan.nodes.iter().position(|node| node.path == *path)?).ok()?,
-            ),
-            _ => return None,
-        };
-        let endpoint = super::EdgeEnd {
-            node,
-            port: endpoint.port.clone(),
-        };
-        ports.endpoint_type(&endpoint)?;
-        Some(endpoint)
+    let physical = |endpoint: &Endpoint| -> Option<&DataType> {
+        let node = plan.nodes.get(endpoint.node.index())?;
+        if node.kind() == crate::node::Kind::Graph && endpoint.node != super::NodeIndex::ROOT {
+            return None;
+        }
+        ports.endpoint_type(endpoint)
     };
     for pair in plan.routes.windows(2) {
         if pair[0].canonical_order_key() >= pair[1].canonical_order_key() {
@@ -169,8 +160,9 @@ pub(super) fn validate_plan_routing(
     }
     for (index, rule) in plan.routes.iter().enumerate() {
         let path = format!("routes[{index}]");
-        let source = physical(&rule.source)
+        physical(&rule.source)
             .ok_or_else(|| RouteValidationError::at(&path, RouteErrorKind::UnknownEndpoint))?;
+        let source = &rule.source;
         let sets = match &rule.selection {
             RouteSelection::All(destinations) => alloc::vec![(None, destinations.as_slice())],
             RouteSelection::Cases(arms) => arms
@@ -183,7 +175,7 @@ pub(super) fn validate_plan_routing(
                 .iter()
                 .map(move |destination| (cases, destination))
         }) {
-            if let RouteDestination::InstanceStop(target) = destination {
+            if let Destination::InstanceStop(target) = destination {
                 if !valid_instance_stop_target(plan, target) {
                     return Err(RouteValidationError::at(
                         &path,
@@ -193,14 +185,14 @@ pub(super) fn validate_plan_routing(
                 }
                 continue;
             }
-            if let RouteDestination::LoopCommand(command) = destination {
+            if let Destination::LoopCommand(command) = destination {
                 // Boundary composition validates the real command source.
                 // Its flattened source can precede the Graph run admission.
-                let graph_command = matches!(&command.owner, super::EndpointOwner::Graph(owner)
-                                    if plan.nodes.iter().any(|candidate| candidate.path == *owner && candidate.loop_spec().is_some())
-                );
+                let graph_command = plan.nodes.get(command.owner.index()).is_some_and(|node| {
+                    node.kind() == crate::node::Kind::Graph && node.loop_spec().is_some()
+                });
                 let admitted = graph_command
-                    || command.owner == rule.source.owner && {
+                    || command.owner == rule.source.node && {
                         let node = &plan.nodes[source.node.index()];
                         node.loop_spec().is_some()
                             && node
@@ -216,16 +208,14 @@ pub(super) fn validate_plan_routing(
                     .into());
                 }
                 if graph_command && command.kind == super::LoopCommandKind::Next {
-                    let selected = ports.endpoint_type(&source).and_then(|ty| match cases {
+                    let selected = ports.endpoint_type(source).and_then(|ty| match cases {
                         Some(cases) => super::routing::selected_case_type(ty, cases),
                         None => Some(ty.clone()),
                     });
-                    let entry = plan.nodes.iter().enumerate().find_map(|(index, owner)| {
-                        if command.owner != super::EndpointOwner::Graph(owner.path.clone()) {
-                            return None;
-                        }
+                    let entry = plan.nodes.get(command.owner.index()).and_then(|owner| {
                         let spec = owner.loop_spec()?;
-                        plan.graph_ports(crate::node::NodeIndex::new(u32::try_from(index).ok()?))?
+                        owner
+                            .ports
                             .iter()
                             .find(|port| port.port == spec.entry)?
                             .ty
@@ -242,17 +232,14 @@ pub(super) fn validate_plan_routing(
                 }
                 continue;
             }
-            if matches!(destination, RouteDestination::Port(endpoint) if physical(endpoint).is_none())
-            {
+            if matches!(destination, Destination::Port(endpoint) if physical(endpoint).is_none()) {
                 return Err(
                     RouteValidationError::at(&path, RouteErrorKind::UnknownEndpoint).into(),
                 );
             }
         }
     }
-    validate_routing(&plan.routes, |endpoint| {
-        physical(endpoint).and_then(|endpoint| ports.endpoint_type(&endpoint).cloned())
-    })?;
+    validate_routing(&plan.routes, |endpoint| physical(endpoint).cloned())?;
     for (index, _) in plan.nodes.iter().enumerate() {
         super::call_loop::validate(
             plan,
@@ -267,22 +254,13 @@ pub(super) fn valid_instance_stop_target(
     plan: &super::ExecutionPlan,
     target: &super::InstanceStopTarget,
 ) -> bool {
-    let Some((scope, _)) =
-        plan.nodes.iter().enumerate().find(|(_, owner)| {
-            owner.path == target.scope && owner.kind() == crate::node::Kind::Graph
-        })
-    else {
-        return false;
-    };
-    let (path, graph) = match &target.owner {
-        super::EndpointOwner::Graph(path) => (path.clone(), true),
-        super::EndpointOwner::Node(path) => (crate::node::OwnerPath::from(path), false),
-    };
-    plan.nodes.iter().enumerate().any(|(index, owner)| {
-        owner.path == path
-            && (owner.kind() == crate::node::Kind::Graph) == graph
-            && (index == scope || owner.parent == Some(crate::node::NodeIndex::new(scope as u32)))
-    })
+    plan.nodes
+        .get(target.scope.index())
+        .is_some_and(|scope| scope.kind() == crate::node::Kind::Graph)
+        && plan
+            .nodes
+            .get(target.owner.index())
+            .is_some_and(|owner| target.owner == target.scope || owner.parent == Some(target.scope))
 }
 
 impl core::error::Error for RouteValidationError {}
@@ -352,7 +330,7 @@ pub fn validate_routing(
 }
 
 fn validate_destinations(
-    destinations: &[RouteDestination],
+    destinations: &[Destination],
     path: &str,
 ) -> Result<(), RouteValidationError> {
     if destinations.is_empty() {
@@ -361,10 +339,10 @@ fn validate_destinations(
             RouteErrorKind::EmptyDestinations,
         ));
     }
-    if destinations.contains(&RouteDestination::Discard)
+    if destinations.contains(&Destination::Discard)
         && destinations
             .iter()
-            .any(|destination| *destination != RouteDestination::Discard)
+            .any(|destination| *destination != Destination::Discard)
     {
         return Err(RouteValidationError::at(path, RouteErrorKind::MixedDiscard));
     }
@@ -412,14 +390,14 @@ pub fn route_conflict(existing: &RouteRule, candidate: &RouteRule) -> Option<Rou
 }
 
 fn destination_conflict(
-    left: &[RouteDestination],
-    right: &[RouteDestination],
+    left: &[Destination],
+    right: &[Destination],
     cases: Option<&[String]>,
 ) -> Option<RouteConflict> {
-    let discards = |set: &[RouteDestination]| set.contains(&RouteDestination::Discard);
-    let delivers = |set: &[RouteDestination]| {
+    let discards = |set: &[Destination]| set.contains(&Destination::Discard);
+    let delivers = |set: &[Destination]| {
         set.iter()
-            .any(|destination| *destination != RouteDestination::Discard)
+            .any(|destination| *destination != Destination::Discard)
     };
     let kind = if (discards(left) && delivers(right)) || (discards(right) && delivers(left)) {
         RouteConflictKind::MixedDiscard

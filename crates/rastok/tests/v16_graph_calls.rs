@@ -282,8 +282,10 @@ graph app : App + Loop {
             assert_eq!(evidence[0].connector.to_string(), "call");
             assert_eq!(evidence[0].source.port.name(), "out");
             assert_eq!(
-                evidence[0].source.owner,
-                plan::EndpointOwner::Node(rastok::node::Path::new(["decide"]).unwrap())
+                compiled.plan.nodes[evidence[0].source.node.index()]
+                    .path
+                    .to_string(),
+                "decide"
             );
             let diagnostic = compiled
                 .warnings

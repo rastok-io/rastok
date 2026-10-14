@@ -366,45 +366,56 @@ impl Execution<'_> {
             ..LoopRecord::default()
         };
         for emission in &record.emissions {
-            for rule in self.plan.routes.iter().filter(|rule| {
-                matches!(&rule.source.owner, crate::plan::EndpointOwner::Node(path) if *path == node.path)
-                    && rule.source.port == emission.port
-            }) {
-                use crate::plan::{LoopCommandKind, RouteDestination, RouteSelection};
-                let is_command = |destination: &RouteDestination| {
-                    matches!(destination, RouteDestination::LoopCommand(_))
-                };
+            for rule in self
+                .plan
+                .routes
+                .iter()
+                .filter(|rule| rule.source.node == slot && rule.source.port == emission.port)
+            {
+                use crate::plan::{Destination, LoopCommandKind, RouteSelection};
+                let is_command =
+                    |destination: &Destination| matches!(destination, Destination::LoopCommand(_));
                 let destinations = match &rule.selection {
                     RouteSelection::All(destinations) => destinations.as_slice(),
                     RouteSelection::Cases(arms) => {
-                        if !arms.iter().flat_map(|arm| &arm.destinations).any(is_command) {
+                        if !arms
+                            .iter()
+                            .flat_map(|arm| &arm.destinations)
+                            .any(is_command)
+                        {
                             continue;
                         }
                         // Only a case decision demands DATA. An unconditional
                         // command carries the opaque envelope or its cause.
                         let value = crate::runtime::data_value(emission.envelope.data())
                             .map_err(ExecutionFault::Fault)?;
-                        rule.selection.selected(&value).ok_or_else(|| {
-                            violation("a Call output has no selected route case")
-                        })?
+                        rule.selection
+                            .selected(&value)
+                            .ok_or_else(|| violation("a Call output has no selected route case"))?
                     }
                 };
                 for destination in destinations {
-                    let RouteDestination::LoopCommand(command) = destination else {
+                    let Destination::LoopCommand(command) = destination else {
                         continue;
                     };
-                    if command.owner != crate::plan::EndpointOwner::Node(self.executor_path(slot)?.clone()) {
+                    if command.owner != slot {
                         continue;
                     }
                     let value = match command.kind {
                         LoopCommandKind::Next => CommandValue::Next(emission.envelope.clone()),
-                        LoopCommandKind::Again => CommandValue::Again(emission.envelope.meta().sys().id()),
+                        LoopCommandKind::Again => {
+                            CommandValue::Again(emission.envelope.meta().sys().id())
+                        }
                         LoopCommandKind::Done => CommandValue::Done {
                             cause: emission.envelope.meta().sys().id(),
                             kind: protocol::DoneKind::Explicit,
                         },
                     };
-                    packet.produced.push(protocol::CommandProduced::new(run, application.iteration, value));
+                    packet.produced.push(protocol::CommandProduced::new(
+                        run,
+                        application.iteration,
+                        value,
+                    ));
                 }
             }
         }

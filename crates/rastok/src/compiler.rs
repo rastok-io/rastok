@@ -286,10 +286,7 @@ pub fn compile_with_assets(
     match plan.loop_repeat_warnings() {
         Ok(warnings) => {
             for warning in warnings {
-                let source_owner = match &warning.source.owner {
-                    crate::plan::EndpointOwner::Graph(path) => path.to_string(),
-                    crate::plan::EndpointOwner::Node(path) => path.to_string(),
-                };
+                let source_owner = plan.nodes[warning.source.node.index()].path.to_string();
                 let source = format!("{source_owner}.{}", warning.source.port);
                 bag.push(Diagnostic::new(check::W_LOOP_REPEAT, Phase::Check,
                 format!("Loop `{}` can repeat visible Call `{}` through `{source} -> Loop.again` without an idempotence guarantee; review the operation or use Retry for a checked repetition policy", warning.owner, warning.connector))
