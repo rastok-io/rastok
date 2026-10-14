@@ -1,6 +1,6 @@
 # Instances, keys, lifetime, and placement
 
-> **Status (2026-10-06): normative target, package 20.**
+> **Status: normative; [current format](identity.md).**
 > Parent-linked owners, scoped routes, instance identity/generation, lifetimes,
 > immutable expressions and phased Connector settings are validated together.
 > Graphs own scope and controller lifecycle, never application state or handlers.
@@ -758,5 +758,5 @@ It preserves the useful invariants already proved by the P0–P3 draft:
 The current package transports the complete owner/instance model and refuses
 other format versions. Canonical generation-bearing references identify
 mailboxes, state, routes and lifecycle; the physical Worker assignment never
-enters their bytes. The [v20 inventory](../architecture/human-review-v20-identity.md)
-records the pre-public allocation change separately from these invariants.
+enters their bytes. The [Node realignment inventory](../architecture/node-realignment-identity.md)
+records the package representation change separately from these invariants.

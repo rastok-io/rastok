@@ -1,7 +1,8 @@
 # Identity and canonical form
 
-> **Format 20, diagnostic recording 4.** The [identity inventory](../architecture/human-review-v20-identity.md)
-> records the reviewed allocation changes and the single witness approval.
+> **Format 21, diagnostic recording 4.** The [Node realignment inventory](../architecture/node-realignment-identity.md)
+> records the package-only representation change; semantic hashes, journal
+> records and causal traces are unchanged.
 > Only this format is readable. The registry is now extend-only: no
 > renumbering or reuse of an allocated key, tag or domain.
 > Changing the public version label to 1 remains a pre-publication TODO.
@@ -119,6 +120,12 @@ The [plan package](../architecture/plan-package.md) transports these facts
 and an asserted HIR hash under an integrity checksum. The package version,
 physical layout and checksum are not additional semantic-hash inputs.
 Hostile decoding re-derives the executable claims without a ContractCatalog.
+
+The package contains one Node table: Graph, Operator or Connector, with the
+App Graph at index zero. Each Graph owns its reference wiring; each Operator
+owns its handlers. `NodeIndex` and execution-local delivery indexes never
+enter the identity recipes below. Paths and exact instance generations remain
+their inputs. Derived execution indexes are not separate transported claims.
 
 ## 2. `graph_version` and the manifest
 

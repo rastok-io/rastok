@@ -1,6 +1,6 @@
 # Rastok DSL — Grammar notes
 
-> **Status (2026-10-06): normative source model for format 20.**
+> **Status: normative source model; [current format](identity.md).**
 > The implemented subset and migration evidence are recorded in
 > [R9](../architecture/rework-r9-qualification.md). Unsupported forms refuse
 > by name at check. The model includes Node-owned `instance`, `lifetime`, `closing`,

@@ -5,9 +5,9 @@
 > of truth** for the envelope's structure, identity, `meta.sys` reserved
 > fields, the version stamp, and the storage / wire form. Other docs cite it
 > rather than restating the field list.
-> Format 20 has one current representation, without compatibility
-> readers. The [cutover inventory](../architecture/human-review-v20-identity.md)
-> records the reviewed pre-public change and its single approval.
+> The [current format](identity.md) has one representation, without compatibility
+> readers. The [Node realignment](../architecture/node-realignment-identity.md)
+> changes only the package; this envelope representation is unchanged.
 
 An **envelope** is the unit that flows along edges and through transactions. It is
 **immutable** : a transaction never mutates an envelope, it *emits* new ones (Mealy
@@ -116,7 +116,7 @@ encodings  : paths/triggers/ports = UTF-8 ; parent_id = its 16 raw bytes ;
 `envelope::IdKind` is the closed registry of the implemented recipes below.
 Each `#[repr(u8)]` variant carries its explicit wire byte; `From<IdKind>`
 projects that discriminant, never declaration order. `TryFrom<u8>` refuses
-all other bytes as `UnknownIdKind`. This is the compact format-20
+all other bytes as `UnknownIdKind`. This is the compact current
 registry. Decoder names are specified in §5.1; runtime attestation is deferred.
 
 | Kind | Byte | Length-prefixed fields, in order |

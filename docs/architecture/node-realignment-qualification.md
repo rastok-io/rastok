@@ -1,17 +1,23 @@
-# Node ontology realignment — qualification in progress
+# Node ontology realignment — qualification
 
-Status: 14 October 2026. This records the preparation for lot 1 of
+Status: 15 October 2026. This records lot 1 of
 [D-2026-10-11-1](../spec/decisions.md#d-2026-10-11-1--realign-the-plan-and-the-runtime-on-the-specifications-node-ontology-before-the-opening).
 The vocabulary follow-up is `2259fd4` and `beabf68`; the Execution interface
-is named in `90c646f` and `9218779`. The last qualified package is format 20;
-the format-21 candidate checkpoint is described at the end of this report.
+is named in `90c646f` and `9218779`. Yoann's instruction to close lot 1 approves
+the measured boxed-body layout and the package-only regeneration inventoried
+in `54c2b3e`. The current representation is format 21; the final closure gate
+is recorded at the end of this report. D-2026-10-14-1 resolves the last depth
+question: reader budget 256, expression and type bounds unchanged at 128.
+Lot 1 is closed: the boundary-package stack measurement and the full
+workspace gate pass, with 1,591 tests across 61 groups, none failed or ignored.
 The Operator-containment step (`5513883`) moves state and handlers into the
 Operator body. `dabda8e` puts the App's port declarations on its
 root Graph. Scope chains now belong to the validated plan rather than each
 Execution. Those qualified steps preserved the separate declaration tables.
-The working candidate below now merges them. The isolated allocation
-measurements describe the preceding representation; no final Node layout
-has been selected.
+The unified Node table and indexed wiring are in `59f1ddf`; indexed queued
+deliveries are in `dd5bda4`. Earlier sections remain dated checkpoint evidence,
+including failed candidate checks; they do not describe the final status.
+Inspection-module separation and the hosted Worker remain lot 2.
 
 ## Invariants before changing the representation
 
@@ -1208,3 +1214,188 @@ Its heap margin stays **1,884 B**. These bounds change no existing package,
 journal record, causal seal or semantic hash; no witness is regenerated for
 this decision. The separately inventoried Node-table package movement is
 recorded in the [identity inventory](node-realignment-identity.md).
+
+## Lot 1 closure — 14 October 2026
+
+### Scope and representation
+
+The App root, nested Graphs, Operators and Connectors occupy one Node table.
+Node bodies are boxed; only the Operator body contains variables and handlers.
+One `NodeIndex` names a declaration. Each Graph owns its reference wiring,
+with indexed `Endpoint` values and explicit `Destination` variants; the Graph
+containing a rule determines the face of its boundary ports. Validation derives
+private execution routes and scope indexes from that description.
+
+Queued deliveries carry an `EdgeIndex`, not a copied route string or port.
+`DeliveryRoutes` resolves the canonical cursor path and arrival port when
+preparing a transaction or reconstructing work. These indexes are execution
+state, never identity material. Journal records retain paths and exact instance
+generations. The differential regression changes internal registration order
+and compares complete records and codec bytes, not just displayed outputs.
+
+A-T4-4 is complete: `admit_proposal` prepares without changing live state,
+commits once, then applies the accepted admission without another fallible
+branch. The five typed source/exchange cases share source-instance reservation.
+Call and Session refusal tests preserve retry identities and prove that a
+failed journal commit leaves no partially applied exchange.
+
+### Approved package update
+
+The [identity inventory](node-realignment-identity.md) preceded regeneration
+in commit `54c2b3e`. The three existing exact package-witness tests regenerated
+echo, JSONL and gauge from source. The `package_ledger` example compiled a fresh
+binary echo for the spike: **1,015 bytes**, byte-identical to the decoded hex
+witness. Body lengths and checksums exactly match the pre-update inventory.
+Only these four `.rkp` files move. The three explicit version assertions now
+expect 21, as does the deliberately noncanonical-header fixture in
+`plan_package`. The public-status test follows the current format registry
+instead of pinning a historical approval date. No functional assertion or
+timeout is weakened.
+
+All 28 gallery comparisons preserve record counts and causal seals. Echo,
+JSONL and gauge semantic hashes remain fixed, as does the independent echo
+recording-v4 tuple digest. No `.trace`, source example, behavioral fixture,
+journal key or identity domain changes. Older packages refuse by version;
+there is no compatibility reader or converter.
+
+The package document now describes the actual Node/body/wiring fields and
+derived indexes. The live specifications link to the current format registry;
+README, whitepaper and the implementation map agree with it. UML views 05 and
+06 were regenerated locally and inspected as images. The human-review
+registers remain untouched. D-2026-10-14-1 records the depth arbitration;
+older decisions remain unchanged.
+
+### Verification before the depth arbitration
+
+The complete run of
+`cargo test --locked --workspace --all-features --no-fail-fast` finished with
+**1,588 passed, three failed, none ignored, across 61 groups**. The failures are:
+
+- `a_non_canonical_envelope_refuses`: its hand-written header still spelled
+  version 20. The correction spells 21 for both the valid prefix and the
+  deliberately nonminimal integer; the canonicality refusal is unchanged.
+- `current_public_status_matches_the_package_and_contracts`: the whitepaper
+  header and catalogue still named format 20. They now name 21 and the current
+  inventory; specification headers link to the checked format registry.
+- `the_depth_boundaries_are_exact`: containing handlers in Operator bodies
+  adds **three CBOR levels**. The previous accepted 118-addition expression now
+  reaches level 130 and refuses against `MAX_NESTING = 128`. This is not just a
+  stale version pin: it reduced the accepted source set. The test was left
+  unchanged at that checkpoint. D-2026-10-14-1 subsequently resolved this
+  issue with independent bounds, not a representation-specific offset.
+
+The focused rerun of `plan_package` and `site_content` is complete:
+**39 passed, one failed, none ignored**. Both version/documentation corrections
+passed; only `the_depth_boundaries_are_exact` still failed before arbitration.
+This was not a second full workspace run. No failing or pending check is
+counted as passed; the final qualification follows below.
+
+Checks completed before applying D-2026-10-14-1:
+
+- `cargo fmt --all -- --check`: passed.
+- `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`:
+  passed.
+- `cargo doc --locked --workspace --no-deps`: passed without warnings.
+- `cargo check --locked -p rastok-core --no-default-features --target <target>`:
+  passed on `thumbv7m-none-eabi`, `riscv32imac-unknown-none-elf` and
+  `thumbv8m.main-none-eabihf`.
+- JavaScript layout, editor, chat and rustdoc-link checker tests: **36 passed**,
+  zero failures or skips. The citation lint checks 214 Rust files with no
+  relative Markdown doc link.
+- Browser interaction suite: **35 passed**, zero failures or skips, in 54.1 s,
+  using the installed Playwright 1.61.1 and Google Chrome. No package install,
+  new browser service or external model call was needed.
+- All 28 gallery scenario comparisons: unchanged counts and seals, using
+  synthetic Lab credentials and responses only.
+- All 696 relative file links in the 27 changed Markdown documents resolve.
+  `git diff --check` passes; the protected review ledgers and decisions remain
+  untouched.
+
+The host again delays some linked executables before their test harness
+starts. A one-second sample of the `generic_measure --list` process shows
+only `_dyld_start`, a 96 KiB footprint and no Rust frame. Additional `--list`
+launches prepare startup but do not execute tests and are not included in any
+passing-test count. The Cargo artifact listing reported every artifact fresh;
+no compilation overlapped the network tests. No timeout or security policy
+was changed to obtain the results.
+
+### Embedded reruns before the depth arbitration
+
+Both workloads were rebuilt from their freshly compiled format-21 packages,
+then executed under Cortex-M33 QEMU with `-icount shift=0`. Network tests had
+finished before these builds. The fixed workloads and limits are unchanged.
+
+| Measurement | Echo, 32 admissions | Retry with recovery |
+|---|---:|---:|
+| Heap immediately after package decoding | 7,692 B | 5,708 B |
+| Package-load peak | 36,160 B | 30,684 B |
+| Complete execution/recovery peak | 111,404 B | 129,188 B |
+| Margin below 128 KiB | 19,668 B | 1,884 B |
+| Live heap after execution | not sampled | 93,252 B |
+| Live heap after recovery | not sampled | 93,116 B |
+| `.text` | 898,748 B | 959,884 B |
+| `.rodata` | 70,264 B | 81,020 B |
+| `.text + .rodata` | 969,012 B | 1,040,904 B |
+| Margin below 1 MiB | 79,564 B | 7,672 B |
+| Journal records | 67 | 17 |
+| QEMU result | `SPIKE_OK` | `SPIKE_OK` |
+
+The Retry workload remains one operation, three Calls, sixteen frames per
+channel, four bytes per frame, including full journal recovery. These are
+workload measurements, not universal bounds for valid programs. They reproduce
+the preceding indexed-delivery measurements exactly; no threshold was raised.
+
+### Final verification after D-2026-10-14-1 — 15 October
+
+The current patch passes workspace formatting, strict all-target/all-feature
+Clippy and rustdoc without warnings. The three core `no_std` checks pass on
+`thumbv7m-none-eabi`, `riscv32imac-unknown-none-elf` and
+`thumbv8m.main-none-eabihf`. All 375 core tests pass. The focused source-depth
+and composed raw-plan boundary tests each pass without a global stack override;
+the raw-plan test's own explicit thread stack is described above. Its emitted
+2,193-byte package is byte-identical to the one measured by the spike.
+The citation lint checks 214 Rust files with no relative Markdown doc link,
+and all four tests of that lint pass. The 67 newly added relative Markdown
+destinations resolve; the earlier full-link and browser passes remain dated
+above and are not presented as new runs.
+
+The complete `cargo test --locked --workspace --all-features --no-fail-fast`
+run exits successfully: **1,591 passed, zero failed, zero ignored, across
+61 groups**, including the empty rustdoc groups. No build overlapped its
+network tests. Earlier focused runs are not added to these totals. The normal
+embedded images and all three stack-probe images pass; the measurements above
+include the final eight-byte Retry code increase. Lot 1 is closed.
+
+Several host executables waited before Rust entry, with samples showing
+only `_dyld_start`. RustRover's project build passed with no reported problem.
+The completed strict Clippy and subsequent gate use the repository's pinned
+1.97.1 toolchain; the final commands select its binaries directly instead of
+the Homebrew Rustup shell launchers. Blocked earlier invocations were stopped
+and are not counted as successful checks. No timeout, assertion, security
+setting or installed toolchain was changed.
+
+### Handoff
+
+`032656a` separates the depth budgets and records the stack qualification;
+`17981f2` regenerates only the inventoried format-21 package witnesses and
+their version pins. This closure aligns the public model and records the
+completed gate without another artifact movement.
+
+This closure does not start lot 2, claim a new independent Fable review, or
+close external release gates. Separating inspection types from Execution and
+introducing the hosted Worker remain the next lot. No push, tag or publication
+is performed.
+
+Planning estimate requested by the 11 October brief, supplied on 14 October
+(working days, not a reconstruction of time already spent):
+
+| Lot | Estimated engineering effort | Calendar condition |
+|---|---:|---|
+| 0 — vocabulary | 2–3 days | Already reviewed; not reopened here |
+| 1 — Node ontology and A-T4-4 | 6–9 days in total | The remaining depth qualification and closure were estimated at 1–2 days |
+| 2 — inspection separation and hosted Worker | 3–5 days, plus one review day | Starts only after the lot-1 report and Yoann's instruction |
+
+The 20 October checkpoint must choose whether lot 2 fits the 23 October
+engineering freeze with a complete gate and review. Keeping the 26–30 October
+external Rust review and the 5 November opening is an option only if that
+evidence is ready; this report does not silently move a date or reduce a gate.

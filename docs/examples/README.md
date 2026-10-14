@@ -1,10 +1,11 @@
 # Checked examples and historical sketches
 
-The checkout uses **format-20 / diagnostic-recording-4**.
-Its byte movements and qualification are tracked in the
-[human-review identity inventory](../architecture/human-review-v20-identity.md).
-Goldens are regenerated together after review and explicit approval, with
-their representation changes enumerated before replacement. The
+The checkout uses **format-21 / diagnostic-recording-4**.
+Its package-only movement is tracked in the
+[Node realignment inventory](../architecture/node-realignment-identity.md),
+with verification in the [qualification report](../architecture/node-realignment-qualification.md).
+Only package witnesses are regenerated for that representation change;
+semantic hashes, journal identities and causal traces remain unchanged. The
 [C4 qualification ledger](../architecture/retry-c4-qualification.md) is dated
 evidence for the native-Retry base. External opening gates remain separate.
 Author against the live

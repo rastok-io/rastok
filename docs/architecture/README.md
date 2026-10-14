@@ -6,8 +6,10 @@ language or runtime behavior.
 
 The [format registry](../spec/identity.md) names the current package and
 recording formats. The checkout includes [public Retry admission](retry-c4-inspection.md)
-and generic annotated measurements. The [human-review identity inventory](human-review-v20-identity.md)
-records the current qualification and single reference update. Earlier migration evidence is recorded in
+and generic annotated measurements. The [Node realignment inventory](node-realignment-identity.md)
+records the current package representation and unchanged causal witnesses;
+the [qualification report](node-realignment-qualification.md) records the gates.
+Earlier migration evidence is recorded in
 [R9 qualification](rework-r9-qualification.md) for the v16 rework and the
 [v17 host-terminal amendment](loop-host-terminal-v17.md), followed by
 [v18 exact-instance closure](instance-stop-command.md). Core/HIR share Dispatch and

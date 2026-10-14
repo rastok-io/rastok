@@ -32,7 +32,8 @@ package "envelope" {
     ArrowIpc
   }
   class Delivery {
-    port / edge / seq
+    edge: EdgeIndex
+    seq: u64
     source_instance: instance::Generation
     envelope: Envelope
   }
@@ -147,6 +148,11 @@ note bottom of Data
 Encoded bytes share Arc<[u8]>; the lazy cache is not identity.
 Graph-born values use canonical CBOR. Raw bytes stay external;
 the reader's port type selects bytes or checked UTF-8 text.
+end note
+note bottom of Delivery
+EdgeIndex is local to one Execution, not a journal identity.
+DeliveryRoutes resolves its arrival port and canonical cursor path.
+Journal records keep paths and exact instance generations.
 end note
 note bottom of Record
 Three append-only kinds: INGRESS, TRANSACTION, EGRESS.

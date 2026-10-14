@@ -1,6 +1,6 @@
 # The Execution Model — mailboxes, ordering, time, and the two planes
 
-> **Status (2026-10-06): normative target, categorical package v20.** Graph scopes own
+> **Status: normative; [current format](identity.md).** Graph scopes own
 > lifecycle, not application transactions. Operators and Connectors share the
 > transactional execution mechanism; temporal managers own their protocol transactions.
 > [R9 qualification](../architecture/rework-r9-qualification.md) records the

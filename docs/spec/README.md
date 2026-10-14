@@ -16,8 +16,10 @@ semantic ownership rather than by release layer.
 [`annotations.md`](annotations.md) records the executable `@struct` model,
 protected standard bindings and generic two-field `@measure(id, unit)`.
 Policy, privacy and retained measurement meanings live in
-[`observability.md`](observability.md). The candidate v20/recording-4 migration and its pre-approval evidence
-are tracked in the [identity inventory](../architecture/human-review-v20-identity.md).
+[`observability.md`](observability.md). The [format registry](identity.md) names
+the current package and recording formats. The
+[Node realignment inventory](../architecture/node-realignment-identity.md)
+records the package-only update and unchanged semantic and causal witnesses.
 
 ## Documentation rules
 

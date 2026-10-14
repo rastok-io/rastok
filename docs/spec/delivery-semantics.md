@@ -1,6 +1,6 @@
 # Delivery Semantics — the journal, the transaction, and the boundary
 
-> **Status (2026-10-06): normative target, categorical package v20.**
+> **Status: normative; [current format](identity.md).**
 > Companion to [envelope.md](envelope.md) (identity ; its §7 journal stub is
 > filled by §6 below) and [execution-model.md](execution-model.md)
 > (Executor/manager transactions, ordering, and the dated-events queue).
@@ -257,7 +257,7 @@ preparing a different operation.
 
 ### 4.3 Retry with the byte-same key — and the key-stability rule
 
-> Native Retry is executable in format 20 for finite outbound Calls. Under its
+> Native Retry is executable for finite outbound Calls. Under its
 > [operation contract](../architecture/retry-c1-algebra.md), the prepared
 > operation, resolved settings and optional partner key are retained once;
 > invocation expressions are not re-evaluated between attempts. This does not

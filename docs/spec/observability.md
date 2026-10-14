@@ -5,7 +5,7 @@
 > pricing or subset arithmetic ships in M1. §6–7 describe that reduced scope;
 > quantity ids have explicit units, not implicit registry meanings.
 
-> **Format 20 target — 6 October 2026.** Security, privacy,
+> **Normative; [current format](identity.md).** Security, privacy,
 > propagation and late-bound secret guarantees remain in force, alongside [flat annotation types](annotations.md), typed response
 > deserialization and original signed measurements. Under D-2026-09-18-1 every
 > measure has exactly `id` and `unit`: money is a quantity with a currency

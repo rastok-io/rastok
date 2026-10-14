@@ -83,8 +83,8 @@ bounded, statically checked policy; `Saga` remains a future Extension. A manager
 a Node nor an edge, so temporal recurrence never creates a spatial cycle.
 Loop contributes no port: exhaustion is a `LoopExpired` case on the host's
 resolved failure terminal (`err`, a custom terminal, or a Call's `exit`).
-Format 20 (the reviewed, single approval is recorded in the
-[identity inventory](docs/architecture/human-review-v20-identity.md)) carries recursive Dispatch, case routing,
+The [current package format](docs/spec/identity.md), with one Node table and
+Graph-owned wiring ([representation inventory](docs/architecture/node-realignment-identity.md)), carries recursive Dispatch, case routing,
 ordered multi-emission and command-based Operator, Graph and outbound Call
 Loops. Independent core validation re-derives their contracts, routes and
 proofs. Recovery reconstructs recorded deliveries, state, commands, exchanges

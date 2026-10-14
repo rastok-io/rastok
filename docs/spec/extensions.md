@@ -1,6 +1,6 @@
 # Node, Graph, Executor, Connector, and Extension
 
-> **Status (2026-10-06): normative target for format 20.** The underlying
+> **Status: normative; [current format](identity.md).** The underlying
 > Graph/Executor model is retained from [R9](../architecture/rework-r9-qualification.md).
 > Loop's host-terminal amendment is D-2026-09-08-1; exact-instance closure
 > is D-2026-09-10-1. [D-2026-09-14-4](decisions.md#d-2026-09-14-4--separate-loop-retry-and-saga-over-one-recurrence-engine)
@@ -246,8 +246,8 @@ redefine an Extension contribution. The diagnostic names both contributors.
 
 ## 9. Transport and validation
 
-Plan v20 transports one closed `ExtensionSpec` list on every owner for which it
-is non-empty. Registry-free validation re-derives:
+The plan transports one closed `ExtensionSpec` list on every Node.
+Registry-free validation re-derives:
 
 - structural owner compatibility;
 - canonical ordering and uniqueness;
@@ -256,16 +256,16 @@ is non-empty. Registry-free validation re-derives:
 - runtime-support requirements;
 - temporal-manager and journal-fold completeness.
 
-App's presence is explicit on the root owner. The `owners` table remains the
+App's presence is explicit on the root Graph. The Node table is the
 authority for containment, instances, lifetime, Closing, and managers.
 `node::Type` was never transported and has been removed from the HIR. A
 Connector's exact versioned `ContractId` remains transported in its
 specification.
 
-An application handler targets an Operator slot, never a Graph owner. The
-independent plan validator rejects a Connector target and an out-of-bounds
-slot before a handler can execute. This does not remove controller-owned
-Graph lifecycle facts from the journal.
+Application handlers are contained in Operator bodies. Graph and Connector
+bodies have no handler field; malformed bodies and out-of-bounds Node indexes
+refuse before execution. This does not remove controller-owned Graph
+lifecycle facts from the journal.
 
 The current Extension tags are App 1, Loop 2 and Retry 3. Unknown tags or
 unsupported package versions refuse, with no compatibility reader.

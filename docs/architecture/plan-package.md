@@ -1,15 +1,16 @@
 # The plan package — the transportable, verifiable ExecutionPlan
 
-> **Current package format 20, diagnostic recording 4.**
-> This is the only readable format. The [v20 identity inventory](human-review-v20-identity.md)
-> records the pre-public compaction and the reviewed reference updates.
+> **Current package format 21, diagnostic recording 4.**
+> This is the only readable format. The [Node realignment inventory](node-realignment-identity.md)
+> records the representation change and the package-only reference updates.
 > There is no compatibility reader or converter. Publication freezes this registry
 > as extend-only; changing the public version label remains a pre-publication task.
 
 The package transports a validated plan, not compiler internals or Driver state.
-Owners retain the lexical Graph tree, instance policies and Extensions. Executable
-Node rows belong only to Operators and Connectors. The two tables are reciprocal;
-flattening a passive Graph never erases its ownership or lifecycle.
+One Node table retains the lexical Graph tree, instance policies and Extensions.
+Each Node contains a Graph, Operator or Connector body; only Operator bodies
+contain variables and handlers. The App is the root Graph at index zero.
+Composing routes through a passive Graph never erases its ownership or lifecycle.
 
 Raw declarations and the independently resolved port table travel together.
 Validation re-derives types, annotations, routes, Dispatch, dispositions and
@@ -38,7 +39,7 @@ module carries it.
 package := magic "RKPB"                      4 raw bytes, sniffable
            ("Rastok Plan Binary" — the pinned meaning of the magic)
         ┌ canonical CBOR map ─────────────────────────────────┐
-        │ 1 : format_version   uint      (20)                 │
+        │ 1 : format_version   uint      (21)                 │
         │ 2 : semantic_hash    bytes(32) (the plan's identity)│
         │ 3 : body             bytes     (embedded, see below)│
         │ 4 : checksum         bytes(32) (see recipe below)   │
@@ -68,22 +69,23 @@ of the contract, in order:
 
 1. **Structural validation, carried by a type** — the parsed plan
    passes through `ValidatedExecutionPlan` (private field, no
-   unverified constructor, no mutable access): every slot in bounds,
-   every referenced port declared with the right direction, every Node and
-   owner row reciprocally linked, one root Graph and a parent-before-child
-   lexical tree, every edge scoped to a Graph, every handler owned by its
+   unverified constructor, no mutable access): every Node index in bounds,
+   every referenced port declared with the right direction, one root Graph
+   and a parent-before-child lexical tree, every route owned by a Graph,
+   every handler contained in its
    Operator, activation on a typed input/join/lifecycle, emission on an output
    or a validated manager command, paths and
    names unique, every state write resolvable. Well-shaped bytes naming impossible structure (an
-   edge to slot 999) refuse typed — and the machine's `Vm::boot`
+   endpoint naming absent Node 999) refuse typed — and `Execution::new`
    accepts only the validated type, so no raw plan reaches it by
    any path. The compiler's lowering earns the same type once.
 2. **Domain canonicity, audited by the same type** — every collection
-   the plan documents as canonically ordered actually is: owners in root-first
-   path order with a preceding Graph parent, Node port tables sorted and unique with
+   the plan documents as canonically ordered actually is: Nodes ordered by
+   nature (Graph, Operator, Connector), then path, with a preceding Graph parent;
+   Node port tables sorted and unique with
    untyped conventional rows omitted (a typed `in`/`out`/`err` row is a
-   real source constraint), edges by their endpoint text,
-   handlers by (owner, activation key, complete canonical Dispatch),
+   real source constraint), reference routes by their canonical encoding,
+   each Operator's handlers by activation key and complete canonical Dispatch,
    with exactly one handler per activation; immutable bindings, vars and
    attributes sorted. Case routes, dispositions, productibility and Loop
    entry/terminal/control/effect proofs are independently re-derived. Immutable
@@ -141,7 +143,7 @@ effective claim. A3 follows the canonical operation graph and requires that
 claim to equal its independent derivation exactly. It never rewrites the raw
 row or recovers meaning from payload strings.
 
-## Body tables (format 20)
+## Body tables (format 21)
 
 The body is one canonical CBOR value encoding the `ExecutionPlan`.
 Compound values use fixed-shape arrays with a leading numeric
@@ -154,11 +156,8 @@ distinct tags, as do raw bytes and ccbor DATA. The surrounding resolved
 conformance before encoding.
 
 ```text
-plan       := {1: [node*], 2: [port_decl*], 3: [edge*], 4: [handler*],
-               5: app_schema?, 6: ext_schema?, 7: [asset_bytes*]?,
-               8: resolved_ports, 9: [owner*],
-               10: [route_rule*], 11: [route_rule*]?}
-                                                  // 2 is the App boundary
+plan       := {5: app_schema?, 6: ext_schema?, 7: [asset_bytes*]?,
+               8: resolved_ports, 12: [node+]}
                                                   // 5/6 are travelling zone schemas:
                                                   //   [[field (text), type]*], sorted, prefix-free
                                                   //   (D-2026-08-10-1); absent = empty; the
@@ -166,32 +165,20 @@ plan       := {1: [node*], 2: [port_decl*], 3: [edge*], 4: [handler*],
                                                   //   §5.2–5.4 are implicit
                                                   // 7 is raw asset content in digest order
                                                   // 8 is mandatory and re-derived at decode
-                                                  // 9 is mandatory, including the root Graph
-                                                  // 10 is sparse flattened case/command routing
-                                                  // 11 retains unflattened boundary routing when needed;
-                                                  // independent recomposition must reproduce 3/10
+                                                  // 12 is the only declaration table
 
-node       := {1: path (text), 2: node_kind, 3: [port_decl*],
-               4: [var*], 5: owner_slot}
-node_kind  := 1                                   — operator
-            | [2, spec]                           — connector
-              // Only Node rows are executable and they retain the established
-              // Slot namespace. Validation proves owner_slot names exactly
-              // one owner_kind=[2,this_node_slot] with the same path.
-
-owner      := {1: path (text), 2: parent_owner_slot | null,
-               3: owner_kind, 4: instance, 5: [owner_val*],
-               6: [port_decl*], 7: [extension_spec*]}
-owner_kind := [1]                                 — graph
-            | [2, node_slot]                      — executable Node owner
-              // Canonical root-first path order. The root App Graph is the
-              // unique empty path, parentless Graph. Every other parent is a
-              // preceding Graph owner and the direct lexical path prefix.
-              // Graphs retain scope/lifecycle without becoming VM Nodes.
-              // Key 6 is empty on the root Graph because plan key 2 is its
-              // sole boundary authority; it is the complete canonical
-              // boundary on a nested Graph and empty on a Node owner.
-              // Key 7 is a canonical Extension list; App occurs once on the
+node       := {1: path (text), 2: parent_node_index | null,
+               3: [port_decl*], 4: instance, 5: [owner_val*],
+               6: [extension_spec*], 7: node_body}
+node_body  := [1, [route_rule*]]                   — Graph reference wiring
+            | [2, [var*], [handler*]]              — Operator
+            | [3, spec]                          — Connector
+              // Order is (Graph, Operator, Connector), then path. The App
+              // Graph is Node zero, with the unique empty path and no parent.
+              // Every other parent is a preceding Graph and the direct lexical
+              // path prefix. Every Node owns its ports, including the App.
+              // Only the Operator body can contain variables and handlers.
+              // Key 6 is a canonical Extension list; App occurs once on the
               // root Graph, Loop on an admissible owner, no implicit order.
 
 extension_spec := [1]                            — App
@@ -298,8 +285,9 @@ mode       := uint: 1 input · 2 output
               port owns policy, element 3 is explicit null so element 4 is
               unambiguous; its effective type remains mandatory below.
 resolved_ports := [boundary_resolved, [node_resolved*]]
-                                                   // one row per executable
-                                                   // Node Slot, not per owner
+                                                   // one row per Node, including root
+                                                   // boundary_resolved equals root's row;
+                                                   // both are checked against derivation
 resolved_port := [name (text), direction, type, origin, annotation_table?]
 direction    := uint: 1 input · 2 output
 origin       := uint: 1 declared · 2 inferred
@@ -341,19 +329,13 @@ personal_flags := uint: bit 0 special-category · bit 1 criminal-offence
               // against the package-depth budget. Empty tables
               // have no wire spelling at an owning schema site.
 
-edge       := [scope (owner_slot), endpoint, endpoint | null]
-              // scope is the lexical Graph that owns the source edge;
-              // null target = «-> nothing». The owner tree + scope derive
-              // every Graph boundary entered/left by the route. The compiler
-              // may bypass a passive composed-Graph port, but it may not erase
-              // that Graph's owner row or key/lifecycle crossing.
-endpoint   := [node_slot (uint) | null, port (text)]
-              // slot=null denotes the App boundary; otherwise it indexes the
-              // executable Node table. Edge scope independently preserves the
-              // lexical Graph whose boundary owns the route.
+endpoint   := [node_index (uint), port (text)]
+              // The containing Graph determines the boundary face: its own
+              // input is a source and output a destination; a child's input
+              // is a destination and output a source. App is Node zero, never null.
 
-handler    := {1: handler_owner, 2: activation, 3: join_guard (tree)?, 4: dispatch}
-handler_owner := [1, node_slot]                   — Operator only
+handler    := {2: activation, 3: join_guard (tree)?, 4: dispatch}
+              // Containment in an Operator body supplies ownership.
 activation := [1, port (text)]
             | [2, lifecycle]
             | [3, [port (text)+], within_ns (signed) | null,
@@ -390,20 +372,19 @@ target     := [1, [seg (text)*]]                  — data path (empty = whole d
             | [3, field (text)]                   — meta.ext, flat field
               data path · app field · ext field (D-2026-08-10-1)
 
-route_rule := [route_endpoint, selection]
+route_rule := [endpoint, selection]
 selection  := [1, [destination+]]                 — all cases
             | [2, [[case_set, [destination+]]+]]  — closed case partition
-destination := [1, route_endpoint] | [2]          — port / explicit nothing
-             | [3, route_owner, command_kind]    — manager, never PhysicalEdge
-             | [4, route_owner, route_owner]     — lexical Graph scope / exact-instance stop target owner
-route_endpoint := [route_owner, port (text)]
-route_owner := [1, node_path (text)] | [2, owner_path (text)]
+destination := [1, endpoint] | [2]                — port / explicit nothing
+             | [3, node_index, command_kind]      — manager, never PhysicalEdge
+             | [4, graph_index, target_index]     — lexical Graph / exact-instance stop target
 command_kind := uint: 1 next · 2 again · 3 done
               // Route rows use canonical encoded-byte order. Destination sets
               // use domain order, independent of source spelling. Same-case
               // duplicate destinations and nothing + real destination refuse.
-              // Tag 4 requires boundary_routes even for flat Graphs. Scope must
-              // be the wiring Graph; target is itself or one direct child.
+              // Every rule is stored only in its owning Graph's wiring.
+              // For tag 4, graph_index must be that Graph; target_index names
+              // itself or one direct child.
               // No instance, key or generation is encoded in the static plan:
               // the producer seals the exact instance::Generation in causal key 42.
 
@@ -492,6 +473,25 @@ append, never renumber.
 Anything a future plan carries that these tables cannot express is a
 format-version bump, not a creative reuse.
 
+## Derived execution indexes
+
+Validation composes the Graph-owned wiring and builds private route and scope
+indexes. They are not additional transported claims. Composed routes preserve
+every Graph crossing needed for admission, instances, lifetime and Loop context.
+`NodeIndex` selects a declaration, not a causal identity: journal recipes still
+use canonical paths and exact instance generations.
+
+Queued `Delivery` values use an execution-local `EdgeIndex`. A `DeliveryRoutes`
+table holds the canonical cursor path and arrival port once; preparation and
+recovery resolve them before writing or checking journal facts. This table also
+covers boundary admissions and temporal readmissions, which are not physical
+back-edges. No execution index enters the journal codec or its causal projection.
+
+Nature-specific Node bodies are boxed in memory. The
+[qualification report](node-realignment-qualification.md) measures both package
+loading and execution/recovery on Cortex-M33; package size alone is not a heap
+bound. The in-memory layout is not another field of the package.
+
 ## Placement
 
 Both codec directions live in `rastok-core`, beside the tables they share.
@@ -516,6 +516,6 @@ and the package codec.
   (`i32::MAX`, `i32::MAX + 1`, `i64::MAX`, negatives) runs on both
   sides of a round trip and compares outputs.
 - **Typed refusals**: a bumped version, a corrupted body byte, a
-  corrupted declared hash, an out-of-bounds slot, a non-canonical
+  corrupted declared hash, an out-of-bounds Node index, a non-canonical
   envelope, and a truncated package each fail with their own error —
   tested.

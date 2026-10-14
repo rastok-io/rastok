@@ -66,11 +66,33 @@ starts after that reference update. Keep the chantier numbered v20 for now, and 
 the switch to public format 1 as a pre-publication TODO. The approved cutover
 now uses package 20 and recording 4; no publication is authorized here.
 
-### Current close-out — 7 October
+### Current close-out — 15 October
 
-The checkout uses **v20 / diagnostic recording v4**. The
+The Node-ontology realignment uses **package 21 / diagnostic recording 4**.
+Its [identity inventory](docs/architecture/node-realignment-identity.md) records
+the package-only movement: one Node table, Graph-owned wiring and
+Operator-owned handlers. Execution indexes do not enter journal identities;
+semantic hashes and causal traces remain unchanged. The
+[lot 1 qualification](docs/architecture/node-realignment-qualification.md#lot-1-closure--14-october-2026)
+records its closure: 1,591 passing tests in 61 groups, no failures or ignored
+tests, and the two fixed embedded workloads within the unchanged 128 KiB
+heap and 1 MiB code limits.
+The depth question is decided by D-2026-10-14-1: format 21 has a 256-level
+reader budget, independent of the unchanged 128-level expression and type
+bounds. The final gate passes the exact source/transport boundaries and
+measures 79,168 B of embedded decoder stack for the accepted level-255
+combined package.
+
+Inspection-module separation and the hosted Worker remain lot 2. Neither
+this refactor nor the local browser suite closes the independent opening
+gates in the [release inventory](docs/architecture/release-qualification.md).
+No public push, tag or publication is authorized by this closure.
+
+### Dated close-out — 7 October
+
+The checkout then used **v20 / diagnostic recording v4**. The
 [human-review identity inventory](docs/architecture/human-review-v20-identity.md)
-owns the reviewed single reference update and current qualification. The
+records that reviewed single reference update and qualification. The
 [C4 ledger](docs/architecture/retry-c4-qualification.md) is dated evidence
 for the preceding native-Retry base. The executable scope includes native Retry,
 typed Responses deserialization and generic `@measure(id, unit)` samples retained
@@ -85,7 +107,7 @@ availability of the confirmed public documentation URL and the authorized
 publication are not inferred from local tests. The confirmed URLs and site
 handoff are recorded in the [release inventory](docs/architecture/release-qualification.md#public-destinations-and-opening-gate).
 No public push, tag, registry publication or paid model call is
-made by this pass. The embedded Retry workload leaves only **512 B of heap**
+made by that pass. The embedded Retry workload then left only **512 B of heap**
 and **7,136 B of code** margin; the unchanged limits remain gates. M2 must
 reclaim bytes before growing the core on this workload.
 

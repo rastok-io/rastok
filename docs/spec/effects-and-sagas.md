@@ -1,6 +1,6 @@
 # Effects and the Saga boundary
 
-> **Format 20 target — D-2026-09-14-4 and D-2026-09-15-1.** Ordinary
+> **Normative — D-2026-09-14-4 and D-2026-09-15-1; [current format](identity.md).** Ordinary
 > Connectors have no global `effect` classification. Retry uses a plan-owned
 > idempotence guarantee; compensation and irreversibility belong to the future
 > Saga step contract. `CallOpen.effect` is removed, with no duplicate

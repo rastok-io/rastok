@@ -1,13 +1,13 @@
 # Flat annotation types and validated metadata
 
-> **Format 20 target — 6 October 2026.** The standard
+> **Normative; [current format](identity.md).** The standard
 > `measure` definition is exactly `id: text` and `unit: text`, under
 > [D-2026-09-18-1](decisions.md#d-2026-09-18-1--separate-generic-measurements-otlp-export-and-budget-authority).
 > A currency such as `"USD"` is an ordinary unit. Original signed quantities,
 > including those in held Retry attempts, remain journaled with their causal
 > provenance. M1 implements no report, valuation, aggregation or subset policy.
-> The [v20 inventory](../architecture/human-review-v20-identity.md) tracks
-> the namespace/tag compaction before approval. Security/privacy meanings
+> The [v20 inventory](../architecture/human-review-v20-identity.md) records
+> the approved namespace/tag compaction. Security/privacy meanings
 > and the two-field signature are unchanged.
 
 This document owns annotation declarations and their interpretation boundary.

@@ -1,6 +1,6 @@
 # Loop — finite temporal recursion
 
-> **Status (2026-10-06): normative target, categorical package v20.** Loop contributes
+> **Status: normative; [current format](identity.md).** Loop contributes
 > no port; exhaustion extends a resolved host terminal under D-2026-09-08-1.
 > [The v17 ledger](../architecture/loop-host-terminal-v17.md) records that host-terminal qualification.
 > Operator, outbound Call and Graph hosts execute and recover, including nested

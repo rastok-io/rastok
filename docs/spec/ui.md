@@ -1,6 +1,6 @@
 # Visual simulation debugger
 
-> **Status (2026-10-06): format-20 projection under D-2026-09-07-8, D-2026-09-08-1 and D-2026-09-10-1.**
+> **Status: projection of the [current format](identity.md), under D-2026-09-07-8, D-2026-09-08-1 and D-2026-09-10-1.**
 > [R9 qualification](../architecture/rework-r9-qualification.md) records code
 > and protocol evidence. Real-browser/keyboard qualification is tracked in
 > [release qualification](../architecture/release-qualification.md).
@@ -124,8 +124,9 @@ disposable debugger state, not another causal ledger or a durable backup.
 
 ## 4. Graph and inspector
 
-Containment comes from the validated owner table. Executable nodes and actual
-boundary ports come from the plan. The UI never infers execution from geometry.
+Containment and actual ports come from the validated Node table, including
+the App root and nested Graphs. Node bodies distinguish Graphs, Operators and
+Connectors. The UI never infers execution from geometry.
 
 - Graphs enclose children; Operator and Connector bodies are visually distinct.
   Titles show names, Contract and Extensions, without synthetic Node types.

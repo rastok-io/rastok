@@ -1,6 +1,6 @@
 # Standard library contracts
 
-> **Status (2026-10-06): normative target, package v20.** Process job uses `@4`,
+> **Status: normative; [current format](identity.md).** Process job uses `@4`,
 > Process service `@5`, and File/HTTP/WebSocket use `@3`. Their exact roles,
 > cardinality, terminal visibility and idempotence profiles are independently
 > checked. [C4 qualification](../architecture/retry-c4-qualification.md) records
@@ -277,7 +277,7 @@ weaken verification or reinterpret the plan bytes.
 
 | Case | Contract |
 |---|---|
-| Stable identity | `job`: `std/process@4`; `service`: `std/process@5`; both use package v20 |
+| Stable identity | `job`: `std/process@4`; `service`: `std/process@5`; both use the [current package format](identity.md) |
 | Role / Direction | Job: outbound Call. Service: both roles, resident Session. Selecting a profile resolves its exact Contract before lowering. |
 | Ports | `in` → stdin; `out` ← decoded/framed stdout; `err` ← framed stderr data; `exit` ← `ProcessExit` |
 | idempotent / behavior | job: `idempotent: bool = false`; service has no idempotence attribute. `behavior` required for both profiles, plan-evaluated |

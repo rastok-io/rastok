@@ -60,9 +60,24 @@ rewriting. These gates must close before public participation opens.
 
 ## Open qualification inventory
 
-**Current representation — 7 October:** package 20 and diagnostic recording 4
-have one reviewed blessing in the [human-review identity inventory](human-review-v20-identity.md).
-That ledger owns the current workspace and three-target `no_std` evidence.
+**Current representation — 15 October:** package 21 and diagnostic recording 4
+are described by the [Node realignment inventory](node-realignment-identity.md).
+Only the package representation changes; semantic hashes, journal identities,
+causal traces and recording tuples remain unchanged. The
+[lot 1 qualification](node-realignment-qualification.md#lot-1-closure--14-october-2026)
+records lot 1's closure: 1,591 passing workspace tests in 61 groups, no failures
+or ignored tests, strict Clippy, rustdoc, three-target `no_std` and embedded
+checks. The local browser pass remains separately dated in that report.
+D-2026-10-14-1 resolves the depth boundary with a 256-level reader budget and
+unchanged expression/type bounds of 128. The accepted level-255 combined
+package uses 79,168 B of decoder stack under Cortex-M33 QEMU. Inspection-module
+separation and the hosted Worker remain lot 2.
+This does not qualify release archives, constitute an independent browser
+review, or close any external opening gate below.
+
+**7 October dated qualification:** package 20 and diagnostic recording 4
+had one reviewed reference update in the [human-review identity inventory](human-review-v20-identity.md).
+That ledger records the workspace and three-target `no_std` evidence at that checkpoint.
 The final all-feature workspace run passes **1,571 tests, zero failures or
 ignored tests, 61 groups**; fmt, strict Clippy and rustdoc pass as well.
 Both fixed Cortex-M33 workloads pass: echo uses 112,656 B peak heap and

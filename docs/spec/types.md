@@ -509,7 +509,7 @@ checked and reviewable.
 
 This schema adapter is distinct from:
 
-- a package-format reader (the current format 20 rejects other `.rkp` versions rather than
+- a package-format reader (the [current format](identity.md) rejects other `.rkp` versions rather than
   translating application schemas);
 - an internal representation codec;
 - a journal-format decoder.

@@ -10,6 +10,10 @@
 > exhaustion on a resolved host terminal, with no contributed port.
 > [Exact-instance closure](docs/architecture/instance-stop-command.md) adds
 > bounded, retained lifecycle requests without restoring Graph handlers.
+> The [Node realignment](docs/architecture/node-realignment-identity.md) puts
+> Graph, Operator and Connector declarations in one table, with wiring in
+> each Graph and handlers in each Operator. Private execution indexes are
+> derived during validation; journal identities continue to use paths.
 
 This document explains how the current Rastok specification becomes an
 executable system. It defines implementation boundaries, dependency direction,
