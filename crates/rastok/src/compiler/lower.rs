@@ -27,9 +27,9 @@ use crate::expr;
 use crate::node;
 use crate::node::NodeIndex;
 use crate::plan::{
-    AttrSetting, ConnectorSpec, DelayPolicy, DispatchStep, Edge, EdgeEnd, EvaluationSite,
-    ExecutionPlan, ExtensionSpec, FieldWrite, Handler, LoopSpec as PlanLoopSpec, Node, NodeKind,
-    Operator, OwnerValue, PlanConstant, SemanticHash, SymbolTable, VarCell,
+    AttrSetting, ConnectorSpec, DelayPolicy, DispatchStep, EvaluationSite, ExecutionPlan,
+    ExtensionSpec, FieldWrite, Handler, LoopSpec as PlanLoopSpec, Node, NodeKind, Operator,
+    OwnerValue, PlanConstant, SemanticHash, SymbolTable, VarCell,
 };
 use crate::schema_annotation::{
     AnnotationTable, DataAnnotation, SchemaPathSegment, SensitivityLevel,
@@ -449,18 +449,12 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
             .unwrap_or_else(|_| unreachable!("node count fits u32")),
         )
     };
-    let mut plan = ExecutionPlan {
-        boundary_routes: Vec::new(),
-        nodes: Vec::new(),
-        edges: Vec::new(),
-        routes: Vec::new(),
-        // DERIVED from the writes the hash already seals — carried
-        // for the ContractCatalog-less validator (D-2026-08-10-1), never
-        // hashed twice.
-        app_schema: hir.app_schema.clone(),
-        ext_schema: hir.ext_schema.clone(),
-        assets: hir.assets.clone(),
-    };
+    let mut plan = ExecutionPlan::new(
+        Vec::new(),
+        hir.app_schema.clone(),
+        hir.ext_schema.clone(),
+        hir.assets.clone(),
+    );
     enum CheckedOwner<'hir> {
         Graph(&'hir HirGraph),
         Node(&'hir HirNode),
@@ -518,7 +512,9 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
                     extensions.insert(0, ExtensionSpec::App);
                 }
                 (
-                    NodeKind::Graph,
+                    NodeKind::Graph(Box::new(crate::plan::Graph {
+                        wiring: routing::wiring(graph),
+                    })),
                     ports,
                     extensions,
                     lower_instance(graph.instance.as_ref(), &constants, &graph.path.to_string())?,
@@ -610,62 +606,6 @@ pub fn lower(hir: &Hir) -> Result<(ExecutionPlan, SymbolTable), LowerError> {
                 dispatch: lower_dispatch(&handler.dispatch, &subst),
             });
         }
-    }
-    plan.routes = routing::flatten(&hir.app).map_err(|error| LowerError {
-        owner: endpoint_text(&error.source),
-        detail: "Graph boundary composition contradicts checked routing dispositions",
-    })?;
-    if plan
-        .nodes
-        .iter()
-        .any(|owner| owner.kind() == node::Kind::Graph && !owner.path.is_root())
-        || hir.app.loop_spec.is_some()
-        || plan.routes.iter().any(|rule| match &rule.selection {
-            RouteSelection::All(set) => set
-                .iter()
-                .any(|destination| matches!(destination, RouteDestination::InstanceStop(_))),
-            RouteSelection::Cases(arms) => arms
-                .iter()
-                .flat_map(|arm| &arm.destinations)
-                .any(|destination| matches!(destination, RouteDestination::InstanceStop(_))),
-        })
-    {
-        plan.boundary_routes = routing::inventory(&hir.app);
-    }
-    for (_, edge) in sorted_edges(hir) {
-        if let Some(rule) = plan.routes.iter().find(|rule| rule.source == edge.from)
-            && !routing::selects(rule, &edge.to)
-        {
-            continue;
-        }
-        let endpoint = |end: &crate::compiler::hir::Endpoint| -> Result<EdgeEnd, LowerError> {
-            let node = match &end.owner {
-                EndpointOwner::Node(path) => slot_of(path),
-                EndpointOwner::Graph(path) if path.is_root() => NodeIndex::ROOT,
-                EndpointOwner::Graph(path) => {
-                    return Err(LowerError {
-                        owner: path.to_string(),
-                        detail: "a nested Graph boundary survived composition lowering",
-                    });
-                }
-            };
-            Ok(EdgeEnd {
-                node,
-                port: end.port.clone(),
-            })
-        };
-        let scope = *owner_slots.get(&edge.scope).ok_or_else(|| LowerError {
-            owner: edge.scope.to_string(),
-            detail: "a lowered edge lost its lexical Graph scope",
-        })?;
-        plan.edges.push(Edge {
-            owner: scope,
-            from: endpoint(&edge.from)?,
-            to: match &edge.to {
-                EdgeTarget::Port(end) => Some(endpoint(end)?),
-                EdgeTarget::Discard => None,
-            },
-        });
     }
     Ok((plan, symbols))
 }
@@ -2275,7 +2215,7 @@ graph m0_probe : App {
                 ..
             }
         ));
-        assert_eq!(plan.edges.len(), 5);
+        assert_eq!(plan.edges().len(), 5);
         assert_eq!(compilation.symbols.nodes, ["", "shout", "echo"]);
         let resolved = plan.resolved_ports();
         let boundary_in = resolved
@@ -3259,7 +3199,7 @@ graph m0_probe : App {
         )
         .unwrap();
         assert_eq!(one.hash, two.hash);
-        assert_eq!(one.plan.edges, two.plan.edges);
+        assert_eq!(one.plan.edges(), two.plan.edges());
     }
 
     #[test]

@@ -44,8 +44,6 @@ pub enum RouteErrorKind {
     BoundaryTypeMismatch,
     /// A selection names an endpoint outside the flattened executable table.
     UnknownEndpoint,
-    /// Selected deliveries and the physical edge inventory disagree.
-    PhysicalEdgeMismatch,
     /// The command has no compatible owner or causal scope.
     InvalidManagerCommand,
     /// A closure target is not the wiring Graph or one of its direct children.
@@ -99,9 +97,6 @@ impl fmt::Display for RouteValidationError {
             }
             RouteErrorKind::UnknownEndpoint => {
                 f.write_str("route endpoint is not a declared executable endpoint")
-            }
-            RouteErrorKind::PhysicalEdgeMismatch => {
-                f.write_str("selected destinations and physical edges disagree")
             }
             RouteErrorKind::InvalidManagerCommand => {
                 f.write_str("Loop manager command has no compatible owner or causal scope")
@@ -189,7 +184,7 @@ pub(super) fn validate_plan_routing(
                 .map(move |destination| (cases, destination))
         }) {
             if let RouteDestination::InstanceStop(target) = destination {
-                if !valid_instance_stop_target(plan, target) || plan.boundary_routes.is_empty() {
+                if !valid_instance_stop_target(plan, target) {
                     return Err(RouteValidationError::at(
                         &path,
                         RouteErrorKind::InvalidInstanceCommand,
@@ -202,9 +197,8 @@ pub(super) fn validate_plan_routing(
                 // Boundary composition validates the real command source.
                 // Its flattened source can precede the Graph run admission.
                 let graph_command = matches!(&command.owner, super::EndpointOwner::Graph(owner)
-                    if plan.nodes.iter().any(|candidate| candidate.path == *owner && candidate.loop_spec().is_some())
-                    && (!plan.boundary_routes.is_empty()
-                        || matches!(&rule.source.owner, super::EndpointOwner::Node(source) if source.segments().starts_with(owner.segments()))));
+                                    if plan.nodes.iter().any(|candidate| candidate.path == *owner && candidate.loop_spec().is_some())
+                );
                 let admitted = graph_command
                     || command.owner == rule.source.owner && {
                         let node = &plan.nodes[source.node.index()];
@@ -252,33 +246,6 @@ pub(super) fn validate_plan_routing(
             {
                 return Err(
                     RouteValidationError::at(&path, RouteErrorKind::UnknownEndpoint).into(),
-                );
-            }
-            if !plan.edges.iter().any(|edge| {
-                edge.from == source && plan.route_destination_matches(destination, edge)
-            }) {
-                return Err(
-                    RouteValidationError::at(&path, RouteErrorKind::PhysicalEdgeMismatch).into(),
-                );
-            }
-        }
-        for edge in plan.edges.iter().filter(|edge| edge.from == source) {
-            if !plan
-                .routes
-                .iter()
-                .filter(|candidate| candidate.source == rule.source)
-                .any(|candidate| match &candidate.selection {
-                    RouteSelection::All(destinations) => destinations
-                        .iter()
-                        .any(|destination| plan.route_destination_matches(destination, edge)),
-                    RouteSelection::Cases(arms) => arms
-                        .iter()
-                        .flat_map(|arm| &arm.destinations)
-                        .any(|destination| plan.route_destination_matches(destination, edge)),
-                })
-            {
-                return Err(
-                    RouteValidationError::at(&path, RouteErrorKind::PhysicalEdgeMismatch).into(),
                 );
             }
         }

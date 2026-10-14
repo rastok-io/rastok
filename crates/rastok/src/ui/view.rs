@@ -471,7 +471,7 @@ fn topology(
                 // public/discard edges do not prove that a delivery occurred.
                 if let Some(slot) = firing_slot.filter(|_| !retry::held(transaction)) {
                     for emission in &transaction.emissions {
-                        for edge in &plan.edges {
+                        for edge in plan.edges() {
                             let leaves_graph = edge
                                 .to
                                 .as_ref()
@@ -499,7 +499,7 @@ fn topology(
         .enumerate()
         .filter_map(|(index, node)| {
             let (kind, ty) = match &node.body {
-                NodeKind::Graph => return None,
+                NodeKind::Graph(_) => return None,
                 NodeKind::Operator(_) => ("operator", String::from("Operator")),
                 NodeKind::Connector(spec) => ("connector", spec.contract.to_string()),
             };
@@ -540,7 +540,7 @@ fn topology(
                 "retry": retry::spec(node),
                 "profile": match &node.body {
                     NodeKind::Connector(spec) => Some(format!("{:?} · {:?}", spec.exchange, spec.roles)),
-                    NodeKind::Graph | NodeKind::Operator(_) => None,
+                    NodeKind::Graph(_) | NodeKind::Operator(_) => None,
                 },
                 "ports": ports,
                 "definition": definition.map(source_definition_json),
@@ -611,7 +611,7 @@ fn topology(
         })
         .collect::<Vec<_>>();
     let edges = plan
-        .edges
+        .edges()
         .iter()
         .enumerate()
         .map(|(index, edge)| {
@@ -679,7 +679,7 @@ fn manager_commands(plan: &crate::plan::ExecutionPlan) -> Vec<JsonValue> {
         EndpointOwner::Graph(path) => path.to_string(),
     };
     let mut commands = Vec::new();
-    for rule in &plan.routes {
+    for rule in plan.routes() {
         let mut project = |cases: &[String], destinations: &[RouteDestination]| {
             for destination in destinations {
                 let RouteDestination::LoopCommand(target) = destination else {
@@ -1993,7 +1993,7 @@ graph inspected : App {
         assert!(value.get("handler_relations").is_none());
         assert!(value.get("control_nodes").is_none());
         let edges = value["edges"].as_array().unwrap();
-        assert_eq!(edges.len(), compilation.plan.edges.len());
+        assert_eq!(edges.len(), compilation.plan.edges().len());
         assert_eq!(edges.len(), 2);
         assert!(edges.iter().any(|edge| edge["target"]["kind"] == "output"));
         assert_eq!(value["nodes"][0]["path"], "inner.relay");

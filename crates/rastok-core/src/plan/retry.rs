@@ -149,8 +149,7 @@ impl ValidatedExecutionPlan {
                     };
                     let target = node.endpoint_owner()?;
                     for rule in plan
-                        .boundary_routes
-                        .iter()
+                        .reference_routes()
                         .filter(|rule| rule.source.owner == target)
                     {
                         let repeats =

@@ -53,7 +53,7 @@ pub(super) fn may_produce(plan: &ExecutionPlan, slot: NodeIndex, port: &node::Po
         return true;
     }
     match &node.body {
-        NodeKind::Graph => false,
+        NodeKind::Graph(_) => false,
         NodeKind::Operator(operator) => operator.handlers.iter().any(|handler| {
             handler.dispatch.may_emit(port)
                     // Re-derive the implicit producer from the validated join bound.
@@ -111,7 +111,7 @@ pub(super) fn live_owners(plan: &ExecutionPlan) -> Vec<bool> {
                 changed |= activate(target.node, &mut live);
             }
         }
-        for rule in &plan.boundary_routes {
+        for rule in plan.reference_routes() {
             let source_path = match &rule.source.owner {
                 EndpointOwner::Node(path) => node::OwnerPath::from(path),
                 EndpointOwner::Graph(path) => path.clone(),

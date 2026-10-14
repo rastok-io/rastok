@@ -490,8 +490,8 @@ Good -> good
         "one input edge plus two physical routes"
     );
     let (plan, _) = crate::compiler::lower::lower(&hir).unwrap();
-    assert_eq!(plan.routes.len(), 1);
-    crate::plan::ValidatedExecutionPlan::try_from_lowered(plan).unwrap();
+    let plan = crate::plan::ValidatedExecutionPlan::try_from_lowered(plan).unwrap();
+    assert_eq!(plan.routes().len(), 1);
 }
 
 #[test]
@@ -667,8 +667,8 @@ graph g : App {
         "destination order is canonical, not source order"
     );
     let (plan, _) = crate::compiler::lower::lower(&hir).unwrap();
-    assert_eq!(plan.edges.len(), 3);
-    crate::plan::ValidatedExecutionPlan::try_from_lowered(plan).unwrap();
+    let plan = crate::plan::ValidatedExecutionPlan::try_from_lowered(plan).unwrap();
+    assert_eq!(plan.edges().len(), 3);
 }
 
 #[test]
@@ -715,13 +715,13 @@ timeout = duration("1s")
     let plan = crate::plan::ValidatedExecutionPlan::try_from_lowered(plan)
         .expect("the Call protocol validates independently");
     assert!(
-        plan.edges
+        plan.edges()
             .iter()
             .filter(|edge| edge.from.port.name() == "exit")
             .all(|edge| edge.to.is_none())
     );
     assert!(
-        plan.routes
+        plan.routes()
             .iter()
             .any(|route| route.source.port.name() == "exit")
     );
@@ -1555,7 +1555,7 @@ in -> pass -> out
     );
     let (plan, _) = crate::compiler::lower::lower(&hir).unwrap();
     let plan = crate::plan::ValidatedExecutionPlan::try_new(plan).unwrap();
-    assert!(!plan.boundary_routes.is_empty());
+    assert!(plan.reference_routes().next().is_some());
     assert_eq!(
         plan.handlers().count(),
         1,

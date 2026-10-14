@@ -30,10 +30,10 @@ use crate::expr;
 use crate::node;
 use crate::node::NodeIndex;
 use crate::plan::{
-    AttrSetting, ConnectorSpec, DelayPolicy, DispatchStep, Edge, EdgeEnd, EmitValue,
-    EvaluationSite, ExecutionPlan, ExtensionSpec, FieldWrite, Handler, LoopSpec, Node, NodeKind,
-    Operator, OwnerValue, PlanConstant, PlanValidationError, PortDecl, SemanticHash,
-    ValidatedExecutionPlan, VarCell,
+    AttrSetting, ConnectorSpec, DelayPolicy, DispatchStep, EmitValue, EvaluationSite,
+    ExecutionPlan, ExtensionSpec, FieldWrite, Handler, LoopSpec, Node, NodeKind, Operator,
+    OwnerValue, PlanConstant, PlanValidationError, PortDecl, SemanticHash, ValidatedExecutionPlan,
+    VarCell,
 };
 use crate::schema_annotation::{
     AnnotationApplication, AnnotationBinding, AnnotationSet, AnnotationTable, DataAnnotation,
@@ -248,14 +248,7 @@ fn plan_tree_with_resolved(
     plan: &ExecutionPlan,
     resolved: Option<&super::ResolvedPortTable>,
 ) -> Cbor {
-    let mut pairs = BTreeMap::from([
-        (12, Cbor::Array(plan.nodes.iter().map(node_tree).collect())),
-        (3, Cbor::Array(plan.edges.iter().map(edge_tree).collect())),
-        (10, fields::routing_tree(&plan.routes)),
-    ]);
-    if !plan.boundary_routes.is_empty() {
-        pairs.insert(11, fields::routing_tree(&plan.boundary_routes));
-    }
+    let mut pairs = BTreeMap::from([(12, Cbor::Array(plan.nodes.iter().map(node_tree).collect()))]);
     // Zone schemas travel with the plan so validation needs no Registry.
     // An absent schema is an omitted key.
     if !plan.app_schema.is_empty() {
@@ -394,7 +387,9 @@ fn schema_tree(schema: &[(String, DataType)]) -> Cbor {
 
 fn node_tree(node: &Node) -> Cbor {
     let body = match &node.body {
-        NodeKind::Graph => Cbor::Array(vec![Cbor::Uint(1)]),
+        NodeKind::Graph(graph) => {
+            Cbor::Array(vec![Cbor::Uint(1), fields::routing_tree(&graph.wiring)])
+        }
         NodeKind::Operator(operator) => Cbor::Array(vec![
             Cbor::Uint(2),
             Cbor::Array(operator.vars.iter().map(var_tree).collect()),
@@ -644,25 +639,6 @@ fn var_tree(var: &VarCell) -> Cbor {
         pairs.insert(4, annotation_table_tree(&var.annotations));
     }
     Cbor::Map(pairs)
-}
-
-fn edge_tree(edge: &Edge) -> Cbor {
-    let to = match &edge.to {
-        Some(endpoint) => endpoint_tree(endpoint),
-        None => Cbor::Null,
-    };
-    Cbor::Array(vec![
-        Cbor::Uint(edge.owner.index() as u64),
-        endpoint_tree(&edge.from),
-        to,
-    ])
-}
-
-fn endpoint_tree(endpoint: &EdgeEnd) -> Cbor {
-    Cbor::Array(vec![
-        Cbor::Uint(endpoint.node.index() as u64),
-        Cbor::Text(endpoint.port.name().to_string()),
-    ])
 }
 
 fn handler_tree(handler: &Handler) -> Cbor {
@@ -1065,23 +1041,24 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
     // The root map's table arrays sit at level 1.
     let mut max = 1usize;
     let mut stack: Vec<Item<'_>> = Vec::new();
-    for route in plan.routes.iter().chain(&plan.boundary_routes) {
-        // root table 1, rule 2, endpoint 3, owner 4, scalar 5.
-        max = max.max(5);
+    for route in plan.reference_routes() {
+        // Nodes 1, Node 2, Graph body 3, wiring 4, rule 5, endpoint 6,
+        // owner 7, scalar 8.
+        max = max.max(8);
         let (sets, level): (Vec<&[super::RouteDestination]>, usize) = match &route.selection {
-            super::RouteSelection::All(destinations) => (vec![destinations], 4),
+            super::RouteSelection::All(destinations) => (vec![destinations], 7),
             super::RouteSelection::Cases(arms) => {
                 if !arms.is_empty() {
-                    max = max.max(6);
+                    max = max.max(9);
                 }
                 for arm in arms {
                     if !arm.cases.is_empty() {
-                        max = max.max(7);
+                        max = max.max(10);
                     }
                 }
                 (
                     arms.iter().map(|arm| arm.destinations.as_slice()).collect(),
-                    6,
+                    9,
                 )
             }
         };
@@ -1192,10 +1169,6 @@ pub(crate) fn deepest_level(plan: &ExecutionPlan) -> usize {
                 }
             }
         }
-    }
-    if !plan.edges.is_empty() {
-        // edge array at 2, endpoint arrays at 3, their fields at 4.
-        max = max.max(4);
     }
     for (_, handler) in plan.handlers() {
         // Operator body at 3, handlers at 4, handler map at 5,
@@ -1600,21 +1573,6 @@ fn plan_from(tree: &Cbor) -> Result<ExecutionPlan, DecodeError> {
         .iter()
         .map(node_from)
         .collect::<Result<Vec<_>, _>>()?;
-    let edges = array_of(get(pairs, 3, "plan edges")?, "plan edges")?
-        .iter()
-        .map(edge_from)
-        .collect::<Result<Vec<_>, _>>()?;
-    let routes = array_of(get(pairs, 10, "plan routing")?, "plan routing")?
-        .iter()
-        .map(fields::route_from)
-        .collect::<Result<Vec<_>, _>>()?;
-    let boundary_routes = match pairs.get(&11) {
-        Some(tree) => array_of(tree, "boundary routing")?
-            .iter()
-            .map(fields::route_from)
-            .collect::<Result<Vec<_>, _>>()?,
-        None => Vec::new(),
-    };
     let app_schema = match pairs.get(&5) {
         Some(tree) => schema_from(tree)?,
         None => Vec::new(),
@@ -1636,15 +1594,7 @@ fn plan_from(tree: &Cbor) -> Result<ExecutionPlan, DecodeError> {
             .collect::<Result<Vec<_>, _>>()?,
         None => Vec::new(),
     };
-    Ok(ExecutionPlan {
-        nodes,
-        edges,
-        routes,
-        boundary_routes,
-        app_schema,
-        ext_schema,
-        assets,
-    })
+    Ok(ExecutionPlan::new(nodes, app_schema, ext_schema, assets))
 }
 
 fn schema_from(tree: &Cbor) -> Result<Vec<(String, DataType)>, DecodeError> {
@@ -1683,7 +1633,12 @@ fn node_from(tree: &Cbor) -> Result<Node, DecodeError> {
         .map(extension_spec_from)
         .collect::<Result<Vec<_>, _>>()?;
     let body = match array_of(get(fields, 7, "Node body")?, "Node body")? {
-        [Cbor::Uint(1)] => NodeKind::Graph,
+        [Cbor::Uint(1), wiring] => NodeKind::Graph(Box::new(crate::plan::Graph {
+            wiring: array_of(wiring, "Graph wiring")?
+                .iter()
+                .map(fields::route_from)
+                .collect::<Result<_, _>>()?,
+        })),
         [Cbor::Uint(2), vars, handlers] => NodeKind::Operator(Box::new(Operator {
             vars: array_of(vars, "Operator vars")?
                 .iter()
@@ -2059,37 +2014,11 @@ fn var_from(tree: &Cbor) -> Result<VarCell, DecodeError> {
     })
 }
 
-fn edge_from(tree: &Cbor) -> Result<Edge, DecodeError> {
-    match array_of(tree, "edge")? {
-        [scope, from, Cbor::Null] => Ok(Edge {
-            owner: node::NodeIndex::new(u32_from(scope, "edge scope")?),
-            from: endpoint_from(from)?,
-            to: None,
-        }),
-        [scope, from, to] => Ok(Edge {
-            owner: node::NodeIndex::new(u32_from(scope, "edge scope")?),
-            from: endpoint_from(from)?,
-            to: Some(endpoint_from(to)?),
-        }),
-        _ => Err(err("edge")),
-    }
-}
-
 fn u32_from(tree: &Cbor, detail: &str) -> Result<u32, DecodeError> {
     let Cbor::Uint(value) = tree else {
         return Err(err(detail));
     };
     u32::try_from(*value).map_err(|_| err(detail))
-}
-
-fn endpoint_from(tree: &Cbor) -> Result<EdgeEnd, DecodeError> {
-    match array_of(tree, "endpoint")? {
-        [Cbor::Uint(index), Cbor::Text(port)] => Ok(EdgeEnd {
-            node: NodeIndex::new(u32::try_from(*index).map_err(|_| err("Node index"))?),
-            port: node::Port::new(port.clone()).map_err(|_| err("endpoint port"))?,
-        }),
-        _ => Err(err("endpoint")),
-    }
 }
 
 fn handler_from(tree: &Cbor) -> Result<Handler, DecodeError> {
@@ -2503,7 +2432,7 @@ mod tests {
         Node {
             path: node::OwnerPath::root(),
             parent: None,
-            body: NodeKind::Graph,
+            body: NodeKind::Graph(Box::default()),
             ports: vec![],
             extensions: vec![ExtensionSpec::App],
             instance: instance::InstanceSpec {
@@ -2545,7 +2474,6 @@ mod tests {
             closing: None,
         };
         let validated = ValidatedExecutionPlan::try_new(ExecutionPlan {
-            boundary_routes: Vec::new(),
             routes: vec![],
             nodes: vec![root_owner(), instance_owner],
             edges: vec![],
@@ -2591,7 +2519,6 @@ mod tests {
         annotations: AnnotationTable,
     ) -> ValidatedExecutionPlan {
         ValidatedExecutionPlan::try_new(ExecutionPlan {
-            boundary_routes: Vec::new(),
             routes: vec![],
             nodes: vec![Node {
                 ports: vec![PortDecl {
@@ -3102,7 +3029,6 @@ mod tests {
             .unwrap_or_else(|error| panic!("one policy row: {error}")),
         }];
         let plan = ValidatedExecutionPlan::try_new(ExecutionPlan {
-            boundary_routes: Vec::new(),
             routes: vec![],
             nodes: vec![root_owner(), nested],
             edges: vec![],
@@ -3260,17 +3186,25 @@ mod tests {
     }
 
     #[test]
-    fn every_edge_endpoint_names_a_node_including_the_app_root() {
-        let endpoint = EdgeEnd {
-            node: NodeIndex::ROOT,
-            port: port("in"),
+    fn graph_wiring_names_the_app_root_and_rejects_an_absent_owner() {
+        let rule = crate::plan::RouteRule {
+            source: crate::plan::Endpoint {
+                owner: crate::plan::EndpointOwner::Graph(node::OwnerPath::root()),
+                port: port("in"),
+            },
+            selection: crate::plan::RouteSelection::All(vec![
+                crate::plan::RouteDestination::Discard,
+            ]),
         };
-        let encoded = Cbor::Array(vec![Cbor::Uint(0), Cbor::Text(text("in"))]);
-        assert_eq!(endpoint_tree(&endpoint), encoded);
-        assert_eq!(endpoint_from(&encoded).unwrap(), endpoint);
+        let encoded = fields::route_tree(&rule);
+        assert_eq!(fields::route_from(&encoded).unwrap(), rule);
+        let Cbor::Array(mut fields) = encoded else {
+            panic!("route");
+        };
+        fields[0] = Cbor::Array(vec![Cbor::Null, Cbor::Text(text("in"))]);
         assert_eq!(
-            endpoint_from(&Cbor::Array(vec![Cbor::Null, Cbor::Text(text("in"))])),
-            Err(err("endpoint")),
+            fields::route_from(&Cbor::Array(fields)),
+            Err(err("endpoint owner: not an array"))
         );
     }
 
@@ -3278,18 +3212,29 @@ mod tests {
     fn routes_are_mandatory_and_unknown_body_fields_are_not_ignored() {
         let package = instance_package();
         let absent = mutate_package_body(&package, |body| {
-            body.remove(&10);
+            let Cbor::Array(nodes) = body.get_mut(&12).expect("nodes") else {
+                panic!("nodes")
+            };
+            let Cbor::Map(root) = &mut nodes[0] else {
+                panic!("App Node")
+            };
+            let Cbor::Array(graph) = root.get_mut(&7).expect("body") else {
+                panic!("Graph body")
+            };
+            graph.pop();
         });
         assert!(matches!(decode(&absent), Err(DecodeError::Malformed(_))));
-        let extra = mutate_package_body(&package, |body| {
-            body.insert(11, Cbor::Array(vec![]));
-        });
-        assert_eq!(
-            decode(&extra),
-            Err(DecodeError::NonCanonical(
-                "the body is not the canonical encoding of its plan"
-            ))
-        );
+        for key in [3, 10, 11] {
+            let extra = mutate_package_body(&package, |body| {
+                body.insert(key, Cbor::Array(vec![]));
+            });
+            assert_eq!(
+                decode(&extra),
+                Err(DecodeError::NonCanonical(
+                    "the body is not the canonical encoding of its plan"
+                ))
+            );
+        }
     }
 
     #[test]
@@ -3425,7 +3370,7 @@ mod tests {
         let owner = Node {
             path: node::OwnerPath::new(["workspace"]).unwrap(),
             parent: Some(node::NodeIndex::new(0)),
-            body: NodeKind::Graph,
+            body: NodeKind::Graph(Box::default()),
             ports: vec![],
             extensions: vec![],
             instance: instance::InstanceSpec {
@@ -3607,10 +3552,40 @@ mod tests {
             ]),
         }];
         ExecutionPlan {
-            boundary_routes: Vec::new(),
             routes: vec![],
             nodes: vec![
                 Node {
+                    body: NodeKind::Graph(Box::new(crate::plan::Graph {
+                        wiring: vec![
+                            crate::plan::RouteRule {
+                                source: crate::plan::Endpoint {
+                                    owner: crate::plan::EndpointOwner::Graph(
+                                        node::OwnerPath::root(),
+                                    ),
+                                    port: port("in"),
+                                },
+                                selection: crate::plan::RouteSelection::All(vec![
+                                    crate::plan::RouteDestination::Port(crate::plan::Endpoint {
+                                        owner: crate::plan::EndpointOwner::Node(
+                                            node::Path::new(["relay"]).unwrap(),
+                                        ),
+                                        port: port("in"),
+                                    }),
+                                ]),
+                            },
+                            crate::plan::RouteRule {
+                                source: crate::plan::Endpoint {
+                                    owner: crate::plan::EndpointOwner::Node(
+                                        node::Path::new(["relay"]).unwrap(),
+                                    ),
+                                    port: port("extra"),
+                                },
+                                selection: crate::plan::RouteSelection::All(vec![
+                                    crate::plan::RouteDestination::Discard,
+                                ]),
+                            },
+                        ],
+                    })),
                     ports: vec![
                         PortDecl {
                             port: port("entry"),
@@ -3658,27 +3633,7 @@ mod tests {
                     ..node_owner("shell")
                 },
             ],
-            edges: vec![
-                Edge {
-                    owner: node::NodeIndex::new(0),
-                    from: EdgeEnd {
-                        node: crate::node::NodeIndex::ROOT,
-                        port: port("in"),
-                    },
-                    to: Some(EdgeEnd {
-                        node: NodeIndex::new(1),
-                        port: port("in"),
-                    }),
-                },
-                Edge {
-                    owner: node::NodeIndex::new(0),
-                    from: EdgeEnd {
-                        node: NodeIndex::new(1),
-                        port: port("extra"),
-                    },
-                    to: None,
-                },
-            ],
+            edges: vec![],
             app_schema: vec![(text("m.dotted"), DataType::Variant)],
             ext_schema: vec![(text("content_type"), DataType::Text)],
             assets: vec![],
@@ -3689,7 +3644,6 @@ mod tests {
     /// nested chains.
     fn one_step_plan(root: expr::Expr) -> ExecutionPlan {
         ExecutionPlan {
-            boundary_routes: Vec::new(),
             routes: vec![],
             nodes: vec![
                 root_owner(),
@@ -4055,7 +4009,6 @@ mod tests {
     #[test]
     fn the_resolved_table_is_mandatory_and_cannot_lie() {
         let validated = ValidatedExecutionPlan::try_new(ExecutionPlan {
-            boundary_routes: Vec::new(),
             routes: vec![],
             nodes: vec![root_owner()],
             edges: vec![],
@@ -4310,7 +4263,6 @@ mod tests {
 
         let plans = [
             ExecutionPlan {
-                boundary_routes: Vec::new(),
                 routes: vec![],
                 nodes: vec![root_owner()],
                 edges: vec![],
@@ -4379,7 +4331,6 @@ mod tests {
         }
 
         let resolved_plan = ExecutionPlan {
-            boundary_routes: Vec::new(),
             routes: vec![],
             nodes: vec![Node {
                 ports: vec![PortDecl {

@@ -163,9 +163,13 @@ fn a_forged_plan_cannot_erase_a_bounded_joins_expiry_disposition() {
     for bound in ["within duration(\"1s\")", "last 2"] {
         let compilation = compile(&join_expiry_source(bound, "pair.expired -> nothing")).unwrap();
         let mut forged = compilation.plan.into_inner();
-        forged
-            .edges
-            .retain(|edge| edge.from.port.name() != "expired");
+        for node in &mut forged.nodes {
+            if let plan::NodeKind::Graph(graph) = &mut node.body {
+                graph
+                    .wiring
+                    .retain(|rule| rule.source.port.name() != "expired");
+            }
+        }
         let error = plan::ValidatedExecutionPlan::try_new(forged).unwrap_err();
         assert!(
             matches!(&error, plan::PlanValidationError::UnwiredOutput { node, port }
@@ -246,7 +250,10 @@ fn deleting_a_discard_from_a_package_cannot_turn_it_into_an_implicit_sink() {
     )
     .unwrap();
     let mut forged = compilation.plan.into_inner();
-    forged.edges.retain(|edge| edge.to.is_some());
+    let plan::NodeKind::Graph(graph) = &mut forged.nodes[0].body else {
+        panic!("App Graph")
+    };
+    graph.wiring.retain(|rule| !matches!(&rule.selection, plan::RouteSelection::All(set) if set == &[plan::RouteDestination::Discard]));
     let error = plan::ValidatedExecutionPlan::try_new(forged).unwrap_err();
     assert!(error.to_string().contains("worker.out"), "{error}");
 }
@@ -302,21 +309,21 @@ fn nested_dispositions_are_rederived_even_after_flattening() {
     .unwrap();
     let bytes = plan::encode(&compilation.plan, &compilation.hash);
     let (decoded, _) = plan::decode(&bytes).unwrap();
-    assert_eq!(decoded.boundary_routes, compilation.plan.boundary_routes);
-    assert!(!decoded.boundary_routes.is_empty());
+    assert_eq!(
+        decoded.reference_routes().collect::<Vec<_>>(),
+        compilation.plan.reference_routes().collect::<Vec<_>>()
+    );
+    assert!(decoded.reference_routes().next().is_some());
 
     let mut forged = decoded.clone().into_inner();
-    forged.boundary_routes.retain(|rule| {
+    let plan::NodeKind::Graph(graph) = &mut forged.nodes[0].body else {
+        panic!("App Graph")
+    };
+    graph.wiring.retain(|rule| {
         !(matches!(&rule.source.owner, plan::EndpointOwner::Graph(path) if path.to_string() == "inner")
             && rule.source.port.name() == "second")
     });
-    // Remove the matching flattened edge as well: flat routing alone cannot
-    // tell that one sibling boundary disposition has been erased.
-    forged.edges.retain(|edge| {
-        !edge.to.as_ref().is_some_and(|target| {
-            target.node == rastok_core::node::NodeIndex::ROOT && target.port.name() == "auxiliary"
-        })
-    });
+    // Derived indexes are rebuilt from the changed reference wiring.
     let error = plan::ValidatedExecutionPlan::try_new(forged).unwrap_err();
     assert!(
         matches!(&error, plan::PlanValidationError::InvalidRouting(error)
@@ -325,10 +332,15 @@ fn nested_dispositions_are_rederived_even_after_flattening() {
     );
 
     let mut forged = decoded.clone().into_inner();
-    forged.boundary_routes.clear();
-    assert!(matches!(plan::ValidatedExecutionPlan::try_new(forged),
-        Err(plan::PlanValidationError::InvalidRouting(error))
-        if error.kind == plan::RouteErrorKind::PhysicalEdgeMismatch));
+    let plan::NodeKind::Graph(graph) = &mut forged.nodes[1].body else {
+        panic!("inner Graph")
+    };
+    graph.wiring.clear();
+    let error = plan::ValidatedExecutionPlan::try_new(forged).unwrap_err();
+    assert!(
+        matches!(error, plan::PlanValidationError::UnwiredOutput { .. }),
+        "{error}"
+    );
 
     let mut forged = decoded.into_inner();
     let inner = forged

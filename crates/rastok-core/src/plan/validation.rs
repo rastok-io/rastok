@@ -1037,6 +1037,8 @@ impl ValidatedExecutionPlan {
         mut plan: ExecutionPlan,
         key_mode: InstanceKeyTypeMode,
     ) -> Result<Self, PlanValidationError> {
+        node_tree_well_formed(&plan)?;
+        super::composition::derive(&mut plan)?;
         validate(&plan)?;
         super::retry::validate(&plan)?;
         let declared_ports = super::type_resolution::resolve(&plan)?;
@@ -1451,7 +1453,7 @@ fn handler_signature(
 
 fn execution_rank(execution: &NodeKind) -> u8 {
     match execution {
-        NodeKind::Graph => 0,
+        NodeKind::Graph(_) => 0,
         NodeKind::Operator(_) => 1,
         NodeKind::Connector(_) => 2,
     }
@@ -2938,7 +2940,7 @@ fn loop_specs_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
     Ok(())
 }
 
-fn owners_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
+fn node_tree_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     let Some(root) = plan.nodes.first() else {
         return Err(PlanValidationError::MissingRootOwner);
     };
@@ -2946,9 +2948,27 @@ fn owners_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
         return Err(PlanValidationError::MissingRootOwner);
     }
 
+    // Prove the declaration addresses before any route resolves a path.
+    // Duplicate paths take precedence over ordering defects.
+    let mut paths = BTreeSet::new();
+    for node in &plan.nodes {
+        if !paths.insert(&node.path) {
+            return Err(PlanValidationError::DuplicateNodePath {
+                path: node.path.clone(),
+            });
+        }
+    }
+    for pair in plan.nodes.windows(2) {
+        if (execution_rank(&pair[0].body), pair[0].path.to_string())
+            >= (execution_rank(&pair[1].body), pair[1].path.to_string())
+        {
+            return Err(PlanValidationError::NonCanonicalOrder {
+                collection: "nodes",
+            });
+        }
+    }
     for (index, owner) in plan.nodes.iter().enumerate() {
         let slot = node::NodeIndex::new(u32::try_from(index).unwrap_or(u32::MAX));
-        let path = owner.path.to_string();
         if index > 0 {
             let Some(parent_slot) = owner.parent else {
                 return Err(PlanValidationError::InvalidOwnerTree { owner: slot });
@@ -2969,7 +2989,14 @@ fn owners_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                 return Err(PlanValidationError::InvalidOwnerTree { owner: slot });
             }
         }
+    }
+    Ok(())
+}
 
+fn owners_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
+    for (index, owner) in plan.nodes.iter().enumerate() {
+        let slot = node::NodeIndex::new(index as u32);
+        let path = owner.path.to_string();
         if owner.kind() == node::Kind::Graph {
             // App ports keep their boundary-specific diagnostics below.
             // All Graph declarations have the same in-memory ownership.
@@ -3230,31 +3257,6 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
     schema_well_formed("app", &plan.app_schema)?;
     schema_well_formed("ext", &plan.ext_schema)?;
     assets_well_formed(plan)?;
-    // Uniqueness first, GLOBALLY, then canonical order: a collection
-    // that is both duplicated and disordered refuses as the
-    // DUPLICATE — the dedicated variant names the defect wherever
-    // the copies sit, adjacent or not. (Edges are the stated
-    // exception: a doubled edge has no dedicated variant — the
-    // checker refuses it at the surface as E-DUP-EDGE — so a raw
-    // plan carrying one refuses as the non-canonical order it also
-    // is.)
-    let mut paths = BTreeSet::new();
-    for node in &plan.nodes {
-        if !paths.insert(&node.path) {
-            return Err(PlanValidationError::DuplicateNodePath {
-                path: node.path.clone(),
-            });
-        }
-    }
-    for pair in plan.nodes.windows(2) {
-        if (execution_rank(&pair[0].body), pair[0].path.to_string())
-            >= (execution_rank(&pair[1].body), pair[1].path.to_string())
-        {
-            return Err(PlanValidationError::NonCanonicalOrder {
-                collection: "nodes",
-            });
-        }
-    }
     owners_well_formed(plan)?;
     let mut boundary_ports = BTreeSet::new();
     for decl in plan.boundary() {
@@ -4914,7 +4916,7 @@ mod scope_chain_tests {
                 .map(|(path, parent)| Node {
                     path: node::OwnerPath::new(path.iter().copied()).unwrap(),
                     parent: parent.map(node::NodeIndex::new),
-                    body: NodeKind::Graph,
+                    body: NodeKind::Graph(alloc::boxed::Box::default()),
                     ports: vec![],
                     extensions: if parent.is_none() {
                         vec![ExtensionSpec::App]
@@ -4931,7 +4933,6 @@ mod scope_chain_tests {
                 .collect(),
             edges: vec![],
             routes: vec![],
-            boundary_routes: vec![],
             app_schema: vec![],
             ext_schema: vec![],
             assets: vec![],

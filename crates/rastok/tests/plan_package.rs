@@ -498,9 +498,13 @@ graph g : App {
             .iter()
             .any(|node| node.path.to_string() == "sessions.greet")
     );
-    assert_eq!(plan.edges.len(), 2, "the two composite seams flatten away");
+    assert_eq!(
+        plan.edges().len(),
+        2,
+        "the two composite seams flatten away"
+    );
     assert!(
-        plan.edges
+        plan.edges()
             .iter()
             .all(|edge| plan.nodes[edge.owner.index()].path.is_root())
     );
@@ -995,10 +999,7 @@ fn an_out_of_bounds_slot_cannot_become_a_validated_plan() {
     // validity claim does not travel through into_inner — the raw
     // plan must re-earn the type, and cannot.
     let mut raw = plan.into_inner();
-    raw.edges[0].to = Some(rastok::plan::EdgeEnd {
-        node: rastok::node::NodeIndex::new(999),
-        port: rastok::node::Port::new("in").unwrap(),
-    });
+    raw.nodes[1].parent = Some(rastok::node::NodeIndex::new(999));
     let refused = rastok::plan::ValidatedExecutionPlan::try_from(raw);
     assert!(
         refused.is_err(),

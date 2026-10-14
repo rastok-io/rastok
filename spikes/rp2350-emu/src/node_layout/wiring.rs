@@ -2,7 +2,7 @@
 //! This experiment converts validated declarations; it is not a new loader.
 
 use super::NodeIndex;
-use alloc::{collections::BTreeMap, string::String, vec::Vec};
+use alloc::{string::String, vec::Vec};
 use rastok_core::{
     node::{OwnerPath, Port, PortDirection},
     plan::{self, ExecutionPlan},
@@ -133,44 +133,9 @@ fn rule(plan: &ExecutionPlan, value: &plan::RouteRule) -> RouteRule {
     }
 }
 
-/// Recover the current reference wiring for a flat plan, where no separate
-/// boundary inventory is transported. Case/command rules take precedence over
-/// the physical pairs that are their already-validated redundant projection.
+/// Copy the per-Graph reference wiring for the layout experiment.
 pub(super) fn inventory(plan: &ExecutionPlan) -> Vec<plan::RouteRule> {
-    if !plan.boundary_routes.is_empty() {
-        return plan.boundary_routes.clone();
-    }
-    let endpoint = |end: &plan::EdgeEnd| plan::Endpoint {
-        owner: match plan.nodes[end.node.index()].kind() {
-            rastok_core::node::Kind::Graph => plan::EndpointOwner::Graph(plan.nodes[end.node.index()].path.clone()),
-            rastok_core::node::Kind::Operator | rastok_core::node::Kind::Connector =>
-                plan::EndpointOwner::Node(plan.nodes[end.node.index()].executor_path().unwrap().clone()),
-        },
-        port: end.port.clone(),
-    };
-    let mut rules = plan.routes.clone();
-    let mut ordinary = BTreeMap::<plan::Endpoint, Vec<plan::RouteDestination>>::new();
-    for edge in &plan.edges {
-        let source = endpoint(&edge.from);
-        if !plan.routes.iter().any(|rule| rule.source == source) {
-            ordinary.entry(source).or_default().push(
-                edge.to
-                    .as_ref()
-                    .map_or(plan::RouteDestination::Discard, |to| {
-                        plan::RouteDestination::Port(endpoint(to))
-                    }),
-            );
-        }
-    }
-    rules.extend(ordinary.into_iter().map(|(source, mut set)| {
-        set.sort();
-        plan::RouteRule {
-            source,
-            selection: plan::RouteSelection::All(set),
-        }
-    }));
-    rules.sort_by_key(plan::RouteRule::canonical_order_key);
-    rules
+    plan.reference_routes().cloned().collect()
 }
 
 fn graph(plan: &ExecutionPlan, rule: &plan::RouteRule) -> usize {
@@ -271,7 +236,8 @@ impl Indexes {
             edges,
             execution_order: plan
                 .nodes
-                .iter().enumerate()
+                .iter()
+                .enumerate()
                 .filter(|(_, node)| node.kind() != rastok_core::node::Kind::Graph)
                 .map(|(index, _)| NodeIndex(u32::try_from(index).unwrap()))
                 .collect(),
@@ -289,7 +255,7 @@ impl Indexes {
                 .collect::<Vec<_>>()
         );
         let mut expected: Vec<_> = plan
-            .edges
+            .edges()
             .iter()
             .filter_map(|edge| {
                 Some(Edge {
@@ -307,7 +273,8 @@ impl Indexes {
         assert_eq!(
             self.execution_order,
             plan.nodes
-                .iter().enumerate()
+                .iter()
+                .enumerate()
                 .filter(|(_, node)| node.kind() != rastok_core::node::Kind::Graph)
                 .map(|(index, _)| NodeIndex(u32::try_from(index).unwrap()))
                 .collect::<Vec<_>>()

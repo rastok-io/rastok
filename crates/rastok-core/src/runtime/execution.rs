@@ -1276,7 +1276,7 @@ impl<'plan> Execution<'plan> {
                 });
             }
             let spec = owner.loop_spec()?;
-            let supported = (matches!(owner.body, NodeKind::Graph | NodeKind::Operator(_))
+            let supported = (matches!(owner.body, NodeKind::Graph(_) | NodeKind::Operator(_))
                 || owner
                     .connector()
                     .and_then(crate::plan::ConnectorSpec::call_semantics)
@@ -1806,7 +1806,7 @@ impl<'plan> Execution<'plan> {
                 return Ok(true);
             }
             match &self.plan.nodes[slot.index()].body {
-                NodeKind::Graph => {
+                NodeKind::Graph(_) => {
                     return Err(ExecutionFault::PlanInvariant {
                         node: self.plan.nodes[slot.index()].path.clone(),
                         reason: "a Graph cannot have an application mailbox",
@@ -1854,7 +1854,7 @@ impl<'plan> Execution<'plan> {
         {
             after = Some((slot, instance.clone()));
             match &self.plan.nodes[slot.index()].body {
-                NodeKind::Graph => {
+                NodeKind::Graph(_) => {
                     return Err(ExecutionFault::PlanInvariant {
                         node: self.plan.nodes[slot.index()].path.clone(),
                         reason: "a Graph cannot have an application mailbox",

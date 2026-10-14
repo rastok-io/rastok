@@ -2,8 +2,8 @@
 //!
 //! The same validated declarations are copied into three physical layouts.
 //! Each copy has one Node header and one body per declaration, with handlers
-//! inside Operators. A second comparison includes reference wiring and route
-//! composition. Neither comparison qualifies a new decoder or a final VM.
+//! inside Operators. Every comparison includes reference wiring and route
+//! composition. These copies do not qualify a new decoder or a final Execution.
 
 mod wiring;
 
@@ -15,13 +15,13 @@ use rastok_core::{
     instance::InstanceSpec,
     node::{HandlerActivation, OwnerPath},
     plan::{
-        ConnectorSpec, Dispatch, ExecutionPlan, ExtensionSpec, Handler, NodeKind,
-        OwnerValue, PortDecl, VarCell,
+        ConnectorSpec, Dispatch, ExecutionPlan, ExtensionSpec, Handler, NodeKind, OwnerValue,
+        PortDecl, VarCell,
     },
 };
 
-/// This probe uses the existing canonical owner preorder as the one Node
-/// index. It does not change any identity recipe or transported index.
+/// This probe keeps the validated Node table's order. It does not change an
+/// identity recipe or a transported index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct NodeIndex(u32);
 
@@ -111,12 +111,13 @@ fn body(
 ) -> InlineBody {
     let node = &plan.nodes[index];
     match &node.body {
-        NodeKind::Graph => InlineBody::Graph(GraphBody {
+        NodeKind::Graph(_) => InlineBody::Graph(GraphBody {
             wiring: wiring::reference(plan, index, inventory),
         }),
         NodeKind::Connector(spec) => InlineBody::Connector(spec.as_ref().clone()),
         NodeKind::Operator(operator) => {
-            let handlers = operator.handlers
+            let handlers = operator
+                .handlers
                 .iter()
                 .map(|handler| HandlerBody {
                     activation: handler.activation.clone(),
@@ -168,7 +169,7 @@ fn tables(plan: &ExecutionPlan, inventory: &[rastok_core::plan::RouteRule]) -> T
     let mut connectors = 0;
     for owner in &plan.nodes {
         match owner.body {
-            NodeKind::Graph => graphs += 1,
+            NodeKind::Graph(_) => graphs += 1,
             NodeKind::Operator(_) => operators += 1,
             NodeKind::Connector(_) => connectors += 1,
         }
@@ -299,31 +300,17 @@ pub(super) fn compare(plan: &ExecutionPlan) {
         size_of::<HandlerBody>(),
     );
     hprintln!(
-        "node_layout_control: {} Nodes / {} executors / {} handlers; routing excluded",
+        "node_layout_control: {} Nodes / {} executors / {} handlers; reference wiring included",
         plan.nodes.len(),
-        plan.nodes.iter().filter(|node| node.kind() != rastok_core::node::Kind::Graph).count(),
+        plan.nodes
+            .iter()
+            .filter(|node| node.kind() != rastok_core::node::Kind::Graph)
+            .count(),
         plan.handlers().count(),
     );
-    measure(
-        "current",
-        || plan.nodes.clone(),
-        |nodes| assert!(nodes == &plan.nodes),
-    );
-    measure(
-        "inline",
-        || inline(plan, &[]),
-        |nodes| check_inline(plan, nodes, &[]),
-    );
-    measure(
-        "boxed",
-        || boxed(plan, &[]),
-        |nodes| check_boxed(plan, nodes, &[]),
-    );
-    measure(
-        "tables",
-        || tables(plan, &[]),
-        |tables| check_tables(plan, tables, &[]),
-    );
+    // Wiring is part of a Graph body now. Compare complete representations;
+    // copying current Nodes against empty candidate Graphs would undercount
+    // only the candidates.
     compare_with_wiring(plan);
 }
 
@@ -337,9 +324,8 @@ fn compare_with_wiring(plan: &ExecutionPlan) {
         || {
             (
                 plan.nodes.clone(),
-                plan.edges.clone(),
-                plan.routes.clone(),
-                plan.boundary_routes.clone(),
+                plan.edges().to_vec(),
+                plan.routes().to_vec(),
                 wiring::scope_chains(plan),
             )
         },

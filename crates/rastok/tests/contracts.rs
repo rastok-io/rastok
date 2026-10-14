@@ -312,7 +312,7 @@ fn forged_http_client_error(
 fn connector_mut(node: &mut rastok::plan::Node) -> &mut rastok::plan::ConnectorSpec {
     match &mut node.body {
         rastok::plan::NodeKind::Connector(spec) => spec,
-        rastok::plan::NodeKind::Graph | rastok::plan::NodeKind::Operator(_) => {
+        rastok::plan::NodeKind::Graph(_) | rastok::plan::NodeKind::Operator(_) => {
             panic!("the test selected a connector")
         }
     }
@@ -1505,9 +1505,18 @@ fn an_unreachable_process_still_carries_one_valid_sheet() {
         )
         .expect("the plan is small"),
     );
-    plan.edges
-        .retain(|edge| edge.to.as_ref().is_none_or(|to| to.node != connector_slot));
-    plan.nodes[1].ports.retain(|port| port.port.name() != "in");
+    let target = plan.nodes[connector_slot.index()]
+        .executor_path()
+        .unwrap()
+        .clone();
+    for node in &mut plan.nodes {
+        if let rastok::plan::NodeKind::Graph(graph) = &mut node.body {
+            graph.wiring.retain(|rule| !matches!(&rule.selection, rastok::plan::RouteSelection::All(set)
+                if set.iter().any(|destination| matches!(destination, rastok::plan::RouteDestination::Port(endpoint)
+                    if endpoint.owner == rastok::plan::EndpointOwner::Node(target.clone())))));
+        }
+    }
+    plan.nodes[0].ports.retain(|port| port.port.name() != "in");
     for node in &mut plan.nodes {
         if let rastok::plan::NodeKind::Connector(spec) = &mut node.body {
             for (name, setting) in &mut spec.attributes {
@@ -1621,9 +1630,15 @@ fn the_global_binder_requires_callable_connectors_but_skips_pure_outbound_source
         )
         .expect("a small plan"),
     );
-    plan.edges
-        .retain(|edge| edge.to.as_ref().is_none_or(|to| to.node != slot));
-    plan.nodes[1].ports.retain(|port| port.port.name() != "in");
+    let target = plan.nodes[slot.index()].executor_path().unwrap().clone();
+    for node in &mut plan.nodes {
+        if let rastok::plan::NodeKind::Graph(graph) = &mut node.body {
+            graph.wiring.retain(|rule| !matches!(&rule.selection, rastok::plan::RouteSelection::All(set)
+                if set.iter().any(|destination| matches!(destination, rastok::plan::RouteDestination::Port(endpoint)
+                    if endpoint.owner == rastok::plan::EndpointOwner::Node(target.clone())))));
+        }
+    }
+    plan.nodes[0].ports.retain(|port| port.port.name() != "in");
     let validated = rastok::plan::ValidatedExecutionPlan::try_from(plan)
         .expect("the foreign pure source remains structurally valid");
     assert!(

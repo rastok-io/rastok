@@ -193,7 +193,12 @@ graph app : App {
         1,
     );
     let (raw, _) = compiler::lower::lower(&hir).unwrap();
-    assert_eq!(raw.routes.len(), 1);
+    assert_eq!(
+        raw.reference_routes()
+            .filter(|rule| matches!(rule.selection, plan::RouteSelection::Cases(_)))
+            .count(),
+        1
+    );
     let validated = plan::ValidatedExecutionPlan::try_new(raw).unwrap();
     let bytes = plan::encode(&validated, &compiler::lower::semantic_hash(&hir));
     assert_eq!(plan::decode(&bytes).unwrap().0, validated);
@@ -265,7 +270,7 @@ graph app : App {
 }
 "#;
     let compilation = compiler::compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
-    assert_eq!(compilation.plan.edges.len(), 1);
+    assert_eq!(compilation.plan.edges().len(), 1);
     let decoded = plan::decode(&plan::encode(&compilation.plan, &compilation.hash))
         .unwrap()
         .0;

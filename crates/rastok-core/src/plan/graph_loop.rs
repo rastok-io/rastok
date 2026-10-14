@@ -151,7 +151,7 @@ pub(super) fn validate(
         EndpointOwner::Node(path) => path.segments().starts_with(owner.path.segments()),
         EndpointOwner::Graph(path) => path.segments().starts_with(owner.path.segments()),
     };
-    for route in &plan.boundary_routes {
+    for route in plan.reference_routes() {
         for destination in sets(&route.selection).into_iter().flatten() {
             if let RouteDestination::Port(target) = destination
                 && in_scope(target)
@@ -195,8 +195,7 @@ pub(super) fn validate(
         match &work {
             Work::Source(source, case) => {
                 for rule in plan
-                    .boundary_routes
-                    .iter()
+                    .reference_routes()
                     .filter(|rule| rule.source == *source)
                 {
                     for destination in sets(&rule.selection).into_iter().flatten() {
@@ -281,8 +280,7 @@ pub(super) fn validate(
             Work::Source(source, case) => {
                 let mut total = empty();
                 for rule in plan
-                    .boundary_routes
-                    .iter()
+                    .reference_routes()
                     .filter(|rule| rule.source == *source)
                 {
                     let mut alternatives = Outcomes::new();

@@ -46,7 +46,7 @@ graph app : App {{
         assert!(
             plan.nodes
                 .iter()
-                .all(|node| matches!(node.body, plan::NodeKind::Graph)),
+                .all(|node| matches!(node.body, plan::NodeKind::Graph(_))),
             "a boundary-only Graph needs no synthetic Operator"
         );
         let mut journal = MemJournal::new(GraphVersion(1));

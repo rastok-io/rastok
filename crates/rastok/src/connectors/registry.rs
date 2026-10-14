@@ -355,7 +355,7 @@ impl<'plan> RuntimeBindings<'plan> {
             let Some(spec) = planned.connector() else {
                 continue;
             };
-            let callable = plan.plan().edges.iter().any(|edge| {
+            let callable = plan.plan().edges().iter().any(|edge| {
                 edge.to
                     .as_ref()
                     .map(|endpoint| endpoint.node)
@@ -1577,7 +1577,7 @@ graph mixed : App {
         for planned in &mut raw.nodes {
             let Some(spec) = (match &mut planned.body {
                 crate::plan::NodeKind::Connector(spec) => Some(spec),
-                crate::plan::NodeKind::Graph | crate::plan::NodeKind::Operator(_) => None,
+                crate::plan::NodeKind::Graph(_) | crate::plan::NodeKind::Operator(_) => None,
             }) else {
                 continue;
             };
@@ -1650,7 +1650,13 @@ graph inbound : App {
         spec.roles = ConnectorDirection::Inbound;
         spec.exchange = ConnectorExchange::Event;
         source.ports.retain(|port| port.port.name() != "exit");
-        raw.edges.retain(|edge| edge.from.port.name() != "exit");
+        for node in &mut raw.nodes {
+            if let crate::plan::NodeKind::Graph(graph) = &mut node.body {
+                graph
+                    .wiring
+                    .retain(|rule| rule.source.port.name() != "exit");
+            }
+        }
         ValidatedExecutionPlan::try_new(raw).expect("the foreign Event contract is structural")
     }
 
@@ -2404,25 +2410,33 @@ graph api : App {
         };
         spec.contract = ContractId::parse("org.rastok.test/inbound-call@1").unwrap();
 
-        let response = raw
-            .edges
+        let relay_path = raw.nodes[relay_slot.index()]
+            .executor_path()
+            .unwrap()
+            .clone();
+        let server_path = raw.nodes[server_slot.index()]
+            .executor_path()
+            .unwrap()
+            .clone();
+        let crate::plan::NodeKind::Graph(graph) = &mut raw.nodes[0].body else {
+            panic!("the App is a Graph")
+        };
+        let response = graph
+            .wiring
             .iter_mut()
-            .find(|edge| {
-                edge.from.node == relay_slot
-                    && edge
-                        .to
-                        .as_ref()
-                        .is_some_and(|to| to.node == crate::node::NodeIndex::ROOT)
-            })
+            .find(|rule| rule.source.owner == crate::plan::EndpointOwner::Node(relay_path.clone()))
             .expect("the relay boundary response exists");
-        response.to = Some(crate::plan::EdgeEnd {
-            node: server_slot,
-            port: node::Port::new("in").expect("the conventional input name is valid"),
-        });
+        response.selection =
+            crate::plan::RouteSelection::All(vec![crate::plan::RouteDestination::Port(
+                crate::plan::Endpoint {
+                    owner: crate::plan::EndpointOwner::Node(server_path),
+                    port: node::Port::new("in").unwrap(),
+                },
+            )]);
+        graph
+            .wiring
+            .sort_by_key(crate::plan::RouteRule::canonical_order_key);
         raw.nodes[0].ports.retain(|decl| decl.port.name() != "out");
-        let mut edges = core::mem::take(&mut raw.edges);
-        edges.sort_by_key(|edge| raw.edge_text(edge));
-        raw.edges = edges;
         ValidatedExecutionPlan::try_new(raw).expect("the foreign inbound Call is structural")
     }
 

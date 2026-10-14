@@ -162,7 +162,7 @@ pub(crate) fn bind_routes(
             .find(|node| &node.path == path)
             .and_then(|node| match &node.body {
                 NodeKind::Connector(spec) => Some(spec),
-                NodeKind::Graph | NodeKind::Operator(_) => None,
+                NodeKind::Graph(_) | NodeKind::Operator(_) => None,
             })
             .ok_or_else(|| {
                 super::DriverFactoryError::new(format!(

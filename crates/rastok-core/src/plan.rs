@@ -360,17 +360,11 @@ pub struct ExecutionPlan {
     /// and Connectors in path order. This preserves the deterministic order
     /// of executable work independently of lexical containment.
     pub nodes: Vec<Node>,
-    /// The wiring, desugared to explicit pairs, in canonical order —
-    /// the same order the semantic hash sees.
-    pub edges: Vec<Edge>,
-    /// Case selections and manager destinations beside the spatial edges.
-    /// A source absent from this sparse table selects its ordinary edges.
-    pub routes: Vec<RouteRule>,
-    /// Unflattened routing when the plan contains nested Graph boundaries.
-    /// The validator derives the physical routes again from this inventory;
-    /// boundaries remain structural seams, never executable pseudo-nodes.
-    /// Empty for plans with no nested boundary or Graph Loop admission.
-    pub boundary_routes: Vec<RouteRule>,
+    // Rebuilt from Graph wiring at the validation boundary. These indexes
+    // are not declarations, cannot be supplied by callers, and never travel
+    // in a package. Validation replaces them even on a cloned raw plan.
+    pub(crate) edges: Vec<Edge>,
+    pub(crate) routes: Vec<RouteRule>,
     /// The resolved `meta.app` schema — inferred from the graph's
     /// writes, travelling so the validator answers without a
     /// Registry (D-2026-08-10-1): flat dotted field, unified type.
@@ -397,6 +391,46 @@ pub struct AssetBlob {
 }
 
 impl ExecutionPlan {
+    /// Builds declarations without granting an execution capability.
+    /// [`ValidatedExecutionPlan`] verifies them and derives the routing indexes.
+    #[must_use]
+    pub fn new(
+        nodes: Vec<Node>,
+        app_schema: Vec<(String, DataType)>,
+        ext_schema: Vec<(String, DataType)>,
+        assets: Vec<AssetBlob>,
+    ) -> Self {
+        Self {
+            nodes,
+            app_schema,
+            ext_schema,
+            assets,
+            edges: Vec::new(),
+            routes: Vec::new(),
+        }
+    }
+
+    /// Authored routes, with every Graph boundary crossing preserved.
+    pub fn reference_routes(&self) -> impl Iterator<Item = &RouteRule> {
+        self.nodes
+            .iter()
+            .filter_map(Node::graph)
+            .flat_map(|graph| &graph.wiring)
+    }
+
+    /// Composed spatial dispositions, derived during validation.
+    /// An unvalidated declaration has no usable routing index.
+    #[must_use]
+    pub fn edges(&self) -> &[Edge] {
+        &self.edges
+    }
+
+    /// Composed case and manager selections, derived during validation.
+    #[must_use]
+    pub fn routes(&self) -> &[RouteRule] {
+        &self.routes
+    }
+
     /// Declared ports of the root App Graph, in canonical order.
     /// The root owns these declarations like any other Graph. Validation
     /// requires the first Node to be that root before the plan can execute.
@@ -563,11 +597,20 @@ impl ExecutionPlan {
 #[derive(Debug, Clone, PartialEq)]
 pub enum NodeKind {
     /// Lexical containment and boundary ports, without an application mailbox.
-    Graph,
+    Graph(Box<Graph>),
     /// DSL transitions and their private state declarations.
     Operator(Box<Operator>),
     /// External-effect Driver under a contract sheet.
     Connector(Box<ConnectorSpec>),
+}
+
+/// A Graph's reference wiring. The containing Node owns its boundary ports;
+/// the Graph holding a route determines which face of each boundary it names.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Graph {
+    /// One canonical, normalized rule per source. Case selection and explicit
+    /// discard or manager destinations are part of this sole description.
+    pub wiring: Vec<RouteRule>,
 }
 
 /// DSL transitions and private state belonging to one Operator.
@@ -604,6 +647,15 @@ pub struct Node {
 }
 
 impl Node {
+    /// The reference wiring when this Node is a Graph, never application code.
+    #[must_use]
+    pub fn graph(&self) -> Option<&Graph> {
+        match &self.body {
+            NodeKind::Graph(graph) => Some(graph),
+            NodeKind::Operator(_) | NodeKind::Connector(_) => None,
+        }
+    }
+
     /// Non-root address of an Operator or Connector. A Graph has no
     /// application mailbox or transaction preparation path.
     #[must_use]
@@ -631,7 +683,7 @@ impl Node {
     #[must_use]
     pub const fn kind(&self) -> node::Kind {
         match self.body {
-            NodeKind::Graph => node::Kind::Graph,
+            NodeKind::Graph(_) => node::Kind::Graph,
             NodeKind::Operator(_) => node::Kind::Operator,
             NodeKind::Connector(_) => node::Kind::Connector,
         }
@@ -642,7 +694,7 @@ impl Node {
     pub fn connector(&self) -> Option<&ConnectorSpec> {
         match &self.body {
             NodeKind::Connector(spec) => Some(spec),
-            NodeKind::Graph | NodeKind::Operator(_) => None,
+            NodeKind::Graph(_) | NodeKind::Operator(_) => None,
         }
     }
 
@@ -651,7 +703,7 @@ impl Node {
     pub fn vars(&self) -> &[VarCell] {
         match &self.body {
             NodeKind::Operator(operator) => &operator.vars,
-            NodeKind::Graph | NodeKind::Connector(_) => &[],
+            NodeKind::Graph(_) | NodeKind::Connector(_) => &[],
         }
     }
 
@@ -660,14 +712,14 @@ impl Node {
     pub fn handlers(&self) -> &[Handler] {
         match &self.body {
             NodeKind::Operator(operator) => &operator.handlers,
-            NodeKind::Graph | NodeKind::Connector(_) => &[],
+            NodeKind::Graph(_) | NodeKind::Connector(_) => &[],
         }
     }
 
     pub(crate) fn handlers_mut(&mut self) -> &mut [Handler] {
         match &mut self.body {
             NodeKind::Operator(operator) => &mut operator.handlers,
-            NodeKind::Graph | NodeKind::Connector(_) => &mut [],
+            NodeKind::Graph(_) | NodeKind::Connector(_) => &mut [],
         }
     }
 

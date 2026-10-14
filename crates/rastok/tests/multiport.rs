@@ -1602,7 +1602,7 @@ fn the_validator_refuses_mismatched_edge_pins() {
     .expect("a valid plan")
     .plan
     .into_inner();
-    let measure = plan.nodes[1]
+    let measure = plan.nodes[0]
         .ports
         .iter_mut()
         .find(|decl| decl.port.name() == "measure")
@@ -1983,9 +1983,11 @@ fn the_validator_reads_the_table_and_gates_the_capability() {
     // Process cannot grow a port beyond its resolved contract, while a
     // referenced row absent from the table refuses by ignorance.
     use rastok::datatype::DataType;
-    use rastok::node::NodeIndex;
     use rastok::node::PortDirection;
-    use rastok::plan::{Edge, EdgeEnd, PortDecl, ValidatedExecutionPlan};
+    use rastok::plan::{
+        Endpoint, EndpointOwner, NodeKind, PortDecl, RouteDestination, RouteSelection,
+        ValidatedExecutionPlan,
+    };
     let source = "graph g : App {\n  input in: text\n  output out: text\n  connector probe : Process {\n    mode = job ; command = \"cat\"\n    codec = lines\n    idempotent = true; behavior = deterministic\n  }\n  in -> probe -> out\n  probe.err -> nothing\n  probe.exit -> nothing\n}\n";
     let mut plan = compile(
         &[source],
@@ -2010,20 +2012,23 @@ fn the_validator_reads_the_table_and_gates_the_capability() {
     probe
         .ports
         .sort_by(|left, right| left.key().cmp(&right.key()));
-    plan.edges.push(Edge {
-        owner: rastok::node::NodeIndex::new(0),
-        from: EdgeEnd {
-            node: rastok_core::node::NodeIndex::ROOT,
-            port: rastok::node::Port::new("in").unwrap(),
-        },
-        to: Some(EdgeEnd {
-            node: NodeIndex::new(u32::try_from(probe_slot).unwrap()),
-            port: rastok::node::Port::new("request").unwrap(),
-        }),
-    });
-    let mut edges = plan.edges.clone();
-    edges.sort_by_key(|edge| plan.edge_text(edge));
-    plan.edges = edges;
+    let probe_path = plan.nodes[probe_slot].executor_path().unwrap().clone();
+    let NodeKind::Graph(graph) = &mut plan.nodes[0].body else {
+        panic!("App Graph")
+    };
+    let input = graph
+        .wiring
+        .iter_mut()
+        .find(|rule| rule.source.port.name() == "in")
+        .unwrap();
+    let RouteSelection::All(destinations) = &mut input.selection else {
+        panic!("unconditional input")
+    };
+    destinations.push(RouteDestination::Port(Endpoint {
+        owner: EndpointOwner::Node(probe_path),
+        port: rastok::node::Port::new("request").unwrap(),
+    }));
+    destinations.sort();
     let error = ValidatedExecutionPlan::try_new(plan.clone()).unwrap_err();
     assert!(matches!(
         &error,
@@ -2032,22 +2037,29 @@ fn the_validator_reads_the_table_and_gates_the_capability() {
     ));
     // A port the table does NOT know refuses by ignorance instead —
     // the distinction is what proves the table answered.
-    let ghost = plan
-        .edges
+    let NodeKind::Graph(graph) = &mut plan.nodes[0].body else {
+        panic!("App Graph")
+    };
+    let input = graph
+        .wiring
         .iter_mut()
-        .find(|edge| {
-            edge.to
-                .as_ref()
-                .is_some_and(|to| to.port.name() == "request")
+        .find(|rule| rule.source.port.name() == "in")
+        .unwrap();
+    let RouteSelection::All(destinations) = &mut input.selection else {
+        panic!("unconditional input")
+    };
+    let ghost = destinations
+        .iter_mut()
+        .find_map(|destination| match destination {
+            RouteDestination::Port(endpoint) if endpoint.port.name() == "request" => Some(endpoint),
+            _ => None,
         })
-        .expect("the spliced edge");
-    ghost.to.as_mut().expect("a target").port = rastok::node::Port::new("ghost").unwrap();
+        .expect("the spliced destination");
+    ghost.port = rastok::node::Port::new("ghost").unwrap();
+    destinations.sort();
     plan.nodes[probe_slot]
         .ports
         .retain(|port| port.port.name() != "request");
-    let mut edges = plan.edges.clone();
-    edges.sort_by_key(|edge| plan.edge_text(edge));
-    plan.edges = edges;
     assert!(matches!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
         rastok::plan::PlanValidationError::WrongPortDirection { port, .. } if port.name() == "ghost"

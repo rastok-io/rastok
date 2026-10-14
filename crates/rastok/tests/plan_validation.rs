@@ -16,7 +16,7 @@ use rastok::instance;
 use rastok::node::NodeIndex;
 use rastok::node::{self, Port, PortDirection};
 use rastok::plan::{
-    self, DispatchStep, Edge, EdgeEnd, ExecutionPlan, PlanValidationError, ValidatedExecutionPlan,
+    self, DispatchStep, EdgeEnd, ExecutionPlan, PlanValidationError, ValidatedExecutionPlan,
 };
 
 fn linear_statements(handler: &mut plan::Handler) -> &mut Vec<DispatchStep> {
@@ -31,6 +31,47 @@ fn operator_handlers(plan: &mut ExecutionPlan, node: usize) -> &mut Vec<plan::Ha
         panic!("the fixture selects an Operator")
     };
     &mut operator.handlers
+}
+
+fn wiring(plan: &mut ExecutionPlan) -> &mut Vec<plan::RouteRule> {
+    let plan::NodeKind::Graph(graph) = &mut plan.nodes[0].body else {
+        panic!("App Graph")
+    };
+    &mut graph.wiring
+}
+
+// Construct an authored destination, not a forged derived edge.
+fn add_route(plan: &mut ExecutionPlan, from: EdgeEnd, to: Option<EdgeEnd>) {
+    let endpoint = |end: EdgeEnd| plan::Endpoint {
+        owner: if plan.nodes[end.node.index()].kind() == node::Kind::Graph {
+            plan::EndpointOwner::Graph(plan.nodes[end.node.index()].path.clone())
+        } else {
+            plan::EndpointOwner::Node(
+                plan.nodes[end.node.index()]
+                    .executor_path()
+                    .unwrap()
+                    .clone(),
+            )
+        },
+        port: end.port,
+    };
+    let source = endpoint(from);
+    let destination = to.map_or(plan::RouteDestination::Discard, |to| {
+        plan::RouteDestination::Port(endpoint(to))
+    });
+    if let Some(rule) = wiring(plan).iter_mut().find(|rule| rule.source == source) {
+        let plan::RouteSelection::All(set) = &mut rule.selection else {
+            panic!("unconditional fixture");
+        };
+        set.push(destination);
+        set.sort();
+    } else {
+        wiring(plan).push(plan::RouteRule {
+            source,
+            selection: plan::RouteSelection::All(vec![destination]),
+        });
+    }
+    wiring(plan).sort_by_key(plan::RouteRule::canonical_order_key);
 }
 
 const PROBE: &str = r#"
@@ -315,14 +356,12 @@ fn a_loop_spec_cannot_be_detached_from_its_host_contributions() {
 }
 
 fn bare_operator_plan() -> ExecutionPlan {
-    ExecutionPlan {
-        boundary_routes: Vec::new(),
-        routes: vec![],
-        nodes: vec![
+    ExecutionPlan::new(
+        vec![
             plan::Node {
                 path: node::OwnerPath::root(),
                 parent: None,
-                body: plan::NodeKind::Graph,
+                body: plan::NodeKind::Graph(Box::default()),
                 ports: vec![],
                 extensions: vec![plan::ExtensionSpec::App],
                 instance: instance::InstanceSpec {
@@ -349,11 +388,10 @@ fn bare_operator_plan() -> ExecutionPlan {
                 vals: vec![],
             },
         ],
-        edges: vec![],
-        app_schema: vec![],
-        ext_schema: vec![],
-        assets: vec![],
-    }
+        vec![],
+        vec![],
+        vec![],
+    )
 }
 
 fn port(name: &str) -> Port {
@@ -848,14 +886,93 @@ fn a_raw_owner_parent_must_be_an_enclosing_graph() {
 }
 
 #[test]
-fn an_edge_scope_must_name_a_graph_owner() {
-    let mut raw = raw_probe();
-    let relay = owner_slot(&raw, "relay");
-    raw.edges[0].owner = relay;
+fn reference_wiring_belongs_to_a_graph_body() {
+    let plan = ValidatedExecutionPlan::try_new(raw_probe()).unwrap();
+    assert!(
+        plan.nodes[0]
+            .graph()
+            .is_some_and(|graph| !graph.wiring.is_empty())
+    );
+    for node in plan
+        .nodes
+        .iter()
+        .filter(|node| node.kind() != node::Kind::Graph)
+    {
+        assert!(node.graph().is_none());
+    }
+    for edge in plan.edges() {
+        assert_eq!(plan.nodes[edge.owner.index()].kind(), node::Kind::Graph);
+    }
+}
 
+#[test]
+fn validation_rebuilds_indexes_from_changed_reference_wiring() {
+    let original = ValidatedExecutionPlan::try_new(raw_probe()).unwrap();
+    let mut changed = original.clone().into_inner();
+    // Removing the only producer must not leave an inferred App output
+    // without a type constraint; this test exercises routing, not inference.
+    changed.nodes[0]
+        .ports
+        .iter_mut()
+        .find(|decl| decl.port.name() == "out")
+        .unwrap()
+        .ty = Some(DataType::Text);
+    let rule = wiring(&mut changed)
+        .iter_mut()
+        .find(|rule| {
+            matches!(&rule.source.owner, plan::EndpointOwner::Node(path)
+            if path.to_string() == "shell")
+                && rule.source.port.name() == "out"
+        })
+        .unwrap();
+    rule.selection = plan::RouteSelection::All(vec![plan::RouteDestination::Discard]);
+    wiring(&mut changed).sort_by_key(plan::RouteRule::canonical_order_key);
+    let changed = ValidatedExecutionPlan::try_new(changed).unwrap();
+    let shell_output = |edge: &&plan::Edge| {
+        edge.from.node == owner_slot(&original, "shell") && edge.from.port.name() == "out"
+    };
+    assert!(
+        original
+            .edges()
+            .iter()
+            .find(shell_output)
+            .unwrap()
+            .to
+            .is_some()
+    );
+    assert!(
+        changed
+            .edges()
+            .iter()
+            .find(shell_output)
+            .unwrap()
+            .to
+            .is_none()
+    );
+}
+
+#[test]
+fn one_graph_cannot_supply_two_rules_for_the_same_source() {
+    let mut raw = raw_probe();
+    let mut duplicate = wiring(&mut raw)
+        .iter()
+        .find(
+            |rule| matches!(&rule.source.owner, plan::EndpointOwner::Graph(path) if path.is_root()),
+        )
+        .unwrap()
+        .clone();
+    duplicate.selection =
+        plan::RouteSelection::All(vec![plan::RouteDestination::Port(plan::Endpoint {
+            owner: plan::EndpointOwner::Node(node::Path::new(["shell"]).unwrap()),
+            port: port("in"),
+        })]);
+    wiring(&mut raw).push(duplicate);
+    wiring(&mut raw).sort_by_key(plan::RouteRule::canonical_order_key);
     assert_eq!(
         ValidatedExecutionPlan::try_new(raw).unwrap_err(),
-        PlanValidationError::InvalidEdgeScope { owner: relay }
+        PlanValidationError::NonCanonicalOrder {
+            collection: "Graph wiring sources"
+        }
     );
 }
 
@@ -1006,7 +1123,7 @@ fn a_dynamic_attribute_cannot_claim_a_later_phase_for_a_literal() {
         .expect("the Process node");
     let spec = match &mut shell.body {
         plan::NodeKind::Connector(spec) => spec,
-        plan::NodeKind::Graph | plan::NodeKind::Operator(_) => panic!("shell is a connector"),
+        plan::NodeKind::Graph(_) | plan::NodeKind::Operator(_) => panic!("shell is a connector"),
     };
     let (_, command) = spec
         .attributes
@@ -1040,7 +1157,7 @@ fn a_dynamic_attribute_requires_a_registry_free_contract_authority() {
         .expect("the connector node");
     let spec = match &mut shell.body {
         plan::NodeKind::Connector(spec) => spec,
-        plan::NodeKind::Graph | plan::NodeKind::Operator(_) => panic!("shell is a connector"),
+        plan::NodeKind::Graph(_) | plan::NodeKind::Operator(_) => panic!("shell is a connector"),
     };
     spec.contract = rastok::connector::ContractId::parse("org.rastok.test/custom@1").unwrap();
     spec.attributes = vec![(
@@ -1093,7 +1210,7 @@ fn instance_values_and_authorized_connector_settings_share_one_phase_judge() {
         .expect("the Process node");
     let spec = match &mut shell.body {
         plan::NodeKind::Connector(spec) => spec,
-        plan::NodeKind::Graph | plan::NodeKind::Operator(_) => panic!("shell is a connector"),
+        plan::NodeKind::Graph(_) | plan::NodeKind::Operator(_) => panic!("shell is a connector"),
     };
     let (_, command) = spec
         .attributes
@@ -1288,20 +1405,17 @@ fn a_boundary_input_cannot_be_an_edge_target() {
     plan.nodes[0]
         .ports
         .sort_by(|left, right| left.key().cmp(&right.key()));
-    plan.edges.push(Edge {
-        owner: node::NodeIndex::new(0),
-        from: EdgeEnd {
+    add_route(
+        &mut plan,
+        EdgeEnd {
             node: NodeIndex::new(1),
             port: port("out"),
         },
-        to: Some(EdgeEnd {
+        Some(EdgeEnd {
             node: rastok_core::node::NodeIndex::ROOT,
             port: port("request"),
         }),
-    });
-    let mut edges = plan.edges.clone();
-    edges.sort_by_key(|edge| plan.edge_text(edge));
-    plan.edges = edges;
+    );
     let error = ValidatedExecutionPlan::try_new(plan).unwrap_err();
     assert_eq!(
         error,
@@ -1325,20 +1439,17 @@ fn a_boundary_output_cannot_be_an_edge_source() {
     plan.nodes[0]
         .ports
         .sort_by(|left, right| left.key().cmp(&right.key()));
-    plan.edges.push(Edge {
-        owner: node::NodeIndex::new(0),
-        from: EdgeEnd {
+    add_route(
+        &mut plan,
+        EdgeEnd {
             node: rastok_core::node::NodeIndex::ROOT,
             port: port("response"),
         },
-        to: Some(EdgeEnd {
+        Some(EdgeEnd {
             node: NodeIndex::new(1),
             port: port("in"),
         }),
-    });
-    let mut edges = plan.edges.clone();
-    edges.sort_by_key(|edge| plan.edge_text(edge));
-    plan.edges = edges;
+    );
     let error = ValidatedExecutionPlan::try_new(plan).unwrap_err();
     assert_eq!(
         error,
@@ -1355,20 +1466,17 @@ fn conventional_ports_hold_their_directions() {
     // Conventional `in` used as a TARGET — the graph's input fed from
     // inside the graph — refuses.
     let mut plan = raw_probe();
-    plan.edges.push(Edge {
-        owner: node::NodeIndex::new(0),
-        from: EdgeEnd {
+    add_route(
+        &mut plan,
+        EdgeEnd {
             node: NodeIndex::new(1),
             port: port("out"),
         },
-        to: Some(EdgeEnd {
+        Some(EdgeEnd {
             node: rastok_core::node::NodeIndex::ROOT,
             port: port("in"),
         }),
-    });
-    let mut edges = plan.edges.clone();
-    edges.sort_by_key(|edge| plan.edge_text(edge));
-    plan.edges = edges;
+    );
     let error = ValidatedExecutionPlan::try_new(plan).unwrap_err();
     assert_eq!(
         error,
@@ -1381,20 +1489,17 @@ fn conventional_ports_hold_their_directions() {
 
     // Conventional `out` used as a SOURCE refuses likewise.
     let mut plan = raw_probe();
-    plan.edges.push(Edge {
-        owner: node::NodeIndex::new(0),
-        from: EdgeEnd {
+    add_route(
+        &mut plan,
+        EdgeEnd {
             node: rastok_core::node::NodeIndex::ROOT,
             port: port("out"),
         },
-        to: Some(EdgeEnd {
+        Some(EdgeEnd {
             node: NodeIndex::new(1),
             port: port("in"),
         }),
-    });
-    let mut edges = plan.edges.clone();
-    edges.sort_by_key(|edge| plan.edge_text(edge));
-    plan.edges = edges;
+    );
     let error = ValidatedExecutionPlan::try_new(plan).unwrap_err();
     assert_eq!(
         error,
@@ -1480,11 +1585,11 @@ fn reordered_nodes_are_not_canonical() {
 #[test]
 fn reordered_edges_are_not_canonical() {
     let mut plan = raw_probe();
-    plan.edges.swap(0, 1);
+    wiring(&mut plan).swap(0, 1);
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
         PlanValidationError::NonCanonicalOrder {
-            collection: "edges"
+            collection: "Graph wiring"
         }
     );
 }
@@ -1628,14 +1733,14 @@ fn an_edge_to_an_unknown_port_refuses() {
     // A node port that exists nowhere: neither implicit nor declared
     // — the reference is not usable in the required role.
     let mut plan = raw_probe();
-    plan.edges.push(Edge {
-        owner: node::NodeIndex::new(0),
-        from: EdgeEnd {
+    add_route(
+        &mut plan,
+        EdgeEnd {
             node: NodeIndex::new(1),
             port: port("ghost"),
         },
-        to: None,
-    });
+        None,
+    );
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
         PlanValidationError::WrongPortDirection {
@@ -1647,14 +1752,14 @@ fn an_edge_to_an_unknown_port_refuses() {
 
     // A boundary port that exists nowhere refuses by its own name.
     let mut plan = raw_probe();
-    plan.edges.push(Edge {
-        owner: node::NodeIndex::new(0),
-        from: EdgeEnd {
+    add_route(
+        &mut plan,
+        EdgeEnd {
             node: rastok_core::node::NodeIndex::ROOT,
             port: port("ghost"),
         },
-        to: None,
-    });
+        None,
+    );
     assert_eq!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),
         PlanValidationError::UnknownBoundaryPort {
@@ -1833,21 +1938,20 @@ fn a_forged_executable_cycle_never_earns_the_validated_type() {
         .position(|node| node.path.to_string() == "shell")
         .map(|index| NodeIndex::new(u32::try_from(index).unwrap()))
         .expect("the fixture has shell");
-    let back_edge = plan
-        .edges
-        .iter_mut()
-        .find(|edge| {
-            edge.from.node == shell
-                && edge
-                    .to
-                    .as_ref()
-                    .is_some_and(|to| to.node == NodeIndex::ROOT)
-        })
-        .expect("the fixture routes shell to the boundary");
-    back_edge.to = Some(EdgeEnd {
-        node: relay,
-        port: Port::new("in").unwrap(),
+    let source =
+        plan::EndpointOwner::Node(plan.nodes[shell.index()].executor_path().unwrap().clone());
+    let destination = plan::RouteDestination::Port(plan::Endpoint {
+        owner: plan::EndpointOwner::Node(
+            plan.nodes[relay.index()].executor_path().unwrap().clone(),
+        ),
+        port: port("in"),
     });
+    let rule = wiring(&mut plan)
+        .iter_mut()
+        .find(|rule| rule.source.owner == source && rule.source.port.name() == "out")
+        .unwrap();
+    rule.selection = plan::RouteSelection::All(vec![destination]);
+    wiring(&mut plan).sort_by_key(plan::RouteRule::canonical_order_key);
 
     assert!(matches!(
         ValidatedExecutionPlan::try_new(plan).unwrap_err(),

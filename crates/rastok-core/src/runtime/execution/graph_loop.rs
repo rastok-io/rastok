@@ -111,8 +111,7 @@ impl Execution<'_> {
             }
             for rule in self
                 .plan
-                .boundary_routes
-                .iter()
+                .reference_routes()
                 .filter(|rule| rule.source == endpoint)
             {
                 let destinations = match &rule.selection {

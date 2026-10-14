@@ -799,3 +799,113 @@ body lengths are 919, 964 and 225 bytes, respectively, versus 961, 1,005 and
 declaration ownership and handler references and name the App endpoint
 explicitly. These intermediate lengths are evidence, not approved fixture
 pins: the final wiring shape must enter the package inventory first.
+
+## Reference wiring candidate — 14 October
+
+Each Graph now contains its reference `wiring`, normalized to one rule per
+source. The compiler leaves the HIR used by semantic hashing unchanged.
+The candidate package carries that wiring in the Graph body; it no longer
+transports physical edges, composed selections, or a separate boundary
+inventory. The reader rejects those extra tables rather than accepting a
+second description of the same graph.
+
+Validation derives private edge and selection indexes from the declarations,
+including when revalidating a modified clone. Node paths, canonical order
+and parent relationships are checked before resolving route endpoints.
+Each Graph supplies the scope and boundary face of its wiring. Destination
+coverage, crossed boundary types and manager-command authority remain
+independently checked. Comparing three supplied routing inventories is no
+longer a validation obligation; `PhysicalEdgeMismatch` disappears.
+
+The runtime, annotation propagation, Loop proofs and debugger projection now
+read the per-Graph declarations instead of a conditional boundary inventory.
+The mailbox and journal representation do not change in this step.
+
+This remains an **incomplete format-21 candidate**. Reference endpoints
+still use the shared path-based routing vocabulary; converting those
+endpoints to Node indices and mailbox deliveries to edge indices remains
+part of lot 1. No final layout, package witness, or complete lot is approved
+here. The human-review ledgers and `decisions.md` are unchanged.
+
+### Checks in this batch
+
+- Workspace/all-feature/all-target compilation and the RustRover build
+  passed. Strict all-target/all-feature Clippy passed without warnings.
+- The first combined run exercised 1,204 tests: 1,199 passed, five failed.
+  Three failures came from test construction: two tests still selected
+  Node 1 for the App boundary, and the new cache-rebuild regression removed
+  an inferred output's only type constraint. A fourth was the new hostile
+  endpoint test expecting the wrong exact error text for a non-array owner.
+  Those fixtures are corrected without weakening their behavioral assertions.
+  The fifth is the unchanged `FORMAT_VERSION == 20` package pin; it remains
+  pending the final format-21 witness inventory. Rerun results follow below.
+- The 16 JavaScript graph-layout tests passed. The browser test did not
+  start: the available Node environment cannot resolve `playwright`.
+  No dependency was installed and no browser pass is claimed.
+- No package, trace, recording, example or conformance fixture was changed.
+
+Host startup time is not reported as test or runtime performance. Sampling
+the core test binary before its first test found it at `_dyld_start`, with
+a 112 KiB process footprint and no Rust frame. No timeout or system-security
+setting was changed to avoid that startup delay.
+
+The focused rerun passed all 85 Contract tests, 63 multiport tests and 76
+plan-validation tests. The instance-stop suite passed 20 tests; its remaining
+failure is the same unchanged format-20 assertion, after its forged lexical
+scope has already been rejected correctly. All 28 core codec tests passed on
+rerun, including rejection of each removed top-level routing table. Together
+with the earlier batch this covers 1,225 distinct tests: 1,223 have a passing
+result and two package-version assertions remain pending. No test is ignored;
+the full workspace test gate is not claimed.
+
+Formatting, rustdoc without warnings and compilation without default features
+passed for `thumbv7m-none-eabi`, `riscv32imac-unknown-none-elf` and
+`thumbv8m.main-none-eabihf`. A final RustRover build also passed.
+
+### Trace and embedded qualification
+
+All 28 gallery scenarios again passed with the same record counts and causal
+seals as the tracked traces. Echo, JSONL and gauge keep their semantic hashes.
+The HTTP scenarios used only explicit synthetic canaries and Lab responses;
+no model or partner was called. Candidate packages were generated from source
+in a temporary directory, not written over tracked witnesses.
+
+| Witness | Tracked format-20 body | Candidate body | Candidate checksum |
+|---|---:|---:|---|
+| Echo | 961 B | 980 B | `0b09b2234601e586127b8631ec37a11f1fffbe8656e676edfaa1466750a3579c` |
+| JSONL | 1,005 B | 1,023 B | `2ecab68fa19ab6f5a8b8401382ca2032cf14b907291efee38ec9c073ce939726` |
+| Gauge | 249 B | 248 B | `cc6e03ca15d0fc2c32d94f897e13818e77e5e7356c0bb620e1e56b1ebdec282f` |
+
+The body now describes each Graph's wiring instead of independently supplied
+physical and boundary tables. These are intermediate measurements, not final
+package pins: endpoints are still path-based in this checkpoint.
+
+Both Cortex-M33 workloads ended with `SPIKE_OK`, unchanged semantic hashes
+and 67/17 journal records respectively.
+
+| Cortex-M33 measurement | Echo, 32 admissions | Retry with recovery |
+|---|---:|---:|
+| Heap immediately after package decoding | 8,460 B | 6,220 B |
+| Package-load peak | 37,836 B | 31,768 B |
+| Complete execution/recovery peak | 113,636 B | 130,016 B |
+| Margin below 128 KiB | 17,436 B | 1,056 B |
+| Live heap after execution | not sampled | 93,976 B |
+| Live heap after recovery | not sampled | 93,840 B |
+| `.text` | 898,820 B | 960,428 B |
+| `.rodata` | 69,828 B | 80,528 B |
+| `.text + .rodata` | 968,648 B | 1,040,956 B |
+| Margin below 1 MiB | 79,928 B | 7,620 B |
+
+Against `7446583`, the Retry heap peak grows by 1,076 B and code decreases
+by 4,052 B; Echo grows by 1,676 B and code decreases by 4,084 B. The limits
+and workload are unchanged. The remaining 1,056 B of Retry heap is not an
+allowance for unmeasured growth. Indexed reference endpoints and mailbox
+deliveries still require qualification before the final package approval.
+
+The optional layout probe now compares complete declarations, wiring and
+execution indexes only. Its earlier declaration-only comparison would count
+the current Graph's wiring against empty experimental Graph bodies and is
+therefore removed rather than reported as a layout saving.
+The updated probe compiled with `retry-qualification,node-layout-probe`;
+its Rust formatting check passed. This checkpoint does not claim a new
+allocation-probe run.

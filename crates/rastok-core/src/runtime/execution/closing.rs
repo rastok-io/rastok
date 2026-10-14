@@ -65,7 +65,7 @@ impl Execution<'_> {
                     continue;
                 }
                 match &node.body {
-                    NodeKind::Graph => continue,
+                    NodeKind::Graph(_) => continue,
                     NodeKind::Operator(_) => {
                         for handler in
                             node.handlers()

@@ -19,7 +19,7 @@ use crate::schema_annotation::{
 
 use super::type_resolution::ResolvedPortTable;
 use super::{
-    DispatchStep, EdgeEnd, EmitValue, Endpoint, EndpointOwner, ExecutionPlan, Handler, LoopCommand,
+    DispatchStep, EmitValue, Endpoint, EndpointOwner, ExecutionPlan, Handler, LoopCommand,
     LoopCommandKind, NodeIndex, RouteDestination, RouteSelection,
 };
 
@@ -283,37 +283,9 @@ impl<'a> Solver<'a> {
         let mut vars = BTreeMap::<VarKey, Vec<AnnotationTable>>::new();
         let mut values = BTreeMap::<ValueKey, Vec<AnnotationTable>>::new();
 
-        for edge in self
-            .plan
-            .edges
-            .iter()
-            .filter(|_| self.plan.boundary_routes.is_empty())
-        {
-            let source = endpoint_key(&edge.from);
-            let Some(target) = edge.to.as_ref().map(endpoint_key) else {
-                continue;
-            };
-            let mut table = self.port(&source)?.current.clone();
-            if let Some(cases) = self.plan.edge_cases(edge) {
-                table = AnnotationTable::new(table.entries().iter().filter(|(path, _)| {
-                    !matches!(path.segments().first(), Some(SchemaPathSegment::TaggedUnionCase(case)) if !cases.contains(case))
-                }).map(|(path, set)| (path.clone(), set.clone())).collect()).map_err(|reason| ResolutionError {
-                    location: port_location(self.plan, &source),
-                    reason: PropagationError::InvalidDerivedTable(reason),
-                })?;
-            }
-            ports.entry(target).or_default().push(table);
-        }
-
-        // Boundary inventories retain intermediate Graph policies which the
-        // executable edge projection cannot represent. With no inventory,
-        // ordinary edges above and the sparse command rules are sufficient.
-        let rules = if self.plan.boundary_routes.is_empty() {
-            &self.plan.routes
-        } else {
-            &self.plan.boundary_routes
-        };
-        for rule in rules {
+        // Follow each authored crossing so intermediate Graph policies are
+        // preserved before composition reaches the final Executor.
+        for rule in self.plan.reference_routes() {
             let source = self.scoped_endpoint_key(&rule.source)?;
             let arms: Vec<_> = match &rule.selection {
                 RouteSelection::All(destinations) => vec![(None, destinations.as_slice())],
@@ -335,7 +307,7 @@ impl<'a> Solver<'a> {
                 };
                 for destination in destinations {
                     match destination {
-                        RouteDestination::Port(target) if !self.plan.boundary_routes.is_empty() => {
+                        RouteDestination::Port(target) => {
                             ports
                                 .entry(self.scoped_endpoint_key(target)?)
                                 .or_default()
@@ -963,13 +935,6 @@ fn producer_policy(
                 overlay(&known, table)
             }),
         result => result,
-    }
-}
-
-fn endpoint_key(endpoint: &EdgeEnd) -> PortKey {
-    match endpoint.node {
-        NodeIndex::ROOT => PortKey::Boundary(endpoint.port.clone()),
-        index => PortKey::Node(index, endpoint.port.clone()),
     }
 }
 

@@ -146,12 +146,7 @@ fn display_owner(owner: &str) -> &str {
 }
 
 pub(super) fn routes(plan: &crate::plan::ExecutionPlan) -> JsonValue {
-    let inventory = if plan.boundary_routes.is_empty() {
-        &plan.routes
-    } else {
-        &plan.boundary_routes
-    };
-    json!(inventory.iter().map(|rule| {
+    json!(plan.reference_routes().map(|rule| {
         let arms = match &rule.selection {
             RouteSelection::All(destinations) => vec![json!({ "cases": [], "destinations": destinations.iter().map(destination).collect::<Vec<_>>() })],
             RouteSelection::Cases(arms) => arms.iter().map(|arm| json!({ "cases": arm.cases, "destinations": arm.destinations.iter().map(destination).collect::<Vec<_>>() })).collect(),
@@ -178,7 +173,7 @@ pub(super) fn edge_cases(
 ) -> Vec<String> {
     let mut cases = BTreeSet::new();
     for rule in plan
-        .routes
+        .routes()
         .iter()
         .filter(|rule| physical_matches(plan, &rule.source, &edge.from))
     {
@@ -311,7 +306,7 @@ pub(super) fn history(plan: &ValidatedExecutionPlan, records: &[Record]) -> Hist
                 extra["envelope_ids"] = json!([id.to_string()]);
                 for route in &inbound.routes {
                     let Some(edge) = plan
-                        .edges
+                        .edges()
                         .iter()
                         .find(|edge| plan.edge_text(edge) == route.edge)
                     else {
@@ -498,7 +493,7 @@ fn decision(
         .consumed
         .iter()
         .filter_map(|position| {
-            plan.edges
+            plan.edges()
                 .iter()
                 .find(|edge| plan.edge_text(edge) == position.edge)?
                 .to
@@ -882,7 +877,7 @@ mod tests {
         assert_eq!(decisions[1]["selected"], JsonValue::Null);
         let edge = compilation
             .plan
-            .edges
+            .edges()
             .iter()
             .find(|edge| {
                 compilation.plan.nodes[edge.from.node.index()]

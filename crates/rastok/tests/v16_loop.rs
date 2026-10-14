@@ -130,7 +130,15 @@ fn a_forged_graph_next_cannot_change_the_entry_type() {
         );
     let compilation = compiler::compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap();
     let mut forged = compilation.plan.plan().clone();
-    for route in forged.routes.iter_mut().chain(&mut forged.boundary_routes) {
+    for route in forged
+        .nodes
+        .iter_mut()
+        .filter_map(|node| match &mut node.body {
+            plan::NodeKind::Graph(graph) => Some(graph.wiring.iter_mut()),
+            _ => None,
+        })
+        .flatten()
+    {
         if let plan::RouteSelection::All(destinations) = &mut route.selection {
             for destination in destinations {
                 if let plan::RouteDestination::LoopCommand(command) = destination {
@@ -988,28 +996,22 @@ lab app {
     assert_eq!(run.state.data(), &Data::materialized(Value::Int(9)));
 
     let mut forged = compilation.plan.plan().clone();
-    let exit = forged
-        .edges
-        .iter()
-        .find(|edge| edge.from.port.name() == "exit")
+    let plan::NodeKind::Graph(graph) = &mut forged.nodes[0].body else {
+        panic!("App Graph")
+    };
+    let exit = graph
+        .wiring
+        .iter_mut()
+        .find(|rule| rule.source.port.name() == "exit")
         .unwrap();
-    let node = &forged.nodes[exit.from.node.index()];
-    let owner = plan::EndpointOwner::Node(node.executor_path().unwrap().clone());
-    forged.routes.push(plan::RouteRule {
-        source: plan::Endpoint {
-            owner: owner.clone(),
-            port: exit.from.port.clone(),
+    exit.selection = plan::RouteSelection::All(vec![plan::RouteDestination::LoopCommand(
+        plan::LoopCommandTarget {
+            owner: exit.source.owner.clone(),
+            kind: plan::LoopCommandKind::Again,
         },
-        selection: plan::RouteSelection::All(vec![plan::RouteDestination::LoopCommand(
-            plan::LoopCommandTarget {
-                owner,
-                kind: plan::LoopCommandKind::Again,
-            },
-        )]),
-    });
-    forged.edges.retain(|edge| edge.from.port.name() != "exit");
-    forged
-        .routes
+    )]);
+    graph
+        .wiring
         .sort_by_key(plan::RouteRule::canonical_order_key);
     let error = plan::ValidatedExecutionPlan::try_new(forged).unwrap_err();
     assert!(

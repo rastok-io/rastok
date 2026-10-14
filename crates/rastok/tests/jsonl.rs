@@ -605,7 +605,11 @@ fn another_contracts_codec_vocabulary_is_untouched() {
                 .sort_by(|left, right| left.key().cmp(&right.key()));
         }
     }
-    plan.edges.retain(|edge| edge.from.port.name() != "err");
+    for node in &mut plan.nodes {
+        if let rastok::plan::NodeKind::Graph(graph) = &mut node.body {
+            graph.wiring.retain(|rule| rule.source.port.name() != "err");
+        }
+    }
     let validated = rastok::plan::ValidatedExecutionPlan::try_from(plan);
     assert!(
         validated.is_ok(),

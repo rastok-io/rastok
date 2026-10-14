@@ -36,11 +36,7 @@ pub fn derive_graph(
         if !visited.insert(source.clone()) {
             return Err(Error::UnsupportedActivation);
         }
-        for rule in plan
-            .boundary_routes
-            .iter()
-            .filter(|rule| rule.source == source)
-        {
+        for rule in plan.reference_routes().filter(|rule| rule.source == source) {
             let RouteSelection::All(destinations) = &rule.selection else {
                 return Err(Error::UnsupportedActivation);
             };
@@ -122,7 +118,7 @@ pub fn derive_graph(
         // A direct path is not enough: every possible producer of this
         // input must preserve the entry. Otherwise a second, transformed
         // input could make a local decrement increase the actual measure.
-        for route in &plan.boundary_routes {
+        for route in plan.reference_routes() {
             let targets = match &route.selection {
                 RouteSelection::All(targets) => vec![targets.as_slice()],
                 RouteSelection::Cases(arms) => {
@@ -162,11 +158,7 @@ fn recurs(plan: &ExecutionPlan, owner: &Node, source: &Endpoint) -> Result<bool,
         if !visited.insert(source.clone()) {
             return Err(Error::UnsupportedActivation);
         }
-        for rule in plan
-            .boundary_routes
-            .iter()
-            .filter(|rule| rule.source == source)
-        {
+        for rule in plan.reference_routes().filter(|rule| rule.source == source) {
             let selections: Vec<_> = match &rule.selection {
                 RouteSelection::All(destinations) => vec![destinations.as_slice()],
                 RouteSelection::Cases(arms) => {

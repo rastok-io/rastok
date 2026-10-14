@@ -54,151 +54,178 @@ impl core::fmt::Display for RouteCompositionError {
 
 impl core::error::Error for RouteCompositionError {}
 
+/// Build runtime indexes from the sole authored wiring. No supplied edge or
+/// composed selection is trusted, even when validating a clone of an old plan.
+pub(super) fn derive(plan: &mut ExecutionPlan) -> Result<(), super::PlanValidationError> {
+    let inventory: Vec<_> = plan.reference_routes().cloned().collect();
+    let mut routes = compose_routing(&inventory).map_err(RouteValidationError::from)?;
+    let endpoint = |value: &Endpoint| -> Result<EdgeEnd, super::PlanValidationError> {
+        let index = plan
+            .nodes
+            .iter()
+            .position(|node| match &value.owner {
+                EndpointOwner::Node(path) => node.path == *path && node.kind() != node::Kind::Graph,
+                EndpointOwner::Graph(path) => {
+                    node.path == *path && node.kind() == node::Kind::Graph
+                }
+            })
+            .ok_or_else(|| failure("Graph wiring", RouteErrorKind::UnknownEndpoint))?;
+        Ok(EdgeEnd {
+            node: NodeIndex::new(index as u32),
+            port: value.port.clone(),
+        })
+    };
+    let scope = |end: &EdgeEnd| {
+        let node = &plan.nodes[end.node.index()];
+        if node.kind() == node::Kind::Graph {
+            node.path.clone()
+        } else {
+            node.path.parent().unwrap_or_else(node::OwnerPath::root)
+        }
+    };
+    let mut edges = Vec::new();
+    for rule in &routes {
+        let from = endpoint(&rule.source)?;
+        for destination in destinations(&rule.selection) {
+            let to = match destination {
+                RouteDestination::Port(value) => Some(endpoint(value)?),
+                RouteDestination::Discard => None,
+                RouteDestination::LoopCommand(_) | RouteDestination::InstanceStop(_) => continue,
+            };
+            let owner_path = to.as_ref().map_or_else(
+                || scope(&from),
+                |to| scope(&from).common_ancestor(&scope(to)),
+            );
+            let owner = plan
+                .nodes
+                .iter()
+                .position(|node| node.path == owner_path && node.kind() == node::Kind::Graph)
+                .ok_or_else(|| failure("Graph wiring scope", RouteErrorKind::UnknownEndpoint))?;
+            edges.push(super::Edge {
+                owner: NodeIndex::new(owner as u32),
+                from: from.clone(),
+                to,
+            });
+        }
+    }
+    edges.sort_by_key(|edge| plan.edge_text(edge));
+    edges.dedup();
+    routes.retain(|rule| match &rule.selection {
+        RouteSelection::All(set) => set.iter().any(|destination| {
+            matches!(
+                destination,
+                RouteDestination::LoopCommand(_) | RouteDestination::InstanceStop(_)
+            )
+        }),
+        RouteSelection::Cases(_) => true,
+    });
+    plan.edges = edges;
+    plan.routes = routes;
+    Ok(())
+}
+
 pub(super) fn validate(
     plan: &ExecutionPlan,
     ports: &ResolvedPortTable,
 ) -> Result<(), super::PlanValidationError> {
-    let needs_inventory = plan.nodes.iter().any(|owner| {
-        owner.kind() == node::Kind::Graph && (!owner.path.is_root() || owner.loop_spec().is_some())
-    }) || plan
-        .routes
-        .iter()
-        .flat_map(|rule| destinations(&rule.selection))
-        .any(|destination| matches!(destination, RouteDestination::InstanceStop(_)));
-    if !needs_inventory {
-        return if plan.boundary_routes.is_empty() {
-            Ok(())
-        } else {
-            Err(failure("boundary_routes", RouteErrorKind::PhysicalEdgeMismatch).into())
-        };
-    }
-    for pair in plan.boundary_routes.windows(2) {
-        if pair[0].canonical_order_key() >= pair[1].canonical_order_key() {
-            return Err(super::PlanValidationError::NonCanonicalOrder {
-                collection: "boundary_routes",
-            });
-        }
-    }
-    super::validate_routing(&plan.boundary_routes, |endpoint| {
-        port(plan, ports, endpoint).and_then(|(_, ty)| ty.cloned())
-    })?;
-    for (index, rule) in plan.boundary_routes.iter().enumerate() {
-        let path = format!("boundary_routes[{index}]");
-        let (direction, _) = port(plan, ports, &rule.source)
-            .ok_or_else(|| failure(&path, RouteErrorKind::UnknownEndpoint))?;
-        if concrete(&rule.source)
-            && direction
-                != match rule.source.owner {
-                    EndpointOwner::Node(_) => PortDirection::Output,
-                    EndpointOwner::Graph(_) => PortDirection::Input,
-                }
-        {
-            return Err(failure(&path, RouteErrorKind::UnknownEndpoint).into());
-        }
-        for destination in destinations(&rule.selection) {
-            if let RouteDestination::InstanceStop(target) = destination {
-                let lexical = match &rule.source.owner {
-                    EndpointOwner::Graph(path) if direction == PortDirection::Input => {
-                        Some(path.clone())
-                    }
-                    EndpointOwner::Graph(path) => path.parent(),
-                    EndpointOwner::Node(path) => crate::node::OwnerPath::from(path).parent(),
-                };
-                if !super::routing_validation::valid_instance_stop_target(plan, target)
-                    || lexical.as_ref() != Some(&target.scope)
-                {
-                    return Err(failure(&path, RouteErrorKind::InvalidInstanceCommand).into());
-                }
-                continue;
+    for owner in &plan.nodes {
+        let Some(graph) = owner.graph() else { continue };
+        let mut sources = BTreeSet::new();
+        for pair in graph.wiring.windows(2) {
+            if pair[0].canonical_order_key() >= pair[1].canonical_order_key() {
+                return Err(super::PlanValidationError::NonCanonicalOrder {
+                    collection: "Graph wiring",
+                });
             }
-            if let RouteDestination::LoopCommand(command) = destination {
-                let valid = match (&command.owner, &rule.source.owner) {
-                    (EndpointOwner::Graph(owner), source) => {
-                        let source = match source {
-                            EndpointOwner::Graph(path) => path.clone(),
-                            EndpointOwner::Node(path) => crate::node::OwnerPath::from(path),
-                        };
-                        source.segments().starts_with(owner.segments())
-                            && plan.nodes.iter().any(|candidate| {
-                                candidate.path == *owner && candidate.loop_spec().is_some()
-                            })
-                    }
-                    (EndpointOwner::Node(owner), EndpointOwner::Node(source))
-                        if owner == source =>
-                    {
-                        plan.nodes
-                            .iter()
-                            .find(|node| node.path == *owner)
-                            .is_some_and(|node| {
-                                node.loop_spec().is_some()
-                                    && node
-                                        .connector()
-                                        .and_then(super::ConnectorSpec::call_semantics)
-                                        .is_some()
-                            })
-                    }
-                    _ => false,
-                };
-                if !valid {
-                    return Err(failure(&path, RouteErrorKind::InvalidManagerCommand).into());
-                }
-                continue;
+        }
+        super::validate_routing(&graph.wiring, |endpoint| {
+            port(plan, ports, endpoint).and_then(|(_, ty)| ty.cloned())
+        })?;
+        for rule in &graph.wiring {
+            let path = format!("Graph {} wiring", owner.path);
+            if !sources.insert(&rule.source) {
+                return Err(super::PlanValidationError::NonCanonicalOrder {
+                    collection: "Graph wiring sources",
+                });
             }
-            let RouteDestination::Port(endpoint) = destination else {
-                continue;
+            let scoped = |endpoint: &Endpoint, source: bool| -> bool {
+                let Some((direction, _)) = port(plan, ports, endpoint) else {
+                    return false;
+                };
+                let endpoint_path = match &endpoint.owner {
+                    EndpointOwner::Node(path) => path.segments(),
+                    EndpointOwner::Graph(path) => path.segments(),
+                };
+                let own_boundary =
+                    matches!(&endpoint.owner, EndpointOwner::Graph(path) if path == &owner.path);
+                endpoint_path.starts_with(owner.path.segments())
+                    && direction
+                        == if source == own_boundary {
+                            PortDirection::Input
+                        } else {
+                            PortDirection::Output
+                        }
             };
-            let (direction, _) = port(plan, ports, endpoint)
-                .ok_or_else(|| failure(&path, RouteErrorKind::UnknownEndpoint))?;
-            if concrete(endpoint)
-                && direction
-                    != match endpoint.owner {
-                        EndpointOwner::Node(_) => PortDirection::Input,
-                        EndpointOwner::Graph(_) => PortDirection::Output,
-                    }
-            {
+            if !scoped(&rule.source, true) {
                 return Err(failure(&path, RouteErrorKind::UnknownEndpoint).into());
             }
+            for destination in destinations(&rule.selection) {
+                match destination {
+                    RouteDestination::InstanceStop(target) => {
+                        if target.scope != owner.path
+                            || !super::routing_validation::valid_instance_stop_target(plan, target)
+                        {
+                            return Err(
+                                failure(&path, RouteErrorKind::InvalidInstanceCommand).into()
+                            );
+                        }
+                    }
+                    RouteDestination::LoopCommand(command) => {
+                        let valid = match (&command.owner, &rule.source.owner) {
+                            (EndpointOwner::Graph(target), source) => {
+                                let source = match source {
+                                    EndpointOwner::Graph(path) => path.segments(),
+                                    EndpointOwner::Node(path) => path.segments(),
+                                };
+                                source.starts_with(target.segments())
+                                    && plan.nodes.iter().any(|candidate| {
+                                        candidate.path == *target && candidate.loop_spec().is_some()
+                                    })
+                            }
+                            (EndpointOwner::Node(target), EndpointOwner::Node(source))
+                                if target == source =>
+                            {
+                                plan.nodes
+                                    .iter()
+                                    .find(|node| node.path == *target)
+                                    .is_some_and(|node| {
+                                        node.loop_spec().is_some()
+                                            && node
+                                                .connector()
+                                                .and_then(super::ConnectorSpec::call_semantics)
+                                                .is_some()
+                                    })
+                            }
+                            _ => false,
+                        };
+                        if !valid {
+                            return Err(
+                                failure(&path, RouteErrorKind::InvalidManagerCommand).into()
+                            );
+                        }
+                    }
+                    RouteDestination::Port(endpoint) if !scoped(endpoint, false) => {
+                        return Err(failure(&path, RouteErrorKind::UnknownEndpoint).into());
+                    }
+                    RouteDestination::Port(_) | RouteDestination::Discard => {}
+                }
+            }
         }
-    }
-
-    let mut derived = compose_routing(&plan.boundary_routes).map_err(RouteValidationError::from)?;
-    // An unreachable input can lead nowhere; it contributes no physical edge.
-    derived.retain(|rule| !matches!(&rule.selection, RouteSelection::All(set) if set.is_empty()));
-    let mut actual = plan.routes.clone();
-    let mut unconditional = BTreeMap::<Endpoint, Vec<RouteDestination>>::new();
-    let endpoint = |physical: &EdgeEnd| -> Result<Endpoint, super::PlanValidationError> {
-        Ok(Endpoint {
-            owner: plan.nodes[physical.node.index()].endpoint_owner()?,
-            port: physical.port.clone(),
-        })
-    };
-    for edge in &plan.edges {
-        let source = endpoint(&edge.from)?;
-        if plan.routes.iter().any(|rule| rule.source == source) {
-            continue;
-        }
-        let target = match &edge.to {
-            Some(target) => RouteDestination::Port(endpoint(target)?),
-            None => RouteDestination::Discard,
-        };
-        unconditional.entry(source).or_default().push(target);
-    }
-    actual.extend(unconditional.into_iter().map(|(source, mut set)| {
-        set.sort();
-        RouteRule {
-            source,
-            selection: RouteSelection::All(set),
-        }
-    }));
-    actual.sort_by_key(RouteRule::canonical_order_key);
-    if actual != derived {
-        return Err(failure("boundary_routes", RouteErrorKind::PhysicalEdgeMismatch).into());
     }
 
     let live = super::productibility::live_owners(plan);
     for source in plan
-        .boundary_routes
-        .iter()
+        .reference_routes()
         .map(|rule| &rule.source)
         .filter(|source| concrete(source))
     {
@@ -209,7 +236,7 @@ pub(super) fn validate(
                 .enumerate()
                 .find(|(_, node)| node.path == *path)
             else {
-                return Err(failure("boundary_routes", RouteErrorKind::UnknownEndpoint).into());
+                return Err(failure("Graph wiring", RouteErrorKind::UnknownEndpoint).into());
             };
             if !live[index]
                 || !super::productibility::may_produce(
@@ -222,9 +249,9 @@ pub(super) fn validate(
             }
         }
         let (_, Some(ty)) = port(plan, ports, source)
-            .ok_or_else(|| failure("boundary_routes", RouteErrorKind::UnknownEndpoint))?
+            .ok_or_else(|| failure("Graph wiring", RouteErrorKind::UnknownEndpoint))?
         else {
-            return Err(failure("boundary_routes", RouteErrorKind::UnresolvedCaseSource).into());
+            return Err(failure("Graph wiring", RouteErrorKind::UnresolvedCaseSource).into());
         };
         let cases = super::closed_case_domain(ty)
             .map_or_else(|| vec![None], |cases| cases.into_iter().map(Some).collect());
@@ -305,8 +332,7 @@ fn check_crossings(
         }
         let mut has_disposition = false;
         for rule in plan
-            .boundary_routes
-            .iter()
+            .reference_routes()
             .filter(|rule| rule.source == *source)
         {
             let selected = match &rule.selection {

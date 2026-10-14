@@ -104,26 +104,25 @@ fn closure_commits_its_request_before_the_exact_target_closes() {
 fn forged_packages_cannot_omit_the_lexical_scope_proof() {
     let compilation = compile(&source("nothing")).unwrap();
     let commands = checked(&source("instance.stop"));
-    for boundary in [false, true] {
-        let mut forged = compilation.plan.clone().into_inner();
-        if boundary {
-            forged.boundary_routes = commands.app.routes.clone();
-        } else {
-            forged.routes = commands.app.routes.clone();
+    let mut forged = compilation.plan.clone().into_inner();
+    let plan::NodeKind::Graph(graph) = &mut forged.nodes[0].body else {
+        panic!("App Graph")
+    };
+    graph.wiring = commands.app.routes.clone();
+    for rule in &mut graph.wiring {
+        if let plan::RouteSelection::All(destinations) = &mut rule.selection {
+            for destination in destinations {
+                if let plan::RouteDestination::InstanceStop(target) = destination {
+                    target.scope = node::OwnerPath::new(["worker"]).unwrap();
+                }
+            }
         }
-        forged
-            .routes
-            .sort_by_key(plan::RouteRule::canonical_order_key);
-        forged
-            .boundary_routes
-            .sort_by_key(plan::RouteRule::canonical_order_key);
-        let error = plan::ValidatedExecutionPlan::try_new(forged).unwrap_err();
-        assert!(
-            error.to_string().contains("instance closure")
-                || error.to_string().contains("physical edges"),
-            "{error}"
-        );
     }
+    graph
+        .wiring
+        .sort_by_key(plan::RouteRule::canonical_order_key);
+    let error = plan::ValidatedExecutionPlan::try_new(forged).unwrap_err();
+    assert!(error.to_string().contains("instance closure"), "{error}");
     assert_eq!(
         plan::FORMAT_VERSION,
         20,
@@ -811,9 +810,15 @@ fn a_forged_boundary_input_cannot_supply_a_nested_closure_context() {
     ))
     .unwrap();
     let mut forged = compiled.plan.into_inner();
-    let command = forged
-        .boundary_routes
+    let owner = forged
+        .nodes
         .iter_mut()
+        .find(|node| node.path.to_string() == "conversation")
+        .unwrap();
+    let plan::NodeKind::Graph(graph) = &mut owner.body else {
+        panic!("conversation Graph")
+    };
+    let command = graph.wiring.iter_mut()
         .find(|rule| matches!(&rule.selection, plan::RouteSelection::All(set)
             if set.iter().any(|destination| matches!(destination, plan::RouteDestination::InstanceStop(_)))))
         .unwrap();
@@ -821,8 +826,8 @@ fn a_forged_boundary_input_cannot_supply_a_nested_closure_context() {
         owner: plan::EndpointOwner::Graph(node::OwnerPath::new(["conversation"]).unwrap()),
         port: rastok::node::Port::new("in").unwrap(),
     };
-    forged
-        .boundary_routes
+    graph
+        .wiring
         .sort_by_key(plan::RouteRule::canonical_order_key);
     let error = plan::ValidatedExecutionPlan::try_new(forged).unwrap_err();
     assert!(error.to_string().contains("Operator inside"), "{error}");
