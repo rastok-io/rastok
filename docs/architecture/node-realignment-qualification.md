@@ -74,7 +74,7 @@ not upper bounds for every valid program.
 Reproduction, from the repository root:
 
 ```sh
-fixture_dir=$(mktemp -d /tmp/rastok-node-realignment.XXXXXX)
+fixture_dir=$(mktemp -d)
 cargo run --locked -p rastok --example retry_spike_package -- "$fixture_dir/retry-3.rkp" 3
 cd spikes/rp2350-emu
 RASTOK_SPIKE_PACKAGE="$fixture_dir/retry-3.rkp" \
@@ -1432,27 +1432,29 @@ independent reproduction remain dated evidence, not a new run.
 ### Reproducing the normal-image code measurements
 
 The earlier normal-image sizes (969,012 B echo, 1,040,912 B Retry) used the
-repository checkout at `/Users/steelcoder/Documents/rastok/rastok`, the pinned
-`1.97.1-aarch64-apple-darwin` toolchain, and the spike's release profile
-(`opt-level = "z"`, LTO, one codegen unit). The Cargo fingerprints retain
+repository checkout, the pinned `1.97.1-aarch64-apple-darwin` toolchain,
+and the spike's release profile (`opt-level = "z"`, LTO, one codegen unit).
+The Cargo fingerprints retain
 `RUSTFLAGS = -D warnings -C link-arg=-Tlink.x`. No stack or layout feature was
-enabled. The commands below reproduce that build configuration, with a fresh
-temporary path for the same Retry package:
+enabled. The commands below reproduce that build configuration from the
+repository root, with a fresh temporary path for the same Retry package.
+Replace `<rust-1.97.1-bin>` with the toolchain's `bin` directory and put LLVM
+18's `llvm-size` on `PATH`; these are host-local paths, not repository paths.
 
 ```sh
-export PATH="/Users/steelcoder/.rustup/toolchains/1.97.1-aarch64-apple-darwin/bin:$PATH"
-qualification_dir=$(mktemp -d /tmp/rastok-lot1-normal.XXXXXX)
+export PATH="<rust-1.97.1-bin>:$PATH"
+qualification_dir=$(mktemp -d)
 cargo run --locked -p rastok --example retry_spike_package -- "$qualification_dir/retry.rkp" 3
 cd spikes/rp2350-emu
 env -u RASTOK_SPIKE_PACKAGE -u RASTOK_RETRY_OPERATIONS \
   -u RASTOK_RETRY_FRAMES -u RASTOK_RETRY_FRAME_BYTES \
   RUSTFLAGS='-D warnings -C link-arg=-Tlink.x' cargo build --locked --release
-/opt/homebrew/opt/llvm@18/bin/llvm-size -A target/thumbv8m.main-none-eabihf/release/rastok-spike-rp2350
+llvm-size -A target/thumbv8m.main-none-eabihf/release/rastok-spike-rp2350
 RASTOK_SPIKE_PACKAGE="$qualification_dir/retry.rkp" \
   RASTOK_RETRY_OPERATIONS=1 RASTOK_RETRY_FRAMES=16 RASTOK_RETRY_FRAME_BYTES=4 \
   RUSTFLAGS='-D warnings -C link-arg=-Tlink.x' \
   cargo build --locked --release --features retry-qualification
-/opt/homebrew/opt/llvm@18/bin/llvm-size -A target/thumbv8m.main-none-eabihf/release/rastok-spike-rp2350
+llvm-size -A target/thumbv8m.main-none-eabihf/release/rastok-spike-rp2350
 ```
 
 The gate is the sum of `.text` and `.rodata`, not the tool's `Total` line.

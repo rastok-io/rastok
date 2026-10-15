@@ -68,9 +68,11 @@ impl core::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// The environment of a continuous [`Worker::run`]. Time, App inputs,
-/// recording and waiting stay outside the execution machinery. The CLI uses
-/// the OS; a test can supply the same inputs without a clock or I/O.
+/// The Worker's interface to services supplied by its Host during [`Worker::run`].
+/// It does not model the machine or its placement: it supplies logical time,
+/// App input, recording checkpoints and waiting policy. The CLI implements
+/// these services with OS resources; a test can supply deterministic inputs
+/// without a clock or I/O. These services stay outside the execution machinery.
 pub trait Host {
     /// Input or presentation failure, kept in the host's own error type.
     type Error;
@@ -296,6 +298,9 @@ impl<'plan> Worker<'plan> {
     /// Idle is not complete or stable: Calls, Sessions and future deadlines
     /// can remain open. The caller resumes after input, a Driver observation
     /// or an explicit time advance. An uninterrupted source need not go idle.
+    ///
+    /// This public control serves embedders with their own event loop, instead
+    /// of delegating input, time and waiting to [`Self::run`] and a [`Host`].
     ///
     /// # Errors
     /// Admission, execution or Driver routing failed; earlier records stand.

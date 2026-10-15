@@ -113,11 +113,12 @@ runs, held Retry attempts, recording, redaction, command disposition,
 assertions, keyboard navigation and playback. Diagram 06 was regenerated
 from PlantUML and its rendered SVG was visually checked. Browser and
 JavaScript commands use the already-installed tooling, without installing a
-dependency:
+dependency. Substitute the installed Playwright module and Chrome executable
+paths for the two placeholders below:
 
 ```sh
-RASTOK_PLAYWRIGHT=/Users/steelcoder/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright \
-RASTOK_CHROME='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' \
+RASTOK_PLAYWRIGHT='<playwright-module-path>' \
+RASTOK_CHROME='<chrome-executable>' \
   node --test crates/rastok/src/ui/browser.test.cjs
 node --test crates/rastok/src/ui/graph_layout.test.cjs \
   editors/vscode/rastok-dsl/grammar.test.cjs examples/agent-chat.test.cjs
@@ -162,7 +163,10 @@ unchanged from the lot 1 reference:
 | Retry, 1 operation, 3 Calls, 16 frames/channel, 4 bytes/frame, full recovery | 30,684 B | 129,188 B | 1,040,912 B | 1,884 B | 7,664 B |
 
 Rust 1.97.1, the spike's existing release profile, target
-`thumbv8m.main-none-eabihf`. From `spikes/rp2350-emu`:
+`thumbv8m.main-none-eabihf`. From `spikes/rp2350-emu`, with LLVM 18's
+`llvm-size` and `qemu-system-arm` on `PATH`. Substitute the Retry package's
+absolute path below; its [generation command](node-realignment-qualification.md#reproducing-the-normal-image-code-measurements)
+is recorded with the lot 1 measurements.
 
 ```sh
 env -u RASTOK_SPIKE_PACKAGE -u RASTOK_RETRY_OPERATIONS \
@@ -174,7 +178,7 @@ qemu-system-arm -M mps2-an505 -cpu cortex-m33 \
   -nographic -monitor none -serial none \
   -semihosting-config enable=on,target=native -icount shift=0
 
-env RASTOK_SPIKE_PACKAGE=/tmp/rastok-lot1-close.Lzhv5R/retry-3.rkp \
+env RASTOK_SPIKE_PACKAGE='<absolute-path-to-retry-package>' \
   RASTOK_RETRY_OPERATIONS=1 RASTOK_RETRY_FRAMES=16 RASTOK_RETRY_FRAME_BYTES=4 \
   RUSTFLAGS='-D warnings -C link-arg=-Tlink.x' \
   cargo build --locked --release --features retry-qualification
@@ -182,10 +186,8 @@ env RASTOK_SPIKE_PACKAGE=/tmp/rastok-lot1-close.Lzhv5R/retry-3.rkp \
 
 Run the same size and QEMU commands after the Retry build. The referenced
 package is the unchanged lot 1 workload (941 B); no new package is generated
-by this lot. `llvm-size` is LLVM 18 at
-`/opt/homebrew/opt/llvm@18/bin/llvm-size`; QEMU is
-`/opt/homebrew/bin/qemu-system-arm`. Echo sections are 898,748 B `.text` and
-70,264 B `.rodata`; Retry sections are 959,892 B and 81,020 B.
+by this lot. Echo sections are 898,748 B `.text` and 70,264 B `.rodata`;
+Retry sections are 959,892 B and 81,020 B.
 
 Stack is not remeasured in this lot. The dated lot 1 probes remain the
 reference, including the accepted level-255 package's 79,168 B stack and
@@ -198,3 +200,35 @@ lot. Yoann assigned it on 15 October to A-T1-12, with the relative logical
 timeline and separate civil origin of D-2026-10-10-1; the
 [roadmap](../../ROADMAP.md#later--incident-lab-and-safe-dogfood) records that
 handoff. Existing time carriers and semantics remain unchanged.
+
+## Review follow-up — 15 October
+
+Yoann accepted the following dispositions after Fable's review, recorded in
+`562cbb7`. The review registers remain untouched by this implementation pass.
+
+- The CLI decision already landed in `2259fd4`: `--compare` reads a reference,
+  `--save` writes one, and the two options are exclusive. The old options
+  remain only in rejection tests and historical prose; no alias is restored.
+- The missed rename derivatives already landed in `beabf68`, including
+  `PrivacyDeclarationName`, `PriceBookAttestation`, the HIR's `DelayPolicy`
+  and `AdmissionView`. The deployment JSON key `cost_profile` stays unchanged,
+  as decided. These two completed items need no second code change.
+- `worker::Host` keeps its name: its rustdoc identifies the services that the
+  Worker's Host supplies, not another machine or placement model.
+  `run_until_idle` stays public for embedders that own their event loop;
+  idle still allows open Calls, Sessions and future deadlines.
+- The two conformance polling-fault messages now use the Lab's wording.
+  Reproduction commands in both qualification reports use documented local
+  path placeholders; measured numbers and build settings are unchanged.
+
+The conformance harness's separate loop, `Worker::new`'s optional semantic
+hash and the deferred time value type are outside this follow-up.
+
+Checks executed for this wording-only follow-up: formatting, strict workspace
+Clippy (all targets and features), rustdoc without warnings, and 49 targeted
+tests in six groups (Worker 5, CLI 24, File conformance 1, HTTP conformance 3,
+Process conformance 4, site content 12), with zero failures or ignored tests.
+The public echo check returns the same hash quoted above. No fixture, golden,
+package, trace or recording changed. The full workspace suite, browser,
+`no_std` targets and embedded probes were not rerun for this follow-up;
+their preceding qualification remains dated evidence, not a new run.

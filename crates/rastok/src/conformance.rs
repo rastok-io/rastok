@@ -936,7 +936,7 @@ fn drive(
             .map_err(|error| format!("a step faulted: {error}"))?;
         let report = vm
             .poll_drivers(journal, driver)
-            .map_err(|error| format!("the boundary round faulted: {error}"))?;
+            .map_err(|error| format!("Driver polling faulted: {error}"))?;
         if let Some((_, reason)) = report.rejected.first() {
             return Err(format!(
                 "the completion gate refused a reply: {reason} — the Driver \
@@ -1174,7 +1174,7 @@ fn interleave_battery(
             .map_err(|error| format!("a step faulted: {error}"))?;
         let report = vm
             .poll_drivers(&mut journal, &mut bindings)
-            .map_err(|error| format!("the boundary round faulted: {error}"))?;
+            .map_err(|error| format!("Driver polling faulted: {error}"))?;
         vm.run_ready_with_bindings(&mut journal, &mut bindings)
             .map_err(|error| format!("a step faulted: {error}"))?;
         if vm.is_stable() {
