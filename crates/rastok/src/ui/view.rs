@@ -7,9 +7,10 @@ use crate::instance;
 use crate::journal::{CallStatus, EgressRecord, Journal, MemJournal, Record, SessionStatus};
 use crate::node::NodeIndex;
 use crate::plan::{NodeKind, ValidatedExecutionPlan};
-use crate::runtime::execution::{
-    CallDirectionInspection, CallReferenceInspection, Execution, ExecutionInspection,
-    InstancePhaseInspection, SessionDirectionInspection,
+use crate::runtime::execution::Execution;
+use crate::runtime::execution::inspection::{
+    CallReferenceInspection, ExecutionInspection, InstancePhaseInspection,
+    SessionDirectionInspection,
 };
 use crate::schema_annotation::{AnnotationTable, SchemaPath, SchemaPathSegment};
 use serde_json::{Map, Value as JsonValue, json};
@@ -1243,13 +1244,6 @@ fn exchanges(inspection: &ExecutionInspection) -> JsonValue {
                 CallReferenceInspection::Outbound(reference) => (reference.to_string(), "outbound"),
                 CallReferenceInspection::Inbound(reference) => (reference.to_string(), "inbound"),
             };
-            debug_assert_eq!(
-                direction,
-                match call.direction {
-                    CallDirectionInspection::Outbound => "outbound",
-                    CallDirectionInspection::Inbound => "inbound",
-                }
-            );
             json!({
                 "reference": reference,
                 "direction": direction,
@@ -1297,7 +1291,7 @@ fn instance_ref_json(reference: &instance::Generation) -> JsonValue {
 }
 
 fn instance_badge_json(
-    instance: &crate::runtime::execution::InstanceInspection,
+    instance: &crate::runtime::execution::inspection::InstanceInspection,
     active_instances: &BTreeSet<instance::Generation>,
 ) -> Option<JsonValue> {
     active_instances
@@ -1586,9 +1580,9 @@ fn hex(bytes: &[u8]) -> String {
 mod tests {
     #[test]
     fn exchange_snapshots_name_recorded_completion_without_an_alias() {
-        use crate::boundary::{CallId, SessionId};
+        use crate::boundary::{CallId, InboundCallId, SessionId};
         use crate::envelope::Id;
-        use crate::runtime::execution::{CallInspection, SessionInspection};
+        use crate::runtime::execution::inspection::{CallInspection, SessionInspection};
 
         let connector = crate::node::Path::new(["peer"]).unwrap();
         let generation = instance::Generation::new(
@@ -1600,15 +1594,24 @@ mod tests {
                 mailbox_capacity: 1024,
                 instances: vec![],
                 mailboxes: vec![],
-                calls: vec![CallInspection {
-                    reference: CallReferenceInspection::Outbound(CallId::new(Id::from_bytes(
-                        [1; 16],
-                    ))),
-                    direction: CallDirectionInspection::Outbound,
-                    connector: crate::node::OwnerPath::from(&connector),
-                    instance: generation.clone(),
-                    completion_recorded: completed,
-                }],
+                calls: vec![
+                    CallInspection {
+                        reference: CallReferenceInspection::Outbound(CallId::new(Id::from_bytes(
+                            [1; 16],
+                        ))),
+                        connector: crate::node::OwnerPath::from(&connector),
+                        instance: generation.clone(),
+                        completion_recorded: completed,
+                    },
+                    CallInspection {
+                        reference: CallReferenceInspection::Inbound(InboundCallId::from_root(
+                            Id::from_bytes([3; 16]),
+                        )),
+                        connector: crate::node::OwnerPath::from(&connector),
+                        instance: generation.clone(),
+                        completion_recorded: completed,
+                    },
+                ],
                 sessions: vec![SessionInspection {
                     reference: SessionId::new(Id::from_bytes([2; 16])),
                     direction: SessionDirectionInspection::Inbound,
@@ -1620,6 +1623,9 @@ mod tests {
                 }],
             };
             let view = exchanges(&inspection);
+            assert_eq!(view["calls"][0]["direction"], "outbound");
+            assert_eq!(view["calls"][1]["direction"], "inbound");
+            assert_eq!(view["sessions"][0]["direction"], "inbound");
             for kind in ["calls", "sessions"] {
                 let exchange = &view[kind][0];
                 assert_eq!(exchange["completion_recorded"], completed);

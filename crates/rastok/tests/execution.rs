@@ -325,6 +325,66 @@ impl CallConnectorDriver for FileSettingsWorld {
     }
 }
 
+#[test]
+fn inspection_is_a_detached_read_only_snapshot() {
+    let compilation = compile(
+        &[r#"graph inspect : App {
+          input in: int
+          output out: int
+          operator count {
+            input in: int
+            output out: int
+            var total: int = 0
+            on in { total = total + data ; out = total }
+          }
+          in -> count -> out
+        }"#],
+        &ContractCatalog::try_m0().unwrap(),
+    )
+    .unwrap();
+    let version = GraphVersion(1);
+    let mut execution = Execution::new(&compilation.plan, version);
+    let mut journal = MemJournal::new(version);
+    execution.run_ready(&mut journal).unwrap();
+    execution
+        .accept_input(&mut journal, int_submission(7))
+        .unwrap();
+    let records = journal.records().to_vec();
+    let snapshot = execution.inspection();
+    let retained = snapshot.clone();
+    assert_eq!(snapshot, execution.inspection());
+    assert_eq!(records, journal.records());
+    assert_eq!(
+        snapshot
+            .mailboxes
+            .iter()
+            .map(|mailbox| mailbox.deliveries.len())
+            .sum::<usize>(),
+        1
+    );
+
+    execution.run_ready(&mut journal).unwrap();
+    assert_eq!(
+        snapshot, retained,
+        "later execution cannot update an owned view"
+    );
+    assert_ne!(snapshot, execution.inspection());
+    assert!(
+        execution
+            .inspection()
+            .mailboxes
+            .iter()
+            .all(|mailbox| mailbox.deliveries.is_empty())
+    );
+    assert!(
+        execution
+            .inspection()
+            .instances
+            .iter()
+            .any(|instance| instance.state.get("total") == Some(&Value::Int(7)))
+    );
+}
+
 fn submission(text: &str) -> IngressProposal {
     let data = vec![(String::from("text"), Value::Text(String::from(text)))];
     IngressProposal {
@@ -3282,7 +3342,7 @@ graph app : App {
 #[test]
 fn a_new_input_reopens_only_its_ended_session_without_resending_old_writes() {
     use rastok::journal::SessionStatus;
-    use rastok::runtime::execution::InstancePhaseInspection;
+    use rastok::runtime::execution::inspection::InstancePhaseInspection;
 
     let compiled = compile(
         &[KEYED_SESSION_LIFECYCLE],
@@ -3486,7 +3546,7 @@ fn repeated_child_stop_closes_only_the_exact_session_instance() {
 #[test]
 fn a_protocol_quit_is_data_until_an_observed_exit_or_bounded_instance_close() {
     use rastok::journal::SessionStatus;
-    use rastok::runtime::execution::InstancePhaseInspection;
+    use rastok::runtime::execution::inspection::InstancePhaseInspection;
 
     let source = r#"
 type Message = struct { tenant: text, text: text }

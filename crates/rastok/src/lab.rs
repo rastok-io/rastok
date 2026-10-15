@@ -27,7 +27,8 @@ use crate::connectors::{
 use crate::envelope::{Data, Envelope, Namespace, Value, WriteTarget};
 use crate::journal::{MemJournal, Record};
 use crate::plan::{GraphVersion, SemanticHash, ValidatedExecutionPlan};
-use crate::runtime::execution::{EnvelopeView, Execution, TimeAdvance};
+use crate::runtime::execution::inspection::EnvelopeView;
+use crate::runtime::execution::{Execution, TimeAdvance};
 use crate::{expr, node, runtime};
 use std::cell::RefCell;
 use std::collections::BTreeMap;

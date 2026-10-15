@@ -1167,7 +1167,8 @@ mod tests {
     use crate::envelope::Namespace;
     use crate::journal::{CallStatus, MemJournal, Record};
     use crate::plan::GraphVersion;
-    use crate::runtime::execution::{EnvelopeView, Execution};
+    use crate::runtime::execution::Execution;
+    use crate::runtime::execution::inspection::EnvelopeView;
 
     const CAT_PROBE: &str = r#"
 graph real : App {
