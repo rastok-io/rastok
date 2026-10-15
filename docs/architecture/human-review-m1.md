@@ -1028,6 +1028,10 @@ correction (bless is the specification's word, `--bless`) and the missed
 derivatives are in the ledger's *Applied — 13 October*. `inject_submission`
 now reads `admit_proposal`; A-T4-4 keeps its decomposition. Realignment
 lot 1 starts on this base.
+**15 October:** lots 1 and 2 of the realignment landed and were reviewed
+(see *Applied and reviewed — 14–15 October* in the realignment section);
+blocks 2–7 are read on the realigned code, `runtime/execution.rs` and its
+`inspection` and `admission` children.
 
 ## Realignment on the Node ontology — decided 2026-10-11
 
@@ -1127,6 +1131,101 @@ structural; reading them with that lens is useful, widening the scope is
 not.
 Point 5 of the decision, the specification's words for business concepts,
 is prepared by the [vocabulary ledger](human-review-vocabulary.md).
+
+**Applied and reviewed — 14–15 October.** Both lots landed on
+`realign/node-ontology` and were reviewed by Fable on the landed commits;
+the registers record what landed, what was reproduced and what is
+submitted to Yoann. Nothing below reopens the decision.
+
+*Lot 1* (`2259fd4` to `54c2b3e`, then `032656a`, `17981f2`, `35d3072`;
+complement `05b67a6`). One `plan::Node` table with a `NodeKind` body by
+nature, handlers inside their Operator and no `Handler::owner`; one
+`NodeIndex`; `Endpoint` and `Destination` in each Graph's reference wiring;
+private execution routes derived at validation; queued deliveries carry an
+`EdgeIndex` resolved by `runtime::DeliveryRoutes`, never a journal identity.
+A-T4-4 is applied as prepare → commit → apply. Layout qualified: boxed
+bodies, measured on both Cortex-M33 workloads (echo 36,160 B at load and
+111,404 B peak; Retry with recovery 30,684 B and 129,188 B, leaving 1,884 B
+of heap and 7,664 B of code under the gates, against the 512 B and 7,136 B
+recorded below as the M2 entry constraint). Package 21: body bytes echo
+961 → 934, JSONL 1,005 → 979, gauge 249 → 230, spike binary 1,042 → 1,015;
+semantic hashes, causal seals and the recording-4 tuple digest unchanged;
+the inventory preceded the regeneration (`54c2b3e`). The one failure the
+realignment produced was the depth boundary: containing handlers in the
+Operator body adds three CBOR levels, so `the_depth_boundaries_are_exact`
+refused at level 130 what format 20 accepted at 127. Yoann decided
+([D-2026-10-14-1](../spec/decisions.md)) that format 21 fixes its own reader
+budget: `canonical_cbor::MAX_NESTING` 256 (root at level 0, consumers
+`decode_at`, both `NestingExceeded` checks and `encode_field`),
+`expr::MAX_EXPRESSION_DEPTH` 128 (`Parser::descend`, the post-parse
+`structural_depth`, `dispatch_validation::tree_at`), `MAX_TYPE_NESTING` 128
+and 32 decisions unchanged; no compatibility framing, no 128 + 3. Stack
+measured by Fable on QEMU `mps2-an505` with a paint-and-scan probe, then
+by Astra with the same method rewritten as the spike's optional
+`stack-qualification` feature: `decode_at` costs 240 B per CBOR level;
+the complete `plan::decode` of the deepest admissible package (2,193 B,
+expression depth 128, serialized level 255) uses 79,168 B of stack and
+107,328 B of heap. On this target the heap binds before the stack at 256
+levels; the 128 KiB heap gate leaves 23,744 B for that package before any
+execution. Fable reproduced on `35d3072`: fmt, Clippy `-D warnings`,
+rustdoc, 1,591 tests in 61 groups (0 failed, 0 ignored), the three stack
+images byte for byte on the reported figures. Three findings, corrected in
+`05b67a6`: the opening checklist and the recording contract still called
+format 20 current (now checked by `site_content`); no test reached the
+Plan-phase `E-PLAN-DEPTH` from source any more (regression added: `size`
+of 119 nested lists under two additions reads back, 120 refuse at Plan with
+depth 256 while expression and type depths stay under 128); the Plan
+message read as if it allowed the refused value (now names the level and
+the exclusive bound). Fable's normal images measure 184 B (echo) and 176 B
+(Retry) less code than Astra's; cause not established, gates unaffected,
+recorded in the [qualification](node-realignment-qualification.md#fable-review-follow-up--15-october).
+
+*Lot 2* (`ab0ae1c`, `b7670ff`, `78cf345`). Inspection types moved from
+`runtime/execution.rs` to the child module `runtime::execution::inspection`
+without a new mutation surface; `CallDirectionInspection` dropped because
+`CallReferenceInspection` already states it, `SessionDirectionInspection`
+kept because a `SessionId` does not say who opened; a regression proves an
+owned snapshot neither tracks later steps nor writes the journal. The
+hosted `rastok::worker::Worker` owns one `Execution`, its `MemJournal` and
+its `RuntimeBindings`, with `run(&mut impl Host)`, `run_until_idle`, `step`,
+`shutdown`, `accept_input` and `advance_to` public and the Lab face
+crate-private (`settle_action`, `poll`, `poll_inbound`, `advance_once`).
+Fable compared the former CLI loop with `Worker::run` and `process_ready`
+step by step: same order (time advance, input, at most 64 admissions, ready
+work, responses, timeouts, terminal events, outbound polling, report, ready
+work, checkpoint, completion rule, 10 ms wait), same error paths including
+the recording checkpoint on a processing fault; the Lab's `settle` and
+`poll_inbound_world` are folded with the same 64-pass bound and order. The
+core is untouched apart from the move; every `Execution` method the Worker
+calls predates the lot. Fable reproduced on `78cf345`: fmt, Clippy,
+rustdoc, 1,598 tests in 61 groups (0 failed, 0 ignored), the three `no_std`
+targets, both embedded images with unchanged heap peaks and Fable's own
+code figures of lot 1. Remarks, none blocking: the trait `worker::Host`
+reuses the specification's word for the clustered model's machine
+([vocabulary ⟂ 7e](human-review-vocabulary.md), to Yoann); `run_until_idle`
+is public with no caller besides its tests (keep as the embedder's verb or
+narrow until one exists, Yoann); two Lab failure sentences changed wording
+with the Worker while `conformance.rs` keeps the former ("the machine did
+not settle within 64 boundary rounds", "the boundary round faulted"), no
+test pins them; the two qualification reports quote machine paths
+(`/Users/…`, the Codex runtime's Playwright, `/opt/homebrew`, `/tmp/…`) to
+replace by placeholders before publication; the conformance harness keeps
+a third small loop with a wall-clock deadline, outside the "two faces"
+target; `Worker::new` takes `Option<SemanticHash>` and lets a Retry plan
+without hash fail at admission, the pre-existing `Execution` behavior.
+Astra records, in the roadmap, Yoann's 15 October decision to carry the
+`LogicalTime(i64)` value type with A-T1-12; Fable did not witness it and
+did not rerun the browser suite (35 tests reported by Astra).
+
+*Calendar.* Option 1 above was taken: lot 1 landed 14–15 October, lot 2 on
+15 October, both before the 20 October checkpoint and the 23 October
+freeze. Astra's own estimate, delivered on 14 October in the lot 1
+handoff: lot 0 two to three days, lot 1 six to nine days, lot 2 three to
+five days plus one review day. The line references of this ledger and of
+the external brief are still anchored on `fedada7`; re-anchoring them on
+the realigned code is the one-day item owed by Fable, together with the
+T4 second pass, blocks 2–7, which now reads the realigned code. Still with
+Yoann from 13 October: bless and the missed rename derivatives.
 
 ## Implementation follow-up — 2026-10-05, lot 1
 
@@ -1757,6 +1856,16 @@ No clock representation or execution semantics changes.
   supervision, hypervisor), Mediator (one role, ESB vocabulary); `Machine`
   is the specification's own word if it is ever renamed; public surfaces
   keep "VM".
+  **15 October:** done in lot 2 (`b7670ff`) as `rastok::worker::Worker`,
+  owning the `Execution`, the `MemJournal` and the `RuntimeBindings`, with
+  the two faces: hosted (`run` over a `worker::Host`, `run_until_idle`,
+  `step`, `shutdown`) and Lab (crate-private `settle_action`, `poll`,
+  `poll_inbound`, `advance_once`). `round` became the private
+  `process_ready`; the public verb in its place is `run_until_idle`, which
+  makes "idle is not complete" explicit and tested. The `Execution` doc
+  comment now says which machine it is: journal-projected state, each
+  step a transaction, the host driving. The 10 ms idle poll stays with the
+  CLI's `Host` implementation. Open: the word `Host` (vocabulary ⟂ 7e).
 
 - **Animated PNG instead of GIF for the public tour** (raised 2026-09-25,
   during T1). Premise check: GIF's LZW patents expired in 2004, so the format

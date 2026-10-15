@@ -464,6 +464,26 @@ specification's word (64 uses), owning the hosted loop of `main.rs` and
 `lab.rs` (boot, rounds, stepping, shutdown); created with the runtime
 organisation lot of D-2026-10-11-1, not a rename.
 **Settled 12 October (Yoann, batch ok: "pour le reste on est à peu près bon").** `Worker`, with the runtime organisation lot.
+**Applied 15 October (`b7670ff`), reviewed by Fable.** `rastok::worker::Worker`
+owns one `Execution`, its `MemJournal` and its `RuntimeBindings`; public
+verbs `run`, `run_until_idle`, `step`, `shutdown`, plus `accept_input` and
+`advance_to`; the Lab face is crate-private. `round` from the parked remark
+became the private `process_ready`. Names the lot introduced without
+passing here first: `worker::Host`, `worker::Error`, `worker::RunError`.
+**⟂ 7e.** `worker::Host` (15 October). The trait names what the Worker
+needs from its surroundings: logical time, non-blocking App input, a
+checkpoint after committed work and the waiting policy; the CLI's
+`CliHost` implements it over stdin, the monotonic clock, the recorder and
+the 10 ms sleep. The specification uses **Host** for the machine of the
+clustered model that runs Workers (delivery-semantics "Host loss",
+instances "Worker, Host, lease, and leader epoch"). The reading "the
+Worker's view of what hosts it" is consistent with that use, and the code
+already leans on the word (`HostedTimeSource`, `hosted-ui`). Rule 2 is not
+engaged, Host not being a taxonomy word; rule 1 asks that the
+specification's word keep its meaning.
+**Proposed 15 October:** keep `Host`, and let the trait doc say it is the
+Worker's view of its Host, never a second machine model; the alternative is
+a mechanism word (`worker::Environment`). To Yoann.
 ### 8. The boundary — driver, contract, binding, dispatcher, gate, pump
 
 | Code | Where | Meaning | Spec (uses) |
@@ -806,6 +826,29 @@ name-only selector cannot distinguish them from other symbols in the file.
 Unique names use semantic refactoring; verified references outside the IDE
 workspace are repaired under the earlier exception. No compatibility alias,
 journal field, package byte or execution rule changes.
+
+### Applied — 14–15 October (Astra), realignment lots 1 and 2, reviewed by Fable
+
+The realignment's names landed as written above: `Slot` / `OwnerSlot` →
+`NodeIndex`; `EdgeEnd`, `EndpointOwner`, `RouteDestination` → `Endpoint`
+and `Destination`; `Delivery.edge` is an `EdgeIndex` and `Delivery.port` is
+derived through `runtime::DeliveryRoutes`; the `Owner` and `Node` rows are
+one `plan::Node` with a `NodeKind` body (Graph wiring, Operator variables
+and handlers, Connector specification), and `Handler::owner` is gone; `Vm`
+→ `Execution` as approved on 13 October; the inspection types live in
+`runtime::execution::inspection`, `CallDirectionInspection` is removed
+because it restated `CallReferenceInspection`, `SessionDirectionInspection`
+stays because a `SessionId` does not say who opened; `Worker` (⟂ 7d).
+Mechanism words that landed without passing here, each defined where its
+type lives: `EdgeIndex`, `DeliveryRoutes`, `NodeKind`,
+`expr::MAX_EXPRESSION_DEPTH` (D-2026-10-14-1, the expression bound now
+distinct from the reader's `MAX_NESTING`), `worker::Host` (⟂ 7e),
+`worker::Error`, `worker::RunError`. Two user-visible Lab failure sentences
+changed wording with the Worker: "the machine did not settle within 64
+boundary rounds" became "execution did not become idle within 64 Driver
+polling passes", and "the boundary round faulted" became "Driver polling
+faulted", while `conformance.rs` keeps the former; no test pins either.
+Still to Yoann from 13 October: bless and the missed derivatives above.
 
 ## What validation produces
 
