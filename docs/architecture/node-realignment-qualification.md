@@ -17,7 +17,9 @@ Execution. Those qualified steps preserved the separate declaration tables.
 The unified Node table and indexed wiring are in `59f1ddf`; indexed queued
 deliveries are in `dd5bda4`. Earlier sections remain dated checkpoint evidence,
 including failed candidate checks; they do not describe the final status.
-Inspection-module separation and the hosted Worker remain lot 2.
+Inspection-module separation and the hosted Worker are now qualified in the
+separate [lot 2 closure](node-runtime-qualification.md); the dated checkpoints
+below retain their original scope and results.
 
 ## Invariants before changing the representation
 

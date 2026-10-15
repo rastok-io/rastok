@@ -70,8 +70,14 @@ or ignored tests, strict Clippy, rustdoc, three-target `no_std` and embedded
 checks. The local browser pass remains separately dated in that report.
 D-2026-10-14-1 resolves the depth boundary with a 256-level reader budget and
 unchanged expression/type bounds of 128. The accepted level-255 combined
-package uses 79,168 B of decoder stack under Cortex-M33 QEMU. Inspection-module
-separation and the hosted Worker remain lot 2.
+package uses 79,168 B of decoder stack under Cortex-M33 QEMU.
+The subsequent [lot 2 qualification](node-runtime-qualification.md) closes
+inspection-module separation and the shared hosted Worker with no further
+artifact movement: 1,598 passing tests in 61 groups, none failed or ignored,
+fmt, strict Clippy, rustdoc, 35 local browser tests, 32 other JavaScript tests
+and three-target `no_std`. Both fixed embedded workloads pass again, with
+unchanged heap/code measurements: echo 111,404 B / 969,012 B and Retry with
+full recovery 129,188 B / 1,040,912 B. Stack was not remeasured in lot 2.
 This does not qualify release archives, constitute an independent browser
 review, or close any external opening gate below.
 

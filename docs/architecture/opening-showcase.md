@@ -52,8 +52,11 @@ and execution separated from read-only inspection and debugger
 presentation. No new semantics and no identity movement; the package
 representation moves once more before publication and is what the format-1
 relabel names. Lot 1's layout and embedded cost are now qualified in the
-[closure report](node-realignment-qualification.md). Inspection separation
-and the hosted Worker remain lot 2; the calendar impact stays with Yoann.
+[closure report](node-realignment-qualification.md). The
+[lot 2 closure](node-runtime-qualification.md) qualifies inspection separation
+and the shared hosted Worker: 1,598 Rust tests, 35 browser tests, unchanged
+artifacts and embedded footprints. Independent review and the external
+opening gates remain separate; the calendar stays with Yoann.
 
 ## Delivery ledger
 

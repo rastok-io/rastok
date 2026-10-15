@@ -83,8 +83,13 @@ bounds. The final gate passes the exact source/transport boundaries and
 measures 79,168 B of embedded decoder stack for the accepted level-255
 combined package.
 
-Inspection-module separation and the hosted Worker remain lot 2. Neither
-this refactor nor the local browser suite closes the independent opening
+The [lot 2 qualification](docs/architecture/node-runtime-qualification.md)
+closes inspection-module separation and the shared hosted Worker: public
+`run`, `run_until_idle` and `step`, with unchanged execution semantics and
+artifacts. Its final gate passes 1,598 Rust tests in 61 groups, 35 browser
+tests and 32 other JavaScript tests; the three `no_std` targets and both
+embedded workloads pass with unchanged heap and code measurements. Neither
+this local qualification nor the browser suite closes the independent opening
 gates in the [release inventory](docs/architecture/release-qualification.md).
 No public push, tag or publication is authorized by this closure.
 

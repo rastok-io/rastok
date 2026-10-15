@@ -1,10 +1,11 @@
 # Node realignment — runtime organisation (lot 2)
 
-Status: 15 October 2026, implementation under qualification. This implements
+Status: 15 October 2026, lot 2 implemented and locally qualified. This closes
 the runtime-organisation lot of D-2026-10-11-1, after the
 [lot 1 closure and Fable follow-up](node-realignment-qualification.md).
 It changes neither semantics nor package, journal or recording formats.
-The human-review registers remain owned by Yoann and Fable.
+The human-review registers remain owned by Yoann and Fable. This is local
+qualification, not a new independent review or an external opening gate.
 
 ## Responsibilities
 
@@ -86,38 +87,68 @@ pre-commit prefix and its reserved input.
 
 ## Verification
 
-The focused inspection checks passed: detached snapshot regression and
-12 UI projection tests, including Retry at every recorded prefix.
+The final API in `b7670ff` passes the complete gate with Rust 1.97.1:
 
-The following checks have also completed on this lot:
+| Check | Result |
+|---|---|
+| `cargo fmt --all -- --check` | Passed |
+| `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings` | Passed |
+| `cargo test --locked --workspace --all-features --no-fail-fast` | 1,598 passed, 61 groups, zero failures or ignored tests |
+| `cargo doc --locked --workspace --no-deps` | Passed, no warnings |
+| Real Chrome, `browser.test.cjs` | 35 passed, zero failures, cancellations or skipped tests; 54.65 s |
+| Layout, editor and chat-client JavaScript | 32 passed, zero failures or skipped tests |
+| Core `no_std`, three targets | Passed on `thumbv7m-none-eabi`, `riscv32imac-unknown-none-elf` and `thumbv8m.main-none-eabihf` |
 
-- Before the public `run` / `run_until_idle` API adjustment, `cargo fmt --all
-  -- --check`, strict all-target/all-feature Clippy, rustdoc and the complete
-  workspace suite passed: 1,595 tests, 61 groups, zero failures or ignored
-  tests. The final API has a fresh complete gate in progress.
-- The initial two Worker regressions passed in the all-feature library suite: exact
-  journal/output/inspection equivalence across hosted, batch and step controls;
-  a fault leaves its input reserved and host shutdown adds no lifecycle record.
-- The existing real-Chrome suite passed all 35 tests, with no failure,
-  cancellation or skipped test. It exercised live, historical and replayed
-  snapshots, keyed runs, held Retry attempts, recorded execution, redaction,
-  command disposition, assertions, keyboard navigation and playback.
-- The layout, editor and chat-client JavaScript suites passed 32 tests,
-  with no failure or skipped test. Diagram 06 was regenerated from PlantUML
-  and its rendered SVG was visually checked.
-- All five focused Worker API tests passed: the same records through
-  continuous/idle/scripted/step controls, pending input versus EOF, an open
-  Call surviving idle and reaching its timeout after EOF, fault/checkpoint
-  stage preservation, and shutdown without invented closure.
-- All three `no_std` checks passed: `thumbv7m-none-eabi`,
-  `riscv32imac-unknown-none-elf`, `thumbv8m.main-none-eabihf`.
+The detached-snapshot regression and 12 UI projection checks pass, including
+Retry inspection at every recorded prefix. All five Worker API regressions
+pass: exact journal/output/inspection equivalence through continuous, idle,
+scripted and step controls; pending input versus EOF; an open Call surviving
+idle and reaching its timeout after EOF; fault/checkpoint stage preservation;
+and shutdown without invented closure. The complete suite also exercises real
+HTTP/WebSocket listeners, distinct resident children, File effects, recording
+and recovery. No paid model call is part of these checks.
 
-The final API's complete workspace gate and browser rerun are still in
-progress. Several newly built executables spend minutes in macOS
-`_dyld_start` before Rust starts; this wait is distinct from test durations.
-No timeout or system security setting was changed. Listing test harnesses
-with `--list` before the final run executes no test body and is not counted
-as a test pass.
+The browser suite exercises live, historical and replayed snapshots, keyed
+runs, held Retry attempts, recording, redaction, command disposition,
+assertions, keyboard navigation and playback. Diagram 06 was regenerated
+from PlantUML and its rendered SVG was visually checked. Browser and
+JavaScript commands use the already-installed tooling, without installing a
+dependency:
+
+```sh
+RASTOK_PLAYWRIGHT=/Users/steelcoder/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright \
+RASTOK_CHROME='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' \
+  node --test crates/rastok/src/ui/browser.test.cjs
+node --test crates/rastok/src/ui/graph_layout.test.cjs \
+  editors/vscode/rastok-dsl/grammar.test.cjs examples/agent-chat.test.cjs
+cargo check --locked -p rastok-core --no-default-features --target thumbv7m-none-eabi
+cargo check --locked -p rastok-core --no-default-features --target riscv32imac-unknown-none-elf
+cargo check --locked -p rastok-core --no-default-features --target thumbv8m.main-none-eabihf
+```
+
+Network tests run after compilation, without a concurrent build. Several
+newly built executables spent minutes in macOS `_dyld_start` before Rust
+started; that startup wait is distinct from the tests' reported durations.
+No timeout or system security setting was changed. Auxiliary harness calls
+with `--list` execute no test body and are not counted as passing tests.
+
+Against lot 1's `35d3072`, no example, fixture, golden, package, causal trace
+or recording changed. Both protected human-review registers are unchanged.
+The public echo check still produces semantic hash
+`562396de22b068ef874b8d7273bf972ee1b08b8dcb6dab8902d6b816b1c90813`.
+
+## Local delivery
+
+| Commit | Scope |
+|---|---|
+| `05b67a6` | Fable's lot 1 follow-up: source-level Plan-depth regression, exclusive-bound diagnostic and live documentation headers |
+| `ab0ae1c` | Read-only inspection module, nonredundant Call direction and detached-snapshot proof |
+| `b7670ff` | Shared hosted Worker, continuous/idle/step controls, CLI/Lab integration and focused proofs |
+
+This close-out records the final complete gate and aligns the live status
+documents. The independent review, release archives and other external
+opening gates remain in the [release inventory](release-qualification.md).
+No push, tag or publication was performed.
 
 ## Embedded recheck — 15 October
 
