@@ -93,7 +93,8 @@ crates/rastok-core/src/       # the kernel — #![no_std] + alloc (split at M0.5
 ├── journal.rs, observation.rs # causal records plus retained typed correlation
 ├── boundary.rs               # host vocabulary, request framing, five traits
 ├── plan/                     # Dispatch, routing, composition, policy, validation, serialization
-└── runtime/                  # TransactionPreparer, VM, Loop/Retry managers, Closing and recovery
+└── runtime/                  # TransactionPreparer, Execution, Loop/Retry, Closing and recovery
+    └── execution/inspection.rs # read-only instance, mailbox, Call and Session views
 
 crates/rastok/src/            # the std layer — re-exports the kernel
 ├── diagnostics.rs    # Diagnostic, Code, Severity, Phase, Span, Bag
@@ -121,6 +122,7 @@ crates/rastok/src/            # the std layer — re-exports the kernel
 │   └── network/      # private sockets/TLS/pumps/protocol codecs
 ├── conformance.rs    # Driver contract harness over the production seam
 ├── lab.rs            # run → ScenarioRun { report, records } ; mock Drivers
+├── worker.rs         # one Execution + journal + Drivers; run, run_until_idle, step
 ├── deployment_config.rs # hosted profile JSON and provider resolution
 ├── observability.rs  # bounded never-block structured-log projection
 ├── ui/               # optional loopback HTTP/SSE controller and embedded page;

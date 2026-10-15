@@ -13,6 +13,7 @@ package "rastok — hosted / compiler crate" as HOSTED {
   rectangle "connectors\nDriverRegistry / RuntimeBindings\nProcess job / service, File, HTTP, WebSocket\nbounded Driver polling; no DSL in Drivers" as DRIVERS
   rectangle "deployment_config\nprofile JSON; explicit environment/provider input\nno clear credentials in semantic artifacts" as CONFIG
   rectangle "lab / conformance\nScenarioRun; controlled Drivers\nsame Execution and exact Contracts" as LAB
+  rectangle "worker\nWorker: Execution + journal + bound Drivers\nrun / run_until_idle / step\nexplicit time; no new parallelism" as WORKER
   rectangle "ui / observability\nsimulation / recorded-history debugger\nread-only prefix; never-block structured logs" as UI
   rectangle "golden / recording\nTrace / Divergence; diagnostic record/replay\nimmutable capture, not durable recovery" as GOLDEN
 }
@@ -24,6 +25,7 @@ package "rastok-core — no_std + alloc" as CORE {
   rectangle "instance / canonical / canonical_cbor\nInstanceAddress, Segment, Generation\ncanonical registry and byte discipline" as IDENTITY
   rectangle "plan / loop_proof\nValidatedExecutionPlan, Node / NodeIndex\nGraph wiring; Operator Dispatch; Connector Contract\nExtensionSpec, LoopSpec/LoopExpiredOutput, RetrySpec\nderived execution routes; independent validation" as PLAN
   rectangle "runtime\nExecution, TransactionPreparer, Mailboxes, Scheduler\nDeliveryRoutes; Loop / Retry managers; recovery\nGraph has no application handler" as VM
+  rectangle "runtime / execution / inspection\nExecutionInspection, EnvelopeView\nread-only instances, mailboxes, Calls, Sessions\nno presentation or scheduling authority" as INSPECTION
   rectangle "boundary\nInbound/Outbound Driver traits\nCallOpen, Completion, CallId, SessionId\nDriverPoller and Contract completion checks" as BOUNDARY
   rectangle "journal / deadline / codec / loop_protocol / retry_protocol / instance_stop\nJournal, MemJournal, Record\nruns, Held/Consumed/Published and instance commands\nunsealed original deadlines; no disk backend" as JOURNAL
   rectangle "schema_annotation / data_policy\nSchemaPath; four standard annotations, typed metadata\nindependent propagation and redaction" as POLICY
@@ -39,7 +41,8 @@ DRIVERS -[hidden]right-> LAB
 CONFIG -[hidden]down-> SCHEMA
 SCHEMA -[hidden]right-> UI
 UI -[hidden]right-> GOLDEN
-GOLDEN -[hidden]down-> NODE
+SCHEMA -[hidden]down-> WORKER
+WORKER -[hidden]down-> NODE
 NODE -[hidden]right-> DATA
 DATA -[hidden]right-> EXPR
 NODE -[hidden]down-> IDENTITY
@@ -50,6 +53,7 @@ BOUNDARY -[hidden]right-> JOURNAL
 JOURNAL -[hidden]right-> POLICY
 BOUNDARY -[hidden]down-> DEPLOY
 DEPLOY -[hidden]right-> REPORT
+REPORT -[hidden]right-> INSPECTION
 
 HOSTED -down-> CORE : compile-time dependency only in this direction
 

@@ -8,9 +8,9 @@
 //! test double.
 
 use crate::boundary::{
-    CallConnectorDriver, CallOpen, CallStart, Completion, EnvelopeDraft, IngressAdmission,
-    IngressProposal, IngressProvenance, IngressSequence, OutboundConnectorDriver,
-    RequestPreparation, Response, SchedulerCompletion,
+    CallConnectorDriver, CallOpen, CallStart, Completion, EnvelopeDraft, IngressProposal,
+    IngressProvenance, IngressSequence, OutboundConnectorDriver, RequestPreparation, Response,
+    SchedulerCompletion,
 };
 use crate::compiler::hir::{
     Cmp, EmitValue, ExpectTarget, Expectation, InjectionTarget, Lab, Mock, Quantifier, Scenario,
@@ -29,6 +29,7 @@ use crate::journal::{MemJournal, Record};
 use crate::plan::{GraphVersion, SemanticHash, ValidatedExecutionPlan};
 use crate::runtime::execution::inspection::EnvelopeView;
 use crate::runtime::execution::{Execution, TimeAdvance};
+use crate::worker::Worker;
 use crate::{expr, node, runtime};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -139,17 +140,16 @@ impl core::fmt::Display for ScenarioStepError {
     }
 }
 
-/// Executes one Lab scenario using its VM, journal, scripted Drivers and
-/// current action position. Both the batch runner and the debugger use this
-/// implementation, so stepping and uninterrupted execution follow the same rules.
+/// Executes one Lab scenario through a Worker with scripted Drivers. The
+/// Simulator owns authored actions, assertion windows and failures; the Worker
+/// owns execution, journal and Driver polling. Batch and interactive controls
+/// use the same scenario and execution state.
 #[derive(Debug)]
 pub struct Simulator<'plan, 'scenario> {
     plan: &'plan ValidatedExecutionPlan,
     simulation: String,
     scenario: &'scenario Scenario,
-    execution: Execution<'plan>,
-    journal: MemJournal,
-    driver: RuntimeBindings<'plan>,
+    worker: Worker<'plan>,
     source_input: Rc<RefCell<HttpServerLabInput>>,
     faults: MockFaults,
     failures: Vec<String>,
@@ -250,26 +250,12 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
             boot.unwrap_or(&empty_boot),
             Rc::clone(&source_input),
         )?;
-        let journal = boot.map_or_else(
-            || MemJournal::new(graph_version),
-            |boot| MemJournal::new_with_deployment(graph_version, boot.attestation().clone()),
-        );
-        let execution = hash.map_or_else(
-            || {
-                boot.map_or_else(
-                    || Execution::new(plan, graph_version),
-                    |boot| Execution::new_with_deployment(plan, graph_version, boot),
-                )
-            },
-            |hash| Execution::new_program(plan, hash, graph_version, 0, boot),
-        );
+        let worker = Worker::new(plan, hash, graph_version, 0, boot, driver);
         Ok(Self {
             plan,
             simulation: String::from(simulation),
             scenario,
-            execution,
-            journal,
-            driver,
+            worker,
             source_input,
             faults,
             failures: Vec::new(),
@@ -342,13 +328,13 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
         else {
             return None;
         };
-        let window = &self.execution.envelope_views()[self.window_start..];
-        let outputs = &self.execution.outputs()[self.output_window_start..];
+        let window = &self.worker.execution().envelope_views()[self.window_start..];
+        let outputs = &self.worker.execution().outputs()[self.output_window_start..];
         let envelopes = expectation_envelopes(
             expectation,
             window,
             outputs,
-            &self.journal.records()[self.record_window_start..],
+            &self.worker.journal().records()[self.record_window_start..],
         );
         let failure = check_expectation(self.plan, expectation, &envelopes);
         Some(ExpectationInspection {
@@ -462,13 +448,13 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
     /// Current execution, borrowed without granting mutation to the debugger.
     #[must_use]
     pub const fn execution(&self) -> &Execution<'plan> {
-        &self.execution
+        self.worker.execution()
     }
 
     /// Read-only causal journal.
     #[must_use]
     pub const fn journal(&self) -> &MemJournal {
-        &self.journal
+        self.worker.journal()
     }
 
     /// Whether an authored clock advance is suspended between its transitions.
@@ -498,9 +484,9 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
         };
         let kind = match step {
             ScenarioStep::Inject { target, value, seq } => {
-                self.window_start = self.execution.envelope_views().len();
-                self.output_window_start = self.execution.outputs().len();
-                self.record_window_start = self.journal.records().len();
+                self.window_start = self.worker.execution().envelope_views().len();
+                self.output_window_start = self.worker.execution().outputs().len();
+                self.record_window_start = self.worker.journal().records().len();
                 let candidate = self
                     .next_injection_override
                     .take()
@@ -528,19 +514,12 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
                                     self.source_input.borrow_mut().offer(submission, action)
                                 });
                             if let Err(error) = offered.and_then(|()| {
-                                poll_inbound_world(
-                                    &mut self.driver,
-                                    &mut self.execution,
-                                    &mut self.journal,
-                                )
-                                .map(|_| ())
+                                self.worker.poll_inbound().map_err(worker_error).map(|_| ())
                             }) {
                                 self.failures
                                     .push(format!("the source injection was refused: {error}"));
                             }
-                        } else if let Err(error) =
-                            self.execution.accept_input(&mut self.journal, submission)
-                        {
+                        } else if let Err(error) = self.worker.accept_input(submission) {
                             self.failures
                                 .push(format!("the injection was refused: {error}"));
                         }
@@ -551,10 +530,14 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
                 ScenarioActionKind::Inject
             }
             ScenarioStep::Advance { nanos } => {
-                self.window_start = self.execution.envelope_views().len();
-                self.output_window_start = self.execution.outputs().len();
-                self.record_window_start = self.journal.records().len();
-                let target = self.execution.logical_time().saturating_add(*nanos);
+                self.window_start = self.worker.execution().envelope_views().len();
+                self.output_window_start = self.worker.execution().outputs().len();
+                self.record_window_start = self.worker.journal().records().len();
+                let target = self
+                    .worker
+                    .execution()
+                    .logical_time()
+                    .saturating_add(*nanos);
                 self.advance = Some(TimeAdvance::new(target));
                 self.quiescent = false;
                 ScenarioActionKind::Advance
@@ -562,9 +545,9 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
             ScenarioStep::Expect(expectation) => {
                 let envelopes = expectation_envelopes(
                     expectation,
-                    &self.execution.envelope_views()[self.window_start..],
-                    &self.execution.outputs()[self.output_window_start..],
-                    &self.journal.records()[self.record_window_start..],
+                    &self.worker.execution().envelope_views()[self.window_start..],
+                    &self.worker.execution().outputs()[self.output_window_start..],
+                    &self.worker.journal().records()[self.record_window_start..],
                 );
                 if let Some(message) = check_expectation(self.plan, expectation, &envelopes) {
                     self.failures.push(message);
@@ -587,13 +570,11 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
     /// A faulting transaction commits nothing and remains reserved for retry.
     pub fn step_transaction(&mut self) -> Result<bool, ScenarioStepError> {
         if let Some(advance) = &mut self.advance {
-            let progressed = advance
-                .advance_once(&mut self.execution, &mut self.journal, &mut self.driver)
-                .map_err(|error| {
-                    // A deadline can retain a closure before a Driver refuses.
-                    // Do not advertise transaction rollback for this wider seam.
-                    ScenarioStepError::Boundary(format!("the advance faulted: {error}"))
-                })?;
+            let progressed = self.worker.advance_once(advance).map_err(|error| {
+                // A deadline can retain a closure before a Driver refuses.
+                // Do not advertise transaction rollback for this wider seam.
+                ScenarioStepError::Boundary(format!("the advance faulted: {error}"))
+            })?;
             if advance.is_complete() {
                 self.advance = None;
             }
@@ -603,10 +584,10 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
             }
         }
         let ran = self
-            .execution
-            .step_with_bindings(&mut self.journal, &mut self.driver)
+            .worker
+            .step()
             .map_err(|error| ScenarioStepError::Transaction(format!("a step faulted: {error}")))?;
-        let progressed = if self.execution.has_ready_work() {
+        let progressed = if self.worker.execution().has_ready_work() {
             false
         } else {
             self.poll_driver().map_err(ScenarioStepError::Boundary)?
@@ -614,7 +595,7 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
         // A retained opening or write acknowledgement can make the next
         // scripted frame admissible without queuing an Executor transaction.
         // Confirm that the world is also at rest before advancing the script.
-        self.quiescent = !progressed && !self.execution.has_ready_work();
+        self.quiescent = !progressed && !self.worker.execution().has_ready_work();
         Ok(ran)
     }
 
@@ -627,7 +608,7 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
             return Ok(false);
         }
         let progressed = self.poll_driver()?;
-        self.quiescent = !progressed && !self.execution.has_ready_work();
+        self.quiescent = !progressed && !self.worker.execution().has_ready_work();
         Ok(progressed)
     }
 
@@ -635,8 +616,7 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
     pub fn settle_current_action(&mut self) {
         if let Some(mut advance) = self.advance.take() {
             loop {
-                match advance.advance_once(&mut self.execution, &mut self.journal, &mut self.driver)
-                {
+                match self.worker.advance_once(&mut advance) {
                     Ok(true) => {}
                     Ok(false) => break,
                     Err(error) => {
@@ -646,13 +626,20 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
                 }
             }
         }
-        settle(
-            &mut self.execution,
-            &mut self.journal,
-            &mut self.driver,
-            &self.faults,
-            &mut self.failures,
-        );
+        let failures = &mut self.failures;
+        let faults = &self.faults;
+        let result = self.worker.settle_action(|report| {
+            failures.extend(faults.borrow_mut().drain(..));
+            for (response, reason) in &report.rejected {
+                failures.push(format!(
+                    "a reply to {:?} was refused before closure: {reason}",
+                    response.call_id
+                ));
+            }
+        });
+        if let Err(errors) = result {
+            self.failures.extend(errors.into_iter().map(worker_error));
+        }
         self.collect_driver_faults();
         self.quiescent = true;
         if self.source_input.borrow().is_pending() {
@@ -690,29 +677,29 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
                 label: self.scenario.label.clone(),
                 failures: self.failures,
             },
-            records: self.journal.records().to_vec(),
+            records: self.worker.shutdown().records().to_vec(),
         }
     }
 
     fn poll_driver(&mut self) -> Result<bool, String> {
-        let report = self
-            .execution
-            .poll_drivers(&mut self.journal, &mut self.driver)
-            .map_err(|error| format!("the boundary round faulted: {error}"))?;
-        // Finish the preceding batch round before offering the next inbound
-        // frame. In particular WriteSettled must not move behind that frame
-        // merely because the caller selected the interactive stepping path.
-        let inbound = poll_inbound_world(&mut self.driver, &mut self.execution, &mut self.journal)?;
-        self.collect_driver_faults();
-        for (response, reason) in &report.rejected {
-            self.failures.push(format!(
-                "a reply to {:?} was refused before closure: {reason}",
-                response.call_id
-            ));
-        }
-        let progressed = inbound || report.settled > 0 || !report.rejected.is_empty();
+        let failures = &mut self.failures;
+        let faults = &self.faults;
+        let source_input = &self.source_input;
+        let progressed = self
+            .worker
+            .poll(|report| {
+                failures.extend(faults.borrow_mut().drain(..));
+                failures.extend(source_input.borrow_mut().take_fault());
+                for (response, reason) in &report.rejected {
+                    failures.push(format!(
+                        "a reply to {:?} was refused before closure: {reason}",
+                        response.call_id
+                    ));
+                }
+            })
+            .map_err(worker_error)?;
         if !progressed
-            && !self.execution.has_ready_work()
+            && !self.worker.execution().has_ready_work()
             && self.source_input.borrow().is_pending()
         {
             return Err(String::from(
@@ -824,93 +811,14 @@ fn run_scenario(
     }
 }
 
-/// Drives the machine to rest after an action step: drain, let the
-/// mocks answer, drain again — until nothing settles. Uncovered
-/// calls and mock faults surface as failures.
-fn settle<'plan>(
-    vm: &mut Execution<'plan>,
-    journal: &mut MemJournal,
-    driver: &mut RuntimeBindings<'plan>,
-    faults: &MockFaults,
-    failures: &mut Vec<String>,
-) {
-    let mut rested = false;
-    for _ in 0..64 {
-        let inbound = match poll_inbound_world(driver, vm, journal) {
-            Ok(progressed) => progressed,
-            Err(error) => {
-                failures.push(error);
-                return;
-            }
-        };
-        if let Err(error) = vm.run_ready_with_bindings(journal, driver) {
-            failures.push(format!("a step faulted: {error}"));
-            return;
-        }
-        let report = match vm.poll_drivers(journal, driver) {
-            Ok(report) => report,
-            Err(error) => {
-                failures.push(format!("the boundary round faulted: {error}"));
-                return;
-            }
-        };
-        failures.extend(faults.borrow_mut().drain(..));
-        for (response, reason) in &report.rejected {
-            failures.push(format!(
-                "a reply to {:?} was refused before closure: {reason}",
-                response.call_id
-            ));
-        }
-        if report.settled == 0 && !inbound {
-            rested = true;
-            break;
-        }
+// The Lab keeps its authored-action diagnostics; the Worker retains typed
+// failures until this presentation boundary.
+fn worker_error(error: crate::worker::Error) -> String {
+    match error {
+        crate::worker::Error::Step(error) => format!("a step faulted: {error}"),
+        crate::worker::Error::Poll(error) => format!("Driver polling faulted: {error}"),
+        error => error.to_string(),
     }
-    if !rested {
-        // Never a silent truncation: a machine still settling after
-        // the cap is a failed scenario, not a shrugged one.
-        failures.push(String::from(
-            "the machine did not settle within 64 boundary rounds",
-        ));
-    }
-    if let Err(error) = vm.run_ready_with_bindings(journal, driver) {
-        failures.push(format!("a step faulted: {error}"));
-    }
-}
-
-/// Offers world facts through the same binding, admission and terminal queue
-/// as a hosted source. This performs no graph transaction and assigns no ids.
-fn poll_inbound_world<'plan>(
-    driver: &mut RuntimeBindings<'plan>,
-    vm: &mut Execution<'plan>,
-    journal: &mut MemJournal,
-) -> Result<bool, String> {
-    let admitted = match driver
-        .poll_inbound(vm, journal)
-        .map_err(|error| error.to_string())?
-    {
-        Some(IngressAdmission::Accepted(_)) => true,
-        Some(IngressAdmission::Rejected(reason)) => {
-            return Err(format!(
-                "the source proposal was refused before admission: {reason:?}"
-            ));
-        }
-        Some(IngressAdmission::Pending) | None => false,
-    };
-    let report = driver
-        .poll_inbound_call_events(vm)
-        .map_err(|error| error.to_string())?;
-    if !report.uncorrelated.is_empty() || !report.discarded.is_empty() {
-        return Err(String::from(
-            "the Lab source reported an uncorrelated or duplicate terminal",
-        ));
-    }
-    if let Some((_, reason)) = report.rejected.first() {
-        return Err(format!(
-            "the source terminal violates its Contract: {reason}"
-        ));
-    }
-    Ok(admitted || report.queued > 0)
 }
 
 fn injection_port<'plan>(

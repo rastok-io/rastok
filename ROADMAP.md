@@ -429,6 +429,13 @@ in the checker and core, without changing the runtime, plan format or goldens.
 
 ## Later — incident lab and safe dogfood
 
+- Introduce the Rust `LogicalTime(i64)` value type with explicit nanosecond
+  conversions as part of the relative-timeline refactor in
+  [D-2026-10-10-1](docs/spec/decisions.md#d-2026-10-10-1--the-logical-timeline-is-relative-civil-time-is-a-retained-external-input)
+  (A-T1-12). Yoann confirmed on 15 October that it belongs with the separation
+  of logical and civil time, not in the current runtime-organisation lot.
+  It distinguishes execution instants from durations and civil timestamps;
+  it adds no DSL type.
 - Qualify derived Retry journal indexes before M2 durable storage: current
   prefix scans can make long histories quadratic in total work. Preserve the
   retained arm order and exact recovery facts; the

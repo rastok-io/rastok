@@ -409,6 +409,64 @@ impl HostedTimeSource {
     }
 }
 
+/// OS input and presentation for the shared Worker. The Worker owns the
+/// processing loop; this adapter supplies the existing clock, stdin channel,
+/// recording order and idle-wait policy.
+struct CliHost<'a> {
+    time: HostedTimeSource,
+    input: std::sync::mpsc::Receiver<Option<std::io::Result<String>>>,
+    inbound_path: node::Path,
+    recorder: &'a mut Option<rastok::recording::Recorder>,
+    log_projector: &'a mut Option<rastok::observability::JournalLogProjector>,
+    printed_outputs: usize,
+}
+
+impl rastok::worker::Host for CliHost<'_> {
+    type Error = String;
+
+    fn logical_time(&mut self) -> i64 {
+        self.time.logical_now()
+    }
+
+    fn poll_input(&mut self) -> Result<std::task::Poll<Option<IngressProposal>>, Self::Error> {
+        match self.input.try_recv() {
+            Ok(Some(Ok(line))) => Ok(std::task::Poll::Ready(Some(cli_submission(
+                &self.inbound_path,
+                line,
+            )))),
+            Ok(Some(Err(error))) => Err(format!("stdin: {error}")),
+            Ok(None) => Ok(std::task::Poll::Ready(None)),
+            Err(_) => Ok(std::task::Poll::Pending),
+        }
+    }
+
+    fn observe_poll(&mut self, report: &rastok::runtime::execution::PollReport) {
+        for (_, reason) in &report.rejected {
+            eprintln!("err: a reply was refused before closure: {reason}");
+        }
+    }
+
+    fn checkpoint(
+        &mut self,
+        execution: &Execution<'_>,
+        journal: &MemJournal,
+    ) -> Result<(), String> {
+        recording_checkpoint(self.recorder, journal, execution.logical_time())
+            .map_err(|error| error.to_string())?;
+        if let Some(projector) = self.log_projector {
+            let _ = projector.project_journal(journal);
+        }
+        print_new_outputs(execution, &mut self.printed_outputs);
+        Ok(())
+    }
+
+    fn wait(&mut self) {
+        // The next poll supplies monotonic elapsed time explicitly. Deadlines
+        // remain logical dates; Drivers do not manufacture timeout outcomes.
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
 /// Runs the App against the real Drivers: each stdin line is one
 /// text submission; public boundary envelopes print to stdout.
 fn run(
@@ -444,19 +502,14 @@ fn run(
         }
         None => connectors::RuntimeBindings::try_new(&compilation.plan, &registry),
     };
-    let mut world = match bindings {
+    let world = match bindings {
         Ok(bindings) => bindings,
         Err(error) => {
             eprintln!("error: {error}");
             return ExitCode::FAILURE;
         }
     };
-    // Binding is complete before either mutable execution authority exists.
     let version = GraphVersion(1);
-    let mut journal = boot.map_or_else(
-        || MemJournal::new(version),
-        |boot| MemJournal::new_with_deployment(version, boot.attestation().clone()),
-    );
     let mut log_projector = if json_logs {
         match rastok::observability::json_log_channel(256) {
             Ok((sink, receiver)) => {
@@ -493,14 +546,19 @@ fn run(
             return ExitCode::FAILURE;
         }
     };
-    let mut vm = Execution::new_program(
+    let mut worker = rastok::worker::Worker::new(
         &compilation.plan,
-        compilation.hash,
+        Some(compilation.hash),
         version,
         time.logical_now(),
         boot,
+        world,
     );
-    if let Err(error) = recording_checkpoint(&mut recorder, &journal, vm.logical_time()) {
+    if let Err(error) = recording_checkpoint(
+        &mut recorder,
+        worker.journal(),
+        worker.execution().logical_time(),
+    ) {
         eprintln!("error: {error}");
         return ExitCode::FAILURE;
     }
@@ -508,7 +566,6 @@ fn run(
         Ok(path) => path,
         Err(_) => return ExitCode::FAILURE,
     };
-    let polls_inbound = world.has_runnable_inbound();
     let (lines, input) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let stdin = std::io::stdin();
@@ -519,70 +576,31 @@ fn run(
         }
         let _ = lines.send(None);
     });
-    let mut printed_outputs = 0;
-    let mut stdin_open = true;
-    loop {
-        let mut progressed = false;
-        let target = time.logical_now();
-        if target > vm.logical_time()
-            && let Err(error) = vm.advance_to(&mut journal, &mut world, target)
+    let result = worker.run(&mut CliHost {
+        time,
+        input,
+        inbound_path,
+        recorder: &mut recorder,
+        log_projector: &mut log_projector,
+        printed_outputs: 0,
+    });
+    if let Err(error) = result {
+        if matches!(error, rastok::worker::RunError::Processing(_))
+            && let Err(record_error) = recording_checkpoint(
+                &mut recorder,
+                worker.journal(),
+                worker.execution().logical_time(),
+            )
         {
-            eprintln!("error: {error}");
-            return ExitCode::FAILURE;
+            eprintln!("error: {record_error}");
         }
-        while let Ok(message) = input.try_recv() {
-            let Some(line) = message else {
-                stdin_open = false;
-                break;
-            };
-            let line = match line {
-                Ok(line) => line,
-                Err(error) => {
-                    eprintln!("error: stdin: {error}");
-                    return ExitCode::FAILURE;
-                }
-            };
-            let submission = cli_submission(&inbound_path, line);
-            if let Err(error) = vm.accept_input(&mut journal, submission) {
-                eprintln!("error: the submission was refused: {error}");
-                return ExitCode::FAILURE;
-            }
-            progressed = true;
-        }
-
-        match drive_boundary(&mut vm, &mut journal, &mut world) {
-            Ok(boundary_progress) => progressed |= boundary_progress,
-            Err(error) => {
-                if let Err(record_error) =
-                    recording_checkpoint(&mut recorder, &journal, vm.logical_time())
-                {
-                    eprintln!("error: {record_error}");
-                }
-                eprintln!("error: {error}");
-                return ExitCode::FAILURE;
-            }
-        }
-        if let Err(error) = recording_checkpoint(&mut recorder, &journal, vm.logical_time()) {
-            eprintln!("error: {error}");
-            return ExitCode::FAILURE;
-        }
-        if let Some(projector) = &mut log_projector {
-            let _ = projector.project_journal(&journal);
-        }
-        print_new_outputs(&vm, &mut printed_outputs);
-
-        if !stdin_open && !polls_inbound && !vm.has_open_obligations() {
-            break;
-        }
-        if !progressed {
-            // The next polling round translates monotonic elapsed time at the one
-            // hosted boundary. Deadlines remain deterministic logical dates and
-            // Drivers never manufacture timeout outcomes themselves.
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
+        eprintln!("error: {error}");
+        return ExitCode::FAILURE;
     }
+    let logical_time = worker.execution().logical_time();
+    let journal = worker.shutdown();
     if let Some(recorder) = recorder {
-        match recorder.finish(&compilation, &journal, vm.logical_time()) {
+        match recorder.finish(&compilation, &journal, logical_time) {
             Ok(()) => eprintln!(
                 "recorded: {} causal records · seal {}",
                 journal.records().len(),
@@ -679,47 +697,6 @@ fn replay(arguments: &[String]) -> ExitCode {
             ExitCode::FAILURE
         }
     }
-}
-
-fn drive_boundary<'plan>(
-    vm: &mut Execution<'plan>,
-    journal: &mut MemJournal,
-    world: &mut connectors::RuntimeBindings<'plan>,
-) -> Result<bool, String> {
-    let mut progressed = false;
-    for _ in 0..64 {
-        match world
-            .poll_inbound(vm, journal)
-            .map_err(|error| error.to_string())?
-        {
-            Some(_) => progressed = true,
-            None => break,
-        }
-    }
-    vm.run_ready_with_bindings(journal, world)
-        .map_err(|error| error.to_string())?;
-    let responses = world
-        .poll_inbound_call_responses(vm)
-        .map_err(|error| error.to_string())?;
-    let timeouts = world
-        .poll_inbound_call_timeouts(vm)
-        .map_err(|error| error.to_string())?;
-    let inbound_events = world
-        .poll_inbound_call_events(vm)
-        .map_err(|error| error.to_string())?;
-    let outbound = vm
-        .poll_drivers(journal, world)
-        .map_err(|error| error.to_string())?;
-    for (_, reason) in &outbound.rejected {
-        eprintln!("err: a reply was refused before closure: {reason}");
-    }
-    progressed |= responses.started > 0
-        || timeouts.started > 0
-        || inbound_events.queued > 0
-        || outbound.settled > 0;
-    vm.run_ready_with_bindings(journal, world)
-        .map_err(|error| error.to_string())?;
-    Ok(progressed)
 }
 
 #[cfg(feature = "hosted-ui")]

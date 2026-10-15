@@ -107,12 +107,14 @@ promise of one crate per box:
 | Semantic checker | names, types, graph validity, Extension and disposition constraints | host I/O |
 | Planner and canonicalizer | immutable executable plan, stable identity and ordering | live execution state |
 | Runtime core | shared Executor transitions, Extension-manager transitions, scheduling decisions, effect intents | direct host calls or Graph application handlers |
+| Hosted Worker | one Execution, its journal and bound Drivers; continuous running, running until idle, and single stepping | an implicit clock, scenario assertions, presentation or new parallelism |
+| Read-only execution inspection | detached instance, mailbox, Call and Session views, with execution indexes resolved to paths | journal authority, mutation, formatting or debugger navigation |
 | Journal boundary | ordered typed inputs and outcomes | hidden semantic decisions |
 | Runtime Connector binding | exact-id and role association before VM/journal construction | compiler catalogue or first-registration-wins selection |
 | Process, File and network Drivers | physical external interactions behind typed Contracts; flat contract-specific modules own binding and private `network` owns sockets/TLS/protocol engines | general runtime semantics, compiler schema projection or journal authority |
 | Project schema tooling | strict OpenAPI discovery/projection and deterministic generated Rastok source | a second runtime type system or authored-source mutation |
 | Lab runner | controlled Driver scripts, virtual inputs, time and assertions; authored crash/restart remains deferred | a second execution engine |
-| Visual simulation debugger | paused transition controls and projections of validated topology, VM inspection, journal observations and accounting | a second execution authority, durable history, editing, remote administration or unredacted classified data |
+| Visual simulation debugger | paused transition controls and projections of validated topology, execution inspection, journal observations and accounting | a second execution authority, durable history, editing, remote administration or unredacted classified data |
 | Diagnostics and golden diff | stable human-facing evidence | mutation of execution |
 | Diagnostic recording | bounded lossless capture of retained records and offline read-only reconstruction, optionally in the debugger | write-ahead durability, automatic restart, producer re-execution or unqualified personal-data persistence |
 

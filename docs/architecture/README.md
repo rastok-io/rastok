@@ -105,8 +105,9 @@ Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
 - [`plan-package.md`](plan-package.md) for the categorical package and
   independent validation boundary, with earlier format ledgers marked historical;
 - [`node-realignment-qualification.md`](node-realignment-qualification.md) for
-  the boundary-face invariant and measured baseline before selecting the new
-  Node-table layout; the representation change is not implemented there;
+  the boundary-face invariant, measured Node-table layout and lot 1 closure;
+- [`node-runtime-qualification.md`](node-runtime-qualification.md) for lot 2:
+  separate read-only inspection and the shared hosted Worker;
 - [`parallelism-notes.md`](parallelism-notes.md) for the keyed-mailbox
   concurrency model and the decisions left for physical parallelism;
 - [`spike-rp2350-emulated.md`](spike-rp2350-emulated.md) for the measured

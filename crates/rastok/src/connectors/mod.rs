@@ -37,7 +37,7 @@ pub use process::{
 };
 pub use registry::{
     BoundConnectorDriver, ConnectorDriverFactory, DriverBindingError, DriverFactoryError,
-    DriverRegistrationError, DriverRegistry, RuntimeBindings,
+    DriverRegistrationError, DriverRegistry, InboundPollError, RuntimeBindings,
 };
 #[cfg(feature = "hosted-websocket")]
 pub use websocket_client::WebSocketClientFactory;
