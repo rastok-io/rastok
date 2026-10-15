@@ -251,8 +251,8 @@ pub fn compile_with_assets(
                     E_PLAN_DEPTH,
                     Phase::Plan,
                     format!(
-                        "the program nests too deeply to ship: its plan reaches \
-                         {depth} levels where the format reads at most {budget}"
+                        "the serialized plan reaches level {depth}; the format \
+                         requires a level below {budget} (root is level 0)"
                     ),
                 )
                 .with_field("depth", depth.to_string()),

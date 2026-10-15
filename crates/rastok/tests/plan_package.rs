@@ -1323,3 +1323,50 @@ fn the_depth_boundaries_are_exact() {
         depth.fields()
     );
 }
+
+#[test]
+fn bounded_source_expressions_still_reach_the_plan_depth_guard() {
+    // Like the raw-plan boundary probe, this combined-depth case needs more
+    // than the host debug test harness's default 2 MiB thread stack.
+    std::thread::Builder::new()
+        .name(String::from("source-transport-depth"))
+        .stack_size(8 * 1024 * 1024)
+        .spawn(|| {
+            let source = |lists: usize| {
+                format!(
+                    "graph g : App {{\n  input in: text\n  operator o {{\n\
+                     var seen: int = 0\n  on in {{\n\
+                     seen = size({}1{}) + 1 + 1\n  out = data\n\
+                     }}\n  }}\n  in -> o -> out\n}}\n",
+                    "[".repeat(lists),
+                    "]".repeat(lists),
+                )
+            };
+            let catalog = ContractCatalog::try_m0().expect("the standard catalogue holds");
+            let accepted = compile(&[source(119).as_str()], &catalog).expect("level 254 fits");
+            assert_eq!(
+                plan::decode(&plan::encode(&accepted.plan, &accepted.hash)).unwrap(),
+                (accepted.plan, accepted.hash)
+            );
+            // Expression depth 124 and type depth 121 both fit their 128-level
+            // bounds. Only their serialized containment reaches the reader bound.
+            let refused = compile(&[source(120).as_str()], &catalog).unwrap_err();
+            let depth = refused
+                .diagnostics()
+                .iter()
+                .find(|diagnostic| diagnostic.code().as_str() == "E-PLAN-DEPTH")
+                .expect("the serialized-depth guard refuses by name");
+            assert_eq!(depth.phase(), rastok::diagnostics::Phase::Plan);
+            assert!(
+                depth
+                    .fields()
+                    .iter()
+                    .any(|(name, value)| *name == "depth" && value == "256")
+            );
+            assert!(depth.message().contains("reaches level 256"));
+            assert!(depth.message().contains("a level below 256"));
+        })
+        .expect("the source depth probe starts")
+        .join()
+        .expect("the source and transport boundaries hold");
+}

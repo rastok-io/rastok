@@ -2,11 +2,11 @@
 
 Opening: **5 November 2026**, freeze **24 October**, per the 5 October
 [human-review amendment](human-review-m1.md). This is the current M1 delivery
-checklist. **Release TODO:** keep v20 as the chantier/target during the work,
-then number the first public format 1 before publication. No public operation
-is authorized by this update. The current representation is **v20 /
-diagnostic recording v4**, reviewed and inventoried in the
-[human-review identity ledger](human-review-v20-identity.md). Exact-instance
+checklist. **Release TODO:** relabel the first public package as format 1 before
+publication. No public operation is authorized by this update. The
+[current plan package](../spec/identity.md) and diagnostic recording **4**
+are qualified in the [Node realignment inventory](node-realignment-identity.md).
+Exact-instance
 closure, resident Process, native Retry, flat annotation types and bounded
 typed HTTP deserialization keep their execution semantics. The
 [C4 ledger](retry-c4-qualification.md) records the preceding native-Retry
@@ -51,8 +51,9 @@ typed index, one reference wiring per Graph with derived execution indexes,
 and execution separated from read-only inspection and debugger
 presentation. No new semantics and no identity movement; the package
 representation moves once more before publication and is what the format-1
-relabel names. Layout and embedded cost remain to qualify; the calendar
-impact is submitted to Yoann in the ledger, not reclassified.
+relabel names. Lot 1's layout and embedded cost are now qualified in the
+[closure report](node-realignment-qualification.md). Inspection separation
+and the hosted Worker remain lot 2; the calendar impact stays with Yoann.
 
 ## Delivery ledger
 

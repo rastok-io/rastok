@@ -1399,3 +1399,71 @@ The 20 October checkpoint must choose whether lot 2 fits the 23 October
 engineering freeze with a complete gate and review. Keeping the 26–30 October
 external Rust review and the 5 November opening is an option only if that
 evidence is ready; this report does not silently move a date or reduce a gate.
+
+## Fable review follow-up — 15 October
+
+Fable independently reproduced the complete 1,591-test gate and all three
+stack/heap probes on `35d3072`. The review does not reopen lot 1. Its two
+documentation omissions are corrected: the opening checklist and diagnostic
+recording contract now link to the current package registry and the Node
+realignment inventory. The public-content test checks both live headers.
+
+A source-level regression exercises the Plan-phase depth guard separately
+from the expression guard: `size([[...1...]]) + 1 + 1` with 119 nested lists
+encodes and reads back; 120 lists refuse with `E-PLAN-DEPTH`, phase Plan,
+`depth = 256`, while expression/type depths remain below 128. The diagnostic
+now names a zero-based **level** and the exclusive upper bound, rather than
+appearing to allow the refused value. Like the raw-plan stress test, the
+unoptimized host probe uses an explicit 8 MiB test-thread stack; the initial
+2 MiB harness overflowed before reaching its assertions. With that harness
+bound explicit, the new regression first failed on the ambiguous sentence.
+The content regression first failed on the stale opening-checklist header.
+No production bound or artifact changes in this follow-up.
+
+Executed after the correction: formatting check, strict workspace Clippy
+(all targets and features), rustdoc, and the two affected integration suites
+(`plan_package`: 29 passed; `site_content`: 12 passed). No failure or ignored
+test. The full suite and the embedded probes were not rerun for this
+diagnostic/documentation follow-up; the preceding full gate and Fable's
+independent reproduction remain dated evidence, not a new run.
+
+### Reproducing the normal-image code measurements
+
+The earlier normal-image sizes (969,012 B echo, 1,040,912 B Retry) used the
+repository checkout at `/Users/steelcoder/Documents/rastok/rastok`, the pinned
+`1.97.1-aarch64-apple-darwin` toolchain, and the spike's release profile
+(`opt-level = "z"`, LTO, one codegen unit). The Cargo fingerprints retain
+`RUSTFLAGS = -D warnings -C link-arg=-Tlink.x`. No stack or layout feature was
+enabled. The commands below reproduce that build configuration, with a fresh
+temporary path for the same Retry package:
+
+```sh
+export PATH="/Users/steelcoder/.rustup/toolchains/1.97.1-aarch64-apple-darwin/bin:$PATH"
+qualification_dir=$(mktemp -d /tmp/rastok-lot1-normal.XXXXXX)
+cargo run --locked -p rastok --example retry_spike_package -- "$qualification_dir/retry.rkp" 3
+cd spikes/rp2350-emu
+env -u RASTOK_SPIKE_PACKAGE -u RASTOK_RETRY_OPERATIONS \
+  -u RASTOK_RETRY_FRAMES -u RASTOK_RETRY_FRAME_BYTES \
+  RUSTFLAGS='-D warnings -C link-arg=-Tlink.x' cargo build --locked --release
+/opt/homebrew/opt/llvm@18/bin/llvm-size -A target/thumbv8m.main-none-eabihf/release/rastok-spike-rp2350
+RASTOK_SPIKE_PACKAGE="$qualification_dir/retry.rkp" \
+  RASTOK_RETRY_OPERATIONS=1 RASTOK_RETRY_FRAMES=16 RASTOK_RETRY_FRAME_BYTES=4 \
+  RUSTFLAGS='-D warnings -C link-arg=-Tlink.x' \
+  cargo build --locked --release --features retry-qualification
+/opt/homebrew/opt/llvm@18/bin/llvm-size -A target/thumbv8m.main-none-eabihf/release/rastok-spike-rp2350
+```
+
+The gate is the sum of `.text` and `.rodata`, not the tool's `Total` line.
+Fable's normal images were 184 B smaller for echo and 176 B smaller for
+Retry. The cause of that difference has not been established; the report
+keeps the original, larger measurements and does not claim binary-identical
+builds. Both measurements satisfy the same gates.
+
+### M2 capacity observation
+
+The level-255 combined package peaks at **107,328 B of heap for decoding
+alone**, leaving 23,744 B below the 128 KiB gate before any execution or
+durable-journal index is loaded. Its 79,168 B stack measurement does not
+establish a corresponding heap margin for M2. Journal-depth and index work
+must measure peak heap as well as stack; the tested package is one boundary
+case, not a maximum-size bound for every admissible package.

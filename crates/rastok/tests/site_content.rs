@@ -262,6 +262,18 @@ fn current_public_status_matches_the_package_and_contracts() {
             "{path}: {status}"
         );
     }
+    for path in [
+        "docs/architecture/opening-showcase.md",
+        "docs/architecture/diagnostic-recording.md",
+    ] {
+        let source = std::fs::read_to_string(root().join(path)).unwrap();
+        let status = source.split("\n## ").next().unwrap();
+        assert!(
+            status.contains("[current plan package](../spec/identity.md)"),
+            "{path}: the live status must refer to the current registry"
+        );
+        assert!(status.contains("node-realignment-identity.md"), "{path}");
+    }
 }
 
 #[test]
