@@ -1,3 +1,11 @@
+//! The Graph-hosted half of the Loop manager. The specification defines one
+//! manager model for all hosts (loop.md §2); the code splits it by host. A
+//! Graph has no handler, application mailbox or mutable application state.
+//! This file retains its opening admission at the boundary, deploys entry
+//! routes into contained Executors, propagates run contexts, collects
+//! verdicts from child transactions, and checks their causal quiescence.
+//! Shared protocol, command, fuel and closing handling is in `loop_manager`.
+//!
 //! Retained Loop Graph admissions stop boundary expansion before fan-out.
 //! The attached manager owns these bounded deliveries; Graphs stay scopes.
 
@@ -25,6 +33,10 @@ struct Admission {
 #[derive(Debug, Default)]
 pub(super) struct GraphLoops {
     admissions: BTreeMap<Id, Admission>,
+    // The key matches Mailboxes::edge_seq: (EdgeIndex, Generation). Each
+    // delivery is sequenced here or in a mailbox, never in both. These
+    // admissions belong to the manager; merging the queues would give the
+    // Graph the application mailbox that loop.md §2 forbids.
     sequences: BTreeMap<(envelope::EdgeIndex, instance::Generation), u64>,
     contexts: BTreeMap<Id, Vec<LoopRunId>>,
 }
@@ -75,26 +87,22 @@ impl Execution<'_> {
                 let destinations = match &rule.selection {
                     RouteSelection::All(destinations) => destinations.as_slice(),
                     RouteSelection::Cases(_) => {
-                        if value.is_none() {
-                            value = Some(
+                        let current = match value.as_ref() {
+                            Some(current) => current,
+                            None => value.insert(
                                 crate::runtime::data_value(envelope.data())
                                     .map_err(ExecutionFault::Fault)?,
-                            );
-                        }
-                        rule.selection
-                            .selected(value.as_ref().ok_or_else(|| {
-                                graph_error(&node::OwnerPath::root(), "a case route has no value")
-                            })?)
-                            .ok_or_else(|| {
-                                graph_error(
-                                    &node::OwnerPath::root(),
-                                    "a produced case has no route",
-                                )
-                            })?
+                            ),
+                        };
+                        rule.selection.selected(current).ok_or_else(|| {
+                            graph_error(&node::OwnerPath::root(), "a produced case has no route")
+                        })?
                     }
                 };
-                // A Node-table index is a lookup, not delivery order. Keep the
-                // canonical path order used by source routing and identities.
+                // This path order determines passive-Graph traversal and the
+                // discovery order of commands and instance stops. The BTreeSet
+                // deduplicates endpoints; prepare_graph_routes restores their
+                // canonical delivery order with endpoint_order.
                 let mut destinations: Vec<_> = destinations.iter().collect();
                 destinations.sort_by(|left, right| destination_order(self.plan, left, right));
                 for destination in destinations {
@@ -270,17 +278,24 @@ impl Execution<'_> {
             return false;
         };
         let edge = self.prepared_edge_text(route);
-        self.apply_instance_admissions(target, candidates, envelope);
         let source = source.unwrap_or(&target.scope).clone();
         let reference = ids::delivery_id(&edge, envelope.meta().sys().id());
+        let opening = if self.plan.nodes[owner.index()].path.is_root() {
+            OpeningAdmissionId::Ingress {
+                inbound: envelope.meta().sys().id(),
+                port: to.port.clone(),
+            }
+        } else {
+            OpeningAdmissionId::Delivery(reference)
+        };
+        let Some(graph) = self.graph_loops.as_deref_mut() else {
+            return false;
+        };
         let edge = self
             .scheduler
             .mailboxes
             .routes
             .insert(edge, to.port.clone());
-        let Some(graph) = self.graph_loops.as_deref_mut() else {
-            return false;
-        };
         let seq = graph.sequences.entry((edge, source.clone())).or_default();
         *seq += 1;
         graph.admissions.insert(
@@ -288,14 +303,7 @@ impl Execution<'_> {
             Admission {
                 owner,
                 instance: target.reference.clone(),
-                opening: if self.plan.nodes[owner.index()].path.is_root() {
-                    OpeningAdmissionId::Ingress {
-                        inbound: envelope.meta().sys().id(),
-                        port: to.port.clone(),
-                    }
-                } else {
-                    OpeningAdmissionId::Delivery(reference)
-                },
+                opening,
                 delivery: envelope::Delivery {
                     edge,
                     seq: *seq,
@@ -304,6 +312,7 @@ impl Execution<'_> {
                 },
             },
         );
+        self.apply_instance_admissions(target, candidates, envelope);
         true
     }
 
@@ -337,6 +346,11 @@ impl Execution<'_> {
     }
 
     pub(super) fn graph_run_has_work(&self, run: LoopRunId) -> bool {
+        // Deadline coverage (loop.md §7) relies on plan::graph_loop refusing
+        // joins with a guard, within or last and requiring a positive constant
+        // timeout for every outbound Call. Queued deliveries, pending Calls,
+        // open Retry operations and nested runs below represent the remaining
+        // deadline obligations; no separate deadline scan is needed.
         if self.graph_loops.is_none() {
             return false;
         }

@@ -1,5 +1,12 @@
-//! Command-driven Loop applications. The cached fold is replaced only from
-//! committed journal facts; preparation never consumes a command or a cursor.
+//! The Loop manager shared by every host (loop.md §2). The specification
+//! defines one manager model; the code splits its implementation by host.
+//! This file handles the journal-derived run view, opening, command admission,
+//! fuel, verdicts and closing, including Operator- and Call-hosted applications.
+//! Graph-specific boundary retention, entry routing, context propagation,
+//! child verdicts and quiescence are in `graph_loop`.
+//!
+//! The cached fold is replaced only from committed journal facts;
+//! preparation never consumes a command or a cursor.
 
 use super::*;
 use crate::envelope;
