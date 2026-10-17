@@ -998,6 +998,171 @@ Connector slot, `:1683-1727`) is what the single typed index rewrites. Not
 before the freeze: this is the most sensitive core path and the external
 brief references it by line.
 
+**Block 4 — the Graph-hosted Loop manager, `graph_loop.rs` — read from
+2026-10-15.** Fable's brief (a ten-step reading order, eight observations
+to confirm or refute, the Rust forms a C#/Scala reader meets) was given in
+session; Yoann reads in the IDE and comments; only confirmed items are
+recorded here, as they are confirmed.
+
+Yoann relayed Fable's eight observations to Astra for an independent
+check (on `f5738b2`, 76 targeted Loop, composition, Graph Call and Retry
+tests passed, full gate not rerun, nothing modified); Fable then verified
+Astra's answer against the code. Astra confirms no functional defect on the
+paths examined. Two of Fable's observations were wrong in their
+explanation and are corrected below; the others stand as structure
+findings.
+
+Confirmed:
+
+- **Neither Loop-manager file says what it is (Yoann, first comment).**
+  The specification has one Loop manager whatever the host (`loop.md` §2:
+  Operator, Graph, finite outbound Call). The code splits it by host.
+  `loop_manager.rs` holds the protocol shared by every host — the fold
+  installed from committed journal facts (`refresh_loop_manager`),
+  opening, command admission, fuel, verdict, closing — and serves
+  Operator- and Call-hosted Loops entirely. `graph_loop.rs` holds what
+  exists only because the host is a scope without handler, mailbox or
+  application state: the admission retained at the Graph boundary before
+  fan-out, the entry routes deployed into the contained Executors, the run
+  context pushed on each delivery, the verdicts collected from the
+  children's transactions, quiescence decided by scanning their
+  obligations — §2's "Its Loop manager observes causal work in the
+  contained Executors". The two `//!` headers say none of this:
+  `graph_loop.rs` opens on "Retained Loop Graph admissions stop boundary
+  expansion before fan-out. The attached manager owns these bounded
+  deliveries; Graphs stay scopes", `loop_manager.rs` on "Command-driven
+  Loop applications". A reader arriving from the specification cannot
+  tell, from either, that they are two halves of one manager, nor which
+  half they hold.
+- **Fuel is resolved a fourth time, and both resolutions refuse the same
+  inputs.** `open_graph_loop` errors on a non-positive or non-integer fuel;
+  `restore_graph_manager` maps the same arm to `None` and then refuses
+  because `expected != Some(fuel)`. Same outcome, two spellings — family
+  A-T4-2, whose count becomes four (`open_graph_loop`,
+  `restore_graph_manager`, `loop_manager.rs`, `recovery/loops.rs`).
+- **The admission derivation is written twice.** `admit_graph_loop`
+  derives the consumed boundary position, the expected routes, the
+  contexts and the deadlines, commits, then applies; the `Admit` arm of
+  `restore_graph_manager` derives the same from the plan, the previous run
+  state and the journal prefix, then compares exactly. Astra's reading,
+  which Fable adopts: share the *preparation*, not the controls — the live
+  path asks for capacity and commits, recovery asks for an exact match and
+  never trusts the recorded fields; what means "wait for room" live must
+  refuse at recovery.
+- **`deliver_graph_admission` mutates before its only `false`.**
+  `apply_instance_admissions` and the route interning precede the
+  `graph_loops` presence test; `false` means "continue ordinary routing",
+  not "undo". The presence is guaranteed at construction whenever the plan
+  holds a Loop Graph (`Execution::new` builds `graph_loops` from the
+  plan), so the branch is unreachable in a valid execution — the shape
+  external priority 2 hunts, as in A-T4-4 (3).
+- **Fifteen `graph_error` refusals, one variant.** All are
+  `InvalidLoopDecision`; several are plan invariants the validator already
+  proved ("lost its Loop specification", "no declared owner"), one is dead
+  ("a case route has no value": `value` was just set in the branch above).
+  Three categories to separate site by site: invariant guaranteed by the
+  plan → eliminate the case or `PlanInvariant`; genuine Loop protocol
+  fault → keep `InvalidLoopDecision`; inconsistent journal → recovery
+  error. No blanket replacement, no `unwrap` to hide a case.
+- **The producer is found by a linear path search** in
+  `retain_graph_verdicts` and `graph_entry_verdict` while the realigned
+  caller holds the `NodeIndex`. Paths stay the reference for journaled
+  identities; the lookup can take the index.
+- **The two sorts in `select_graph_routes` / `prepare_graph_routes` are
+  not redundant, and not interchangeable (Astra's nuance, verified).** The
+  first sort, by `destination_order`, runs before the traversal pushes
+  commands, instance stops and pending crossings, so it fixes the
+  traversal of passive Graphs and the discovery order of commands; the
+  `BTreeSet<Endpoint>` deduplicates; the sort in `prepare_graph_routes` by
+  `endpoint_order` restores the canonical delivery order. The comment above
+  the first sort ("Keep the canonical path order used by source routing and
+  identities") describes the second sort's job. Replacing either by
+  Node-index order would be wrong.
+- **Two sequence tables, one mechanism, two authorities (Astra's reading,
+  verified).** `GraphLoops::sequences` and `Mailboxes::edge_seq`
+  (`runtime.rs`) share the key `(EdgeIndex, Generation)`; routing uses one
+  or the other for a given delivery, never both, so no delivery is counted
+  twice. A common allocator is conceivable; merging the queues is not — it
+  would give the Graph the application mailbox §2 denies it.
+
+Corrected from Fable's brief:
+
+- **`refresh_loop_manager` is not a journal scan.** `MemJournal`, the only
+  production `Journal` (the other implementor is a test double in
+  `execution.rs`), keeps `command_loops: Option<Box<LoopView>>`; at commit
+  it applies the transaction to a clone of that view *before* pushing the
+  record and installs the new view with it; `Journal::loop_protocol`
+  returns a clone of the maintained view and folds the records only when
+  no view exists yet. So the refresh after each manager commit cannot
+  refuse with `MemJournal`. Two residues stay: the trait signature is
+  `Result`, a fallible interface after the commit (external priority 2,
+  interface level); and the refresh clones the whole view at each of its
+  fourteen call sites, a cost to measure (A-T4-3, M2), not a scan.
+- **Quiescence (§7) covers the deadlines of today's admitted perimeter,
+  but not through join windows.** The validator (`plan/graph_loop.rs`)
+  refuses, inside a Loop Graph, any join with a guard, a `within` or a
+  `last` ("a retained or expiring join needs a finite per-run completion
+  proof") and requires a positive plan-constant timeout on every outbound
+  Call. Coverage therefore holds through pending Calls, open Retry
+  operations and nested runs awaiting a verdict; the join-window
+  transitivity Fable offered does not apply. `graph_run_has_work`,
+  `update_graph_loop_contexts` (rebuilding the live set each call) and the
+  worst-case quadratic `next_graph_admission` join A-T4-3's list.
+
+**A-T4-5 — The two Loop-manager module headers name the split, and three
+comments say what the code does not (before the freeze, zero bytes).**
+Rewrite both `//!` headers so that each states: that the specification's
+Loop manager is one and the code splits it by host; what this file holds
+and for which hosts; where the other half is; the `loop.md` section that
+grounds the split (§2 for the Graph half). The invariant sentence each
+header already carries (boundary expansion stopped before fan-out;
+preparation never consumes a command or a cursor) stays. Three comments:
+the two sequence tables and why they are not merged
+(`GraphLoops::sequences`); the two sorts and their distinct jobs
+(`select_graph_routes`); the deadline coverage of quiescence by the
+validator's restrictions (`graph_run_has_work`). Owner: Astra. Lot: before
+the 23 October freeze, with the documentation touch; no code moves.
+
+**A-T4-6 — One fuel resolution and one admission preparation shared by
+the live path and recovery (v21, zero bytes).** A pure fuel resolution
+replacing the four spellings (closes the count of A-T4-2); one admission
+preparation — consumed boundary position, routes, contexts, deadlines —
+called by `admit_graph_loop` (capacity, then commit, then apply) and by the
+`Admit` arm of `restore_graph_manager` (exact comparison with the record).
+Recovery keeps recomputing from the plan and the previous state and keeps
+refusing what the live path would merely defer. No new manager object.
+Owner: Astra. Lot: v21, after the opening.
+
+**A-T4-7 — No renunciation after mutation in `deliver_graph_admission`
+(v21, zero bytes).** Recognise the destination and check every
+precondition, `graph_loops` included, before `apply_instance_admissions`
+and the route interning; then apply without a refusal path. Family A-T4-4
+(3), external priority 2. Owner: Astra. Lot: v21, after the opening.
+
+**A-T4-8 — Classify the `graph_error` refusals site by site, remove the
+dead branch, look the producer up by index (v21).** The three categories
+above; "a case route has no value" removed; `retain_graph_verdicts` and
+`graph_entry_verdict` take the `NodeIndex` the caller holds. Owner: Astra.
+Lot: v21, after the opening; the lot placements of A-T4-6 to A-T4-8 are
+Fable's proposal, to be confirmed by Yoann.
+
+**Applied 17 October (`c57fbd7`, Astra), reviewed by Fable.** Yoann asked
+for a light evening rework; Fable briefed A-T4-5, A-T4-7 and the dead
+branch of A-T4-8 only, A-T4-6 and the rest of A-T4-8 staying in v21. Astra
+landed the three in one commit touching `graph_loop.rs` and
+`loop_manager.rs` alone: both `//!` headers now name the split by host and
+point at each other, the invariant sentences kept; the three comments sit
+on `GraphLoops::sequences`, on the sort in `select_graph_routes` and in
+`graph_run_has_work`; `deliver_graph_admission` binds `graph_loops` and
+computes the opening before `routes.insert`, `sequences`, `admissions` and
+a final `apply_instance_admissions`, so no refusal follows a mutation;
+the case value is bound with `Option::insert` and the "a case route has no
+value" refusal is gone. Fable reproduced the four completion checks on the
+commit: fmt, clippy `-D warnings`, rustdoc, and 1 598 tests in 61 groups,
+0 failed, 0 ignored; no `.rkp` or golden moved; `unreachable!` counts
+unchanged (0 in `graph_loop.rs`, 32 in `execution.rs`). Block 4 is closed
+for the human review; A-T4-6 and the remainder of A-T4-8 wait for v21.
+
 ### Disposition of the 8 October findings
 
 | Lot | Items |
@@ -1031,7 +1196,9 @@ lot 1 starts on this base.
 **15 October:** lots 1 and 2 of the realignment landed and were reviewed
 (see *Applied and reviewed — 14–15 October* in the realignment section);
 blocks 2–7 are read on the realigned code, `runtime/execution.rs` and its
-`inspection` and `admission` children.
+`inspection` and `admission` children. Block 4 (`graph_loop.rs`) started
+the same evening and closed on 17 October with its applied rework: see
+*Block 4* above. Blocks 2, 3, 5, 6 and 7 remain.
 
 ## Realignment on the Node ontology — decided 2026-10-11
 
