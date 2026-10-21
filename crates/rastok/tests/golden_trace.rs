@@ -9,12 +9,19 @@
 //! The compact format-20 movement is enumerated before approval in
 //! docs/architecture/human-review-v20-identity.md.
 
-use rastok::boundary::{
-    CallConnectorDriver, CallOpen, CallStart, Completion, EnvelopeDraft, IngressProposal,
-    IngressProvenance, IngressSequence, ProcessExit, RequestPreparation, Response,
-    SchedulerCompletion,
-};
 use rastok::compiler::compile;
+use rastok::connector::driver::OutboundCall;
+use rastok::connector::exchange::CallOpen;
+use rastok::connector::exchange::CallResponse;
+use rastok::connector::exchange::CallStart;
+use rastok::connector::exchange::Completion;
+use rastok::connector::exchange::EnvelopeDraft;
+use rastok::connector::exchange::IngressProposal;
+use rastok::connector::exchange::IngressProvenance;
+use rastok::connector::exchange::IngressSequence;
+use rastok::connector::exchange::RequestPreparation;
+use rastok::connector::exchange::SchedulerCompletion;
+use rastok::connector::stdlib::ProcessExit;
 use rastok::contract::ContractCatalog;
 use rastok::envelope::{Data, Encoding, Envelope, Namespace, Value};
 use rastok::golden::{Trace, diff, project};
@@ -50,17 +57,20 @@ graph m0_probe : App {
 /// The scripted world half: echoes every request, like `cat`.
 #[derive(Default)]
 struct EchoWorld {
-    answers: Vec<Response>,
+    answers: Vec<CallResponse>,
 }
 
-impl CallConnectorDriver for EchoWorld {
+impl OutboundCall for EchoWorld {
     fn prepare_request(
         &mut self,
         _: &node::Path,
         data: &Data,
         _: &std::collections::BTreeMap<String, rastok::value::Value>,
     ) -> RequestPreparation {
-        rastok::boundary::prepare_process_request(rastok::boundary::RequestCodec::Lines, data)
+        rastok::connector::stdlib::prepare_process_request(
+            rastok::connector::stdlib::RequestCodec::Lines,
+            data,
+        )
     }
 
     fn scheduler_completion(
@@ -68,11 +78,11 @@ impl CallConnectorDriver for EchoWorld {
         _: &node::Path,
         completion: SchedulerCompletion,
     ) -> Completion {
-        rastok::boundary::process_scheduler_completion(completion)
+        rastok::connector::stdlib::process_scheduler_completion(completion)
     }
 
     fn start(&mut self, intent: &CallOpen, _request: &Envelope) -> CallStart {
-        self.answers.push(Response {
+        self.answers.push(CallResponse {
             call_id: intent.call_id,
             completion: Completion::process(
                 vec![Data::encoded(Encoding::Raw, *b"salut")],
@@ -86,7 +96,7 @@ impl CallConnectorDriver for EchoWorld {
         CallStart::Started
     }
 
-    fn events(&mut self) -> Vec<Response> {
+    fn poll_responses(&mut self) -> Vec<CallResponse> {
         std::mem::take(&mut self.answers)
     }
 }

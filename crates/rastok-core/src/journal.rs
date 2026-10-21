@@ -18,10 +18,18 @@
 //! [`envelope.md`]: https://github.com/rastok-io/rastok/blob/main/docs/spec/envelope.md
 //! [`identity.md`]: https://github.com/rastok-io/rastok/blob/main/docs/spec/identity.md
 
-use crate::boundary::{
-    CallId, CallOpen, Completion, InboundCallId, InboundSession, IngressProposal,
-    IngressProvenance, IngressSequence, SessionId, SessionOpen, SessionWrite, SessionWriteId,
-};
+use crate::connector::exchange::CallId;
+use crate::connector::exchange::CallOpen;
+use crate::connector::exchange::Completion;
+use crate::connector::exchange::InboundCallId;
+use crate::connector::exchange::InboundSession;
+use crate::connector::exchange::IngressProposal;
+use crate::connector::exchange::IngressProvenance;
+use crate::connector::exchange::IngressSequence;
+use crate::connector::exchange::SessionId;
+use crate::connector::exchange::SessionOpen;
+use crate::connector::exchange::SessionWrite;
+use crate::connector::exchange::SessionWriteId;
 use crate::envelope::{Envelope, Id, IdKind, Meta, MetaSys};
 use crate::instance;
 
@@ -863,7 +871,7 @@ pub enum CloseVerdict {
 
 /// Complete result returned by the journal after an ingress commit: its
 /// sequence, envelope and record. The Driver receives only their portable
-/// identifiers in [`crate::boundary::AdmittedIngress`].
+/// identifiers in [`crate::connector::exchange::AdmittedIngress`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct CommittedIngress {
     /// The allocated or validated sequence.
@@ -1551,7 +1559,7 @@ impl MemJournal {
                     };
                     let submission = IngressProposal {
                         provenance: inbound.provenance.clone(),
-                        draft: crate::boundary::EnvelopeDraft {
+                        draft: crate::connector::exchange::EnvelopeDraft {
                             port: inbound.port.clone(),
                             data: inbound.envelope.data().clone(),
                             ext: inbound.envelope.meta().ext().clone(),
@@ -2595,7 +2603,7 @@ impl Journal for MemJournal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::boundary::EnvelopeDraft;
+    use crate::connector::exchange::EnvelopeDraft;
     use crate::envelope::{Data, Encoding, Namespace};
     use alloc::format;
     use alloc::string::ToString;
@@ -2650,7 +2658,7 @@ mod tests {
         let connector_path = node::Path::new([connector]).unwrap();
         let emitting_id = Id::derive(crate::envelope::IdKind::Emission, &[b"cause"]);
         let edge = alloc::format!("shout.out>{connector}.in");
-        let prepared = crate::boundary::PreparedRequest::seal(vec![digest; 4]);
+        let prepared = crate::connector::exchange::PreparedRequest::seal(vec![digest; 4]);
         CallOpen {
             call_id: ids::call_id(ids::delivery_id(&edge, emitting_id), prepared.digest()),
             emitting_id,
@@ -2954,7 +2962,7 @@ mod tests {
             crate::envelope::IdKind::Emission,
             &[b"session-cause", &[digest]],
         );
-        let prepared = crate::boundary::PreparedRequest::seal(vec![digest; 4]);
+        let prepared = crate::connector::exchange::PreparedRequest::seal(vec![digest; 4]);
         SessionOpen {
             session_id: ids::outbound_session_id(&connector_path, emitting_id, prepared.digest()),
             emitting_id,
@@ -2969,7 +2977,7 @@ mod tests {
             crate::envelope::IdKind::Emission,
             &[b"message-cause", &[digest]],
         );
-        let prepared = crate::boundary::PreparedRequest::seal(vec![digest; 3]);
+        let prepared = crate::connector::exchange::PreparedRequest::seal(vec![digest; 3]);
         SessionWrite {
             write_ref: ids::session_write_id(session_id, emitting_id, prepared.digest()),
             session_id,
@@ -3179,7 +3187,7 @@ mod tests {
 
         let connector_path = node::Path::new(["remote"]).expect("valid connector path");
         let edge = String::from("app.out>remote.in");
-        let prepared = crate::boundary::PreparedRequest::seal(vec![1, 2, 3]);
+        let prepared = crate::connector::exchange::PreparedRequest::seal(vec![1, 2, 3]);
         let call_id = ids::call_id(
             ids::delivery_id(&edge, inbound.envelope.meta().sys().id()),
             prepared.digest(),
@@ -3203,7 +3211,7 @@ mod tests {
             .abandon_egress(&call_id, 0)
             .expect("the Call closes abandoned");
 
-        let prepared = crate::boundary::PreparedRequest::seal(vec![4, 5, 6]);
+        let prepared = crate::connector::exchange::PreparedRequest::seal(vec![4, 5, 6]);
         let session_id = ids::outbound_session_id(
             &connector_path,
             inbound.envelope.meta().sys().id(),
@@ -3220,7 +3228,7 @@ mod tests {
         journal
             .confirm_session_open(&session_id)
             .expect("the Session becomes live");
-        let prepared = crate::boundary::PreparedRequest::seal(vec![7, 8, 9]);
+        let prepared = crate::connector::exchange::PreparedRequest::seal(vec![7, 8, 9]);
         let write_ref = ids::session_write_id(
             session_id,
             inbound.envelope.meta().sys().id(),

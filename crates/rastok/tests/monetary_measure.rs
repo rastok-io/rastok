@@ -278,7 +278,10 @@ graph app : App {
 #[test]
 fn signed_refunds_remain_distinct_original_samples() {
     use rastok::accounting::{ExactDecimal, accounting_observations};
-    use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
+    use rastok::connector::exchange::EnvelopeDraft;
+    use rastok::connector::exchange::IngressProposal;
+    use rastok::connector::exchange::IngressProvenance;
+    use rastok::connector::exchange::IngressSequence;
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::node;

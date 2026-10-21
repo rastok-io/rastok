@@ -18,7 +18,6 @@ extern crate alloc;
 extern crate std;
 
 pub mod accounting;
-pub mod boundary;
 pub mod canonical;
 pub mod canonical_cbor;
 pub mod connector;

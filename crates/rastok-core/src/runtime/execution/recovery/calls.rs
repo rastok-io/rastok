@@ -8,7 +8,7 @@ impl Execution<'_> {
     pub(super) fn restore_call(
         &mut self,
         journal: &dyn Journal,
-        bindings: &mut dyn OutboundConnectorBindings,
+        bindings: &mut dyn OutboundDrivers,
         index: usize,
         record: &CallRecord,
     ) -> Result<(), ExecutionFault> {
@@ -154,7 +154,7 @@ impl Execution<'_> {
                 };
                 let completion = bindings
                     .scheduler_completion(&intent.connector_path, terminal)
-                    .map_err(crate::boundary::PollFault::Driver)
+                    .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
                     .map_err(ExecutionFault::Dispatch)?;
                 (
                     completion,
@@ -168,7 +168,7 @@ impl Execution<'_> {
             CallStatus::Open => return Err(invalid(index, "duplicate Call opening")),
         };
         PlanCompletionCheck { plan: self.plan }
-            .admit(&intent.connector_path, &completion)
+            .check(&intent.connector_path, &completion)
             .map_err(|_| invalid(index, "the retained Call completion violates its Contract"))?;
         let attempt = self.retry_attempt(&pending.instance, &pending.delivery);
         if record
@@ -181,7 +181,7 @@ impl Execution<'_> {
         }
         self.retain_retry_closure(record)?;
         self.settled.push_back(SettledEntry {
-            event: BoundaryObservation {
+            event: ClosedCall {
                 call_id: intent.call_id,
                 connector_path: intent.connector_path.clone(),
                 emitting_id: intent.emitting_id,

@@ -5,6 +5,121 @@ use super::*;
 use crate::instance;
 use crate::journal::deadline::{Deadline, Deadlines};
 
+/// The work selected when a scheduler deadline is reached. Each variant
+/// carries the exact delivery, run or instance to which the obligation belongs;
+/// the scheduler does not infer a current generation when it fires.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Obligation {
+    /// A delivery's call budget expired. The budget runs from the
+    /// DELIVERY into the connector's mailbox (execution-model §8) —
+    /// queue time counts — and the obligation resolves by its
+    /// delivery reference `(edge, envelope_id)`, whether the call is
+    /// still queued or already open.
+    DeliveryBudget {
+        /// The connector whose budget this is (the mailbox to search).
+        connector: node::Path,
+        /// Half of the delivery reference: the canonical edge the
+        /// envelope traveled. The obligation's identity is
+        /// `budget_ref(edge, delivery)` — never the envelope id
+        /// alone: two ports of one connector are two obligations.
+        edge: String,
+        /// The other half of the reference: the delivered envelope's
+        /// id.
+        delivery: envelope::Id,
+        /// Exact connector instance owning the mailbox/call obligation.
+        instance: instance::Generation,
+    },
+    /// An admitted inbound Call reached the request deadline published by
+    /// its Connector contract. The Driver owns the protocol-side timeout
+    /// response; this event only transfers the scheduler's won request.
+    InboundCallBudget {
+        /// Stable reference of the admitted root Call.
+        call_id: InboundCallId,
+        /// Exact source generation retaining the request.
+        instance: instance::Generation,
+    },
+    /// One retained join candidate reached its `within` bound. The full
+    /// delivery reference makes a consumed candidate's stale event harmless.
+    JoinWithin {
+        /// Operator owning the join buffer.
+        operator: node::Path,
+        /// Edge half of the buffered-delivery reference.
+        edge: String,
+        /// Envelope-id half of the buffered-delivery reference.
+        delivery: envelope::Id,
+        /// Exact Operator generation that retained it.
+        instance: instance::Generation,
+    },
+    /// One committed Loop continuation reached its re-admission date. The
+    /// journal fold remains authoritative for the state, ordinal and fuel;
+    /// these fields only identify the exact obligation to re-check.
+    LoopDelay {
+        /// Owner carrying the Loop Extension.
+        owner: node::NodeIndex,
+        /// Exact generation in which the continuation was selected.
+        instance: instance::Generation,
+        /// Durable Loop run whose fold must still be open.
+        run: crate::journal::LoopRunId,
+        /// Ordinal of the manager-produced state awaiting admission.
+        iteration: u64,
+        /// Re-entry envelope id, also used as deadline kind 4's stable id (RecurrenceDelay).
+        state: envelope::Id,
+    },
+    /// Original closure-based eligibility, on the same dated scheduler as Loop.
+    RetryDelay {
+        /// Exact generation retaining the operation.
+        instance: instance::Generation,
+        /// Predecessor whose winning closure created this deadline.
+        attempt: crate::journal::retry_protocol::AttemptId,
+        /// Following admission reference (deadline kind 4, RecurrenceDelay).
+        admission: envelope::Id,
+    },
+    /// One owner lifetime reached a scheduler-owned deadline. The complete
+    /// instance reference is the generation fence; idle additionally compares
+    /// the causal admission id, while fixed and tumbling never move after
+    /// `l:start`.
+    InstanceLifetime {
+        /// Plan owner whose policy scheduled the event.
+        owner: node::NodeIndex,
+        /// Exact generation whose deadline is being observed.
+        instance: instance::Generation,
+        /// Envelope whose arrival created this deadline and causes `l:stop`.
+        cause: envelope::Id,
+        /// Which profile determines the stale-event rule.
+        deadline: InstanceDeadline,
+    },
+    /// One phase boundary of the explicit bounded Closing protocol.
+    InstanceClosing {
+        /// Root generation whose policy owns the whole closing subtree.
+        instance: instance::Generation,
+        /// Envelope that won the close request.
+        cause: envelope::Id,
+        /// Drain or settlement deadline.
+        deadline: ClosingDeadline,
+    },
+}
+
+/// Scheduler-owned stages of bounded instance Closing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClosingDeadline {
+    /// Stop executing admitted ordinary work and request cancellation.
+    Drain,
+    /// Stop waiting for cancellation observations; unresolved calls become
+    /// `OutcomeUnknown` and their EGRESS records become `abandoned`.
+    Settlement,
+}
+
+/// Scheduler semantics of a finite dated instance lifetime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstanceDeadline {
+    /// Superseded by any later admitted envelope in the same generation.
+    Idle,
+    /// Fixed relative to the creating `l:start`.
+    Fixed,
+    /// Fixed at the end of the address's epoch-aligned processing-time box.
+    Tumbling,
+}
+
 impl Execution<'_> {
     pub(super) fn admission_deadlines(
         &self,

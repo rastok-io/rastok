@@ -10,7 +10,9 @@
 //! making the scheduler's fields a public mutation interface.
 
 use super::Execution;
-use crate::boundary::{CallId, InboundCallId, SessionId};
+use crate::connector::exchange::CallId;
+use crate::connector::exchange::InboundCallId;
+use crate::connector::exchange::SessionId;
 use crate::envelope::Envelope;
 use crate::{instance, node};
 use alloc::collections::BTreeMap;

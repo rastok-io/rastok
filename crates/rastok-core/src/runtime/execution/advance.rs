@@ -1,8 +1,6 @@
 //! Resumable control of the existing discrete-time sweep.
 
-use super::{
-    ClosingDeadline, Execution, ExecutionFault, Journal, Obligation, OutboundConnectorBindings,
-};
+use super::{ClosingDeadline, Execution, ExecutionFault, Journal, Obligation, OutboundDrivers};
 
 /// An in-progress advance on one Execution. This is a caller-owned control cursor,
 /// not a journal fact or a second timer queue. Do not interleave other Execution
@@ -62,7 +60,7 @@ impl TimeAdvance {
         &mut self,
         vm: &mut Execution<'_>,
         journal: &mut dyn Journal,
-        bindings: &mut dyn OutboundConnectorBindings,
+        bindings: &mut dyn OutboundDrivers,
     ) -> Result<bool, ExecutionFault> {
         loop {
             match &self.phase {

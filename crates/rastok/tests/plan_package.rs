@@ -235,7 +235,10 @@ fn v16_retains_one_operator_loop_without_a_graph_handler_or_command_port() {
     assert_eq!(decoded, compiled);
     assert_eq!(declared, hash);
 
-    use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
+    use rastok::connector::exchange::EnvelopeDraft;
+    use rastok::connector::exchange::IngressProposal;
+    use rastok::connector::exchange::IngressProvenance;
+    use rastok::connector::exchange::IngressSequence;
     use rastok::envelope::{Data, Namespace};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
@@ -265,7 +268,7 @@ fn v16_retains_one_operator_loop_without_a_graph_handler_or_command_port() {
     );
 
     let registry = rastok::connectors::DriverRegistry::default();
-    let mut bindings = rastok::connectors::RuntimeBindings::try_new(&decoded, &registry)
+    let mut bindings = rastok::connectors::RuntimeDrivers::prepare(&decoded, &registry)
         .expect("a connector-free Loop needs no Driver");
     vm.poll_drivers(&mut journal, &mut bindings)
         .expect("a connector-free boundary pump remains inert");
@@ -957,7 +960,10 @@ fn the_boundary_value_matrix_executes_identically_across_the_trip() {
 /// outputs and the error count — the execution fingerprint the matrix
 /// compares.
 fn run_boundary_probe(plan: &rastok::plan::ValidatedExecutionPlan) -> (Vec<String>, usize) {
-    use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
+    use rastok::connector::exchange::EnvelopeDraft;
+    use rastok::connector::exchange::IngressProposal;
+    use rastok::connector::exchange::IngressProvenance;
+    use rastok::connector::exchange::IngressSequence;
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;

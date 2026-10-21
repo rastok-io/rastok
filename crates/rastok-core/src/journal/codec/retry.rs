@@ -202,7 +202,8 @@ mod tests {
                 opening: Id::from_bytes([3; 16]),
                 entry: Port::new("in").unwrap(),
                 plan: SemanticHash::from_bytes([4; 32]),
-                contract: ContractId::parse(crate::connector::PROCESS_CONNECTOR_ID).unwrap(),
+                contract: ContractId::parse(crate::connector::stdlib::PROCESS_CONNECTOR_ID)
+                    .unwrap(),
                 pin: Pin {
                     envelope: source.meta().sys().id(),
                     prepared: PreparedRequest::seal(vec![0, 1, 255]),

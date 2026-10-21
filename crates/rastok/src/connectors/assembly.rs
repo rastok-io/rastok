@@ -4,7 +4,7 @@
 //! compile-time choice into one exact runtime registry; the semantic
 //! Connector ids remain unchanged in every build.
 
-use super::{ConnectorDriverFactory, DriverRegistry};
+use super::{DriverFactory, DriverRegistry};
 use std::path::Path;
 
 /// Why the selected hosted image cannot construct its Driver registry.
@@ -27,7 +27,7 @@ impl std::error::Error for HostedAssemblyError {}
 
 fn add(
     registry: DriverRegistry,
-    factory: impl ConnectorDriverFactory + 'static,
+    factory: impl DriverFactory + 'static,
 ) -> Result<DriverRegistry, HostedAssemblyError> {
     registry
         .try_with(Box::new(factory))
@@ -40,7 +40,7 @@ fn add(
 /// root is supplied. Network families follow Cargo capabilities:
 /// `hosted-http12`, `hosted-http3`, `hosted-websocket`, or their
 /// `hosted-network` union. A plan requiring an omitted family is rejected by
-/// [`super::RuntimeBindings`] before Execution construction.
+/// [`super::RuntimeDrivers`] before Execution construction.
 ///
 /// # Errors
 ///
@@ -112,16 +112,16 @@ mod tests {
             .iter()
             .map(|entry| entry.connector().as_str())
             .collect::<Vec<_>>();
-        assert!(ids.contains(&crate::connector::PROCESS_CONNECTOR_ID));
-        assert!(!ids.contains(&crate::connector::FILE_CONNECTOR_ID));
+        assert!(ids.contains(&crate::connector::stdlib::PROCESS_CONNECTOR_ID));
+        assert!(!ids.contains(&crate::connector::stdlib::FILE_CONNECTOR_ID));
         #[cfg(any(feature = "hosted-http12", feature = "hosted-http3"))]
-        assert!(ids.contains(&crate::connector::HTTP_CLIENT_CONNECTOR_ID));
+        assert!(ids.contains(&crate::connector::stdlib::HTTP_CLIENT_CONNECTOR_ID));
         #[cfg(feature = "hosted-http12")]
-        assert!(ids.contains(&crate::connector::HTTP_SERVER_CONNECTOR_ID));
+        assert!(ids.contains(&crate::connector::stdlib::HTTP_SERVER_CONNECTOR_ID));
         #[cfg(feature = "hosted-websocket")]
         {
-            assert!(ids.contains(&crate::connector::WEBSOCKET_CLIENT_CONNECTOR_ID));
-            assert!(ids.contains(&crate::connector::WEBSOCKET_SERVER_CONNECTOR_ID));
+            assert!(ids.contains(&crate::connector::stdlib::WEBSOCKET_CLIENT_CONNECTOR_ID));
+            assert!(ids.contains(&crate::connector::stdlib::WEBSOCKET_SERVER_CONNECTOR_ID));
         }
     }
 
@@ -139,13 +139,13 @@ mod tests {
         assert_eq!(
             ids,
             [
-                crate::connector::FILE_CONNECTOR_ID,
-                crate::connector::HTTP_CLIENT_CONNECTOR_ID,
-                crate::connector::HTTP_SERVER_CONNECTOR_ID,
-                crate::connector::PROCESS_CONNECTOR_ID,
-                crate::connector::PROCESS_SERVICE_CONNECTOR_ID,
-                crate::connector::WEBSOCKET_CLIENT_CONNECTOR_ID,
-                crate::connector::WEBSOCKET_SERVER_CONNECTOR_ID,
+                crate::connector::stdlib::FILE_CONNECTOR_ID,
+                crate::connector::stdlib::HTTP_CLIENT_CONNECTOR_ID,
+                crate::connector::stdlib::HTTP_SERVER_CONNECTOR_ID,
+                crate::connector::stdlib::PROCESS_CONNECTOR_ID,
+                crate::connector::stdlib::PROCESS_SERVICE_CONNECTOR_ID,
+                crate::connector::stdlib::WEBSOCKET_CLIENT_CONNECTOR_ID,
+                crate::connector::stdlib::WEBSOCKET_SERVER_CONNECTOR_ID,
             ]
         );
     }

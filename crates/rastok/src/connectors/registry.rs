@@ -4,40 +4,44 @@
 //! This registry owns implementation factories.  Their stable Connector ids
 //! meet only at binding; registration order is never selection policy.
 
-use crate::boundary::{
-    AdmittedIngress, CallConnectorDriver, CallId, CallOpen, CallStart, Completion,
-    DriverRouteError, InboundCallResponseStart, InboundCallTimeoutStart, InboundConnectorDriver,
-    InboundExchangeId, IngressRejection, OutboundConnectorBindings, OutboundConnectorDriver,
-    RequestPreparation, Response, RetainedProposal, SchedulerCompletion, SessionConnectorBindings,
-    SessionConnectorDriver, SessionId, SessionObservation, SessionOpen, SessionWrite,
-};
-use crate::connector::{ConnectorDirection, ConnectorExchange, ContractId};
+use crate::connector::ConnectorDirection;
+use crate::connector::ContractId;
+use crate::connector::ExchangeKind;
+use crate::connector::driver::Driver;
+use crate::connector::driver::DriverRouteError;
+use crate::connector::driver::Ingress;
+use crate::connector::driver::OutboundCall;
+use crate::connector::driver::OutboundDrivers;
+use crate::connector::driver::Session;
+use crate::connector::driver::SessionConnectorBindings;
+use crate::connector::exchange::AdmittedIngress;
+use crate::connector::exchange::CallId;
+use crate::connector::exchange::CallOpen;
+use crate::connector::exchange::CallResponse;
+use crate::connector::exchange::CallStart;
+use crate::connector::exchange::Completion;
+use crate::connector::exchange::InboundCallResponseStart;
+use crate::connector::exchange::InboundCallTimeoutStart;
+use crate::connector::exchange::InboundExchangeId;
+use crate::connector::exchange::IngressRejection;
+use crate::connector::exchange::PendingIngress;
+use crate::connector::exchange::RequestPreparation;
+use crate::connector::exchange::SchedulerCompletion;
+use crate::connector::exchange::SessionId;
+use crate::connector::exchange::SessionObservation;
+use crate::connector::exchange::SessionOpen;
+use crate::connector::exchange::SessionWrite;
 use crate::envelope::{Data, Envelope};
 use crate::node;
 use crate::plan::ValidatedExecutionPlan;
 use crate::runtime::execution::{Execution, ExecutionFault, InboundCallPollReport};
-use crate::{boundary::IngressAdmission, journal::Journal};
+use crate::{connector::exchange::IngressAdmission, journal::Journal};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// One bound implementation object, potentially exposing both roles over the
-/// same state.
-///
-/// Returning role views from one object makes the duplex invariant explicit:
-/// a both-role factory cannot accidentally register two unrelated states.
-pub trait BoundConnectorDriver {
-    /// The inbound role view, when implemented. Presence is immutable for the
-    /// lifetime of this bound object; returning `None` after binding is an
-    /// integrity fault.
-    fn inbound(&mut self) -> Option<&mut dyn InboundConnectorDriver>;
-
-    /// The outbound role view under the same stable-presence invariant.
-    fn outbound(&mut self) -> Option<&mut dyn OutboundConnectorDriver>;
-}
-
 /// Creates one plan-bound Driver object for a stable Connector contract.
-pub trait ConnectorDriverFactory {
+pub trait DriverFactory {
     /// Stable contract identity implemented by this factory.
-    fn connector_id(&self) -> &ContractId;
+    fn contract_id(&self) -> &ContractId;
 
     /// Roles the implementation exposes.
     fn roles(&self) -> ConnectorDirection;
@@ -55,22 +59,22 @@ pub trait ConnectorDriverFactory {
     /// Binding may validate plan facts, allocate local state, and fail while
     /// reserving passive host resources. A reservation must remain bounded
     /// and externally unacknowledged until the runtime admits its input.
-    fn bind<'plan>(
+    fn create<'plan>(
         &self,
         plan: &'plan ValidatedExecutionPlan,
         nodes: &[node::Path],
-    ) -> Result<Box<dyn BoundConnectorDriver + 'plan>, DriverFactoryError>;
+    ) -> Result<Box<dyn Driver + 'plan>, DriverFactoryError>;
 
     /// Binds with deployment inputs already resolved and attested. The
     /// default keeps every existing family honest: it delegates only when no
     /// selected Node carries a boot reference. A family opens a boot setting
     /// by overriding this method and consuming it before returning.
-    fn bind_with_boot<'plan>(
+    fn create_with_boot<'plan>(
         &self,
         plan: &'plan ValidatedExecutionPlan,
         nodes: &[node::Path],
         _boot: &crate::deployment::BootBindings,
-    ) -> Result<Box<dyn BoundConnectorDriver + 'plan>, DriverFactoryError> {
+    ) -> Result<Box<dyn Driver + 'plan>, DriverFactoryError> {
         for planned in &plan.plan().nodes {
             if !planned
                 .executor_path()
@@ -96,7 +100,7 @@ pub trait ConnectorDriverFactory {
                 }
             }
         }
-        self.bind(plan, nodes)
+        self.create(plan, nodes)
     }
 }
 
@@ -133,7 +137,7 @@ impl std::error::Error for DriverFactoryError {}
 /// Runtime factories explicitly linked or loaded into one build.
 #[derive(Default)]
 pub struct DriverRegistry {
-    factories: BTreeMap<ContractId, Box<dyn ConnectorDriverFactory>>,
+    factories: BTreeMap<ContractId, Box<dyn DriverFactory>>,
 }
 
 impl core::fmt::Debug for DriverRegistry {
@@ -155,9 +159,9 @@ impl DriverRegistry {
     /// id already has an implementation.
     pub fn try_with(
         mut self,
-        factory: Box<dyn ConnectorDriverFactory>,
+        factory: Box<dyn DriverFactory>,
     ) -> Result<Self, DriverRegistrationError> {
-        let id = factory.connector_id().clone();
+        let id = factory.contract_id().clone();
         if self.factories.contains_key(&id) {
             return Err(DriverRegistrationError::Duplicate(id));
         }
@@ -190,7 +194,7 @@ impl DriverRegistry {
         &self,
         id: &ContractId,
         required: ConnectorDirection,
-    ) -> Result<&dyn ConnectorDriverFactory, DriverBindingError> {
+    ) -> Result<&dyn DriverFactory, DriverBindingError> {
         let Some(factory) = self.factories.get(id) else {
             return Err(DriverBindingError::Missing { id: id.clone() });
         };
@@ -208,16 +212,16 @@ impl DriverRegistry {
 
 #[derive(Debug)]
 struct FamilyRequirement {
-    nodes: Vec<(node::Path, ConnectorDirection, ConnectorExchange)>,
+    nodes: Vec<(node::Path, ConnectorDirection, ExchangeKind)>,
     required: ConnectorDirection,
 }
 
 struct BoundFamily<'plan> {
-    driver: Box<dyn BoundConnectorDriver + 'plan>,
+    driver: Box<dyn Driver + 'plan>,
     uses_inbound: bool,
     inbound_paths: BTreeSet<node::Path>,
-    exchange: ConnectorExchange,
-    pending_inbound: Option<RetainedProposal>,
+    exchange: ExchangeKind,
+    pending_inbound: Option<PendingIngress>,
     outbound_path: Option<node::Path>,
     session_path: Option<node::Path>,
 }
@@ -226,7 +230,7 @@ struct BoundFamily<'plan> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RoutedInboundProposal {
     connector: ContractId,
-    proposal: RetainedProposal,
+    proposal: PendingIngress,
 }
 
 /// Failure of one inbound Driver/Execution boundary round.
@@ -279,7 +283,7 @@ impl RoutedInboundProposal {
 
     /// Retained proposal presented for atomic Execution admission.
     #[must_use]
-    pub fn proposal(&self) -> &RetainedProposal {
+    pub fn proposal(&self) -> &PendingIngress {
         &self.proposal
     }
 }
@@ -290,22 +294,22 @@ impl RoutedInboundProposal {
 /// Construction is the only registry lookup. Thereafter the Execution routes by
 /// exact Node path and role; no concrete contract name or registration order
 /// participates in execution.
-pub struct RuntimeBindings<'plan> {
+pub struct RuntimeDrivers<'plan> {
     families: BTreeMap<ContractId, BoundFamily<'plan>>,
     /// Last inbound family polled. Cycling from this key prevents one
     /// backpressured transport from blocking an unrelated family.
     inbound_cursor: Option<ContractId>,
     outbound: BTreeMap<node::Path, ContractId>,
     calls: BTreeMap<CallId, ContractId>,
-    inbound_calls: BTreeMap<crate::boundary::InboundCallId, ContractId>,
+    inbound_calls: BTreeMap<crate::connector::exchange::InboundCallId, ContractId>,
     session_outbound: BTreeMap<node::Path, ContractId>,
     sessions: BTreeMap<SessionId, ContractId>,
 }
 
-impl core::fmt::Debug for RuntimeBindings<'_> {
+impl core::fmt::Debug for RuntimeDrivers<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
-            .debug_struct("RuntimeBindings")
+            .debug_struct("RuntimeDrivers")
             .field("families", &self.families.keys().collect::<Vec<_>>())
             .field("inbound_cursor", &self.inbound_cursor)
             .field("outbound", &self.outbound)
@@ -317,7 +321,7 @@ impl core::fmt::Debug for RuntimeBindings<'_> {
     }
 }
 
-impl<'plan> RuntimeBindings<'plan> {
+impl<'plan> RuntimeDrivers<'plan> {
     /// Whether this statically bound image contains at least one external
     /// source that must be polled even when no CLI submission is pending.
     pub fn has_runnable_inbound(&self) -> bool {
@@ -335,17 +339,17 @@ impl<'plan> RuntimeBindings<'plan> {
     ///
     /// Missing, role-incomplete, lying, or factory-refused implementations
     /// remain distinct typed failures.
-    pub fn try_new(
+    pub fn prepare(
         plan: &'plan ValidatedExecutionPlan,
         registry: &DriverRegistry,
     ) -> Result<Self, DriverBindingError> {
-        Self::try_new_with_boot(plan, registry, &crate::deployment::BootBindings::empty())
+        Self::prepare_with_boot(plan, registry, &crate::deployment::BootBindings::empty())
     }
 
     /// Binds with one complete deployment input set before an Execution or journal
     /// exists. Secret material can cross only a factory override that owns a
     /// contract-declared secret-compatible setting.
-    pub fn try_new_with_boot(
+    pub fn prepare_with_boot(
         plan: &'plan ValidatedExecutionPlan,
         registry: &DriverRegistry,
         boot: &crate::deployment::BootBindings,
@@ -400,7 +404,7 @@ impl<'plan> RuntimeBindings<'plan> {
                 return Err(DriverBindingError::ConflictingExchange { id });
             }
             let mut driver = factory
-                .bind_with_boot(plan, &paths, boot)
+                .create_with_boot(plan, &paths, boot)
                 .map_err(|error| DriverBindingError::Factory {
                     id: id.clone(),
                     detail: error.detail().to_string(),
@@ -424,15 +428,12 @@ impl<'plan> RuntimeBindings<'plan> {
                     });
                 }
             }
-            if requirement.required.has_inbound() && exchange == ConnectorExchange::Call {
-                let has_call_view = driver
-                    .inbound()
-                    .and_then(InboundConnectorDriver::call)
-                    .is_some();
+            if requirement.required.has_inbound() && exchange == ExchangeKind::Call {
+                let has_call_view = driver.inbound().and_then(Ingress::call).is_some();
                 if !has_call_view {
                     return Err(DriverBindingError::BoundExchangeMismatch {
                         id,
-                        required: ConnectorExchange::Call,
+                        required: ExchangeKind::Call,
                         actual: None,
                     });
                 }
@@ -447,10 +448,10 @@ impl<'plan> RuntimeBindings<'plan> {
             let mut outbound_path = None;
             let mut session_path = None;
             for (path, roles, _) in requirement.nodes {
-                if roles.has_outbound() && exchange == ConnectorExchange::Call {
+                if roles.has_outbound() && exchange == ExchangeKind::Call {
                     outbound_path.get_or_insert_with(|| path.clone());
                     outbound.insert(path, id.clone());
-                } else if roles.has_outbound() && exchange == ConnectorExchange::Session {
+                } else if roles.has_outbound() && exchange == ExchangeKind::Session {
                     session_path.get_or_insert_with(|| path.clone());
                     session_outbound.insert(path, id.clone());
                 }
@@ -513,7 +514,7 @@ impl<'plan> RuntimeBindings<'plan> {
             let Some(driver) = family.driver.inbound() else {
                 return Err(DriverRouteError::UnavailableInbound(id.clone()));
             };
-            if let Some(proposal) = driver.proposal() {
+            if let Some(proposal) = driver.poll_proposal() {
                 let source = proposal.proposal.provenance.connector_path();
                 if !family.inbound_paths.contains(source) {
                     return Err(DriverRouteError::InboundSourceMismatch {
@@ -522,10 +523,8 @@ impl<'plan> RuntimeBindings<'plan> {
                     });
                 }
                 let framing_matches = match family.exchange {
-                    ConnectorExchange::Event | ConnectorExchange::Call => {
-                        proposal.proposal.session.is_none()
-                    }
-                    ConnectorExchange::Session => proposal.proposal.session.is_some(),
+                    ExchangeKind::Event | ExchangeKind::Call => proposal.proposal.session.is_none(),
+                    ExchangeKind::Session => proposal.proposal.session.is_some(),
                 };
                 if !framing_matches {
                     return Err(DriverRouteError::InboundExchangeMismatch {
@@ -607,7 +606,7 @@ impl<'plan> RuntimeBindings<'plan> {
                 routed.connector.clone(),
             ));
         };
-        driver.decide(routed.proposal.handle, decision);
+        driver.notify_admission(routed.proposal.handle, decision);
         family.pending_inbound = None;
         Ok(())
     }
@@ -754,8 +753,7 @@ impl<'plan> RuntimeBindings<'plan> {
             .families
             .iter()
             .filter_map(|(id, family)| {
-                (family.uses_inbound && family.exchange == ConnectorExchange::Call)
-                    .then_some(id.clone())
+                (family.uses_inbound && family.exchange == ExchangeKind::Call).then_some(id.clone())
             })
             .collect();
         let mut report = InboundCallPollReport::default();
@@ -770,7 +768,7 @@ impl<'plan> RuntimeBindings<'plan> {
                     .ok_or_else(|| DriverRouteError::UnavailableInbound(id.clone()))?
                     .call()
                     .ok_or_else(|| DriverRouteError::UnavailableInboundCall(id.clone()))?;
-                driver.events()
+                driver.poll_completions()
             };
             for event in events {
                 let Some(expected) = self.inbound_calls.get(&event.call_id).cloned() else {
@@ -801,7 +799,7 @@ impl<'plan> RuntimeBindings<'plan> {
     fn outbound_driver(
         &mut self,
         connector: &node::Path,
-    ) -> Result<&mut dyn CallConnectorDriver, DriverRouteError> {
+    ) -> Result<&mut dyn OutboundCall, DriverRouteError> {
         let Some(id) = self.outbound.get(connector) else {
             return Err(DriverRouteError::UnboundOutbound(connector.clone()));
         };
@@ -820,7 +818,7 @@ impl<'plan> RuntimeBindings<'plan> {
     fn session_driver(
         &mut self,
         connector: &node::Path,
-    ) -> Result<(ContractId, &mut dyn SessionConnectorDriver), DriverRouteError> {
+    ) -> Result<(ContractId, &mut dyn Session), DriverRouteError> {
         let id = self.session_family(connector)?;
         let Some(family) = self.families.get_mut(&id) else {
             return Err(DriverRouteError::UnboundSession(connector.clone()));
@@ -843,7 +841,7 @@ impl<'plan> RuntimeBindings<'plan> {
     }
 }
 
-impl OutboundConnectorBindings for RuntimeBindings<'_> {
+impl OutboundDrivers for RuntimeDrivers<'_> {
     fn prepare_request(
         &mut self,
         connector: &node::Path,
@@ -887,7 +885,7 @@ impl OutboundConnectorBindings for RuntimeBindings<'_> {
         Ok(start)
     }
 
-    fn events(&mut self) -> Result<Vec<Response>, DriverRouteError> {
+    fn poll_responses(&mut self) -> Result<Vec<CallResponse>, DriverRouteError> {
         let mut responses = Vec::new();
         for (id, family) in &mut self.families {
             let Some(path) = &family.outbound_path else {
@@ -899,7 +897,7 @@ impl OutboundConnectorBindings for RuntimeBindings<'_> {
             let Some(driver) = driver.call() else {
                 return Err(DriverRouteError::UnavailableCall(path.clone()));
             };
-            for response in driver.events() {
+            for response in driver.poll_responses() {
                 if let Some(expected) = self.calls.get(&response.call_id)
                     && expected != id
                 {
@@ -937,7 +935,7 @@ impl OutboundConnectorBindings for RuntimeBindings<'_> {
         &mut self,
         intent: &SessionOpen,
         request: &Envelope,
-    ) -> Result<crate::boundary::SessionStart, DriverRouteError> {
+    ) -> Result<crate::connector::exchange::SessionStart, DriverRouteError> {
         SessionConnectorBindings::open_session(self, intent, request)
     }
 
@@ -961,7 +959,7 @@ impl OutboundConnectorBindings for RuntimeBindings<'_> {
         &mut self,
         intent: &SessionWrite,
         message: &Envelope,
-    ) -> Result<crate::boundary::SessionStart, DriverRouteError> {
+    ) -> Result<crate::connector::exchange::SessionStart, DriverRouteError> {
         SessionConnectorBindings::write_session(self, intent, message)
     }
 
@@ -969,12 +967,12 @@ impl OutboundConnectorBindings for RuntimeBindings<'_> {
         &mut self,
         connector: &node::Path,
         session: SessionId,
-    ) -> Result<crate::boundary::SessionStart, DriverRouteError> {
+    ) -> Result<crate::connector::exchange::SessionStart, DriverRouteError> {
         SessionConnectorBindings::close_session(self, connector, session)
     }
 
-    fn session_events(&mut self) -> Result<Vec<SessionObservation>, DriverRouteError> {
-        SessionConnectorBindings::session_events(self)
+    fn poll_observations(&mut self) -> Result<Vec<SessionObservation>, DriverRouteError> {
+        SessionConnectorBindings::poll_observations(self)
     }
 
     fn abort_session(
@@ -990,7 +988,7 @@ impl OutboundConnectorBindings for RuntimeBindings<'_> {
     }
 }
 
-impl SessionConnectorBindings for RuntimeBindings<'_> {
+impl SessionConnectorBindings for RuntimeDrivers<'_> {
     fn prepare_session_open(
         &mut self,
         connector: &node::Path,
@@ -1008,7 +1006,7 @@ impl SessionConnectorBindings for RuntimeBindings<'_> {
         &mut self,
         intent: &SessionOpen,
         request: &Envelope,
-    ) -> Result<crate::boundary::SessionStart, DriverRouteError> {
+    ) -> Result<crate::connector::exchange::SessionStart, DriverRouteError> {
         let (id, driver) = self.session_driver(&intent.connector_path)?;
         let start = driver.open_session(intent, request);
         // Ownership follows the journaled intent, even while local capacity
@@ -1021,8 +1019,8 @@ impl SessionConnectorBindings for RuntimeBindings<'_> {
     fn scheduler_session_completion(
         &mut self,
         connector: &node::Path,
-        completion: crate::boundary::SchedulerCompletion,
-    ) -> Result<crate::boundary::Completion, DriverRouteError> {
+        completion: crate::connector::exchange::SchedulerCompletion,
+    ) -> Result<crate::connector::exchange::Completion, DriverRouteError> {
         Ok(self
             .session_driver(connector)?
             .1
@@ -1054,7 +1052,7 @@ impl SessionConnectorBindings for RuntimeBindings<'_> {
         &mut self,
         intent: &SessionWrite,
         message: &Envelope,
-    ) -> Result<crate::boundary::SessionStart, DriverRouteError> {
+    ) -> Result<crate::connector::exchange::SessionStart, DriverRouteError> {
         let actual = self.session_family(&intent.connector_path)?;
         let Some(expected) = self.sessions.get(&intent.session_id) else {
             return Err(DriverRouteError::UncorrelatedSession(intent.session_id));
@@ -1074,7 +1072,7 @@ impl SessionConnectorBindings for RuntimeBindings<'_> {
         &mut self,
         connector: &node::Path,
         session: SessionId,
-    ) -> Result<crate::boundary::SessionStart, DriverRouteError> {
+    ) -> Result<crate::connector::exchange::SessionStart, DriverRouteError> {
         let actual = self.session_family(connector)?;
         let Some(expected) = self.sessions.get(&session) else {
             return Err(DriverRouteError::UncorrelatedSession(session));
@@ -1111,7 +1109,7 @@ impl SessionConnectorBindings for RuntimeBindings<'_> {
         Ok(())
     }
 
-    fn session_events(&mut self) -> Result<Vec<SessionObservation>, DriverRouteError> {
+    fn poll_observations(&mut self) -> Result<Vec<SessionObservation>, DriverRouteError> {
         let mut events = Vec::new();
         for (id, family) in &mut self.families {
             let Some(path) = &family.session_path else {
@@ -1123,7 +1121,7 @@ impl SessionConnectorBindings for RuntimeBindings<'_> {
             let Some(driver) = outbound.session() else {
                 return Err(DriverRouteError::UnavailableSession(path.clone()));
             };
-            for event in driver.session_events() {
+            for event in driver.poll_observations() {
                 let session = match &event {
                     SessionObservation::Opened(session)
                     | SessionObservation::WriteSettled { session, .. }
@@ -1177,7 +1175,7 @@ fn union_roles(left: ConnectorDirection, right: ConnectorDirection) -> Connector
     }
 }
 
-fn roles_of(driver: &mut dyn BoundConnectorDriver) -> Option<ConnectorDirection> {
+fn roles_of(driver: &mut dyn Driver) -> Option<ConnectorDirection> {
     match (driver.inbound().is_some(), driver.outbound().is_some()) {
         (true, true) => Some(ConnectorDirection::InboundAndOutbound),
         (true, false) => Some(ConnectorDirection::Inbound),
@@ -1186,11 +1184,11 @@ fn roles_of(driver: &mut dyn BoundConnectorDriver) -> Option<ConnectorDirection>
     }
 }
 
-fn outbound_exchange_of(driver: &mut dyn BoundConnectorDriver) -> Option<ConnectorExchange> {
+fn outbound_exchange_of(driver: &mut dyn Driver) -> Option<ExchangeKind> {
     let outbound = driver.outbound()?;
     match (outbound.call().is_some(), outbound.session().is_some()) {
-        (true, false) => Some(ConnectorExchange::Call),
-        (false, true) => Some(ConnectorExchange::Session),
+        (true, false) => Some(ExchangeKind::Call),
+        (false, true) => Some(ExchangeKind::Session),
         (false, false) | (true, true) => None,
     }
 }
@@ -1260,9 +1258,9 @@ pub enum DriverBindingError {
         /// Contract being bound.
         id: ContractId,
         /// Exchange carried by the validated plan.
-        required: ConnectorExchange,
+        required: ExchangeKind,
         /// Sole exchange view actually exposed, if any.
-        actual: Option<ConnectorExchange>,
+        actual: Option<ExchangeKind>,
     },
 }
 
@@ -1322,20 +1320,43 @@ impl std::error::Error for DriverBindingError {}
 #[cfg(test)]
 mod tests {
     use super::{
-        BoundConnectorDriver, ConnectorDriverFactory, DriverBindingError, DriverFactoryError,
-        DriverRegistrationError, DriverRegistry, RuntimeBindings,
-    };
-    use crate::boundary::{
-        AdmittedIngress, CallConnectorDriver, CallOpen, CallStart, Completion, EnvelopeDraft,
-        HttpServerExit, InboundCallConnectorDriver, InboundCallObservation, InboundCallResponse,
-        InboundCallResponseStart, InboundExchangeId, IngressProposal, IngressProposalHandle,
-        IngressProvenance, IngressRejection, IngressSequence, OutboundConnectorBindings,
-        OutboundConnectorDriver, ProcessExit, RequestPreparation, Response, RetainedProposal,
-        SchedulerCompletion, SessionConnectorBindings, SessionConnectorDriver, SessionId,
-        SessionObservation, SessionOpen, SessionWrite,
+        Driver, DriverBindingError, DriverFactory, DriverFactoryError, DriverRegistrationError,
+        DriverRegistry, RuntimeDrivers,
     };
     use crate::compiler::compile;
-    use crate::connector::{ConnectorDirection, ConnectorExchange, ContractId};
+    use crate::connector::ConnectorDirection;
+    use crate::connector::ContractId;
+    use crate::connector::ExchangeKind;
+    use crate::connector::driver::InboundCall;
+    use crate::connector::driver::Outbound;
+    use crate::connector::driver::OutboundCall;
+    use crate::connector::driver::OutboundDrivers;
+    use crate::connector::driver::Session;
+    use crate::connector::driver::SessionConnectorBindings;
+    use crate::connector::exchange::AdmittedIngress;
+    use crate::connector::exchange::CallOpen;
+    use crate::connector::exchange::CallResponse;
+    use crate::connector::exchange::CallStart;
+    use crate::connector::exchange::Completion;
+    use crate::connector::exchange::EnvelopeDraft;
+    use crate::connector::exchange::InboundCallObservation;
+    use crate::connector::exchange::InboundCallResponse;
+    use crate::connector::exchange::InboundCallResponseStart;
+    use crate::connector::exchange::InboundExchangeId;
+    use crate::connector::exchange::IngressProposal;
+    use crate::connector::exchange::IngressProposalHandle;
+    use crate::connector::exchange::IngressProvenance;
+    use crate::connector::exchange::IngressRejection;
+    use crate::connector::exchange::IngressSequence;
+    use crate::connector::exchange::PendingIngress;
+    use crate::connector::exchange::RequestPreparation;
+    use crate::connector::exchange::SchedulerCompletion;
+    use crate::connector::exchange::SessionId;
+    use crate::connector::exchange::SessionObservation;
+    use crate::connector::exchange::SessionOpen;
+    use crate::connector::exchange::SessionWrite;
+    use crate::connector::stdlib::HttpServerExit;
+    use crate::connector::stdlib::ProcessExit;
     use crate::contract::ContractCatalog;
     use crate::envelope::{Data, Envelope, Namespace, Value};
     use crate::journal::{Journal, MemJournal, ids};
@@ -1350,8 +1371,8 @@ mod tests {
         roles: ConnectorDirection,
     }
 
-    impl ConnectorDriverFactory for FakeFactory {
-        fn connector_id(&self) -> &ContractId {
+    impl DriverFactory for FakeFactory {
+        fn contract_id(&self) -> &ContractId {
             &self.id
         }
 
@@ -1359,16 +1380,16 @@ mod tests {
             self.roles
         }
 
-        fn bind<'plan>(
+        fn create<'plan>(
             &self,
             _plan: &'plan ValidatedExecutionPlan,
             _nodes: &[node::Path],
-        ) -> Result<Box<dyn BoundConnectorDriver + 'plan>, DriverFactoryError> {
+        ) -> Result<Box<dyn Driver + 'plan>, DriverFactoryError> {
             Err(DriverFactoryError::new("the registry test never binds"))
         }
     }
 
-    fn fake(id: &str, roles: ConnectorDirection) -> Box<dyn ConnectorDriverFactory> {
+    fn fake(id: &str, roles: ConnectorDirection) -> Box<dyn DriverFactory> {
         Box::new(FakeFactory {
             id: ContractId::parse(id).unwrap(),
             roles,
@@ -1386,7 +1407,7 @@ mod tests {
             registry
                 .require(&id, ConnectorDirection::Inbound)
                 .unwrap()
-                .connector_id(),
+                .contract_id(),
             &id
         );
         assert_eq!(
@@ -1419,12 +1440,12 @@ mod tests {
     #[derive(Default)]
     struct EmptyInbound;
 
-    impl crate::boundary::InboundConnectorDriver for EmptyInbound {
-        fn proposal(&mut self) -> Option<RetainedProposal> {
+    impl crate::connector::driver::Ingress for EmptyInbound {
+        fn poll_proposal(&mut self) -> Option<PendingIngress> {
             None
         }
 
-        fn decide(
+        fn notify_admission(
             &mut self,
             _: IngressProposalHandle,
             _: Result<AdmittedIngress, IngressRejection>,
@@ -1435,17 +1456,20 @@ mod tests {
     struct RoutingDriver {
         family: String,
         starts: Arc<Mutex<Vec<String>>>,
-        answers: Vec<Response>,
+        answers: Vec<CallResponse>,
     }
 
-    impl CallConnectorDriver for RoutingDriver {
+    impl OutboundCall for RoutingDriver {
         fn prepare_request(
             &mut self,
             _: &node::Path,
             data: &Data,
             _: &BTreeMap<String, crate::value::Value>,
         ) -> RequestPreparation {
-            crate::boundary::prepare_process_request(crate::boundary::RequestCodec::Lines, data)
+            crate::connector::stdlib::prepare_process_request(
+                crate::connector::stdlib::RequestCodec::Lines,
+                data,
+            )
         }
 
         fn scheduler_completion(
@@ -1453,7 +1477,7 @@ mod tests {
             _: &node::Path,
             completion: SchedulerCompletion,
         ) -> Completion {
-            crate::boundary::process_scheduler_completion(completion)
+            crate::connector::stdlib::process_scheduler_completion(completion)
         }
 
         fn start(&mut self, intent: &CallOpen, _: &Envelope) -> CallStart {
@@ -1461,7 +1485,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(format!("{}:{}", self.family, intent.connector_path));
-            self.answers.push(Response {
+            self.answers.push(CallResponse {
                 call_id: intent.call_id,
                 completion: Completion::process(
                     vec![Data::materialized(Value::Text(self.family.clone()))],
@@ -1475,7 +1499,7 @@ mod tests {
             CallStart::Started
         }
 
-        fn events(&mut self) -> Vec<Response> {
+        fn poll_responses(&mut self) -> Vec<CallResponse> {
             core::mem::take(&mut self.answers)
         }
     }
@@ -1485,17 +1509,17 @@ mod tests {
         outbound: Option<RoutingDriver>,
     }
 
-    impl BoundConnectorDriver for RoutingBound {
-        fn inbound(&mut self) -> Option<&mut dyn crate::boundary::InboundConnectorDriver> {
+    impl Driver for RoutingBound {
+        fn inbound(&mut self) -> Option<&mut dyn crate::connector::driver::Ingress> {
             self.inbound
                 .as_mut()
-                .map(|driver| driver as &mut dyn crate::boundary::InboundConnectorDriver)
+                .map(|driver| driver as &mut dyn crate::connector::driver::Ingress)
         }
 
-        fn outbound(&mut self) -> Option<&mut dyn OutboundConnectorDriver> {
+        fn outbound(&mut self) -> Option<&mut dyn Outbound> {
             self.outbound
                 .as_mut()
-                .map(|driver| driver as &mut dyn OutboundConnectorDriver)
+                .map(|driver| driver as &mut dyn Outbound)
         }
     }
 
@@ -1506,8 +1530,8 @@ mod tests {
         starts: Arc<Mutex<Vec<String>>>,
     }
 
-    impl ConnectorDriverFactory for RoutingFactory {
-        fn connector_id(&self) -> &ContractId {
+    impl DriverFactory for RoutingFactory {
+        fn contract_id(&self) -> &ContractId {
             &self.id
         }
 
@@ -1515,11 +1539,11 @@ mod tests {
             self.advertised
         }
 
-        fn bind<'plan>(
+        fn create<'plan>(
             &self,
             _: &'plan ValidatedExecutionPlan,
             _: &[node::Path],
-        ) -> Result<Box<dyn BoundConnectorDriver + 'plan>, DriverFactoryError> {
+        ) -> Result<Box<dyn Driver + 'plan>, DriverFactoryError> {
             let inbound = self
                 .actual
                 .filter(|roles| roles.has_inbound())
@@ -1541,7 +1565,7 @@ mod tests {
         advertised: ConnectorDirection,
         actual: Option<ConnectorDirection>,
         starts: &Arc<Mutex<Vec<String>>>,
-    ) -> Box<dyn ConnectorDriverFactory> {
+    ) -> Box<dyn DriverFactory> {
         Box::new(RoutingFactory {
             id: ContractId::parse(id).unwrap(),
             advertised,
@@ -1611,7 +1635,7 @@ graph mixed : App {
         let crate::plan::NodeKind::Connector(spec) = &mut first.body else {
             panic!("the first node is a connector")
         };
-        spec.exchange = ConnectorExchange::Session;
+        spec.exchange = ExchangeKind::Session;
         ValidatedExecutionPlan::try_new(raw).expect("the foreign Session contract is structural")
     }
 
@@ -1648,7 +1672,7 @@ graph inbound : App {
         spec.idempotent = None;
         spec.attributes.retain(|(name, _)| name != "idempotent");
         spec.roles = ConnectorDirection::Inbound;
-        spec.exchange = ConnectorExchange::Event;
+        spec.exchange = ExchangeKind::Event;
         source.ports.retain(|port| port.port.name() != "exit");
         for node in &mut raw.nodes {
             if let crate::plan::NodeKind::Graph(graph) = &mut node.body {
@@ -1664,42 +1688,42 @@ graph inbound : App {
         observations: Arc<Mutex<Vec<&'static str>>>,
     }
 
-    impl crate::boundary::InboundConnectorDriver for DuplexDriver {
-        fn proposal(&mut self) -> Option<RetainedProposal> {
+    impl crate::connector::driver::Ingress for DuplexDriver {
+        fn poll_proposal(&mut self) -> Option<PendingIngress> {
             self.observations.lock().unwrap().push("inbound");
             None
         }
 
-        fn decide(
+        fn notify_admission(
             &mut self,
             _: IngressProposalHandle,
             _: Result<AdmittedIngress, IngressRejection>,
         ) {
         }
 
-        fn call(&mut self) -> Option<&mut dyn InboundCallConnectorDriver> {
+        fn call(&mut self) -> Option<&mut dyn InboundCall> {
             Some(self)
         }
     }
 
-    impl InboundCallConnectorDriver for DuplexDriver {
+    impl InboundCall for DuplexDriver {
         fn start_response(&mut self, _: &InboundCallResponse) -> InboundCallResponseStart {
             InboundCallResponseStart::Pending
         }
 
         fn start_timeout(
             &mut self,
-            _: &crate::boundary::InboundCallTimeout,
-        ) -> crate::boundary::InboundCallTimeoutStart {
-            crate::boundary::InboundCallTimeoutStart::Pending
+            _: &crate::connector::exchange::InboundCallTimeout,
+        ) -> crate::connector::exchange::InboundCallTimeoutStart {
+            crate::connector::exchange::InboundCallTimeoutStart::Pending
         }
 
-        fn events(&mut self) -> Vec<InboundCallObservation> {
+        fn poll_completions(&mut self) -> Vec<InboundCallObservation> {
             Vec::new()
         }
     }
 
-    impl CallConnectorDriver for DuplexDriver {
+    impl OutboundCall for DuplexDriver {
         fn prepare_request(
             &mut self,
             _: &node::Path,
@@ -1707,7 +1731,10 @@ graph inbound : App {
             _: &BTreeMap<String, crate::value::Value>,
         ) -> RequestPreparation {
             self.observations.lock().unwrap().push("outbound");
-            crate::boundary::prepare_process_request(crate::boundary::RequestCodec::Lines, data)
+            crate::connector::stdlib::prepare_process_request(
+                crate::connector::stdlib::RequestCodec::Lines,
+                data,
+            )
         }
 
         fn scheduler_completion(
@@ -1715,24 +1742,24 @@ graph inbound : App {
             _: &node::Path,
             completion: SchedulerCompletion,
         ) -> Completion {
-            crate::boundary::process_scheduler_completion(completion)
+            crate::connector::stdlib::process_scheduler_completion(completion)
         }
 
         fn start(&mut self, _: &CallOpen, _: &Envelope) -> CallStart {
             CallStart::Started
         }
 
-        fn events(&mut self) -> Vec<Response> {
+        fn poll_responses(&mut self) -> Vec<CallResponse> {
             Vec::new()
         }
     }
 
-    impl BoundConnectorDriver for DuplexDriver {
-        fn inbound(&mut self) -> Option<&mut dyn crate::boundary::InboundConnectorDriver> {
+    impl Driver for DuplexDriver {
+        fn inbound(&mut self) -> Option<&mut dyn crate::connector::driver::Ingress> {
             Some(self)
         }
 
-        fn outbound(&mut self) -> Option<&mut dyn OutboundConnectorDriver> {
+        fn outbound(&mut self) -> Option<&mut dyn Outbound> {
             Some(self)
         }
     }
@@ -1742,8 +1769,8 @@ graph inbound : App {
         observations: Arc<Mutex<Vec<&'static str>>>,
     }
 
-    impl ConnectorDriverFactory for DuplexFactory {
-        fn connector_id(&self) -> &ContractId {
+    impl DriverFactory for DuplexFactory {
+        fn contract_id(&self) -> &ContractId {
             &self.id
         }
 
@@ -1751,11 +1778,11 @@ graph inbound : App {
             ConnectorDirection::InboundAndOutbound
         }
 
-        fn bind<'plan>(
+        fn create<'plan>(
             &self,
             _: &'plan ValidatedExecutionPlan,
             _: &[node::Path],
-        ) -> Result<Box<dyn BoundConnectorDriver + 'plan>, DriverFactoryError> {
+        ) -> Result<Box<dyn Driver + 'plan>, DriverFactoryError> {
             Ok(Box::new(DuplexDriver {
                 observations: Arc::clone(&self.observations),
             }))
@@ -1780,10 +1807,10 @@ graph inbound : App {
                 &starts,
             ))
             .unwrap();
-        let mut bindings = RuntimeBindings::try_new(&plan, &registry).unwrap();
+        let mut bindings = RuntimeDrivers::prepare(&plan, &registry).unwrap();
 
         assert!(bindings.next_inbound().unwrap().is_none());
-        let preparation = OutboundConnectorBindings::prepare_request(
+        let preparation = OutboundDrivers::prepare_request(
             &mut bindings,
             &node::Path::new(["first"]).unwrap(),
             &Data::materialized(Value::Text(String::from("request"))),
@@ -1800,13 +1827,13 @@ graph inbound : App {
         closed: BTreeSet<SessionId>,
     }
 
-    impl crate::boundary::InboundConnectorDriver for SessionDuplexDriver {
-        fn proposal(&mut self) -> Option<RetainedProposal> {
+    impl crate::connector::driver::Ingress for SessionDuplexDriver {
+        fn poll_proposal(&mut self) -> Option<PendingIngress> {
             self.observations.lock().unwrap().push("inbound");
             None
         }
 
-        fn decide(
+        fn notify_admission(
             &mut self,
             _: IngressProposalHandle,
             _: Result<AdmittedIngress, IngressRejection>,
@@ -1815,14 +1842,17 @@ graph inbound : App {
         }
     }
 
-    impl SessionConnectorDriver for SessionDuplexDriver {
+    impl Session for SessionDuplexDriver {
         fn prepare_session_open(
             &mut self,
             _: &node::Path,
             data: &Data,
             _: &BTreeMap<String, crate::value::Value>,
         ) -> RequestPreparation {
-            crate::boundary::prepare_process_request(crate::boundary::RequestCodec::Lines, data)
+            crate::connector::stdlib::prepare_process_request(
+                crate::connector::stdlib::RequestCodec::Lines,
+                data,
+            )
         }
 
         fn scheduler_session_completion(
@@ -1840,11 +1870,11 @@ graph inbound : App {
             &mut self,
             intent: &SessionOpen,
             _: &Envelope,
-        ) -> crate::boundary::SessionStart {
+        ) -> crate::connector::exchange::SessionStart {
             self.observations.lock().unwrap().push("open");
             self.events
                 .insert(0, SessionObservation::Opened(intent.session_id));
-            crate::boundary::SessionStart::Started
+            crate::connector::exchange::SessionStart::Started
         }
 
         fn prepare_session_write(
@@ -1854,14 +1884,17 @@ graph inbound : App {
             data: &Data,
             _: &BTreeMap<String, crate::value::Value>,
         ) -> RequestPreparation {
-            crate::boundary::prepare_process_request(crate::boundary::RequestCodec::Lines, data)
+            crate::connector::stdlib::prepare_process_request(
+                crate::connector::stdlib::RequestCodec::Lines,
+                data,
+            )
         }
 
         fn write_session(
             &mut self,
             intent: &SessionWrite,
             _: &Envelope,
-        ) -> crate::boundary::SessionStart {
+        ) -> crate::connector::exchange::SessionStart {
             self.observations.lock().unwrap().push("write");
             self.events.insert(
                 0,
@@ -1870,17 +1903,20 @@ graph inbound : App {
                     write: intent.write_ref,
                 },
             );
-            crate::boundary::SessionStart::Started
+            crate::connector::exchange::SessionStart::Started
         }
 
-        fn close_session(&mut self, session: SessionId) -> crate::boundary::SessionStart {
+        fn close_session(
+            &mut self,
+            session: SessionId,
+        ) -> crate::connector::exchange::SessionStart {
             if self.closed.insert(session) {
                 self.observations.lock().unwrap().push("close");
                 self.events.insert(
                     0,
                     SessionObservation::Exited {
                         session,
-                        exit: crate::boundary::EnvelopeDraft {
+                        exit: crate::connector::exchange::EnvelopeDraft {
                             port: node::Port::conventional_exit(),
                             data: Data::materialized(
                                 ProcessExit::Exited {
@@ -1894,10 +1930,10 @@ graph inbound : App {
                     },
                 );
             }
-            crate::boundary::SessionStart::Started
+            crate::connector::exchange::SessionStart::Started
         }
 
-        fn session_events(&mut self) -> Vec<SessionObservation> {
+        fn poll_observations(&mut self) -> Vec<SessionObservation> {
             core::mem::take(&mut self.events)
         }
 
@@ -1922,22 +1958,22 @@ graph inbound : App {
         }
     }
 
-    impl OutboundConnectorDriver for SessionDuplexDriver {
-        fn call(&mut self) -> Option<&mut dyn CallConnectorDriver> {
+    impl Outbound for SessionDuplexDriver {
+        fn call(&mut self) -> Option<&mut dyn OutboundCall> {
             None
         }
 
-        fn session(&mut self) -> Option<&mut dyn SessionConnectorDriver> {
+        fn session(&mut self) -> Option<&mut dyn Session> {
             Some(self)
         }
     }
 
-    impl BoundConnectorDriver for SessionDuplexDriver {
-        fn inbound(&mut self) -> Option<&mut dyn crate::boundary::InboundConnectorDriver> {
+    impl Driver for SessionDuplexDriver {
+        fn inbound(&mut self) -> Option<&mut dyn crate::connector::driver::Ingress> {
             Some(self)
         }
 
-        fn outbound(&mut self) -> Option<&mut dyn OutboundConnectorDriver> {
+        fn outbound(&mut self) -> Option<&mut dyn Outbound> {
             Some(self)
         }
     }
@@ -1947,8 +1983,8 @@ graph inbound : App {
         observations: Arc<Mutex<Vec<&'static str>>>,
     }
 
-    impl ConnectorDriverFactory for SessionDuplexFactory {
-        fn connector_id(&self) -> &ContractId {
+    impl DriverFactory for SessionDuplexFactory {
+        fn contract_id(&self) -> &ContractId {
             &self.id
         }
 
@@ -1956,11 +1992,11 @@ graph inbound : App {
             ConnectorDirection::InboundAndOutbound
         }
 
-        fn bind<'plan>(
+        fn create<'plan>(
             &self,
             _: &'plan ValidatedExecutionPlan,
             _: &[node::Path],
-        ) -> Result<Box<dyn BoundConnectorDriver + 'plan>, DriverFactoryError> {
+        ) -> Result<Box<dyn Driver + 'plan>, DriverFactoryError> {
             Ok(Box::new(SessionDuplexDriver {
                 observations: Arc::clone(&self.observations),
                 events: Vec::new(),
@@ -1987,7 +2023,7 @@ graph inbound : App {
                 &starts,
             ))
             .unwrap();
-        let mut bindings = RuntimeBindings::try_new(&plan, &registry).unwrap();
+        let mut bindings = RuntimeDrivers::prepare(&plan, &registry).unwrap();
         assert!(bindings.next_inbound().unwrap().is_none());
 
         let mut journal = MemJournal::new(GraphVersion(1));
@@ -2006,7 +2042,7 @@ graph inbound : App {
             .envelope;
         let connector = node::Path::new(["first"]).unwrap();
         let opening = |byte| {
-            let prepared = crate::boundary::PreparedRequest::seal(vec![byte]);
+            let prepared = crate::connector::exchange::PreparedRequest::seal(vec![byte]);
             let emitting_id = crate::envelope::Id::from_bytes([byte; 16]);
             SessionOpen {
                 session_id: ids::outbound_session_id(&connector, emitting_id, prepared.digest()),
@@ -2022,7 +2058,7 @@ graph inbound : App {
             SessionConnectorBindings::open_session(&mut bindings, intent, &request).unwrap();
         }
         assert_eq!(
-            SessionConnectorBindings::session_events(&mut bindings).unwrap(),
+            SessionConnectorBindings::poll_observations(&mut bindings).unwrap(),
             [
                 SessionObservation::Opened(second.session_id),
                 SessionObservation::Opened(first.session_id),
@@ -2033,7 +2069,7 @@ graph inbound : App {
         journal.confirm_session_open(&second.session_id).unwrap();
 
         let write = |session: SessionId, byte| {
-            let prepared = crate::boundary::PreparedRequest::seal(vec![byte]);
+            let prepared = crate::connector::exchange::PreparedRequest::seal(vec![byte]);
             let emitting_id = crate::envelope::Id::from_bytes([byte; 16]);
             SessionWrite {
                 write_ref: ids::session_write_id(session, emitting_id, prepared.digest()),
@@ -2050,7 +2086,7 @@ graph inbound : App {
             SessionConnectorBindings::write_session(&mut bindings, intent, &request).unwrap();
         }
         assert_eq!(
-            SessionConnectorBindings::session_events(&mut bindings).unwrap(),
+            SessionConnectorBindings::poll_observations(&mut bindings).unwrap(),
             [
                 SessionObservation::WriteSettled {
                     session: second.session_id,
@@ -2082,7 +2118,7 @@ graph inbound : App {
         );
         assert!(bindings.sessions.contains_key(&first.session_id));
         assert!(
-            SessionConnectorBindings::session_events(&mut bindings)
+            SessionConnectorBindings::poll_observations(&mut bindings)
                 .unwrap()
                 .is_empty()
         );
@@ -2102,7 +2138,7 @@ graph inbound : App {
         assert!(bindings.sessions.contains_key(&second.session_id));
         assert!(matches!(
             SessionConnectorBindings::abort_session(&mut bindings, &connector, first.session_id),
-            Err(crate::boundary::DriverRouteError::UncorrelatedSession(reference)) if reference == first.session_id
+            Err(crate::connector::driver::DriverRouteError::UncorrelatedSession(reference)) if reference == first.session_id
         ));
         SessionConnectorBindings::write_session(&mut bindings, &second_write, &request).unwrap();
     }
@@ -2125,12 +2161,12 @@ graph inbound : App {
                 &starts,
             ))
             .unwrap();
-        let contract = Box::leak(Box::new(crate::contract::ConnectorContract {
+        let contract = Box::leak(Box::new(crate::connector::contract::ConnectorContract {
             id: "org.rastok.test/alpha@1",
             name: "SessionProbe",
             roles: ConnectorDirection::InboundAndOutbound,
-            exchange: ConnectorExchange::Session,
-            ..crate::stdlib::PROCESS.clone()
+            exchange: ExchangeKind::Session,
+            ..crate::connector::stdlib::PROCESS.clone()
         }));
         let terminal = Data::materialized(
             ProcessExit::Exited {
@@ -2170,7 +2206,7 @@ graph inbound : App {
 
     #[derive(Default)]
     struct InboundQueueState {
-        proposals: VecDeque<RetainedProposal>,
+        proposals: VecDeque<PendingIngress>,
         decisions: Vec<(
             IngressProposalHandle,
             Result<AdmittedIngress, IngressRejection>,
@@ -2181,12 +2217,12 @@ graph inbound : App {
         state: Arc<Mutex<InboundQueueState>>,
     }
 
-    impl crate::boundary::InboundConnectorDriver for RetainedInboundDriver {
-        fn proposal(&mut self) -> Option<RetainedProposal> {
+    impl crate::connector::driver::Ingress for RetainedInboundDriver {
+        fn poll_proposal(&mut self) -> Option<PendingIngress> {
             self.state.lock().unwrap().proposals.front().cloned()
         }
 
-        fn decide(
+        fn notify_admission(
             &mut self,
             reference: IngressProposalHandle,
             decision: Result<AdmittedIngress, IngressRejection>,
@@ -2201,12 +2237,12 @@ graph inbound : App {
         }
     }
 
-    impl BoundConnectorDriver for RetainedInboundDriver {
-        fn inbound(&mut self) -> Option<&mut dyn crate::boundary::InboundConnectorDriver> {
+    impl Driver for RetainedInboundDriver {
+        fn inbound(&mut self) -> Option<&mut dyn crate::connector::driver::Ingress> {
             Some(self)
         }
 
-        fn outbound(&mut self) -> Option<&mut dyn OutboundConnectorDriver> {
+        fn outbound(&mut self) -> Option<&mut dyn Outbound> {
             None
         }
     }
@@ -2218,7 +2254,7 @@ graph inbound : App {
 
     #[derive(Default)]
     struct RetainedCallState {
-        proposals: VecDeque<RetainedProposal>,
+        proposals: VecDeque<PendingIngress>,
         decisions: Vec<(
             IngressProposalHandle,
             Result<AdmittedIngress, IngressRejection>,
@@ -2233,12 +2269,12 @@ graph inbound : App {
         state: Arc<Mutex<RetainedCallState>>,
     }
 
-    impl crate::boundary::InboundConnectorDriver for RetainedCallDriver {
-        fn proposal(&mut self) -> Option<RetainedProposal> {
+    impl crate::connector::driver::Ingress for RetainedCallDriver {
+        fn poll_proposal(&mut self) -> Option<PendingIngress> {
             self.state.lock().unwrap().proposals.front().cloned()
         }
 
-        fn decide(
+        fn notify_admission(
             &mut self,
             reference: IngressProposalHandle,
             decision: Result<AdmittedIngress, IngressRejection>,
@@ -2265,12 +2301,12 @@ graph inbound : App {
             state.decisions.push((reference, decision));
         }
 
-        fn call(&mut self) -> Option<&mut dyn InboundCallConnectorDriver> {
+        fn call(&mut self) -> Option<&mut dyn InboundCall> {
             Some(self)
         }
     }
 
-    impl InboundCallConnectorDriver for RetainedCallDriver {
+    impl InboundCall for RetainedCallDriver {
         fn start_response(&mut self, response: &InboundCallResponse) -> InboundCallResponseStart {
             let mut state = self.state.lock().unwrap();
             if state.hold_first_response {
@@ -2287,22 +2323,22 @@ graph inbound : App {
 
         fn start_timeout(
             &mut self,
-            _: &crate::boundary::InboundCallTimeout,
-        ) -> crate::boundary::InboundCallTimeoutStart {
-            crate::boundary::InboundCallTimeoutStart::Pending
+            _: &crate::connector::exchange::InboundCallTimeout,
+        ) -> crate::connector::exchange::InboundCallTimeoutStart {
+            crate::connector::exchange::InboundCallTimeoutStart::Pending
         }
 
-        fn events(&mut self) -> Vec<InboundCallObservation> {
+        fn poll_completions(&mut self) -> Vec<InboundCallObservation> {
             core::mem::take(&mut self.state.lock().unwrap().events)
         }
     }
 
-    impl BoundConnectorDriver for RetainedCallDriver {
-        fn inbound(&mut self) -> Option<&mut dyn crate::boundary::InboundConnectorDriver> {
+    impl Driver for RetainedCallDriver {
+        fn inbound(&mut self) -> Option<&mut dyn crate::connector::driver::Ingress> {
             Some(self)
         }
 
-        fn outbound(&mut self) -> Option<&mut dyn OutboundConnectorDriver> {
+        fn outbound(&mut self) -> Option<&mut dyn Outbound> {
             None
         }
     }
@@ -2312,8 +2348,8 @@ graph inbound : App {
         state: Arc<Mutex<RetainedCallState>>,
     }
 
-    impl ConnectorDriverFactory for RetainedCallFactory {
-        fn connector_id(&self) -> &ContractId {
+    impl DriverFactory for RetainedCallFactory {
+        fn contract_id(&self) -> &ContractId {
             &self.id
         }
 
@@ -2321,19 +2357,19 @@ graph inbound : App {
             ConnectorDirection::Inbound
         }
 
-        fn bind<'plan>(
+        fn create<'plan>(
             &self,
             _: &'plan ValidatedExecutionPlan,
             _: &[node::Path],
-        ) -> Result<Box<dyn BoundConnectorDriver + 'plan>, DriverFactoryError> {
+        ) -> Result<Box<dyn Driver + 'plan>, DriverFactoryError> {
             Ok(Box::new(RetainedCallDriver {
                 state: Arc::clone(&self.state),
             }))
         }
     }
 
-    impl ConnectorDriverFactory for RetainedInboundFactory {
-        fn connector_id(&self) -> &ContractId {
+    impl DriverFactory for RetainedInboundFactory {
+        fn contract_id(&self) -> &ContractId {
             &self.id
         }
 
@@ -2341,19 +2377,19 @@ graph inbound : App {
             ConnectorDirection::Inbound
         }
 
-        fn bind<'plan>(
+        fn create<'plan>(
             &self,
             _: &'plan ValidatedExecutionPlan,
             _: &[node::Path],
-        ) -> Result<Box<dyn BoundConnectorDriver + 'plan>, DriverFactoryError> {
+        ) -> Result<Box<dyn Driver + 'plan>, DriverFactoryError> {
             Ok(Box::new(RetainedInboundDriver {
                 state: Arc::clone(&self.state),
             }))
         }
     }
 
-    fn inbound_proposal(reference: u64, port: &str) -> RetainedProposal {
-        RetainedProposal {
+    fn inbound_proposal(reference: u64, port: &str) -> PendingIngress {
+        PendingIngress {
             handle: IngressProposalHandle::new(reference),
             proposal: IngressProposal {
                 provenance: IngressProvenance::single(node::Path::new(["source"]).unwrap()),
@@ -2453,20 +2489,20 @@ graph api : App {
         .plan;
         let event_only_registry = DriverRegistry::default()
             .try_with(Box::new(RetainedInboundFactory {
-                id: ContractId::parse(crate::connector::HTTP_SERVER_CONNECTOR_ID).unwrap(),
+                id: ContractId::parse(crate::connector::stdlib::HTTP_SERVER_CONNECTOR_ID).unwrap(),
                 state: Arc::new(Mutex::new(InboundQueueState::default())),
             }))
             .unwrap();
         assert!(matches!(
-            RuntimeBindings::try_new(&plan, &event_only_registry),
+            RuntimeDrivers::prepare(&plan, &event_only_registry),
             Err(DriverBindingError::BoundExchangeMismatch {
-                required: ConnectorExchange::Call,
+                required: ExchangeKind::Call,
                 actual: None,
                 ..
             })
         ));
         let state = Arc::new(Mutex::new(RetainedCallState {
-            proposals: VecDeque::from([RetainedProposal {
+            proposals: VecDeque::from([PendingIngress {
                 handle: IngressProposalHandle::new(1),
                 proposal: IngressProposal {
                     provenance: IngressProvenance::single(node::Path::new(["server"]).unwrap()),
@@ -2484,15 +2520,15 @@ graph api : App {
         }));
         let registry = DriverRegistry::default()
             .try_with(Box::new(RetainedCallFactory {
-                id: ContractId::parse(crate::connector::HTTP_SERVER_CONNECTOR_ID).unwrap(),
+                id: ContractId::parse(crate::connector::stdlib::HTTP_SERVER_CONNECTOR_ID).unwrap(),
                 state: Arc::clone(&state),
             }))
             .unwrap();
-        let mut bindings = RuntimeBindings::try_new(&plan, &registry).unwrap();
+        let mut bindings = RuntimeDrivers::prepare(&plan, &registry).unwrap();
         let mut vm = Execution::new(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
 
-        let Some(crate::boundary::IngressAdmission::Accepted(accepted)) = bindings
+        let Some(crate::connector::exchange::IngressAdmission::Accepted(accepted)) = bindings
             .poll_inbound(&mut vm, &mut journal)
             .expect("the proposal reaches atomic admission")
         else {
@@ -2599,7 +2635,7 @@ graph api : App {
     fn a_graph_response_closes_its_original_inbound_call_without_an_outbound_call() {
         let plan = inbound_call_response_plan();
         let state = Arc::new(Mutex::new(RetainedCallState {
-            proposals: VecDeque::from([RetainedProposal {
+            proposals: VecDeque::from([PendingIngress {
                 handle: IngressProposalHandle::new(1),
                 proposal: IngressProposal {
                     provenance: IngressProvenance::single(node::Path::new(["server"]).unwrap()),
@@ -2621,11 +2657,11 @@ graph api : App {
                 state: Arc::clone(&state),
             }))
             .unwrap();
-        let mut bindings = RuntimeBindings::try_new(&plan, &registry).unwrap();
+        let mut bindings = RuntimeDrivers::prepare(&plan, &registry).unwrap();
         let mut vm = Execution::new(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
 
-        let Some(crate::boundary::IngressAdmission::Accepted(accepted)) = bindings
+        let Some(crate::connector::exchange::IngressAdmission::Accepted(accepted)) = bindings
             .poll_inbound(&mut vm, &mut journal)
             .expect("the request reaches atomic admission")
         else {
@@ -2734,7 +2770,7 @@ graph api : App {
     fn a_response_after_the_inbound_call_closed_is_discarded_and_journaled() {
         let plan = inbound_call_response_plan();
         let state = Arc::new(Mutex::new(RetainedCallState {
-            proposals: VecDeque::from([RetainedProposal {
+            proposals: VecDeque::from([PendingIngress {
                 handle: IngressProposalHandle::new(1),
                 proposal: IngressProposal {
                     provenance: IngressProvenance::single(node::Path::new(["server"]).unwrap()),
@@ -2756,11 +2792,11 @@ graph api : App {
                 state: Arc::clone(&state),
             }))
             .unwrap();
-        let mut bindings = RuntimeBindings::try_new(&plan, &registry).unwrap();
+        let mut bindings = RuntimeDrivers::prepare(&plan, &registry).unwrap();
         let mut vm = Execution::new(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
 
-        let Some(crate::boundary::IngressAdmission::Accepted(accepted)) = bindings
+        let Some(crate::connector::exchange::IngressAdmission::Accepted(accepted)) = bindings
             .poll_inbound(&mut vm, &mut journal)
             .expect("the request reaches atomic admission")
         else {
@@ -2824,12 +2860,12 @@ graph api : App {
                 state: Arc::clone(&state),
             }))
             .unwrap();
-        let mut bindings = RuntimeBindings::try_new(&plan, &registry).unwrap();
+        let mut bindings = RuntimeDrivers::prepare(&plan, &registry).unwrap();
         let mut vm = Execution::new(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
 
         for expected in 0..1024 {
-            let Some(crate::boundary::IngressAdmission::Accepted(accepted)) = bindings
+            let Some(crate::connector::exchange::IngressAdmission::Accepted(accepted)) = bindings
                 .poll_inbound(&mut vm, &mut journal)
                 .expect("the bounded intake stays healthy")
             else {
@@ -2862,7 +2898,7 @@ graph api : App {
         let records_before = journal.records().len();
         assert_eq!(
             bindings.poll_inbound(&mut vm, &mut journal).unwrap(),
-            Some(crate::boundary::IngressAdmission::Pending)
+            Some(crate::connector::exchange::IngressAdmission::Pending)
         );
         assert_eq!(journal.records().len(), records_before);
         assert_eq!(state.lock().unwrap().decisions.len(), 1024);
@@ -2870,7 +2906,7 @@ graph api : App {
         assert_eq!(retained.proposal().handle.get(), 1024);
         assert_eq!(
             bindings.poll_inbound(&mut vm, &mut journal).unwrap(),
-            Some(crate::boundary::IngressAdmission::Pending),
+            Some(crate::connector::exchange::IngressAdmission::Pending),
             "re-polling cannot replace or acknowledge the retained proposal"
         );
         assert_eq!(journal.records().len(), records_before);
@@ -2890,13 +2926,13 @@ graph api : App {
                 state: Arc::clone(&state),
             }))
             .unwrap();
-        let mut bindings = RuntimeBindings::try_new(&plan, &registry).unwrap();
+        let mut bindings = RuntimeDrivers::prepare(&plan, &registry).unwrap();
         let mut vm = Execution::new(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
         assert_eq!(
             bindings.poll_inbound(&mut vm, &mut journal).unwrap(),
-            Some(crate::boundary::IngressAdmission::Rejected(
-                crate::boundary::IngressRejection::UnknownPort
+            Some(crate::connector::exchange::IngressAdmission::Rejected(
+                crate::connector::exchange::IngressRejection::UnknownPort
             ))
         );
         assert!(journal.records().is_empty());
@@ -2904,7 +2940,7 @@ graph api : App {
             state.lock().unwrap().decisions,
             [(
                 IngressProposalHandle::new(7),
-                Err(crate::boundary::IngressRejection::UnknownPort)
+                Err(crate::connector::exchange::IngressRejection::UnknownPort)
             )]
         );
     }
@@ -2913,7 +2949,7 @@ graph api : App {
     fn inbound_session_framing_cannot_contradict_the_exchange_fact() {
         let plan = inbound_event_plan();
         let mut proposal = inbound_proposal(9, "out");
-        proposal.proposal.session = Some(crate::boundary::InboundSession::Open);
+        proposal.proposal.session = Some(crate::connector::exchange::InboundSession::Open);
         let state = Arc::new(Mutex::new(InboundQueueState {
             proposals: VecDeque::from([proposal]),
             decisions: Vec::new(),
@@ -2924,14 +2960,16 @@ graph api : App {
                 state,
             }))
             .unwrap();
-        let mut bindings = RuntimeBindings::try_new(&plan, &registry).unwrap();
+        let mut bindings = RuntimeDrivers::prepare(&plan, &registry).unwrap();
 
         assert!(matches!(
             bindings.next_inbound(),
-            Err(crate::boundary::DriverRouteError::InboundExchangeMismatch {
-                exchange: ConnectorExchange::Event,
-                ..
-            })
+            Err(
+                crate::connector::driver::DriverRouteError::InboundExchangeMismatch {
+                    exchange: ExchangeKind::Event,
+                    ..
+                }
+            )
         ));
     }
 
@@ -2951,11 +2989,11 @@ graph api : App {
                 state,
             }))
             .unwrap();
-        let mut bindings = RuntimeBindings::try_new(&plan, &registry).unwrap();
+        let mut bindings = RuntimeDrivers::prepare(&plan, &registry).unwrap();
 
         assert!(matches!(
             bindings.next_inbound(),
-            Err(crate::boundary::DriverRouteError::InboundSourceMismatch {
+            Err(crate::connector::driver::DriverRouteError::InboundSourceMismatch {
                 source,
                 ..
             }) if source.to_string() == "other"
@@ -2975,21 +3013,21 @@ graph api : App {
                 state,
             }))
             .unwrap();
-        let ports = crate::stdlib::PROCESS
+        let ports = crate::connector::stdlib::PROCESS
             .ports
             .iter()
             .filter(|port| port.name != "exit")
             .cloned()
             .collect::<Vec<_>>()
             .into_boxed_slice();
-        let contract = Box::leak(Box::new(crate::contract::ConnectorContract {
+        let contract = Box::leak(Box::new(crate::connector::contract::ConnectorContract {
             id: "org.rastok.test/event-source@1",
             name: "EventSource",
             roles: ConnectorDirection::Inbound,
-            exchange: ConnectorExchange::Event,
+            exchange: ExchangeKind::Event,
             ports: Box::leak(ports),
-            common: crate::stdlib::PROCESS.common,
-            selector: crate::stdlib::PROCESS.selector.clone(),
+            common: crate::connector::stdlib::PROCESS.common,
+            selector: crate::connector::stdlib::PROCESS.selector.clone(),
         }));
         let profile = crate::conformance::EventTestFixture {
             contract,
@@ -3021,7 +3059,7 @@ graph api : App {
                 &starts,
             ))
             .unwrap();
-        let mut bindings = RuntimeBindings::try_new(&plan, &registry).unwrap();
+        let mut bindings = RuntimeDrivers::prepare(&plan, &registry).unwrap();
         let mut journal = MemJournal::new(GraphVersion(1));
         let mut vm = Execution::new(&plan, GraphVersion(1));
         vm.accept_input(
@@ -3068,7 +3106,7 @@ graph api : App {
         let plan = two_family_plan();
         let starts = Arc::new(Mutex::new(Vec::new()));
         assert!(matches!(
-            RuntimeBindings::try_new(&plan, &DriverRegistry::default()),
+            RuntimeDrivers::prepare(&plan, &DriverRegistry::default()),
             Err(DriverBindingError::Missing { .. })
         ));
 
@@ -3081,7 +3119,7 @@ graph api : App {
             ))
             .unwrap();
         assert!(matches!(
-            RuntimeBindings::try_new(&plan, &wrong),
+            RuntimeDrivers::prepare(&plan, &wrong),
             Err(DriverBindingError::MissingRoles { .. })
         ));
 
@@ -3101,7 +3139,7 @@ graph api : App {
             ))
             .unwrap();
         assert!(matches!(
-            RuntimeBindings::try_new(&plan, &extra),
+            RuntimeDrivers::prepare(&plan, &extra),
             Err(DriverBindingError::BoundRolesMismatch { .. })
         ));
         assert!(

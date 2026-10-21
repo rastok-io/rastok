@@ -4,7 +4,8 @@ use alloc::format;
 use alloc::string::ToString;
 
 use super::*;
-use crate::connector::{CallCommandError, FrameProduction};
+use crate::connector::CallCommandError;
+use crate::connector::FrameProduction;
 
 pub(super) fn validate(
     plan: &ExecutionPlan,

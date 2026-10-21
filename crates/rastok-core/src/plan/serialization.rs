@@ -1935,7 +1935,7 @@ fn spec_from(tree: &Cbor) -> Result<ConnectorSpec, DecodeError> {
         return Err(err("connector exchange"));
     };
     let exchange_tag = u8::try_from(*exchange_tag).map_err(|_| err("connector exchange"))?;
-    let exchange = crate::connector::ConnectorExchange::from_tag(exchange_tag)
+    let exchange = crate::connector::ExchangeKind::from_tag(exchange_tag)
         .ok_or_else(|| err("connector exchange"))?;
     Ok(ConnectorSpec {
         contract,
@@ -3606,11 +3606,11 @@ mod tests {
                 Node {
                     body: NodeKind::Connector(Box::new(ConnectorSpec {
                         contract: crate::connector::ContractId::parse(
-                            crate::connector::PROCESS_CONNECTOR_ID,
+                            crate::connector::stdlib::PROCESS_CONNECTOR_ID,
                         )
                         .unwrap(),
                         roles: crate::connector::ConnectorDirection::Outbound,
-                        exchange: crate::connector::ConnectorExchange::Call,
+                        exchange: crate::connector::ExchangeKind::Call,
                         idempotent: Some(PlanConstant {
                             expr: expr::compile("true", &expr::Signature::new()).unwrap(),
                             resolved: Value::Bool(true),

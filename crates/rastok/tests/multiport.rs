@@ -185,7 +185,10 @@ fn the_machine_verifies_the_ingress_port() {
     // The raw API is verified, not trusted: a submission at a port
     // that is not a graph input refuses typed, before any journal
     // append.
-    use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
+    use rastok::connector::exchange::EnvelopeDraft;
+    use rastok::connector::exchange::IngressProposal;
+    use rastok::connector::exchange::IngressProvenance;
+    use rastok::connector::exchange::IngressSequence;
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
@@ -223,8 +226,11 @@ fn the_machine_verifies_the_ingress_port() {
 
 #[test]
 fn the_inbound_record_carries_its_port_and_omits_the_default() {
-    use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
     use rastok::canonical_cbor::{Value as Cbor, decode};
+    use rastok::connector::exchange::EnvelopeDraft;
+    use rastok::connector::exchange::IngressProposal;
+    use rastok::connector::exchange::IngressProvenance;
+    use rastok::connector::exchange::IngressSequence;
     use rastok::envelope::{Data, Encoding, Namespace};
     use rastok::journal::{Journal, MemJournal};
     use rastok::plan::GraphVersion;
@@ -570,7 +576,7 @@ fn a_typed_injection_matrix_holds_at_the_boundary() {
 
 #[test]
 fn a_resolved_contract_port_table_enters_the_validated_plan_complete() {
-    use rastok::contract::{
+    use rastok::connector::contract::{
         AttributeSpec, ConnectorContract, EvaluationSite, PortContract, PortDataType, PortTypeRule,
         Presence, ValueDomain,
     };
@@ -584,7 +590,7 @@ fn a_resolved_contract_port_table_enters_the_validated_plan_complete() {
         id: "org.rastok.test/probe@1",
         name: "Probe",
         roles: rastok::connector::ConnectorDirection::Outbound,
-        exchange: rastok::connector::ConnectorExchange::Call,
+        exchange: rastok::connector::ExchangeKind::Call,
         ports: &[
             PortContract {
                 name: "in",
@@ -649,7 +655,7 @@ fn a_resolved_contract_port_table_enters_the_validated_plan_complete() {
 
 #[test]
 fn a_named_connector_edge_defers_by_name() {
-    use rastok::contract::{
+    use rastok::connector::contract::{
         AttributeSpec, ConnectorContract, EvaluationSite, PortContract, PortDataType, PortTypeRule,
         Presence, ValueDomain,
     };
@@ -658,7 +664,7 @@ fn a_named_connector_edge_defers_by_name() {
         id: "org.rastok.test/probe@1",
         name: "Probe",
         roles: rastok::connector::ConnectorDirection::Outbound,
-        exchange: rastok::connector::ConnectorExchange::Call,
+        exchange: rastok::connector::ExchangeKind::Call,
         ports: &[
             PortContract {
                 name: "in",
@@ -717,7 +723,7 @@ fn a_named_connector_edge_defers_by_name() {
         .expect("the standard catalogue holds")
         .try_with(PROBE_SHEET)
         .expect("a valid sheet enters");
-    // The OutboundConnectorDriver seam does not speak named connector ports yet:
+    // The Outbound seam does not speak named connector ports yet:
     // wiring one refuses BY NAME instead of compiling into an
     // execution that silently answers on `out`.
     let source = "graph g : App {\n  connector probe : Probe {\n    behavior = deterministic\n  }\n\n  operator relay {\n    on in { out = data }\n  }\n\n  in -> relay\n  relay.out -> probe.request\n  probe.response -> out\n}\n";
@@ -769,7 +775,10 @@ fn the_braced_record_is_physically_a_struct() {
     // tags 17 and 18). A braced record produces a STRUCT — asserted
     // on the envelope itself for all three interpreters' shared
     // path, and on the canonical seal below.
-    use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
+    use rastok::connector::exchange::EnvelopeDraft;
+    use rastok::connector::exchange::IngressProposal;
+    use rastok::connector::exchange::IngressProvenance;
+    use rastok::connector::exchange::IngressSequence;
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
@@ -882,7 +891,10 @@ lab g {
 fn an_empty_brace_is_an_empty_record() {
     // `{}` builds an EMPTY struct — never an identity (identity is
     // `.`). The injected payload must not leak through.
-    use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
+    use rastok::connector::exchange::EnvelopeDraft;
+    use rastok::connector::exchange::IngressProposal;
+    use rastok::connector::exchange::IngressProvenance;
+    use rastok::connector::exchange::IngressSequence;
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
@@ -922,7 +934,10 @@ fn an_empty_brace_is_an_empty_record() {
 fn a_whole_data_write_is_the_payload_itself() {
     // `{data = 1}` is the ENVELOPE form: the payload becomes the
     // integer 1 — never a struct with a field named `data`.
-    use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
+    use rastok::connector::exchange::EnvelopeDraft;
+    use rastok::connector::exchange::IngressProposal;
+    use rastok::connector::exchange::IngressProvenance;
+    use rastok::connector::exchange::IngressSequence;
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
@@ -1027,7 +1042,10 @@ fn identity_re_emits_the_materialized_envelope_whole() {
     // `out = .` — the exact re-emission: payload AND writable
     // metadata cross untouched. (The encoded twin lives in
     // `data_materializes_only_on_demand`.)
-    use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
+    use rastok::connector::exchange::EnvelopeDraft;
+    use rastok::connector::exchange::IngressProposal;
+    use rastok::connector::exchange::IngressProvenance;
+    use rastok::connector::exchange::IngressSequence;
     use rastok::envelope::{Data, MetaValue, Namespace, Scalar, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
@@ -1083,7 +1101,10 @@ fn an_empty_nested_record_is_a_value_not_an_absence() {
     // `parent = {}` writes an EMPTY STRUCT under `parent` — a
     // leaf-splice alone would write nothing and the field would
     // vanish. Every nesting and both braced forms hold it.
-    use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
+    use rastok::connector::exchange::EnvelopeDraft;
+    use rastok::connector::exchange::IngressProposal;
+    use rastok::connector::exchange::IngressProvenance;
+    use rastok::connector::exchange::IngressSequence;
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
@@ -1250,15 +1271,16 @@ lab g {
 
 #[test]
 fn a_defective_sheet_is_held_at_the_door() {
-    use rastok::contract::{
-        ConnectorContract, PortContract, PortDataType, PortTypeRule, SheetDefect,
+    use rastok::connector::contract::{
+        ConnectorContract, PortContract, PortDataType, PortTypeRule,
     };
+    use rastok::contract::ContractValidationError;
     use rastok::node::PortDirection;
     const MISDIRECTED: ConnectorContract = ConnectorContract {
         id: "org.rastok.test/bad@1",
         name: "Bad",
         roles: rastok::connector::ConnectorDirection::Outbound,
-        exchange: rastok::connector::ConnectorExchange::Call,
+        exchange: rastok::connector::ExchangeKind::Call,
         ports: &[PortContract {
             name: "out",
             direction: PortDirection::Input,
@@ -1272,7 +1294,7 @@ fn a_defective_sheet_is_held_at_the_door() {
         id: "org.rastok.test/bad@1",
         name: "Bad",
         roles: rastok::connector::ConnectorDirection::Outbound,
-        exchange: rastok::connector::ConnectorExchange::Call,
+        exchange: rastok::connector::ExchangeKind::Call,
         ports: &[
             PortContract {
                 name: "request",
@@ -1298,7 +1320,7 @@ fn a_defective_sheet_is_held_at_the_door() {
             .expect("the standard catalogue holds")
             .try_with(MISDIRECTED)
             .unwrap_err(),
-        SheetDefect::MisdirectedDefault("out")
+        ContractValidationError::MisdirectedDefault("out")
     );
     // One name in both directions.
     assert_eq!(
@@ -1306,12 +1328,12 @@ fn a_defective_sheet_is_held_at_the_door() {
             .expect("the standard catalogue holds")
             .try_with(CONFLICTING)
             .unwrap_err(),
-        SheetDefect::ConflictingPort("request")
+        ContractValidationError::ConflictingPort("request")
     );
     // The shipped M0 sheet passes its own door.
     ContractCatalog::try_m0()
         .expect("the standard catalogue holds")
-        .try_with(rastok::stdlib::PROCESS)
+        .try_with(rastok::connector::stdlib::PROCESS)
         .expect("the Process sheet is valid");
 }
 
@@ -1320,7 +1342,10 @@ fn boundary_outputs_carry_their_port() {
     // Two named outputs are two different FACTS: the business API
     // answers (port, envelope) pairs, not an anonymous stream the
     // caller would have to re-derive from the plan.
-    use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
+    use rastok::connector::exchange::EnvelopeDraft;
+    use rastok::connector::exchange::IngressProposal;
+    use rastok::connector::exchange::IngressProvenance;
+    use rastok::connector::exchange::IngressSequence;
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
@@ -1374,7 +1399,10 @@ fn a_raw_ingress_holds_the_pin_before_any_append() {
     // The reviewer's escape: the raw API accepted a wrong-typed
     // draft and JOURNALED it. The pins are judged before any append
     // — replay never meets a record a pin refuses.
-    use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
+    use rastok::connector::exchange::EnvelopeDraft;
+    use rastok::connector::exchange::IngressProposal;
+    use rastok::connector::exchange::IngressProvenance;
+    use rastok::connector::exchange::IngressSequence;
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
@@ -1804,7 +1832,10 @@ lab g {
 
 #[test]
 fn the_bare_data_relay_preserves_the_logical_type() {
-    use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
+    use rastok::connector::exchange::EnvelopeDraft;
+    use rastok::connector::exchange::IngressProposal;
+    use rastok::connector::exchange::IngressProvenance;
+    use rastok::connector::exchange::IngressSequence;
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
@@ -1857,7 +1888,10 @@ fn the_bare_data_relay_preserves_the_logical_type() {
 
 #[test]
 fn an_ingress_pin_violation_is_a_named_error() {
-    use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
+    use rastok::connector::exchange::EnvelopeDraft;
+    use rastok::connector::exchange::IngressProposal;
+    use rastok::connector::exchange::IngressProvenance;
+    use rastok::connector::exchange::IngressSequence;
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
@@ -2071,7 +2105,10 @@ fn the_struct_witness_survives_every_equivalent_spelling() {
     // The logical type rides the VALUE through the Rastok expression bridge — not
     // an AST special case: a local binding and a ternary preserve it
     // exactly like the bare relay.
-    use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
+    use rastok::connector::exchange::EnvelopeDraft;
+    use rastok::connector::exchange::IngressProposal;
+    use rastok::connector::exchange::IngressProvenance;
+    use rastok::connector::exchange::IngressSequence;
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
@@ -2188,7 +2225,10 @@ fn an_encoded_bare_relay_passes_the_representation_through() {
     // representation — bytes, encoding, and content-type hint —
     // before any Rastok expression binding materializes. An Avro relay therefore
     // works; reading an Avro FIELD still faults, typed.
-    use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
+    use rastok::connector::exchange::EnvelopeDraft;
+    use rastok::connector::exchange::IngressProposal;
+    use rastok::connector::exchange::IngressProvenance;
+    use rastok::connector::exchange::IngressSequence;
     use rastok::envelope::{Data, Encoding};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
@@ -2342,7 +2382,10 @@ fn data_materializes_only_on_demand() {
     // An expression that never reads `data` must never force an
     // opaque payload to decode: a `true` guard, a state write, and
     // an identity emission all leave Avro bytes untouched.
-    use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
+    use rastok::connector::exchange::EnvelopeDraft;
+    use rastok::connector::exchange::IngressProposal;
+    use rastok::connector::exchange::IngressProvenance;
+    use rastok::connector::exchange::IngressSequence;
     use rastok::envelope::{Data, Encoding};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
@@ -2427,7 +2470,10 @@ fn short_circuits_never_demand_the_data() {
     // The demand comes from the EVALUATOR, not a pre-scan of the
     // tree: a branch the evaluation never takes must never force an
     // opaque payload to decode, even though `data` appears in it.
-    use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
+    use rastok::connector::exchange::EnvelopeDraft;
+    use rastok::connector::exchange::IngressProposal;
+    use rastok::connector::exchange::IngressProvenance;
+    use rastok::connector::exchange::IngressSequence;
     use rastok::envelope::{Data, Encoding, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
@@ -2517,7 +2563,10 @@ fn the_carry_is_as_lazy_as_the_name() {
     // taken ternary branch behave exactly like `out = data` — the whole
     // payload ships its REPRESENTATION (bytes, encoding, MIME),
     // opaque or not, however the carry is written.
-    use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
+    use rastok::connector::exchange::EnvelopeDraft;
+    use rastok::connector::exchange::IngressProposal;
+    use rastok::connector::exchange::IngressProvenance;
+    use rastok::connector::exchange::IngressSequence;
     use rastok::envelope::{Data, Encoding, Namespace};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
@@ -2619,7 +2668,10 @@ fn an_inspection_then_identity_ships_the_filled_cell() {
     // emitted data carries the FILLED cell, so the next node's
     // demand is a cache read — once per envelope, not once per
     // transaction.
-    use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
+    use rastok::connector::exchange::EnvelopeDraft;
+    use rastok::connector::exchange::IngressProposal;
+    use rastok::connector::exchange::IngressProvenance;
+    use rastok::connector::exchange::IngressSequence;
     use rastok::envelope::{Data, Encoding, Namespace};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
@@ -2711,7 +2763,10 @@ fn struct_equality_is_by_name_like_the_seal() {
 
 #[test]
 fn a_duplicated_struct_field_refuses_at_the_door() {
-    use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
+    use rastok::connector::exchange::EnvelopeDraft;
+    use rastok::connector::exchange::IngressProposal;
+    use rastok::connector::exchange::IngressProvenance;
+    use rastok::connector::exchange::IngressSequence;
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;
@@ -2756,7 +2811,10 @@ fn a_duplicated_struct_field_refuses_at_the_door() {
 
 #[test]
 fn the_conformance_judgement_is_matchable() {
-    use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
+    use rastok::connector::exchange::EnvelopeDraft;
+    use rastok::connector::exchange::IngressProposal;
+    use rastok::connector::exchange::IngressProvenance;
+    use rastok::connector::exchange::IngressSequence;
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;

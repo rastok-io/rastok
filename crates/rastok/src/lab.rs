@@ -7,22 +7,30 @@
 //! a green scenario is a statement about the machine, not about a
 //! test double.
 
-use crate::boundary::{
-    CallConnectorDriver, CallOpen, CallStart, Completion, EnvelopeDraft, IngressProposal,
-    IngressProvenance, IngressSequence, OutboundConnectorDriver, RequestPreparation, Response,
-    SchedulerCompletion,
-};
 use crate::compiler::hir::{
     Cmp, EmitValue, ExpectTarget, Expectation, InjectionTarget, Lab, Mock, Quantifier, Scenario,
     ScenarioStep,
 };
-use crate::connector::{ConnectorDirection, ContractId};
+use crate::connector::ConnectorDirection;
+use crate::connector::ContractId;
+use crate::connector::driver::Driver;
+use crate::connector::driver::Outbound;
+use crate::connector::driver::OutboundCall;
+use crate::connector::exchange::CallOpen;
+use crate::connector::exchange::CallResponse;
+use crate::connector::exchange::CallStart;
+use crate::connector::exchange::Completion;
+use crate::connector::exchange::EnvelopeDraft;
+use crate::connector::exchange::IngressProposal;
+use crate::connector::exchange::IngressProvenance;
+use crate::connector::exchange::IngressSequence;
+use crate::connector::exchange::RequestPreparation;
+use crate::connector::exchange::SchedulerCompletion;
 #[cfg(test)]
 use crate::connectors::ProcessRequestSettings;
 use crate::connectors::{
-    BoundConnectorDriver, ConnectorDriverFactory, DriverFactoryError, DriverRegistry,
-    HttpServerLabInput, RuntimeBindings, ScriptedConnectorProtocol, ScriptedProtocolBinder,
-    inbound_lab_factories, scripted_protocol_binders,
+    CallProtocol, DriverFactory, DriverFactoryError, DriverRegistry, HttpServerLabInput,
+    RuntimeDrivers, ScriptedProtocolBinder, inbound_lab_factories, scripted_protocol_binders,
 };
 use crate::envelope::{Data, Envelope, Namespace, Value, WriteTarget};
 use crate::journal::{MemJournal, Record};
@@ -838,7 +846,7 @@ fn injection_port<'plan>(
                 .find(|(_, node)| &node.path == path)
                 .ok_or_else(|| format!("the injection names no source Connector `{path}`"))?;
             let supported = node.connector().is_some_and(|spec| {
-                spec.contract.as_str() == crate::connector::HTTP_SERVER_CONNECTOR_ID
+                spec.contract.as_str() == crate::connector::stdlib::HTTP_SERVER_CONNECTOR_ID
                     && matches!(spec.attribute("mode"), Some(crate::plan::AttrSetting::Word(mode)) if mode == "ack")
                     && port.name() == "out"
             });
@@ -1072,8 +1080,8 @@ impl core::fmt::Debug for MockConnectorFactory {
     }
 }
 
-impl ConnectorDriverFactory for MockConnectorFactory {
-    fn connector_id(&self) -> &ContractId {
+impl DriverFactory for MockConnectorFactory {
+    fn contract_id(&self) -> &ContractId {
         &self.id
     }
 
@@ -1081,20 +1089,20 @@ impl ConnectorDriverFactory for MockConnectorFactory {
         ConnectorDirection::Outbound
     }
 
-    fn bind<'plan>(
+    fn create<'plan>(
         &self,
         plan: &'plan ValidatedExecutionPlan,
         nodes: &[node::Path],
-    ) -> Result<Box<dyn BoundConnectorDriver + 'plan>, DriverFactoryError> {
-        self.bind_with_boot(plan, nodes, &crate::deployment::BootBindings::empty())
+    ) -> Result<Box<dyn Driver + 'plan>, DriverFactoryError> {
+        self.create_with_boot(plan, nodes, &crate::deployment::BootBindings::empty())
     }
 
-    fn bind_with_boot<'plan>(
+    fn create_with_boot<'plan>(
         &self,
         plan: &'plan ValidatedExecutionPlan,
         nodes: &[node::Path],
         boot: &crate::deployment::BootBindings,
-    ) -> Result<Box<dyn BoundConnectorDriver + 'plan>, DriverFactoryError> {
+    ) -> Result<Box<dyn Driver + 'plan>, DriverFactoryError> {
         let protocol = (self.bind_protocol)(plan, nodes, boot)?;
         Ok(Box::new(MockOutboundConnectorDriver {
             plan,
@@ -1111,7 +1119,7 @@ fn mock_bindings<'plan>(
     mocks: BTreeMap<node::Path, Mock>,
     boot: &crate::deployment::BootBindings,
     source_input: Rc<RefCell<HttpServerLabInput>>,
-) -> Result<(RuntimeBindings<'plan>, MockFaults), String> {
+) -> Result<(RuntimeDrivers<'plan>, MockFaults), String> {
     let faults = Rc::new(RefCell::new(Vec::new()));
     let mocks = share_mocks(mocks);
     let mut registry = DriverRegistry::default();
@@ -1137,7 +1145,7 @@ fn mock_bindings<'plan>(
             .try_with(factory)
             .map_err(|error| error.to_string())?;
     }
-    let bindings = RuntimeBindings::try_new_with_boot(plan, &registry, boot)
+    let bindings = RuntimeDrivers::prepare_with_boot(plan, &registry, boot)
         .map_err(|error| error.to_string())?;
     Ok((bindings, faults))
 }
@@ -1158,8 +1166,8 @@ fn share_mocks(mocks: BTreeMap<node::Path, Mock>) -> SharedMocks {
 struct MockOutboundConnectorDriver<'plan> {
     plan: &'plan ValidatedExecutionPlan,
     mocks: SharedMocks,
-    protocol: Box<dyn ScriptedConnectorProtocol>,
-    pending: Vec<Response>,
+    protocol: Box<dyn CallProtocol>,
+    pending: Vec<CallResponse>,
     faults: MockFaults,
 }
 
@@ -1437,7 +1445,7 @@ impl MockOutboundConnectorDriver<'_> {
     }
 }
 
-impl CallConnectorDriver for MockOutboundConnectorDriver<'_> {
+impl OutboundCall for MockOutboundConnectorDriver<'_> {
     fn prepare_request(
         &mut self,
         connector: &node::Path,
@@ -1457,7 +1465,7 @@ impl CallConnectorDriver for MockOutboundConnectorDriver<'_> {
 
     fn start(&mut self, intent: &CallOpen, request: &Envelope) -> CallStart {
         if let Some(completion) = self.answer(intent, request) {
-            self.pending.push(Response {
+            self.pending.push(CallResponse {
                 call_id: intent.call_id,
                 completion,
             });
@@ -1465,17 +1473,17 @@ impl CallConnectorDriver for MockOutboundConnectorDriver<'_> {
         CallStart::Started
     }
 
-    fn events(&mut self) -> Vec<Response> {
+    fn poll_responses(&mut self) -> Vec<CallResponse> {
         std::mem::take(&mut self.pending)
     }
 }
 
-impl BoundConnectorDriver for MockOutboundConnectorDriver<'_> {
-    fn inbound(&mut self) -> Option<&mut dyn crate::boundary::InboundConnectorDriver> {
+impl Driver for MockOutboundConnectorDriver<'_> {
+    fn inbound(&mut self) -> Option<&mut dyn crate::connector::driver::Ingress> {
         None
     }
 
-    fn outbound(&mut self) -> Option<&mut dyn OutboundConnectorDriver> {
+    fn outbound(&mut self) -> Option<&mut dyn Outbound> {
         Some(self)
     }
 }
@@ -1522,8 +1530,8 @@ mod tests {
             crate::envelope::Meta::new(crate::envelope::MetaSys::root(id, 1)),
             Data::encoded(crate::envelope::Encoding::ArrowIpc, *b"\x01\x02"),
         );
-        let prepared = crate::boundary::PreparedRequest::seal(vec![1]);
-        let intent = crate::boundary::CallOpen {
+        let prepared = crate::connector::exchange::PreparedRequest::seal(vec![1]);
+        let intent = crate::connector::exchange::CallOpen {
             call_id: crate::journal::ids::call_id(
                 crate::journal::ids::delivery_id(".in>echo.in", id),
                 prepared.digest(),

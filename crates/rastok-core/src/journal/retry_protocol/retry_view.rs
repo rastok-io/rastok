@@ -3,8 +3,8 @@
 //! independently checked when accepting journal records.
 
 use super::*;
-use crate::boundary::CallOpen;
 use crate::canonical;
+use crate::connector::exchange::CallOpen;
 use crate::instance;
 
 use crate::journal::{DeadlineKind, Emission, deadline::Deadlines, ids};

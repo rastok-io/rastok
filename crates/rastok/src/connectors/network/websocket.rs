@@ -4,13 +4,27 @@
 //! Session intents. Hyper/Tokio/Tungstenite values remain on the private
 //! network thread, and every finite queue is charged by the shared pump.
 
-use crate::boundary::{
-    AdmittedIngress, EnvelopeDraft, InboundConnectorDriver, InboundExchangeId, InboundSession,
-    IngressProposal, IngressProposalHandle, IngressProvenance, IngressRejection, IngressSequence,
-    OutboundConnectorDriver, RequestPreparation, RetainedProposal, SchedulerCompletion,
-    SessionConnectorDriver, SessionId, SessionObservation, SessionOpen, SessionStart, SessionWrite,
-    WebSocketExit,
-};
+use crate::connector::driver::Ingress;
+use crate::connector::driver::Outbound;
+use crate::connector::driver::Session;
+use crate::connector::exchange::AdmittedIngress;
+use crate::connector::exchange::EnvelopeDraft;
+use crate::connector::exchange::InboundExchangeId;
+use crate::connector::exchange::InboundSession;
+use crate::connector::exchange::IngressProposal;
+use crate::connector::exchange::IngressProposalHandle;
+use crate::connector::exchange::IngressProvenance;
+use crate::connector::exchange::IngressRejection;
+use crate::connector::exchange::IngressSequence;
+use crate::connector::exchange::PendingIngress;
+use crate::connector::exchange::RequestPreparation;
+use crate::connector::exchange::SchedulerCompletion;
+use crate::connector::exchange::SessionId;
+use crate::connector::exchange::SessionObservation;
+use crate::connector::exchange::SessionOpen;
+use crate::connector::exchange::SessionStart;
+use crate::connector::exchange::SessionWrite;
+use crate::connector::stdlib::WebSocketExit;
 use crate::connectors::network::pump::{
     EngineInput, EngineLimits, EventPoll, EventReservation, EventSender, HostedNetworkEngine,
     NetworkRuntime, ReserveError, SubmitError,
@@ -126,10 +140,10 @@ pub struct WebSocketClientFactory {
 
 impl WebSocketClientFactory {
     /// Constructs a client factory without observing DNS or the network.
-    pub fn try_new(config: WebSocketConfig) -> Result<Self, crate::connector::ConnectorIdError> {
+    pub fn try_new(config: WebSocketConfig) -> Result<Self, crate::connector::ContractIdError> {
         Ok(Self {
             id: crate::connector::ContractId::parse(
-                crate::connector::WEBSOCKET_CLIENT_CONNECTOR_ID,
+                crate::connector::stdlib::WEBSOCKET_CLIENT_CONNECTOR_ID,
             )?,
             config,
         })
@@ -145,18 +159,18 @@ pub struct WebSocketServerFactory {
 
 impl WebSocketServerFactory {
     /// Constructs a server factory without opening a listener.
-    pub fn try_new(config: WebSocketConfig) -> Result<Self, crate::connector::ConnectorIdError> {
+    pub fn try_new(config: WebSocketConfig) -> Result<Self, crate::connector::ContractIdError> {
         Ok(Self {
             id: crate::connector::ContractId::parse(
-                crate::connector::WEBSOCKET_SERVER_CONNECTOR_ID,
+                crate::connector::stdlib::WEBSOCKET_SERVER_CONNECTOR_ID,
             )?,
             config,
         })
     }
 }
 
-impl crate::connectors::ConnectorDriverFactory for WebSocketClientFactory {
-    fn connector_id(&self) -> &crate::connector::ContractId {
+impl crate::connectors::DriverFactory for WebSocketClientFactory {
+    fn contract_id(&self) -> &crate::connector::ContractId {
         &self.id
     }
 
@@ -164,24 +178,22 @@ impl crate::connectors::ConnectorDriverFactory for WebSocketClientFactory {
         crate::connector::ConnectorDirection::InboundAndOutbound
     }
 
-    fn bind<'plan>(
+    fn create<'plan>(
         &self,
         plan: &'plan crate::plan::ValidatedExecutionPlan,
         nodes: &[crate::node::Path],
     ) -> Result<
-        Box<dyn crate::connectors::BoundConnectorDriver + 'plan>,
+        Box<dyn crate::connector::driver::Driver + 'plan>,
         crate::connectors::DriverFactoryError,
     > {
         HostedWebSocket::try_bind_client(plan, nodes, self.config)
-            .map(|driver| {
-                Box::new(driver) as Box<dyn crate::connectors::BoundConnectorDriver + 'plan>
-            })
+            .map(|driver| Box::new(driver) as Box<dyn crate::connector::driver::Driver + 'plan>)
             .map_err(crate::connectors::DriverFactoryError::new)
     }
 }
 
-impl crate::connectors::ConnectorDriverFactory for WebSocketServerFactory {
-    fn connector_id(&self) -> &crate::connector::ContractId {
+impl crate::connectors::DriverFactory for WebSocketServerFactory {
+    fn contract_id(&self) -> &crate::connector::ContractId {
         &self.id
     }
 
@@ -189,18 +201,16 @@ impl crate::connectors::ConnectorDriverFactory for WebSocketServerFactory {
         crate::connector::ConnectorDirection::InboundAndOutbound
     }
 
-    fn bind<'plan>(
+    fn create<'plan>(
         &self,
         plan: &'plan crate::plan::ValidatedExecutionPlan,
         nodes: &[crate::node::Path],
     ) -> Result<
-        Box<dyn crate::connectors::BoundConnectorDriver + 'plan>,
+        Box<dyn crate::connector::driver::Driver + 'plan>,
         crate::connectors::DriverFactoryError,
     > {
         HostedWebSocket::try_bind_server(plan, nodes, self.config)
-            .map(|driver| {
-                Box::new(driver) as Box<dyn crate::connectors::BoundConnectorDriver + 'plan>
-            })
+            .map(|driver| Box::new(driver) as Box<dyn crate::connector::driver::Driver + 'plan>)
             .map_err(crate::connectors::DriverFactoryError::new)
     }
 }
@@ -246,7 +256,7 @@ enum DriverEvent {
 
 #[derive(Debug)]
 struct LiveProposal {
-    proposal: RetainedProposal,
+    proposal: PendingIngress,
     decision: oneshot::Sender<Result<AdmittedIngress, IngressRejection>>,
     _reservation: EventReservation,
 }
@@ -313,23 +323,23 @@ struct HostedWebSocket<'plan> {
     local_addresses: Vec<std::net::SocketAddr>,
 }
 
-impl crate::connectors::BoundConnectorDriver for HostedWebSocket<'_> {
-    fn inbound(&mut self) -> Option<&mut dyn InboundConnectorDriver> {
+impl crate::connector::driver::Driver for HostedWebSocket<'_> {
+    fn inbound(&mut self) -> Option<&mut dyn Ingress> {
         Some(self)
     }
 
-    fn outbound(&mut self) -> Option<&mut dyn OutboundConnectorDriver> {
+    fn outbound(&mut self) -> Option<&mut dyn Outbound> {
         Some(self)
     }
 }
 
-impl InboundConnectorDriver for HostedWebSocket<'_> {
-    fn proposal(&mut self) -> Option<RetainedProposal> {
+impl Ingress for HostedWebSocket<'_> {
+    fn poll_proposal(&mut self) -> Option<PendingIngress> {
         self.poll_events();
         self.pending.front().map(|live| live.proposal.clone())
     }
 
-    fn decide(
+    fn notify_admission(
         &mut self,
         reference: IngressProposalHandle,
         decision: Result<AdmittedIngress, IngressRejection>,
@@ -346,17 +356,17 @@ impl InboundConnectorDriver for HostedWebSocket<'_> {
     }
 }
 
-impl OutboundConnectorDriver for HostedWebSocket<'_> {
-    fn call(&mut self) -> Option<&mut dyn crate::boundary::CallConnectorDriver> {
+impl Outbound for HostedWebSocket<'_> {
+    fn call(&mut self) -> Option<&mut dyn crate::connector::driver::OutboundCall> {
         None
     }
 
-    fn session(&mut self) -> Option<&mut dyn SessionConnectorDriver> {
+    fn session(&mut self) -> Option<&mut dyn Session> {
         Some(self)
     }
 }
 
-impl SessionConnectorDriver for HostedWebSocket<'_> {
+impl Session for HostedWebSocket<'_> {
     fn prepare_session_open(
         &mut self,
         connector: &crate::node::Path,
@@ -365,9 +375,9 @@ impl SessionConnectorDriver for HostedWebSocket<'_> {
     ) -> RequestPreparation {
         match self.protocol.prepare_open(connector, data, settings) {
             Ok(prepared) => RequestPreparation::Prepared(prepared),
-            Err(exit) => {
-                RequestPreparation::Rejected(crate::boundary::Completion::websocket_exit(exit))
-            }
+            Err(exit) => RequestPreparation::Rejected(
+                crate::connector::exchange::Completion::websocket_exit(exit),
+            ),
         }
     }
 
@@ -375,8 +385,8 @@ impl SessionConnectorDriver for HostedWebSocket<'_> {
         &mut self,
         _: &crate::node::Path,
         completion: SchedulerCompletion,
-    ) -> crate::boundary::Completion {
-        crate::boundary::Completion::websocket_exit(match completion {
+    ) -> crate::connector::exchange::Completion {
+        crate::connector::exchange::Completion::websocket_exit(match completion {
             SchedulerCompletion::TimeoutExpired => WebSocketExit::TimeoutExpired,
             SchedulerCompletion::OutcomeUnknown => WebSocketExit::OutcomeUnknown,
         })
@@ -445,9 +455,9 @@ impl SessionConnectorDriver for HostedWebSocket<'_> {
     ) -> RequestPreparation {
         match self.protocol.prepare_message(connector, data) {
             Ok(prepared) => RequestPreparation::Prepared(prepared),
-            Err(exit) => {
-                RequestPreparation::Rejected(crate::boundary::Completion::websocket_exit(exit))
-            }
+            Err(exit) => RequestPreparation::Rejected(
+                crate::connector::exchange::Completion::websocket_exit(exit),
+            ),
         }
     }
 
@@ -495,7 +505,7 @@ impl SessionConnectorDriver for HostedWebSocket<'_> {
         }
     }
 
-    fn session_events(&mut self) -> Vec<SessionObservation> {
+    fn poll_observations(&mut self) -> Vec<SessionObservation> {
         self.poll_events();
         std::mem::take(&mut self.session_events)
     }
@@ -519,9 +529,10 @@ impl<'plan> HostedWebSocket<'plan> {
         nodes: &[crate::node::Path],
         config: WebSocketConfig,
     ) -> Result<Self, String> {
-        let id =
-            crate::connector::ContractId::parse(crate::connector::WEBSOCKET_CLIENT_CONNECTOR_ID)
-                .map_err(|error| error.to_string())?;
+        let id = crate::connector::ContractId::parse(
+            crate::connector::stdlib::WEBSOCKET_CLIENT_CONNECTOR_ID,
+        )
+        .map_err(|error| error.to_string())?;
         let protocol =
             WebSocketLabDriver::try_bind(plan, nodes, &id).map_err(|error| error.to_string())?;
         let mut plans = BTreeMap::new();
@@ -555,9 +566,10 @@ impl<'plan> HostedWebSocket<'plan> {
         nodes: &[crate::node::Path],
         config: WebSocketConfig,
     ) -> Result<Self, String> {
-        let id =
-            crate::connector::ContractId::parse(crate::connector::WEBSOCKET_SERVER_CONNECTOR_ID)
-                .map_err(|error| error.to_string())?;
+        let id = crate::connector::ContractId::parse(
+            crate::connector::stdlib::WEBSOCKET_SERVER_CONNECTOR_ID,
+        )
+        .map_err(|error| error.to_string())?;
         let protocol =
             WebSocketLabDriver::try_bind(plan, nodes, &id).map_err(|error| error.to_string())?;
         let routes = bind_server_routes(plan, nodes).map_err(|error| error.to_string())?;
@@ -1791,7 +1803,7 @@ async fn propose_message(
     })?;
     let reference = next_proposal_ref()?;
     let (decision, accepted) = oneshot::channel();
-    let proposal = RetainedProposal {
+    let proposal = PendingIngress {
         handle: reference,
         proposal: IngressProposal {
             provenance: IngressProvenance::single(connector.clone()),
@@ -2139,7 +2151,7 @@ async fn progress_h3_peer(
                     selected.clone(),
                 );
                 let (decision, accepted) = oneshot::channel();
-                let proposal = RetainedProposal {
+                let proposal = PendingIngress {
                     handle: IngressProposalHandle::new(reference_value),
                     proposal: IngressProposal {
                         provenance: IngressProvenance::single(route.node.clone()),
@@ -2515,7 +2527,7 @@ async fn drain_h3_server_messages(
         let reservation = events.reserve(bytes.len()).await.map_err(|_| ())?;
         let reference = next_proposal_ref().map_err(|_| ())?;
         let (decision, accepted) = oneshot::channel();
-        let proposal = RetainedProposal {
+        let proposal = PendingIngress {
             handle: reference,
             proposal: IngressProposal {
                 provenance: IngressProvenance::single(live.route.node.clone()),
@@ -2837,7 +2849,7 @@ async fn serve_handshake(
         ext: ext.clone(),
     };
     let (decision, accepted) = oneshot::channel();
-    let proposal = RetainedProposal {
+    let proposal = PendingIngress {
         handle: reference,
         proposal: IngressProposal {
             provenance: IngressProvenance::single(route.node.clone()),
@@ -3261,10 +3273,10 @@ graph websocket : App {{
         .plan
     }
 
-    fn wait_for_proposal(server: &mut HostedWebSocket<'_>) -> RetainedProposal {
+    fn wait_for_proposal(server: &mut HostedWebSocket<'_>) -> PendingIngress {
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
-            if let Some(proposal) = server.proposal() {
+            if let Some(proposal) = server.poll_proposal() {
                 return proposal;
             }
             assert!(
@@ -3286,7 +3298,7 @@ graph websocket : App {{
         let deadline = Instant::now() + Duration::from_secs(3);
         let mut observed = Vec::new();
         loop {
-            observed.extend(server.session_events());
+            observed.extend(server.poll_observations());
             if observed.len() >= count {
                 return observed;
             }
@@ -3447,7 +3459,7 @@ graph websocket : App {{
             "the peer cannot observe upgrade success before causal acceptance"
         );
         let session = SessionId::new(Id::from_bytes([9; 16]));
-        server.decide(
+        server.notify_admission(
             opening.handle,
             Ok(AdmittedIngress {
                 envelope: Id::from_bytes([7; 16]),
@@ -3464,7 +3476,7 @@ graph websocket : App {{
             message.proposal.draft.data.materialized_value(),
             Some(&Value::Text(String::from("hello")))
         );
-        server.decide(
+        server.notify_admission(
             message.handle,
             Ok(AdmittedIngress {
                 envelope: Id::from_bytes([8; 16]),
@@ -3485,7 +3497,7 @@ graph websocket : App {{
         peer.recv_timeout(Duration::from_secs(3))
             .expect("the peer completes")
             .expect("the peer observes a clean close");
-        assert!(server.session_events().is_empty());
+        assert!(server.poll_observations().is_empty());
     }
 
     #[test]
@@ -3514,7 +3526,7 @@ graph websocket : App {{
         let alpha = client_h1_message(address, "alpha", alpha_closing, true);
         let alpha_open = wait_for_proposal(&mut server);
         let alpha_session = SessionId::new(Id::from_bytes([0x51; 16]));
-        server.decide(
+        server.notify_admission(
             alpha_open.handle,
             Ok(AdmittedIngress {
                 envelope: Id::from_bytes([0x52; 16]),
@@ -3530,7 +3542,7 @@ graph websocket : App {{
             alpha_message.proposal.draft.data.materialized_value(),
             Some(&Value::Text(String::from("alpha")))
         );
-        server.decide(
+        server.notify_admission(
             alpha_message.handle,
             Ok(AdmittedIngress {
                 envelope: Id::from_bytes([0x53; 16]),
@@ -3542,7 +3554,7 @@ graph websocket : App {{
         let beta = client_h1_message(address, "beta", beta_closing, true);
         let beta_open = wait_for_proposal(&mut server);
         let beta_session = SessionId::new(Id::from_bytes([0x61; 16]));
-        server.decide(
+        server.notify_admission(
             beta_open.handle,
             Ok(AdmittedIngress {
                 envelope: Id::from_bytes([0x62; 16]),
@@ -3559,7 +3571,7 @@ graph websocket : App {{
             Some(&Value::Text(String::from("beta")))
         );
         assert_ne!(alpha_session, beta_session);
-        server.decide(
+        server.notify_admission(
             beta_message.handle,
             Ok(AdmittedIngress {
                 envelope: Id::from_bytes([0x63; 16]),
@@ -3585,7 +3597,7 @@ graph websocket : App {{
         beta.recv_timeout(Duration::from_secs(3))
             .expect("beta completes")
             .expect("beta closes cleanly");
-        assert!(server.session_events().is_empty());
+        assert!(server.poll_observations().is_empty());
     }
 
     #[test]
@@ -3603,7 +3615,7 @@ graph websocket : App {{
         let peer = client_h1_message(address, "before-loss", dropping, false);
         let opening = wait_for_proposal(&mut server);
         let session = SessionId::new(Id::from_bytes([0x71; 16]));
-        server.decide(
+        server.notify_admission(
             opening.handle,
             Ok(AdmittedIngress {
                 envelope: Id::from_bytes([0x72; 16]),
@@ -3611,7 +3623,7 @@ graph websocket : App {{
             }),
         );
         let message = wait_for_proposal(&mut server);
-        server.decide(
+        server.notify_admission(
             message.handle,
             Ok(AdmittedIngress {
                 envelope: Id::from_bytes([0x73; 16]),
@@ -3634,7 +3646,7 @@ graph websocket : App {{
             exit.data.materialized_value(),
             Some(Value::TaggedUnion(value)) if value.case == "TransportLost"
         ));
-        assert!(server.session_events().is_empty());
+        assert!(server.poll_observations().is_empty());
     }
 
     #[test]
@@ -3652,7 +3664,7 @@ graph websocket : App {{
         let peer = client_h1_message(address, "hello", releasing, true);
         let opening = wait_for_proposal(&mut server);
         let session = SessionId::new(Id::from_bytes([0x74; 16]));
-        server.decide(
+        server.notify_admission(
             opening.handle,
             Ok(AdmittedIngress {
                 envelope: Id::from_bytes([0x75; 16]),
@@ -3674,12 +3686,12 @@ graph websocket : App {{
                     && value.payload == vec![(String::from("limit"), Value::Uint(4))]
         ));
         assert!(
-            server.proposal().is_none(),
+            server.poll_proposal().is_none(),
             "no oversized message is admitted"
         );
         let _ = release_peer.send(());
         let _ = peer.recv_timeout(Duration::from_secs(3));
-        assert!(server.session_events().is_empty());
+        assert!(server.poll_observations().is_empty());
     }
 
     #[test]
@@ -3916,10 +3928,10 @@ graph websocket : App {
 
         let deadline = Instant::now() + Duration::from_secs(5);
         let opening = loop {
-            if let Some(proposal) = server.proposal() {
+            if let Some(proposal) = server.poll_proposal() {
                 break proposal;
             }
-            let client_events = client.session_events();
+            let client_events = client.poll_observations();
             assert!(
                 client_events.is_empty(),
                 "the HTTP/3 client failed before the server proposal: {client_events:?}"
@@ -3931,7 +3943,7 @@ graph websocket : App {
             std::thread::yield_now();
         };
         let server_session = SessionId::new(Id::from_bytes([0x32; 16]));
-        server.decide(
+        server.notify_admission(
             opening.handle,
             Ok(AdmittedIngress {
                 envelope: Id::from_bytes([0x33; 16]),
@@ -3941,7 +3953,7 @@ graph websocket : App {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             if client
-                .session_events()
+                .poll_observations()
                 .iter()
                 .any(|event| matches!(event, SessionObservation::Opened(session) if *session == client_session))
             {
@@ -3959,7 +3971,7 @@ graph websocket : App {
             message.proposal.session,
             Some(InboundSession::Message(server_session))
         );
-        server.decide(
+        server.notify_admission(
             message.handle,
             Ok(AdmittedIngress {
                 envelope: Id::from_bytes([0x34; 16]),
@@ -3977,8 +3989,8 @@ graph websocket : App {
             client_exit,
             SessionObservation::Exited { session, .. } if session == client_session
         ));
-        assert!(server.session_events().is_empty());
-        assert!(client.session_events().is_empty());
+        assert!(server.poll_observations().is_empty());
+        assert!(client.poll_observations().is_empty());
     }
 
     #[test]
@@ -4004,9 +4016,10 @@ graph websocket : App {
         .expect("the WebSocketClient source checks")
         .plan;
         let node = crate::node::Path::new(["socket"]).expect("the path is valid");
-        let id =
-            crate::connector::ContractId::parse(crate::connector::WEBSOCKET_CLIENT_CONNECTOR_ID)
-                .expect("the id is canonical");
+        let id = crate::connector::ContractId::parse(
+            crate::connector::stdlib::WEBSOCKET_CLIENT_CONNECTOR_ID,
+        )
+        .expect("the id is canonical");
         let binding = WebSocketLabDriver::try_bind(&plan, std::slice::from_ref(&node), &id)
             .expect("the protocol binds");
         let prepared = binding

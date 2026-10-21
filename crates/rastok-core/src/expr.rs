@@ -3210,10 +3210,10 @@ mod tests {
 
     #[test]
     fn a_case_test_preserves_optional_payload_branch_witnesses() {
-        let ty = crate::boundary::process_exit_type().unwrap();
+        let ty = crate::connector::stdlib::process_exit_type().unwrap();
         let signature = Signature::new().with("data", ty);
         let tree = compile("data is Exited", &signature).unwrap();
-        let value = crate::boundary::ProcessExit::Exited {
+        let value = crate::connector::stdlib::ProcessExit::Exited {
             exit_code: 0,
             signal: None,
         }

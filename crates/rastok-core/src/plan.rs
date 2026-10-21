@@ -689,9 +689,9 @@ impl Node {
     pub(crate) fn input_drives_outputs(&self) -> bool {
         !self.connector().is_some_and(|spec| {
             spec.roles.has_inbound()
-                && (spec.exchange == crate::connector::ConnectorExchange::Session
+                && (spec.exchange == crate::connector::ExchangeKind::Session
                     || (!spec.roles.has_outbound()
-                        && spec.exchange == crate::connector::ConnectorExchange::Call))
+                        && spec.exchange == crate::connector::ExchangeKind::Call))
         })
     }
 }
@@ -899,7 +899,7 @@ pub struct ConnectorSpec {
     /// Inbound/outbound runtime roles required by the contract.
     pub roles: crate::connector::ConnectorDirection,
     /// Cardinality and terminal lifecycle required by the contract.
-    pub exchange: crate::connector::ConnectorExchange,
+    pub exchange: crate::connector::ExchangeKind,
     /// Original plan-owned Call guarantee. Non-Call profiles have none.
     /// It is never copied into a CallOpen or inferred from a partner key.
     pub idempotent: Option<PlanConstant>,

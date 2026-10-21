@@ -11,8 +11,11 @@
 //! the rustc shape through [`rastok::render`]. `--resolve-open-api` owns one
 //! deterministic generated source without rewriting authored project files.
 
-use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
 use rastok::compiler::Compilation;
+use rastok::connector::exchange::EnvelopeDraft;
+use rastok::connector::exchange::IngressProposal;
+use rastok::connector::exchange::IngressProvenance;
+use rastok::connector::exchange::IngressSequence;
 use rastok::contract::ContractCatalog;
 use rastok::envelope::{Data, Namespace, Value};
 use rastok::journal::MemJournal;
@@ -498,9 +501,9 @@ fn run(
     };
     let bindings = match boot {
         Some(boot) => {
-            connectors::RuntimeBindings::try_new_with_boot(&compilation.plan, &registry, boot)
+            connectors::RuntimeDrivers::prepare_with_boot(&compilation.plan, &registry, boot)
         }
-        None => connectors::RuntimeBindings::try_new(&compilation.plan, &registry),
+        None => connectors::RuntimeDrivers::prepare(&compilation.plan, &registry),
     };
     let world = match bindings {
         Ok(bindings) => bindings,

@@ -4,12 +4,22 @@
 //! opening a socket. H3/H6 replace only the external-world observation; the
 //! contract ids, shared both-role object and message framing stay put.
 
-use crate::boundary::{
-    AdmittedIngress, InboundConnectorDriver, IngressProposalHandle, IngressRejection,
-    OutboundConnectorDriver, PreparedRequest, RequestPreparation, RetainedProposal,
-    SessionConnectorDriver, SessionId, SessionObservation, SessionOpen, SessionStart, SessionWrite,
-};
-use crate::connector::{ConnectorDirection, ContractId};
+use crate::connector::ConnectorDirection;
+use crate::connector::ContractId;
+use crate::connector::driver::Ingress;
+use crate::connector::driver::Outbound;
+use crate::connector::driver::Session;
+use crate::connector::exchange::AdmittedIngress;
+use crate::connector::exchange::IngressProposalHandle;
+use crate::connector::exchange::IngressRejection;
+use crate::connector::exchange::PendingIngress;
+use crate::connector::exchange::PreparedRequest;
+use crate::connector::exchange::RequestPreparation;
+use crate::connector::exchange::SessionId;
+use crate::connector::exchange::SessionObservation;
+use crate::connector::exchange::SessionOpen;
+use crate::connector::exchange::SessionStart;
+use crate::connector::exchange::SessionWrite;
 use crate::envelope::{Data, Envelope};
 use crate::plan::{AttrSetting, NodeKind, ValidatedExecutionPlan};
 use crate::value::Value;
@@ -169,7 +179,7 @@ pub(crate) fn bind_server_routes(
                     "the WebSocketServer binding path `{path}` is not a connector"
                 ))
             })?;
-        if spec.contract.as_str() != crate::connector::WEBSOCKET_SERVER_CONNECTOR_ID {
+        if spec.contract.as_str() != crate::connector::stdlib::WEBSOCKET_SERVER_CONNECTOR_ID {
             return Err(super::DriverFactoryError::new(format!(
                 "the WebSocketServer binder received `{}` at `{path}`",
                 spec.contract
@@ -411,23 +421,23 @@ impl WebSocketLabDriver {
         &self,
         connector: &crate::node::Path,
         data: &Data,
-    ) -> Result<(String, Vec<u8>), crate::boundary::WebSocketExit> {
+    ) -> Result<(String, Vec<u8>), crate::connector::stdlib::WebSocketExit> {
         let Some(spec) = self.specs.get(connector) else {
-            return Err(crate::boundary::WebSocketExit::ProtocolFailed);
+            return Err(crate::connector::stdlib::WebSocketExit::ProtocolFailed);
         };
         let Some(AttrSetting::Word(codec)) = spec.attribute("codec") else {
-            return Err(crate::boundary::WebSocketExit::ProtocolFailed);
+            return Err(crate::connector::stdlib::WebSocketExit::ProtocolFailed);
         };
-        crate::boundary::network_payload_bytes(codec, data)
+        crate::connector::stdlib::network_payload_bytes(codec, data)
             .map(|bytes| (codec.clone(), bytes))
-            .map_err(|_| crate::boundary::WebSocketExit::DecodeFailed)
+            .map_err(|_| crate::connector::stdlib::WebSocketExit::DecodeFailed)
     }
 
     pub(crate) fn prepare_message(
         &self,
         connector: &crate::node::Path,
         data: &Data,
-    ) -> Result<PreparedRequest, crate::boundary::WebSocketExit> {
+    ) -> Result<PreparedRequest, crate::connector::stdlib::WebSocketExit> {
         let (codec, body) = self.message_bytes(connector, data)?;
         let descriptor = Value::Struct(vec![
             (String::from("body"), Value::Bytes(body)),
@@ -443,12 +453,12 @@ impl WebSocketLabDriver {
         connector: &crate::node::Path,
         data: &Data,
         resolved: &BTreeMap<String, Value>,
-    ) -> Result<PreparedRequest, crate::boundary::WebSocketExit> {
+    ) -> Result<PreparedRequest, crate::connector::stdlib::WebSocketExit> {
         let Some(spec) = self.specs.get(connector) else {
-            return Err(crate::boundary::WebSocketExit::ProtocolFailed);
+            return Err(crate::connector::stdlib::WebSocketExit::ProtocolFailed);
         };
-        if spec.contract.as_str() != crate::connector::WEBSOCKET_CLIENT_CONNECTOR_ID {
-            return Err(crate::boundary::WebSocketExit::ProtocolFailed);
+        if spec.contract.as_str() != crate::connector::stdlib::WEBSOCKET_CLIENT_CONNECTOR_ID {
+            return Err(crate::connector::stdlib::WebSocketExit::ProtocolFailed);
         }
         let (codec, initial_message) = self.message_bytes(connector, data)?;
         let typed_headers =
@@ -456,9 +466,9 @@ impl WebSocketLabDriver {
         let custom_headers = Self::value(spec, resolved, "custom_headers")
             .unwrap_or_else(|| Value::Map(BTreeMap::new()));
         let headers = crate::plan::canonical_request_headers(&typed_headers, &custom_headers)
-            .ok_or(crate::boundary::WebSocketExit::ProtocolFailed)?;
+            .ok_or(crate::connector::stdlib::WebSocketExit::ProtocolFailed)?;
         let Some(Value::Text(url)) = Self::value(spec, resolved, "url") else {
-            return Err(crate::boundary::WebSocketExit::ProtocolFailed);
+            return Err(crate::connector::stdlib::WebSocketExit::ProtocolFailed);
         };
         let descriptor = Value::Struct(vec![
             (
@@ -492,12 +502,12 @@ impl WebSocketLabDriver {
             (
                 String::from("versions"),
                 Self::value(spec, resolved, "versions")
-                    .ok_or(crate::boundary::WebSocketExit::ProtocolFailed)?,
+                    .ok_or(crate::connector::stdlib::WebSocketExit::ProtocolFailed)?,
             ),
             (
                 String::from("zero_rtt"),
                 Self::value(spec, resolved, "zero_rtt")
-                    .ok_or(crate::boundary::WebSocketExit::ProtocolFailed)?,
+                    .ok_or(crate::connector::stdlib::WebSocketExit::ProtocolFailed)?,
             ),
         ]);
         Ok(PreparedRequest::seal(crate::canonical_cbor::encode(
@@ -506,13 +516,13 @@ impl WebSocketLabDriver {
     }
 
     fn preparation(
-        result: Result<PreparedRequest, crate::boundary::WebSocketExit>,
+        result: Result<PreparedRequest, crate::connector::stdlib::WebSocketExit>,
     ) -> RequestPreparation {
         match result {
             Ok(prepared) => RequestPreparation::Prepared(prepared),
-            Err(exit) => {
-                RequestPreparation::Rejected(crate::boundary::Completion::websocket_exit(exit))
-            }
+            Err(exit) => RequestPreparation::Rejected(
+                crate::connector::exchange::Completion::websocket_exit(exit),
+            ),
         }
     }
 
@@ -547,25 +557,30 @@ impl WebSocketLabDriver {
     }
 }
 
-impl InboundConnectorDriver for WebSocketLabDriver {
-    fn proposal(&mut self) -> Option<RetainedProposal> {
+impl Ingress for WebSocketLabDriver {
+    fn poll_proposal(&mut self) -> Option<PendingIngress> {
         None
     }
 
-    fn decide(&mut self, _: IngressProposalHandle, _: Result<AdmittedIngress, IngressRejection>) {}
+    fn notify_admission(
+        &mut self,
+        _: IngressProposalHandle,
+        _: Result<AdmittedIngress, IngressRejection>,
+    ) {
+    }
 }
 
-impl OutboundConnectorDriver for WebSocketLabDriver {
-    fn call(&mut self) -> Option<&mut dyn crate::boundary::CallConnectorDriver> {
+impl Outbound for WebSocketLabDriver {
+    fn call(&mut self) -> Option<&mut dyn crate::connector::driver::OutboundCall> {
         None
     }
 
-    fn session(&mut self) -> Option<&mut dyn SessionConnectorDriver> {
+    fn session(&mut self) -> Option<&mut dyn Session> {
         Some(self)
     }
 }
 
-impl SessionConnectorDriver for WebSocketLabDriver {
+impl Session for WebSocketLabDriver {
     fn prepare_session_open(
         &mut self,
         connector: &crate::node::Path,
@@ -578,14 +593,14 @@ impl SessionConnectorDriver for WebSocketLabDriver {
     fn scheduler_session_completion(
         &mut self,
         _: &crate::node::Path,
-        completion: crate::boundary::SchedulerCompletion,
-    ) -> crate::boundary::Completion {
-        crate::boundary::Completion::websocket_exit(match completion {
-            crate::boundary::SchedulerCompletion::TimeoutExpired => {
-                crate::boundary::WebSocketExit::TimeoutExpired
+        completion: crate::connector::exchange::SchedulerCompletion,
+    ) -> crate::connector::exchange::Completion {
+        crate::connector::exchange::Completion::websocket_exit(match completion {
+            crate::connector::exchange::SchedulerCompletion::TimeoutExpired => {
+                crate::connector::stdlib::WebSocketExit::TimeoutExpired
             }
-            crate::boundary::SchedulerCompletion::OutcomeUnknown => {
-                crate::boundary::WebSocketExit::OutcomeUnknown
+            crate::connector::exchange::SchedulerCompletion::OutcomeUnknown => {
+                crate::connector::stdlib::WebSocketExit::OutcomeUnknown
             }
         })
     }
@@ -608,23 +623,23 @@ impl SessionConnectorDriver for WebSocketLabDriver {
         SessionStart::Started
     }
 
-    fn session_events(&mut self) -> Vec<SessionObservation> {
+    fn poll_observations(&mut self) -> Vec<SessionObservation> {
         Vec::new()
     }
 }
 
-impl super::BoundConnectorDriver for WebSocketLabDriver {
-    fn inbound(&mut self) -> Option<&mut dyn InboundConnectorDriver> {
+impl crate::connector::driver::Driver for WebSocketLabDriver {
+    fn inbound(&mut self) -> Option<&mut dyn Ingress> {
         Some(self)
     }
 
-    fn outbound(&mut self) -> Option<&mut dyn OutboundConnectorDriver> {
+    fn outbound(&mut self) -> Option<&mut dyn Outbound> {
         Some(self)
     }
 }
 
-impl super::ConnectorDriverFactory for WebSocketLabFactory {
-    fn connector_id(&self) -> &ContractId {
+impl super::DriverFactory for WebSocketLabFactory {
+    fn contract_id(&self) -> &ContractId {
         &self.id
     }
 
@@ -632,20 +647,20 @@ impl super::ConnectorDriverFactory for WebSocketLabFactory {
         ConnectorDirection::InboundAndOutbound
     }
 
-    fn bind<'plan>(
+    fn create<'plan>(
         &self,
         plan: &'plan ValidatedExecutionPlan,
         nodes: &[crate::node::Path],
-    ) -> Result<Box<dyn super::BoundConnectorDriver + 'plan>, super::DriverFactoryError> {
-        WebSocketLabDriver::try_bind(plan, nodes, self.connector_id())
-            .map(|driver| Box::new(driver) as Box<dyn super::BoundConnectorDriver + 'plan>)
+    ) -> Result<Box<dyn crate::connector::driver::Driver + 'plan>, super::DriverFactoryError> {
+        WebSocketLabDriver::try_bind(plan, nodes, self.contract_id())
+            .map(|driver| Box::new(driver) as Box<dyn crate::connector::driver::Driver + 'plan>)
     }
 }
 
 pub(crate) fn lab_factory(
     spelling: &str,
-) -> Result<Box<dyn super::ConnectorDriverFactory>, super::DriverFactoryError> {
+) -> Result<Box<dyn super::DriverFactory>, super::DriverFactoryError> {
     ContractId::parse(spelling)
-        .map(|id| Box::new(WebSocketLabFactory { id }) as Box<dyn super::ConnectorDriverFactory>)
+        .map(|id| Box::new(WebSocketLabFactory { id }) as Box<dyn super::DriverFactory>)
         .map_err(|error| super::DriverFactoryError::new(error.to_string()))
 }

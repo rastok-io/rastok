@@ -1,7 +1,13 @@
-use crate::boundary::{
-    CallConnectorDriver, CallId, CallOpen, CallStart, Completion, HttpClientExit,
-    OutboundConnectorDriver, RequestPreparation, Response, SchedulerCompletion,
-};
+use crate::connector::driver::Outbound;
+use crate::connector::driver::OutboundCall;
+use crate::connector::exchange::CallId;
+use crate::connector::exchange::CallOpen;
+use crate::connector::exchange::CallResponse;
+use crate::connector::exchange::CallStart;
+use crate::connector::exchange::Completion;
+use crate::connector::exchange::RequestPreparation;
+use crate::connector::exchange::SchedulerCompletion;
+use crate::connector::stdlib::HttpClientExit;
 use crate::connectors::http_client::{
     HttpBearer, HttpClientPlanBinding, HttpClientRequestSettings, HttpRequest, decode_request,
 };
@@ -123,16 +129,18 @@ impl HttpClientFactory {
     /// # Errors
     ///
     /// The built-in Connector id ceased to be canonical.
-    pub fn try_new(config: HttpClientConfig) -> Result<Self, crate::connector::ConnectorIdError> {
+    pub fn try_new(config: HttpClientConfig) -> Result<Self, crate::connector::ContractIdError> {
         Ok(Self {
-            id: crate::connector::ContractId::parse(crate::connector::HTTP_CLIENT_CONNECTOR_ID)?,
+            id: crate::connector::ContractId::parse(
+                crate::connector::stdlib::HTTP_CLIENT_CONNECTOR_ID,
+            )?,
             config,
         })
     }
 }
 
-impl crate::connectors::ConnectorDriverFactory for HttpClientFactory {
-    fn connector_id(&self) -> &crate::connector::ContractId {
+impl crate::connectors::DriverFactory for HttpClientFactory {
+    fn contract_id(&self) -> &crate::connector::ContractId {
         &self.id
     }
 
@@ -140,34 +148,30 @@ impl crate::connectors::ConnectorDriverFactory for HttpClientFactory {
         crate::connector::ConnectorDirection::Outbound
     }
 
-    fn bind<'plan>(
+    fn create<'plan>(
         &self,
         plan: &'plan crate::plan::ValidatedExecutionPlan,
         nodes: &[crate::node::Path],
     ) -> Result<
-        Box<dyn crate::connectors::BoundConnectorDriver + 'plan>,
+        Box<dyn crate::connector::driver::Driver + 'plan>,
         crate::connectors::DriverFactoryError,
     > {
         HttpClient::try_bind(plan, nodes, self.config)
-            .map(|driver| {
-                Box::new(driver) as Box<dyn crate::connectors::BoundConnectorDriver + 'plan>
-            })
+            .map(|driver| Box::new(driver) as Box<dyn crate::connector::driver::Driver + 'plan>)
             .map_err(crate::connectors::DriverFactoryError::new)
     }
 
-    fn bind_with_boot<'plan>(
+    fn create_with_boot<'plan>(
         &self,
         plan: &'plan crate::plan::ValidatedExecutionPlan,
         nodes: &[crate::node::Path],
         boot: &crate::deployment::BootBindings,
     ) -> Result<
-        Box<dyn crate::connectors::BoundConnectorDriver + 'plan>,
+        Box<dyn crate::connector::driver::Driver + 'plan>,
         crate::connectors::DriverFactoryError,
     > {
         HttpClient::try_bind_with_boot(plan, nodes, self.config, boot)
-            .map(|driver| {
-                Box::new(driver) as Box<dyn crate::connectors::BoundConnectorDriver + 'plan>
-            })
+            .map(|driver| Box::new(driver) as Box<dyn crate::connector::driver::Driver + 'plan>)
             .map_err(crate::connectors::DriverFactoryError::new)
     }
 }
@@ -224,7 +228,7 @@ struct ClientControl(CallId);
 
 #[derive(Debug)]
 struct ClientEvent {
-    response: Response,
+    response: CallResponse,
 }
 
 #[derive(Debug)]
@@ -277,15 +281,15 @@ struct HttpClient<'plan> {
     config: HttpClientConfig,
     engine: HostedNetworkEngine<ClientWork, ClientControl, ClientEvent>,
     cancellations: BTreeMap<CallId, tokio::sync::watch::Sender<bool>>,
-    immediate: Vec<Response>,
+    immediate: Vec<CallResponse>,
 }
 
-impl crate::connectors::BoundConnectorDriver for HttpClient<'_> {
-    fn inbound(&mut self) -> Option<&mut dyn crate::boundary::InboundConnectorDriver> {
+impl crate::connector::driver::Driver for HttpClient<'_> {
+    fn inbound(&mut self) -> Option<&mut dyn crate::connector::driver::Ingress> {
         None
     }
 
-    fn outbound(&mut self) -> Option<&mut dyn OutboundConnectorDriver> {
+    fn outbound(&mut self) -> Option<&mut dyn Outbound> {
         Some(self)
     }
 }
@@ -397,7 +401,7 @@ impl<'plan> HttpClient<'plan> {
                                 // result competes for the same finite budget.
                                 let _completed_work = work.into_inner();
                                 let event = ClientEvent {
-                                    response: Response {
+                                    response: CallResponse {
                                         call_id,
                                         completion,
                                     },
@@ -454,7 +458,7 @@ impl<'plan> HttpClient<'plan> {
     }
 
     fn immediate(&mut self, call_id: CallId, exit: HttpClientExit) {
-        self.immediate.push(Response {
+        self.immediate.push(CallResponse {
             call_id,
             completion: Completion::http_client_exit(exit),
         });
@@ -475,7 +479,7 @@ impl<'plan> HttpClient<'plan> {
     }
 }
 
-impl CallConnectorDriver for HttpClient<'_> {
+impl OutboundCall for HttpClient<'_> {
     fn prepare_request(
         &mut self,
         connector: &crate::node::Path,
@@ -585,7 +589,7 @@ impl CallConnectorDriver for HttpClient<'_> {
         }
     }
 
-    fn events(&mut self) -> Vec<Response> {
+    fn poll_responses(&mut self) -> Vec<CallResponse> {
         let mut responses = std::mem::take(&mut self.immediate);
         for event in self.engine.drain_events(MAX_EVENTS_PER_POLL).events {
             self.cancellations.remove(&event.response.call_id);

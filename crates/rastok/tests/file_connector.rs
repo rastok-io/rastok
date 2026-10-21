@@ -4,18 +4,20 @@
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use rastok::boundary::{
-    AcceptAnyCompletion, DriverPoller, EnvelopeDraft, IngressProposal, IngressProvenance,
-    IngressSequence,
-};
 use rastok::compiler::compile;
-use rastok::connectors::{DriverRegistry, FileFactory, RuntimeBindings};
+use rastok::connector::exchange::EnvelopeDraft;
+use rastok::connector::exchange::IngressProposal;
+use rastok::connector::exchange::IngressProvenance;
+use rastok::connector::exchange::IngressSequence;
+use rastok::connectors::{DriverRegistry, FileFactory, RuntimeDrivers};
 use rastok::contract::ContractCatalog;
 use rastok::envelope::{Data, Namespace, Value};
 use rastok::journal::{Journal, MemJournal, Record};
 use rastok::node;
 use rastok::plan::GraphVersion;
 use rastok::runtime::execution::Execution;
+use rastok::runtime::execution::driver_polling::AcceptAnyCompletion;
+use rastok::runtime::execution::driver_polling::DriverPoller;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -107,7 +109,7 @@ fn registry(root: &Path) -> DriverRegistry {
         .expect("File is registered once")
 }
 
-fn drive(vm: &mut Execution<'_>, journal: &mut MemJournal, bindings: &mut RuntimeBindings<'_>) {
+fn drive(vm: &mut Execution<'_>, journal: &mut MemJournal, bindings: &mut RuntimeDrivers<'_>) {
     for _ in 0..2_000 {
         vm.run_ready_with_bindings(journal, bindings)
             .expect("ready File work commits");
@@ -155,7 +157,7 @@ fn source_bytes(vm: &Execution<'_>) -> Vec<Vec<u8>> {
 fn run_observed(root: &Path, source: &str, data: Data) -> (MemJournal, Vec<String>, Vec<Vec<u8>>) {
     let plan = compile_file(source);
     let registry = registry(root);
-    let mut bindings = RuntimeBindings::try_new(&plan, &registry).expect("File binds");
+    let mut bindings = RuntimeDrivers::prepare(&plan, &registry).expect("File binds");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Execution::new(&plan, GraphVersion(1));
     vm.accept_input(&mut journal, submission(data))
@@ -304,7 +306,7 @@ fn filesystem_observation_begins_only_after_the_outbound_open() {
     let target = root.path().join("late.bin");
     let plan = compile_file(&source("read", "late.bin", None));
     let registry = registry(root.path());
-    let mut bindings = RuntimeBindings::try_new(&plan, &registry).expect("File binds");
+    let mut bindings = RuntimeDrivers::prepare(&plan, &registry).expect("File binds");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Execution::new(&plan, GraphVersion(1));
     vm.accept_input(&mut journal, submission(Data::materialized(Value::Null)))
@@ -339,7 +341,7 @@ fn replay_of_an_open_replace_never_reexecutes_the_file_effect() {
     )
     .expect("the input is admitted");
     {
-        let mut bindings = RuntimeBindings::try_new(&plan, &registry).expect("File binds");
+        let mut bindings = RuntimeDrivers::prepare(&plan, &registry).expect("File binds");
         vm.run_ready_with_bindings(&mut journal, &mut bindings)
             .expect("the call opens without starting the Driver");
     }
@@ -347,7 +349,7 @@ fn replay_of_an_open_replace_never_reexecutes_the_file_effect() {
     std::fs::write(&target, b"changed-after-open").expect("the external change writes");
 
     let mut resumed = DriverPoller::resume(&journal);
-    let mut bindings = RuntimeBindings::try_new(&plan, &registry).expect("File rebinds");
+    let mut bindings = RuntimeDrivers::prepare(&plan, &registry).expect("File rebinds");
     for _ in 0..3 {
         let batch = resumed
             .poll_drivers(&mut journal, &mut bindings, &AcceptAnyCompletion, 0)

@@ -2,12 +2,18 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use rastok::boundary::{
-    Completion, EnvelopeDraft, HttpServerExit, InboundCallObservation, InboundExchangeId,
-    IngressAdmission, IngressProposal, IngressProposalHandle, IngressProvenance, IngressSequence,
-    RetainedProposal,
-};
 use rastok::compiler;
+use rastok::connector::exchange::Completion;
+use rastok::connector::exchange::EnvelopeDraft;
+use rastok::connector::exchange::InboundCallObservation;
+use rastok::connector::exchange::InboundExchangeId;
+use rastok::connector::exchange::IngressAdmission;
+use rastok::connector::exchange::IngressProposal;
+use rastok::connector::exchange::IngressProposalHandle;
+use rastok::connector::exchange::IngressProvenance;
+use rastok::connector::exchange::IngressSequence;
+use rastok::connector::exchange::PendingIngress;
+use rastok::connector::stdlib::HttpServerExit;
 use rastok::contract::ContractCatalog;
 use rastok::envelope::{Data, Namespace, Value};
 use rastok::journal::MemJournal;
@@ -22,8 +28,8 @@ fn compile(source: &str) -> plan::ValidatedExecutionPlan {
         .0
 }
 
-fn proposal(reference: u64, text: &str) -> RetainedProposal {
-    RetainedProposal {
+fn proposal(reference: u64, text: &str) -> PendingIngress {
+    PendingIngress {
         handle: IngressProposalHandle::new(reference),
         proposal: IngressProposal {
             provenance: IngressProvenance::single(node::Path::new(["server"]).unwrap()),

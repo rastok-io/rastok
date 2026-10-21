@@ -224,8 +224,8 @@ fn current_public_status_matches_the_package_and_contracts() {
     assert!(paper.contains(&format!("**package {version} / diagnostic recording 4**")));
     assert!(!paper.contains("blessing pending review"));
     for contract in [
-        rastok_core::connector::PROCESS_CONNECTOR_ID,
-        rastok_core::connector::PROCESS_SERVICE_CONNECTOR_ID,
+        rastok_core::connector::stdlib::PROCESS_CONNECTOR_ID,
+        rastok_core::connector::stdlib::PROCESS_SERVICE_CONNECTOR_ID,
     ] {
         assert!(paper.contains(contract), "whitepaper names {contract}");
     }

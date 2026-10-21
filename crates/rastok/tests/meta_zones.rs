@@ -292,7 +292,10 @@ fn content_type_follows_the_payload_not_the_merge() {
     // The lifecycle across spellings (D-2026-08-10-4): a kept
     // witness keeps it, fresh data strikes it, an explicit write
     // wins — variables and ternaries included.
-    use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
+    use rastok::connector::exchange::EnvelopeDraft;
+    use rastok::connector::exchange::IngressProposal;
+    use rastok::connector::exchange::IngressProvenance;
+    use rastok::connector::exchange::IngressSequence;
     use rastok::envelope::{Data, MetaValue, Namespace, Scalar, Value};
     use rastok::journal::MemJournal;
     use rastok::plan::GraphVersion;

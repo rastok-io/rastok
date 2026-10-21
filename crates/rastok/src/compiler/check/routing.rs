@@ -82,7 +82,7 @@ impl Checker<'_, '_> {
             return false;
         };
         let ack = target.connector_contract_id().is_some_and(|contract| {
-            contract.as_str() == crate::connector::HTTP_SERVER_CONNECTOR_ID
+            contract.as_str() == crate::connector::stdlib::HTTP_SERVER_CONNECTOR_ID
         }) && attributes.iter().any(|attribute| {
             attribute.name == "mode"
                 && matches!(&attribute.value, AttrValue::Word(word) if word == "ack")
@@ -303,9 +303,9 @@ impl Checker<'_, '_> {
                         exchange,
                         ..
                     } if roles.has_inbound()
-                        && (matches!(exchange, crate::connector::ConnectorExchange::Session)
+                        && (matches!(exchange, crate::connector::ExchangeKind::Session)
                             || (!roles.has_outbound()
-                                && matches!(exchange, crate::connector::ConnectorExchange::Call)))
+                                && matches!(exchange, crate::connector::ExchangeKind::Call)))
                 );
                 if target_is_inbound_boundary {
                     // A response/message input and a world-origin output are

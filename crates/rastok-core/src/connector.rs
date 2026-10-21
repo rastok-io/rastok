@@ -5,6 +5,10 @@
 //! exchange lifecycles are likewise contract facts: runtime registration may
 //! satisfy them, but may not reinterpret them.
 
+use self::stdlib::{
+    PROCESS_SERVICE_CONNECTOR_ID, WEBSOCKET_CLIENT_CONNECTOR_ID, WEBSOCKET_SERVER_CONNECTOR_ID,
+};
+
 use alloc::boxed::Box;
 use core::fmt;
 
@@ -14,26 +18,6 @@ pub use call::{
     CallCommandError, CallSemantics, FrameProduction, RetryCaseError, TerminalVisibility,
     outbound_call_semantics,
 };
-
-/// The standard Process contract's stable major-version identity.
-pub const PROCESS_CONNECTOR_ID: &str = "std/process@4";
-/// Resident stdio Session, distinct from the finite job Contract.
-pub const PROCESS_SERVICE_CONNECTOR_ID: &str = "std/process@5";
-
-/// The standard single-file contract's stable major-version identity.
-pub const FILE_CONNECTOR_ID: &str = "std/file@3";
-
-/// The standard outbound HTTP call contract's stable identity.
-pub const HTTP_CLIENT_CONNECTOR_ID: &str = "std/http-client@3";
-
-/// The standard inbound HTTP request contract's stable identity.
-pub const HTTP_SERVER_CONNECTOR_ID: &str = "std/http-server@3";
-
-/// The standard outbound WebSocket session contract's stable identity.
-pub const WEBSOCKET_CLIENT_CONNECTOR_ID: &str = "std/websocket-client@3";
-
-/// The standard accepted WebSocket session contract's stable identity.
-pub const WEBSOCKET_SERVER_CONNECTOR_ID: &str = "std/websocket-server@3";
 
 /// Portable upper bound of one declared byte budget: 4 GiB inclusive.
 pub const MAX_BYTE_SIZE: u64 = 4 * 1024 * 1024 * 1024;
@@ -77,26 +61,26 @@ impl ContractId {
     ///
     /// Returns the first structural category that makes `spelling`
     /// non-canonical.
-    pub fn parse(spelling: &str) -> Result<Self, ConnectorIdError> {
+    pub fn parse(spelling: &str) -> Result<Self, ContractIdError> {
         let Some((qualified, major)) = spelling.rsplit_once('@') else {
-            return Err(ConnectorIdError::Shape);
+            return Err(ContractIdError::Shape);
         };
         if qualified.contains('@') {
-            return Err(ConnectorIdError::Shape);
+            return Err(ContractIdError::Shape);
         }
         let Some((namespace, name)) = qualified.split_once('/') else {
-            return Err(ConnectorIdError::Shape);
+            return Err(ContractIdError::Shape);
         };
         if name.contains('/') {
-            return Err(ConnectorIdError::Shape);
+            return Err(ContractIdError::Shape);
         }
         if (namespace != "std" && !namespace.contains('.'))
             || namespace.split('.').any(|label| !canonical_label(label))
         {
-            return Err(ConnectorIdError::Namespace);
+            return Err(ContractIdError::Namespace);
         }
         if !canonical_label(name) {
-            return Err(ConnectorIdError::Name);
+            return Err(ContractIdError::Name);
         }
         if major.is_empty()
             || major.starts_with('0')
@@ -107,7 +91,7 @@ impl ContractId {
                 .filter(|value| *value > 0)
                 .is_none()
         {
-            return Err(ConnectorIdError::Major);
+            return Err(ContractIdError::Major);
         }
         Ok(Self(Box::from(spelling)))
     }
@@ -135,7 +119,7 @@ impl fmt::Display for ContractId {
 }
 
 impl TryFrom<&str> for ContractId {
-    type Error = ConnectorIdError;
+    type Error = ContractIdError;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         Self::parse(value)
@@ -144,7 +128,7 @@ impl TryFrom<&str> for ContractId {
 
 /// Why a Connector contract identity is not canonical.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConnectorIdError {
+pub enum ContractIdError {
     /// The `/` and `@` framing is absent or ambiguous.
     Shape,
     /// The namespace is not a dot-separated sequence of canonical labels.
@@ -155,7 +139,7 @@ pub enum ConnectorIdError {
     Major,
 }
 
-impl fmt::Display for ConnectorIdError {
+impl fmt::Display for ContractIdError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::Shape => "expected exactly `<namespace>/<name>@<major>`",
@@ -166,7 +150,7 @@ impl fmt::Display for ConnectorIdError {
     }
 }
 
-impl core::error::Error for ConnectorIdError {}
+impl core::error::Error for ContractIdError {}
 
 /// The cardinality and terminal lifecycle of one Connector interaction.
 ///
@@ -175,7 +159,7 @@ impl core::error::Error for ConnectorIdError {}
 /// are independent events, one bounded call, or members of one long-lived
 /// session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum ConnectorExchange {
+pub enum ExchangeKind {
     /// One spontaneous INGRESS fact with no per-event terminal obligation.
     Event,
     /// One admitted operation with zero or more outputs and exactly one exit.
@@ -184,7 +168,7 @@ pub enum ConnectorExchange {
     Session,
 }
 
-impl ConnectorExchange {
+impl ExchangeKind {
     /// Stable categorical tag used by semantic identity and plan transport.
     #[must_use]
     pub const fn tag(self) -> u8 {
@@ -207,7 +191,7 @@ impl ConnectorExchange {
     }
 }
 
-impl fmt::Display for ConnectorExchange {
+impl fmt::Display for ExchangeKind {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::Event => "event",
@@ -298,9 +282,9 @@ pub(crate) enum SessionOpening {
 pub(crate) fn session_opening(
     contract: &ContractId,
     roles: ConnectorDirection,
-    exchange: ConnectorExchange,
+    exchange: ExchangeKind,
 ) -> Option<SessionOpening> {
-    if roles != ConnectorDirection::InboundAndOutbound || exchange != ConnectorExchange::Session {
+    if roles != ConnectorDirection::InboundAndOutbound || exchange != ExchangeKind::Session {
         return None;
     }
     match contract.as_str() {
@@ -313,6 +297,9 @@ pub(crate) fn session_opening(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::connector::stdlib::{
+        FILE_CONNECTOR_ID, HTTP_CLIENT_CONNECTOR_ID, HTTP_SERVER_CONNECTOR_ID, PROCESS_CONNECTOR_ID,
+    };
 
     #[test]
     fn session_opening_comes_from_the_exact_contract_not_duplex_roles() {
@@ -334,12 +321,12 @@ mod tests {
                 ConnectorDirection::InboundAndOutbound,
             ] {
                 for exchange in [
-                    ConnectorExchange::Event,
-                    ConnectorExchange::Call,
-                    ConnectorExchange::Session,
+                    ExchangeKind::Event,
+                    ExchangeKind::Call,
+                    ExchangeKind::Session,
                 ] {
                     let expected = if roles == ConnectorDirection::InboundAndOutbound
-                        && exchange == ConnectorExchange::Session
+                        && exchange == ExchangeKind::Session
                     {
                         opening
                     } else {
@@ -365,19 +352,19 @@ mod tests {
             assert_eq!(ContractId::parse(valid).unwrap().as_str(), valid);
         }
         for (invalid, reason) in [
-            ("Process", ConnectorIdError::Shape),
-            ("acme/process@1", ConnectorIdError::Namespace),
-            ("rastok/process@4", ConnectorIdError::Namespace),
-            ("rastok/process", ConnectorIdError::Shape),
-            ("std/process@2@2", ConnectorIdError::Shape),
-            ("rastok/more/process@1", ConnectorIdError::Shape),
-            ("Rastok/process@1", ConnectorIdError::Namespace),
-            ("rastok./process@1", ConnectorIdError::Namespace),
-            ("std/Process@1", ConnectorIdError::Name),
-            ("std/-process@1", ConnectorIdError::Name),
-            ("std/process@0", ConnectorIdError::Major),
-            ("std/process@01", ConnectorIdError::Major),
-            ("std/process@4294967296", ConnectorIdError::Major),
+            ("Process", ContractIdError::Shape),
+            ("acme/process@1", ContractIdError::Namespace),
+            ("rastok/process@4", ContractIdError::Namespace),
+            ("rastok/process", ContractIdError::Shape),
+            ("std/process@2@2", ContractIdError::Shape),
+            ("rastok/more/process@1", ContractIdError::Shape),
+            ("Rastok/process@1", ContractIdError::Namespace),
+            ("rastok./process@1", ContractIdError::Namespace),
+            ("std/Process@1", ContractIdError::Name),
+            ("std/-process@1", ContractIdError::Name),
+            ("std/process@0", ContractIdError::Major),
+            ("std/process@01", ContractIdError::Major),
+            ("std/process@4294967296", ContractIdError::Major),
         ] {
             assert_eq!(ContractId::parse(invalid), Err(reason), "{invalid}");
         }
@@ -408,13 +395,21 @@ mod tests {
     #[test]
     fn exchange_tags_are_closed_and_extend_only() {
         for exchange in [
-            ConnectorExchange::Event,
-            ConnectorExchange::Call,
-            ConnectorExchange::Session,
+            ExchangeKind::Event,
+            ExchangeKind::Call,
+            ExchangeKind::Session,
         ] {
-            assert_eq!(ConnectorExchange::from_tag(exchange.tag()), Some(exchange));
+            assert_eq!(ExchangeKind::from_tag(exchange.tag()), Some(exchange));
         }
-        assert_eq!(ConnectorExchange::from_tag(0), None);
-        assert_eq!(ConnectorExchange::from_tag(4), None);
+        assert_eq!(ExchangeKind::from_tag(0), None);
+        assert_eq!(ExchangeKind::from_tag(4), None);
     }
 }
+
+pub mod contract;
+/// Driver protocol interfaces and execution routing.
+pub mod driver;
+/// Data exchanged with Connector Drivers.
+pub mod exchange;
+/// Portable standard Contract definitions.
+pub mod stdlib;

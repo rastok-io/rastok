@@ -8,7 +8,6 @@ pub use crate::connectors::network::websocket::{
     WebSocketConfig, WebSocketConfigError, WebSocketServerFactory,
 };
 
-pub(crate) fn lab_factory()
--> Result<Box<dyn super::ConnectorDriverFactory>, super::DriverFactoryError> {
-    super::websocket_protocol::lab_factory(crate::connector::WEBSOCKET_SERVER_CONNECTOR_ID)
+pub(crate) fn lab_factory() -> Result<Box<dyn super::DriverFactory>, super::DriverFactoryError> {
+    super::websocket_protocol::lab_factory(crate::connector::stdlib::WEBSOCKET_SERVER_CONNECTOR_ID)
 }

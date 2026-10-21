@@ -98,7 +98,7 @@ production the world-half is *recorded* ; in simulation there is no world —
 
 Mock composition uses the same categorical boundary as production. The Lab
 registers one mock factory for each exact Connector contract id used by the
-plan, proves its required roles through `RuntimeBindings`, and reuses that
+plan, proves its required roles through `RuntimeDrivers`, and reuses that
 Contract's pure plan-bound request framing and scheduler-terminal projection.
 Only the external interaction is replaced. Consequently a
 mock cannot change contract identity, skip binding, choose a different request
@@ -178,7 +178,7 @@ needed. The fixture may supply `meta.ext` explicitly; absent HTTP metadata is
 not invented. `meta.app` and `meta.sys` remain forbidden fixture writes.
 
 The source path and sequence enter the ordinary `IngressProposal`.
-`RuntimeBindings` proves ownership; Execution admission reserves every destination
+`RuntimeDrivers` proves ownership; Execution admission reserves every destination
 and commits INGRESS before the Lab receives the `InboundCallId`. The Lab
 then reports `Completed { status: 202 }`; the core commits the ordinary
 correlated `l:reply` transaction and `exit`. `expect listener.out` reads the

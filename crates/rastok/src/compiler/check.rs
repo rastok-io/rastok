@@ -526,7 +526,7 @@ struct PendingConnectorAttribute {
     node: node::Path,
     name: String,
     value: SynValue,
-    domain: contract::ValueDomain,
+    domain: crate::connector::contract::ValueDomain,
     latest_site: crate::plan::EvaluationSite,
     signature: expr::Signature,
     consts: BTreeMap<String, crate::value::Value>,
@@ -1048,7 +1048,7 @@ impl Checker<'_, '_> {
                     let session = matches!(
                         &node.semantics,
                         NodeSemantics::Connector {
-                            exchange: crate::connector::ConnectorExchange::Session,
+                            exchange: crate::connector::ExchangeKind::Session,
                             ..
                         }
                     );
@@ -1175,7 +1175,7 @@ impl Checker<'_, '_> {
             );
             return None;
         };
-        if contract.as_str() != crate::connector::HTTP_SERVER_CONNECTOR_ID {
+        if contract.as_str() != crate::connector::stdlib::HTTP_SERVER_CONNECTOR_ID {
             self.deferred(
                 "source injection without a Lab ingress model (currently HttpServer ack only)",
                 target.span,
@@ -2565,9 +2565,11 @@ impl Checker<'_, '_> {
                 let Some(contract) = contract.as_ref() else {
                     continue;
                 };
-                let admitted =
-                    crate::boundary::connector_boot_reference_policy(contract, &pending.name)
-                        .is_some_and(|policy| policy.admits(&reference));
+                let admitted = crate::connector::stdlib::connector_boot_reference_policy(
+                    contract,
+                    &pending.name,
+                )
+                .is_some_and(|policy| policy.admits(&reference));
                 if !admitted {
                     let function = match reference {
                         crate::deployment::BootReference::Environment(_) => "env",
@@ -2617,7 +2619,7 @@ impl Checker<'_, '_> {
                 };
                 (tree, None)
             };
-            if pending.domain == contract::ValueDomain::ExprPath
+            if pending.domain == crate::connector::contract::ValueDomain::ExprPath
                 && !matches!(
                     &tree.root,
                     expr::Expr::Path(path)
@@ -3198,11 +3200,13 @@ impl Checker<'_, '_> {
                     .find(|row| row.name == port.name.text)
                     .map(|row| row.ty)
                 {
-                    Some(contract::PortTypeRule::JsonOutput { attribute, .. })
-                        if node.attributes().iter().any(|setting| {
-                            setting.name == attribute
-                                && matches!(&setting.value, AttrValue::Word(word) if word == "json")
-                        }) =>
+                    Some(crate::connector::contract::PortTypeRule::JsonOutput {
+                        attribute,
+                        ..
+                    }) if node.attributes().iter().any(|setting| {
+                        setting.name == attribute
+                            && matches!(&setting.value, AttrValue::Word(word) if word == "json")
+                    }) =>
                     {
                         None
                     }
@@ -3374,7 +3378,7 @@ impl Checker<'_, '_> {
             .collect();
         // 1. The PROFILE: the selector's written word, or its
         // default. The admitted words are derived from the profiles.
-        let mut profile: Option<&contract::Profile> = None;
+        let mut profile: Option<&crate::connector::contract::ContractMode> = None;
         let mut selector_written = false;
         // The selector itself is three-state: WRITTEN-BUT-INVALID
         // (its value failed to check, so it reached no HIR) selects
@@ -3422,7 +3426,9 @@ impl Checker<'_, '_> {
                 Some(word) => match contract.profile(&word) {
                     Some(found) => {
                         profile = Some(found);
-                        if let contract::ProfileSupport::Deferred(reason) = found.support {
+                        if let crate::connector::contract::ModeSupport::Deferred(reason) =
+                            found.support
+                        {
                             self.deferred(reason, span_of(selector.attribute));
                         }
                     }
@@ -3456,7 +3462,7 @@ impl Checker<'_, '_> {
         }
         let deferred_profile = matches!(
             profile.map(|profile| profile.support),
-            Some(contract::ProfileSupport::Deferred(_))
+            Some(crate::connector::contract::ModeSupport::Deferred(_))
         );
         // 2. NAME-level judgement is SYNTACTIC — an attribute whose
         // value failed to check still deserves the precise refusal
@@ -3478,7 +3484,7 @@ impl Checker<'_, '_> {
                 .map(|segment| segment.text.as_str())
                 .collect::<Vec<_>>()
                 .join(".");
-            if contract.id == crate::connector::PROCESS_CONNECTOR_ID
+            if contract.id == crate::connector::stdlib::PROCESS_CONNECTOR_ID
                 && matches!(name.as_str(), "correlate" | "restart")
             {
                 refuse(
@@ -3552,7 +3558,7 @@ impl Checker<'_, '_> {
                 continue;
             }
             let fault: Option<String> = match (&spec.domain, &attribute.value) {
-                (contract::ValueDomain::Choice(words), AttrValue::Word(word)) => {
+                (crate::connector::contract::ValueDomain::Choice(words), AttrValue::Word(word)) => {
                     if words.contains(&word.as_str()) {
                         None
                     } else if let [only] = words {
@@ -3571,30 +3577,32 @@ impl Checker<'_, '_> {
                         Some(format!("expected one of {words:?}, got `{word}`"))
                     }
                 }
-                (contract::ValueDomain::Choice(words), AttrValue::Const(constant)) => {
-                    match &constant.value {
-                        crate::value::Value::Text(text) if words.contains(&text.as_str()) => {
-                            Some(format!(
-                                "expected one of {words:?} as a bare word; `\"{text}\"` is Rastok expression \
-                             text — write `{text}`"
-                            ))
-                        }
-                        _ => Some(format!("expected one of {words:?} as a bare word")),
-                    }
-                }
-                (contract::ValueDomain::Choice(words), AttrValue::Expr { .. }) => {
-                    Some(format!("expected one of {words:?} as a bare word"))
-                }
                 (
-                    contract::ValueDomain::Boolean
-                    | contract::ValueDomain::Text
-                    | contract::ValueDomain::Bytes
-                    | contract::ValueDomain::TextList
-                    | contract::ValueDomain::ChoiceList(_)
-                    | contract::ValueDomain::Duration
-                    | contract::ValueDomain::TextMap
-                    | contract::ValueDomain::TypedHttpHeaders
-                    | contract::ValueDomain::CustomHttpHeaders,
+                    crate::connector::contract::ValueDomain::Choice(words),
+                    AttrValue::Const(constant),
+                ) => match &constant.value {
+                    crate::value::Value::Text(text) if words.contains(&text.as_str()) => {
+                        Some(format!(
+                            "expected one of {words:?} as a bare word; `\"{text}\"` is Rastok expression \
+                             text — write `{text}`"
+                        ))
+                    }
+                    _ => Some(format!("expected one of {words:?} as a bare word")),
+                },
+                (
+                    crate::connector::contract::ValueDomain::Choice(words),
+                    AttrValue::Expr { .. },
+                ) => Some(format!("expected one of {words:?} as a bare word")),
+                (
+                    crate::connector::contract::ValueDomain::Boolean
+                    | crate::connector::contract::ValueDomain::Text
+                    | crate::connector::contract::ValueDomain::Bytes
+                    | crate::connector::contract::ValueDomain::TextList
+                    | crate::connector::contract::ValueDomain::ChoiceList(_)
+                    | crate::connector::contract::ValueDomain::Duration
+                    | crate::connector::contract::ValueDomain::TextMap
+                    | crate::connector::contract::ValueDomain::TypedHttpHeaders
+                    | crate::connector::contract::ValueDomain::CustomHttpHeaders,
                     AttrValue::Word(word),
                 ) => Some(format!(
                     "expected a Rastok expression fitting the {:?} domain; `{word}` is a bare word",
@@ -3602,7 +3610,7 @@ impl Checker<'_, '_> {
                 )),
                 (domain, AttrValue::Const(constant)) if domain.implemented() => {
                     if attribute.name == "idempotent"
-                        && contract.id == crate::connector::FILE_CONNECTOR_ID
+                        && contract.id == crate::connector::stdlib::FILE_CONNECTOR_ID
                         && constant.value == crate::value::Value::Bool(false)
                     {
                         Some(String::from(
@@ -3623,11 +3631,11 @@ impl Checker<'_, '_> {
         // 4. Required attributes — the COMMON sheet is known and
         // fully owed even under a deferred profile; only the
         // deferred profile's own attributes wait with it.
-        let composed: Vec<&contract::AttributeSpec> = contract
+        let composed: Vec<&crate::connector::contract::AttributeSpec> = contract
             .common
             .iter()
             .chain(if deferred_profile {
-                &[] as &[contract::AttributeSpec]
+                &[] as &[crate::connector::contract::AttributeSpec]
             } else {
                 profile
                     .map(|profile| profile.attributes)
@@ -3635,7 +3643,9 @@ impl Checker<'_, '_> {
             })
             .collect();
         for spec in &composed {
-            if spec.presence == contract::Presence::Required && !written_names.contains(spec.name) {
+            if spec.presence == crate::connector::contract::Presence::Required
+                && !written_names.contains(spec.name)
+            {
                 self.bag.push(
                     Diagnostic::new(
                         E_CONTRACT_REQUIRED,
@@ -3649,10 +3659,10 @@ impl Checker<'_, '_> {
         }
         if matches!(
             contract.id,
-            crate::connector::HTTP_CLIENT_CONNECTOR_ID
-                | crate::connector::HTTP_SERVER_CONNECTOR_ID
-                | crate::connector::WEBSOCKET_CLIENT_CONNECTOR_ID
-                | crate::connector::WEBSOCKET_SERVER_CONNECTOR_ID
+            crate::connector::stdlib::HTTP_CLIENT_CONNECTOR_ID
+                | crate::connector::stdlib::HTTP_SERVER_CONNECTOR_ID
+                | crate::connector::stdlib::WEBSOCKET_CLIENT_CONNECTOR_ID
+                | crate::connector::stdlib::WEBSOCKET_SERVER_CONNECTOR_ID
         ) {
             let certificate = node
                 .attributes()
@@ -3695,15 +3705,17 @@ impl Checker<'_, '_> {
             });
         }
         for spec in &composed {
-            let contract::Presence::Defaulted(default) = &spec.presence else {
+            let crate::connector::contract::Presence::Defaulted(default) = &spec.presence else {
                 continue;
             };
             if written_names.contains(spec.name) {
                 continue;
             }
             let value = match default {
-                contract::DefaultValue::Choice(word) => Some(AttrValue::Word(word.to_string())),
-                contract::DefaultValue::Expression(source) => self
+                crate::connector::contract::DefaultValue::Choice(word) => {
+                    Some(AttrValue::Word(word.to_string()))
+                }
+                crate::connector::contract::DefaultValue::Expression(source) => self
                     .constant(
                         &ExprSource {
                             text: (*source).to_string(),
@@ -3742,7 +3754,7 @@ impl Checker<'_, '_> {
                 *roles = protocol.roles;
                 *exchange = protocol.exchange;
             }
-            if protocol.id == crate::connector::PROCESS_SERVICE_CONNECTOR_ID {
+            if protocol.id == crate::connector::stdlib::PROCESS_SERVICE_CONNECTOR_ID {
                 for attribute in node.attributes() {
                     let rejected = match attribute.name.as_str() {
                         "codec" | "err_codec" => {
@@ -3782,8 +3794,8 @@ impl Checker<'_, '_> {
                 // future rule violates that invariant.
                 if !matches!(
                     &error,
-                    contract::PortResolutionError::MissingAttribute(_)
-                        | contract::PortResolutionError::UnknownChoice { .. }
+                    crate::connector::contract::PortResolutionError::MissingAttribute(_)
+                        | crate::connector::contract::PortResolutionError::UnknownChoice { .. }
                 ) {
                     self.bag.push(
                         Diagnostic::new(
@@ -3830,7 +3842,10 @@ impl Checker<'_, '_> {
         &self,
         node: &Node,
         name: &str,
-    ) -> Option<(contract::ValueDomain, crate::plan::EvaluationSite)> {
+    ) -> Option<(
+        crate::connector::contract::ValueDomain,
+        crate::plan::EvaluationSite,
+    )> {
         let contract_id = node.connector_contract_id()?;
         let sheet = self.registry.connector_by_id(contract_id)?;
         let mut matches = sheet
@@ -3847,7 +3862,10 @@ impl Checker<'_, '_> {
                 spec.name == name
                     && spec.latest_site == crate::plan::EvaluationSite::Invocation
                     && spec.domain.implemented()
-                    && !matches!(spec.domain, contract::ValueDomain::Choice(_))
+                    && !matches!(
+                        spec.domain,
+                        crate::connector::contract::ValueDomain::Choice(_)
+                    )
             });
         let first = matches.next()?;
         matches

@@ -36,8 +36,8 @@ pub use process::{
     Process, ProcessBindError, ProcessFactory, ProcessServiceFactory, ProcessSettingsError,
 };
 pub use registry::{
-    BoundConnectorDriver, ConnectorDriverFactory, DriverBindingError, DriverFactoryError,
-    DriverRegistrationError, DriverRegistry, InboundPollError, RuntimeBindings,
+    DriverBindingError, DriverFactory, DriverFactoryError, DriverRegistrationError, DriverRegistry,
+    InboundPollError, RuntimeDrivers,
 };
 #[cfg(feature = "hosted-websocket")]
 pub use websocket_client::WebSocketClientFactory;
@@ -49,18 +49,18 @@ pub use websocket_server::{WebSocketConfig, WebSocketConfigError, WebSocketServe
 /// Real and Lab Drivers share request framing and scheduler projections; only
 /// observation of the external world is replaced. Three shipped families make
 /// this a real substitution seam rather than a decorative trait.
-pub(crate) trait ScriptedConnectorProtocol {
+pub(crate) trait CallProtocol {
     fn prepare_request(
         &self,
         connector: &crate::node::Path,
         data: &crate::envelope::Data,
         settings: &std::collections::BTreeMap<String, crate::value::Value>,
-    ) -> crate::boundary::RequestPreparation;
+    ) -> crate::connector::exchange::RequestPreparation;
 
     fn scheduler_completion(
         &self,
-        completion: crate::boundary::SchedulerCompletion,
-    ) -> crate::boundary::Completion;
+        completion: crate::connector::exchange::SchedulerCompletion,
+    ) -> crate::connector::exchange::Completion;
 }
 
 pub(crate) type ScriptedProtocolBinder =
@@ -68,21 +68,21 @@ pub(crate) type ScriptedProtocolBinder =
         &crate::plan::ValidatedExecutionPlan,
         &[crate::node::Path],
         &crate::deployment::BootBindings,
-    ) -> Result<Box<dyn ScriptedConnectorProtocol>, registry::DriverFactoryError>;
+    ) -> Result<Box<dyn CallProtocol>, registry::DriverFactoryError>;
 
 /// Every built-in family's scripted twin, declared beside its real module.
 pub(crate) fn scripted_protocol_binders() -> [(&'static str, ScriptedProtocolBinder); 3] {
     [
         (
-            crate::connector::PROCESS_CONNECTOR_ID,
+            crate::connector::stdlib::PROCESS_CONNECTOR_ID,
             process::bind_scripted_protocol,
         ),
         (
-            crate::connector::FILE_CONNECTOR_ID,
+            crate::connector::stdlib::FILE_CONNECTOR_ID,
             file::bind_scripted_protocol,
         ),
         (
-            crate::connector::HTTP_CLIENT_CONNECTOR_ID,
+            crate::connector::stdlib::HTTP_CLIENT_CONNECTOR_ID,
             http_client::bind_scripted_protocol,
         ),
     ]
@@ -91,7 +91,7 @@ pub(crate) fn scripted_protocol_binders() -> [(&'static str, ScriptedProtocolBin
 /// Effectless inbound and Session models, independent of physical transports.
 pub(crate) fn inbound_lab_factories(
     input: std::rc::Rc<std::cell::RefCell<HttpServerLabInput>>,
-) -> Result<Vec<Box<dyn ConnectorDriverFactory>>, DriverFactoryError> {
+) -> Result<Vec<Box<dyn DriverFactory>>, DriverFactoryError> {
     let mut factories = vec![http_server::lab_factory(input)?];
     factories.push(websocket_client::lab_factory()?);
     factories.push(websocket_server::lab_factory()?);

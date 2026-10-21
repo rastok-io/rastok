@@ -2,9 +2,12 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
 use rastok::compiler;
-use rastok::connectors::{DriverRegistry, RuntimeBindings};
+use rastok::connector::exchange::EnvelopeDraft;
+use rastok::connector::exchange::IngressProposal;
+use rastok::connector::exchange::IngressProvenance;
+use rastok::connector::exchange::IngressSequence;
+use rastok::connectors::{DriverRegistry, RuntimeDrivers};
 use rastok::contract::ContractCatalog;
 use rastok::envelope::{Data, Namespace, Value};
 use rastok::journal::{
@@ -383,8 +386,7 @@ fn graph_loop_delay_and_expiry_recover_without_restarting_the_wait() {
     assert!(vm.outputs().is_empty());
     let mut restored = Execution::new_at(&compilation.plan, GraphVersion(1), 500_000_000);
     restored.recover_from_journal(&journal).unwrap();
-    let mut world =
-        RuntimeBindings::try_new(&compilation.plan, &DriverRegistry::default()).unwrap();
+    let mut world = RuntimeDrivers::prepare(&compilation.plan, &DriverRegistry::default()).unwrap();
     restored
         .advance_to(&mut journal, &mut world, 1_000_000_000)
         .unwrap();
@@ -411,8 +413,7 @@ fn closing_a_graph_loop_invalidates_its_pending_reentry() {
     let compilation = compiler::compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap();
     let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut world =
-        RuntimeBindings::try_new(&compilation.plan, &DriverRegistry::default()).unwrap();
+    let mut world = RuntimeDrivers::prepare(&compilation.plan, &DriverRegistry::default()).unwrap();
     inject(&mut vm, &mut journal, 2);
     vm.run_ready(&mut journal).unwrap();
     vm.advance_to(&mut journal, &mut world, 2_000_000_000)
@@ -446,8 +447,7 @@ fn logical_advance_drains_graph_admissions_before_a_future_closure() {
     for _ in 0..12 {
         inject(&mut vm, &mut journal, 1);
     }
-    let mut world =
-        RuntimeBindings::try_new(&compilation.plan, &DriverRegistry::default()).unwrap();
+    let mut world = RuntimeDrivers::prepare(&compilation.plan, &DriverRegistry::default()).unwrap();
     vm.advance_to(&mut journal, &mut world, 2_000_000_000)
         .unwrap();
     // `advance` drains the current instant before moving to a future deadline.
@@ -864,7 +864,7 @@ fn delayed_runs_reserve_manager_capacity_before_the_next_ingress_commit() {
         before,
         "refusal must not admit another root"
     );
-    let mut bindings = RuntimeBindings::try_new(&plan, &DriverRegistry::default()).unwrap();
+    let mut bindings = RuntimeDrivers::prepare(&plan, &DriverRegistry::default()).unwrap();
     vm.advance_to(&mut journal, &mut bindings, 1_000_000_000)
         .unwrap();
     vm.run_ready(&mut journal).unwrap();
@@ -1064,7 +1064,7 @@ fn recovery_reschedules_the_original_deadline_not_a_fresh_delay() {
     restored.run_ready(&mut journal).unwrap();
     assert!(restored.outputs().is_empty());
     assert_eq!(journal.records().len(), before);
-    let mut bindings = RuntimeBindings::try_new(&plan, &DriverRegistry::default()).unwrap();
+    let mut bindings = RuntimeDrivers::prepare(&plan, &DriverRegistry::default()).unwrap();
     restored
         .advance_to(&mut journal, &mut bindings, 1_000_000_000)
         .unwrap();
@@ -1450,7 +1450,7 @@ fn delayed_commands_wait_on_logical_time_without_reserving_reentry() {
     let run = fold.runs().next().unwrap().1;
     assert_eq!(run.phase, Phase::AwaitingAdmission);
     assert_eq!(run.due_at, Some(1_000_000_000));
-    let mut bindings = RuntimeBindings::try_new(&plan, &DriverRegistry::default()).unwrap();
+    let mut bindings = RuntimeDrivers::prepare(&plan, &DriverRegistry::default()).unwrap();
     vm.advance_to(&mut journal, &mut bindings, 999_999_999)
         .unwrap();
     vm.run_ready(&mut journal).unwrap();
@@ -1588,7 +1588,7 @@ fn lifetime_closure_invalidates_pending_reentry_before_the_next_generation() {
     );
     let mut vm = Execution::new(&plan, GraphVersion(1));
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut bindings = RuntimeBindings::try_new(&plan, &DriverRegistry::default()).unwrap();
+    let mut bindings = RuntimeDrivers::prepare(&plan, &DriverRegistry::default()).unwrap();
     inject(&mut vm, &mut journal, 7);
     vm.run_ready(&mut journal).unwrap();
     vm.advance_to(&mut journal, &mut bindings, 1_000_000_000)

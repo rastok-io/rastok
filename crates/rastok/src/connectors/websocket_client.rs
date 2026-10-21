@@ -6,7 +6,6 @@
 #[cfg(feature = "hosted-websocket")]
 pub use crate::connectors::network::websocket::WebSocketClientFactory;
 
-pub(crate) fn lab_factory()
--> Result<Box<dyn super::ConnectorDriverFactory>, super::DriverFactoryError> {
-    super::websocket_protocol::lab_factory(crate::connector::WEBSOCKET_CLIENT_CONNECTOR_ID)
+pub(crate) fn lab_factory() -> Result<Box<dyn super::DriverFactory>, super::DriverFactoryError> {
+    super::websocket_protocol::lab_factory(crate::connector::stdlib::WEBSOCKET_CLIENT_CONNECTOR_ID)
 }

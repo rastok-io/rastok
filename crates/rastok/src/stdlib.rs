@@ -1,26 +1,14 @@
-//! The standard catalogue — concrete instances of the
-//! [`crate::contract`] metamodel.
+//! The hosted standard catalogue, frontends and annotation declarations.
 //!
 //! Governing rule: [`stdlib.md`] — the ten-case Connector template and
-//! the standard contracts. Contracts are data: the checker validates
-//! declarations against these sheets without linking any Driver, and
-//! Drivers implement them later. The current catalogue ships the
-//! `Process`, `File`, HTTP and WebSocket sheets; the remaining names are
-//! declared so they refuse explicitly rather than accidentally.
+//! the standard contracts. The compiler and independent package validator
+//! read the same definitions in [`crate::connector::stdlib`], without linking
+//! any physical Driver. This module adds the compiler's frontend and
+//! annotation declarations and explicitly deferred Connector names.
 //!
 //! [`stdlib.md`]: https://github.com/rastok-io/rastok/blob/main/docs/spec/stdlib.md
 
-use crate::connector::{
-    ConnectorDirection, ConnectorExchange, FILE_CONNECTOR_ID, HTTP_CLIENT_CONNECTOR_ID,
-    HTTP_SERVER_CONNECTOR_ID, PROCESS_CONNECTOR_ID, WEBSOCKET_CLIENT_CONNECTOR_ID,
-    WEBSOCKET_SERVER_CONNECTOR_ID,
-};
-use crate::contract::{
-    AttributeSpec, ConnectorContract, ContractCatalog, DefaultValue, EvaluationSite,
-    FrontendContract, FrontendFraming, FrontendReader, PortContract, PortDataType, PortTypeChoice,
-    PortTypeRule, Presence, Profile, ProfileSelector, ProfileSupport, ValueDomain,
-};
-use crate::node::PortDirection;
+use crate::contract::{ContractCatalog, FrontendContract, FrontendFraming, FrontendReader};
 
 /// Hosted declarations; runtime interpretation is retained in the resolved plan.
 pub(crate) const ANNOTATION_DEFINITIONS: &str = include_str!("stdlib/annotations.rkg");
@@ -103,850 +91,10 @@ pub const MEDIA_TYPE_CATALOG: &[MediaTypeCatalogEntry] = &[
     },
 ];
 
-/// Profile selection resolves one exact Contract: a finite job Call or a
-/// resident service Session. Defaults and roles cannot leak between them.
-pub const PROCESS: ConnectorContract = ConnectorContract {
-    id: PROCESS_CONNECTOR_ID,
-    name: "Process",
-    roles: ConnectorDirection::Outbound,
-    exchange: ConnectorExchange::Call,
-    ports: &[
-        PortContract {
-            name: "in",
-            direction: PortDirection::Input,
-
-            ty: PortTypeRule::AttributeSelected {
-                attribute: "codec",
-                choices: &[
-                    PortTypeChoice {
-                        word: "lines",
-                        ty: PortDataType::Text,
-                    },
-                    PortTypeChoice {
-                        word: "jsonl",
-                        ty: PortDataType::Variant,
-                    },
-                    PortTypeChoice {
-                        word: "bytes",
-                        ty: PortDataType::Bytes,
-                    },
-                ],
-            },
-        },
-        PortContract {
-            name: "out",
-            direction: PortDirection::Output,
-
-            ty: PortTypeRule::AttributeSelected {
-                attribute: "codec",
-                choices: &[
-                    PortTypeChoice {
-                        word: "lines",
-                        ty: PortDataType::Text,
-                    },
-                    PortTypeChoice {
-                        word: "jsonl",
-                        ty: PortDataType::Variant,
-                    },
-                    PortTypeChoice {
-                        word: "bytes",
-                        ty: PortDataType::Bytes,
-                    },
-                ],
-            },
-        },
-        PortContract {
-            name: "err",
-            direction: PortDirection::Output,
-
-            ty: PortTypeRule::AttributeSelected {
-                attribute: "err_codec",
-                choices: &[
-                    PortTypeChoice {
-                        word: "lines",
-                        ty: PortDataType::Text,
-                    },
-                    PortTypeChoice {
-                        word: "bytes",
-                        ty: PortDataType::Bytes,
-                    },
-                ],
-            },
-        },
-        PortContract {
-            name: "exit",
-            direction: PortDirection::Output,
-
-            // One exact union is shared by the contract, v7 port table,
-            // completion gate and Process Driver.
-            ty: PortTypeRule::Fixed(PortDataType::ProcessExit),
-        },
-    ],
-    common: &[
-        AttributeSpec {
-            name: "args",
-            presence: Presence::Defaulted(DefaultValue::Expression("[]")),
-            domain: ValueDomain::TextList,
-            latest_site: EvaluationSite::Instance,
-        },
-        AttributeSpec {
-            name: "behavior",
-            presence: Presence::Required,
-            domain: ValueDomain::Choice(&["deterministic", "probabilistic"]),
-            latest_site: EvaluationSite::Plan,
-        },
-        AttributeSpec {
-            // The framing is the sheet's most semantic decision —
-            // bytes, digest, reply type and error surface all follow
-            // it — so it is never chosen silently (D-2026-08-11-1,
-            // reaffirmed by D-2026-08-12-1).
-            name: "codec",
-            presence: Presence::Required,
-            domain: ValueDomain::Choice(&["bytes", "jsonl", "lines"]),
-            latest_site: EvaluationSite::Plan,
-        },
-        AttributeSpec {
-            // stderr is an independent physical channel. It never inherits
-            // the stdout codec and defaults to one text value per line.
-            name: "err_codec",
-            presence: Presence::Defaulted(DefaultValue::Choice("lines")),
-            domain: ValueDomain::Choice(&["bytes", "lines"]),
-            latest_site: EvaluationSite::Plan,
-        },
-        AttributeSpec {
-            name: "command",
-            presence: Presence::Required,
-            domain: ValueDomain::Text,
-            latest_site: EvaluationSite::Instance,
-        },
-        AttributeSpec {
-            name: "cwd",
-            presence: Presence::Optional,
-            domain: ValueDomain::Text,
-            latest_site: EvaluationSite::Instance,
-        },
-        AttributeSpec {
-            name: "env",
-            presence: Presence::Optional,
-            domain: ValueDomain::TextMap,
-            latest_site: EvaluationSite::Instance,
-        },
-    ],
-    selector: Some(ProfileSelector {
-        attribute: "mode",
-        default: Some("job"),
-        profiles: &[
-            Profile {
-                protocol: None,
-                word: "job",
-                support: ProfileSupport::Available,
-                attributes: &[
-                    AttributeSpec {
-                        name: "idempotent",
-                        presence: Presence::Defaulted(DefaultValue::Expression("false")),
-                        domain: ValueDomain::Boolean,
-                        latest_site: EvaluationSite::Plan,
-                    },
-                    AttributeSpec {
-                        name: "timeout",
-                        presence: Presence::Optional,
-                        domain: ValueDomain::Duration,
-                        latest_site: EvaluationSite::Instance,
-                    },
-                    AttributeSpec {
-                        // Judged by `contract::byte_size` — the same
-                        // parser the Driver enforces the budget
-                        // with (D-2026-08-12-1, review round).
-                        name: "max_output",
-                        presence: Presence::Defaulted(DefaultValue::Expression(r#""8MiB""#)),
-                        domain: ValueDomain::ByteSize,
-                        latest_site: EvaluationSite::Plan,
-                    },
-                    AttributeSpec {
-                        // Bypassing a detached one-shot is
-                        // meaningless: the domain has ONE word, and
-                        // the diagnostic says "fixed to".
-                        name: "on_timeout",
-                        presence: Presence::Defaulted(DefaultValue::Choice("kill")),
-                        domain: ValueDomain::Choice(&["kill"]),
-                        latest_site: EvaluationSite::Plan,
-                    },
-                ],
-            },
-            Profile {
-                protocol: Some(crate::contract::ProfileProtocol {
-                    id: crate::connector::PROCESS_SERVICE_CONNECTOR_ID,
-                    roles: ConnectorDirection::InboundAndOutbound,
-                    exchange: ConnectorExchange::Session,
-                }),
-                word: "service",
-                support: ProfileSupport::Available,
-                attributes: &[AttributeSpec {
-                    name: "max_frame",
-                    presence: Presence::Defaulted(DefaultValue::Expression(r#""1MiB""#)),
-                    domain: ValueDomain::ByteSize,
-                    latest_site: EvaluationSite::Plan,
-                }],
-            },
-        ],
-    }),
+use crate::connector::stdlib::{
+    FILE, HTTP_CLIENT, HTTP_SERVER, PROCESS, WEBSOCKET_CLIENT, WEBSOCKET_SERVER,
 };
 
-/// The one-file outbound contract. One invocation either reads one complete
-/// bounded byte value or atomically replaces one file; directory operations
-/// and observation streams are separate contracts, never hidden modes.
-pub const FILE: ConnectorContract = ConnectorContract {
-    id: FILE_CONNECTOR_ID,
-    name: "File",
-    roles: ConnectorDirection::Outbound,
-    exchange: ConnectorExchange::Call,
-    ports: &[
-        PortContract {
-            name: "in",
-            direction: PortDirection::Input,
-
-            ty: PortTypeRule::AttributeSelected {
-                attribute: "mode",
-                choices: &[
-                    PortTypeChoice {
-                        word: "read",
-                        ty: PortDataType::Variant,
-                    },
-                    PortTypeChoice {
-                        word: "replace",
-                        ty: PortDataType::Bytes,
-                    },
-                    // The deferred selector word keeps this table total. It
-                    // promises no future trigger shape: lifting an inbound
-                    // watch requires an explicit contract-version decision.
-                    PortTypeChoice {
-                        word: "watch",
-                        ty: PortDataType::Variant,
-                    },
-                ],
-            },
-        },
-        PortContract {
-            name: "out",
-            direction: PortDirection::Output,
-
-            ty: PortTypeRule::Fixed(PortDataType::Bytes),
-        },
-        PortContract {
-            name: "exit",
-            direction: PortDirection::Output,
-
-            ty: PortTypeRule::Fixed(PortDataType::FileExit),
-        },
-    ],
-    common: &[
-        AttributeSpec {
-            name: "path",
-            presence: Presence::Required,
-            domain: ValueDomain::Text,
-            latest_site: EvaluationSite::Invocation,
-        },
-        AttributeSpec {
-            name: "idempotent",
-            presence: Presence::Defaulted(DefaultValue::Expression("true")),
-            domain: ValueDomain::Boolean,
-            latest_site: EvaluationSite::Plan,
-        },
-        AttributeSpec {
-            name: "behavior",
-            presence: Presence::Defaulted(DefaultValue::Choice("deterministic")),
-            domain: ValueDomain::Choice(&["deterministic"]),
-            latest_site: EvaluationSite::Plan,
-        },
-        AttributeSpec {
-            name: "timeout",
-            presence: Presence::Optional,
-            domain: ValueDomain::Duration,
-            latest_site: EvaluationSite::Instance,
-        },
-    ],
-    selector: Some(ProfileSelector {
-        attribute: "mode",
-        // Reading versus replacing is user intent and never inferred from the
-        // payload or wiring.
-        default: None,
-        profiles: &[
-            Profile {
-                protocol: None,
-                word: "read",
-                support: ProfileSupport::Available,
-                attributes: &[AttributeSpec {
-                    name: "max_read",
-                    presence: Presence::Defaulted(DefaultValue::Expression(r#""8MiB""#)),
-                    domain: ValueDomain::ByteSize,
-                    latest_site: EvaluationSite::Plan,
-                }],
-            },
-            Profile {
-                protocol: None,
-                word: "replace",
-                support: ProfileSupport::Available,
-                attributes: &[],
-            },
-            Profile {
-                protocol: None,
-                word: "watch",
-                support: ProfileSupport::Deferred("the File watch profile"),
-                attributes: &[],
-            },
-        ],
-    }),
-};
-
-const NETWORK_BODY_TYPES: &[PortTypeChoice] = &[
-    PortTypeChoice {
-        word: "bytes",
-        ty: PortDataType::Bytes,
-    },
-    PortTypeChoice {
-        word: "json",
-        ty: PortDataType::Variant,
-    },
-    PortTypeChoice {
-        word: "text",
-        ty: PortDataType::Text,
-    },
-];
-
-const NETWORK_VERSIONS: &[&str] = &["http/1.1", "http/2", "http/3"];
-const ALL_NETWORK_VERSIONS: &str = r#"["http/3", "http/2", "http/1.1"]"#;
-
-/// One outbound HTTP request and its portable terminal fact. The negotiated
-/// wire version is physical observation; it never selects another contract.
-pub const HTTP_CLIENT: ConnectorContract = ConnectorContract {
-    id: HTTP_CLIENT_CONNECTOR_ID,
-    name: "HttpClient",
-    roles: ConnectorDirection::Outbound,
-    exchange: ConnectorExchange::Call,
-    ports: &[
-        PortContract {
-            name: "in",
-            direction: PortDirection::Input,
-
-            ty: PortTypeRule::AttributeSelected {
-                attribute: "codec",
-                choices: NETWORK_BODY_TYPES,
-            },
-        },
-        PortContract {
-            name: "out",
-            direction: PortDirection::Output,
-
-            ty: PortTypeRule::JsonOutput {
-                attribute: "codec",
-                choices: NETWORK_BODY_TYPES,
-            },
-        },
-        PortContract {
-            name: "exit",
-            direction: PortDirection::Output,
-
-            ty: PortTypeRule::Fixed(PortDataType::HttpClientExit),
-        },
-    ],
-    common: &[
-        AttributeSpec {
-            name: "auth_bearer",
-            presence: Presence::Optional,
-            domain: ValueDomain::Text,
-            latest_site: EvaluationSite::Invocation,
-        },
-        AttributeSpec {
-            name: "behavior",
-            presence: Presence::Required,
-            domain: ValueDomain::Choice(&["deterministic", "probabilistic"]),
-            latest_site: EvaluationSite::Plan,
-        },
-        AttributeSpec {
-            name: "codec",
-            presence: Presence::Required,
-            domain: ValueDomain::Choice(&["bytes", "json", "text"]),
-            latest_site: EvaluationSite::Plan,
-        },
-        AttributeSpec {
-            name: "json_profile",
-            presence: Presence::Optional,
-            domain: ValueDomain::Choice(&["projected"]),
-            latest_site: EvaluationSite::Plan,
-        },
-        AttributeSpec {
-            name: "idempotent",
-            presence: Presence::Defaulted(DefaultValue::Expression("false")),
-            domain: ValueDomain::Boolean,
-            latest_site: EvaluationSite::Plan,
-        },
-        AttributeSpec {
-            name: "headers",
-            presence: Presence::Optional,
-            domain: ValueDomain::TypedHttpHeaders,
-            latest_site: EvaluationSite::Invocation,
-        },
-        AttributeSpec {
-            name: "custom_headers",
-            presence: Presence::Optional,
-            domain: ValueDomain::CustomHttpHeaders,
-            latest_site: EvaluationSite::Invocation,
-        },
-        AttributeSpec {
-            name: "idempotency_key",
-            presence: Presence::Optional,
-            domain: ValueDomain::Text,
-            latest_site: EvaluationSite::Invocation,
-        },
-        AttributeSpec {
-            name: "max_body",
-            presence: Presence::Defaulted(DefaultValue::Expression(r#""8MiB""#)),
-            domain: ValueDomain::ByteSize,
-            latest_site: EvaluationSite::Plan,
-        },
-        AttributeSpec {
-            name: "method",
-            presence: Presence::Defaulted(DefaultValue::Expression(r#""GET""#)),
-            domain: ValueDomain::Text,
-            latest_site: EvaluationSite::Invocation,
-        },
-        AttributeSpec {
-            name: "timeout",
-            presence: Presence::Required,
-            domain: ValueDomain::Duration,
-            latest_site: EvaluationSite::Instance,
-        },
-        AttributeSpec {
-            name: "tls_ca",
-            presence: Presence::Optional,
-            domain: ValueDomain::Bytes,
-            latest_site: EvaluationSite::Instance,
-        },
-        AttributeSpec {
-            name: "tls_certificate",
-            presence: Presence::Optional,
-            domain: ValueDomain::Bytes,
-            latest_site: EvaluationSite::Instance,
-        },
-        AttributeSpec {
-            name: "tls_private_key",
-            presence: Presence::Optional,
-            domain: ValueDomain::Bytes,
-            latest_site: EvaluationSite::Instance,
-        },
-        AttributeSpec {
-            name: "url",
-            presence: Presence::Required,
-            domain: ValueDomain::Text,
-            latest_site: EvaluationSite::Invocation,
-        },
-        AttributeSpec {
-            name: "versions",
-            presence: Presence::Defaulted(DefaultValue::Expression(ALL_NETWORK_VERSIONS)),
-            domain: ValueDomain::ChoiceList(NETWORK_VERSIONS),
-            latest_site: EvaluationSite::Plan,
-        },
-        AttributeSpec {
-            name: "zero_rtt",
-            presence: Presence::Defaulted(DefaultValue::Choice("disabled")),
-            domain: ValueDomain::Choice(&["disabled"]),
-            latest_site: EvaluationSite::Plan,
-        },
-    ],
-    selector: None,
-};
-
-/// One inbound HTTP request. `ack` closes after causal admission; `respond`
-/// retains the protocol request until a graph response or its scheduler-owned
-/// deadline wins the close-once race.
-pub const HTTP_SERVER: ConnectorContract = ConnectorContract {
-    id: HTTP_SERVER_CONNECTOR_ID,
-    name: "HttpServer",
-    roles: ConnectorDirection::Inbound,
-    exchange: ConnectorExchange::Call,
-    ports: &[
-        PortContract {
-            name: "in",
-            direction: PortDirection::Input,
-
-            ty: PortTypeRule::AttributeSelected {
-                attribute: "codec",
-                choices: NETWORK_BODY_TYPES,
-            },
-        },
-        PortContract {
-            name: "out",
-            direction: PortDirection::Output,
-
-            ty: PortTypeRule::SameAs("in"),
-        },
-        PortContract {
-            name: "exit",
-            direction: PortDirection::Output,
-
-            ty: PortTypeRule::Fixed(PortDataType::HttpServerExit),
-        },
-    ],
-    common: &[
-        AttributeSpec {
-            name: "auth_bearer",
-            presence: Presence::Optional,
-            domain: ValueDomain::Text,
-            latest_site: EvaluationSite::Instance,
-        },
-        AttributeSpec {
-            name: "behavior",
-            presence: Presence::Defaulted(DefaultValue::Choice("deterministic")),
-            domain: ValueDomain::Choice(&["deterministic"]),
-            latest_site: EvaluationSite::Plan,
-        },
-        AttributeSpec {
-            name: "codec",
-            presence: Presence::Required,
-            domain: ValueDomain::Choice(&["bytes", "json", "text"]),
-            latest_site: EvaluationSite::Plan,
-        },
-        AttributeSpec {
-            name: "headers",
-            presence: Presence::Optional,
-            domain: ValueDomain::TypedHttpHeaders,
-            latest_site: EvaluationSite::Instance,
-        },
-        AttributeSpec {
-            name: "custom_headers",
-            presence: Presence::Optional,
-            domain: ValueDomain::CustomHttpHeaders,
-            latest_site: EvaluationSite::Instance,
-        },
-        AttributeSpec {
-            name: "listen",
-            presence: Presence::Required,
-            domain: ValueDomain::Text,
-            latest_site: EvaluationSite::Instance,
-        },
-        AttributeSpec {
-            name: "max_body",
-            presence: Presence::Defaulted(DefaultValue::Expression(r#""8MiB""#)),
-            domain: ValueDomain::ByteSize,
-            latest_site: EvaluationSite::Plan,
-        },
-        AttributeSpec {
-            name: "path",
-            presence: Presence::Defaulted(DefaultValue::Expression(r#""/""#)),
-            domain: ValueDomain::Text,
-            latest_site: EvaluationSite::Plan,
-        },
-        AttributeSpec {
-            name: "tls_certificate",
-            presence: Presence::Optional,
-            domain: ValueDomain::Bytes,
-            latest_site: EvaluationSite::Instance,
-        },
-        AttributeSpec {
-            name: "tls_private_key",
-            presence: Presence::Optional,
-            domain: ValueDomain::Bytes,
-            latest_site: EvaluationSite::Instance,
-        },
-        AttributeSpec {
-            name: "versions",
-            presence: Presence::Defaulted(DefaultValue::Expression(ALL_NETWORK_VERSIONS)),
-            domain: ValueDomain::ChoiceList(NETWORK_VERSIONS),
-            latest_site: EvaluationSite::Plan,
-        },
-        AttributeSpec {
-            name: "zero_rtt",
-            presence: Presence::Defaulted(DefaultValue::Choice("disabled")),
-            domain: ValueDomain::Choice(&["disabled"]),
-            latest_site: EvaluationSite::Plan,
-        },
-    ],
-    selector: Some(ProfileSelector {
-        attribute: "mode",
-        default: Some("ack"),
-        profiles: &[
-            Profile {
-                protocol: None,
-                word: "ack",
-                support: ProfileSupport::Available,
-                attributes: &[],
-            },
-            Profile {
-                protocol: None,
-                word: "respond",
-                support: ProfileSupport::Available,
-                attributes: &[
-                    AttributeSpec {
-                        name: "correlate",
-                        presence: Presence::Optional,
-                        domain: ValueDomain::ExprPath,
-                        latest_site: EvaluationSite::Invocation,
-                    },
-                    AttributeSpec {
-                        name: "timeout",
-                        presence: Presence::Required,
-                        domain: ValueDomain::Duration,
-                        latest_site: EvaluationSite::Instance,
-                    },
-                ],
-            },
-        ],
-    }),
-};
-
-/// One client-opened WebSocket session: many complete messages in both
-/// directions and exactly one terminal session exit.
-pub const WEBSOCKET_CLIENT: ConnectorContract = ConnectorContract {
-    id: WEBSOCKET_CLIENT_CONNECTOR_ID,
-    name: "WebSocketClient",
-    roles: ConnectorDirection::InboundAndOutbound,
-    exchange: ConnectorExchange::Session,
-    ports: &[
-        PortContract {
-            name: "in",
-            direction: PortDirection::Input,
-
-            ty: PortTypeRule::AttributeSelected {
-                attribute: "codec",
-                choices: NETWORK_BODY_TYPES,
-            },
-        },
-        PortContract {
-            name: "out",
-            direction: PortDirection::Output,
-
-            ty: PortTypeRule::SameAs("in"),
-        },
-        PortContract {
-            name: "exit",
-            direction: PortDirection::Output,
-
-            ty: PortTypeRule::Fixed(PortDataType::WebSocketExit),
-        },
-    ],
-    common: &[
-        AttributeSpec {
-            name: "auth_bearer",
-            presence: Presence::Optional,
-            domain: ValueDomain::Text,
-            latest_site: EvaluationSite::Instance,
-        },
-        AttributeSpec {
-            name: "behavior",
-            presence: Presence::Required,
-            domain: ValueDomain::Choice(&["deterministic", "probabilistic"]),
-            latest_site: EvaluationSite::Plan,
-        },
-        AttributeSpec {
-            name: "codec",
-            presence: Presence::Required,
-            domain: ValueDomain::Choice(&["bytes", "json", "text"]),
-            latest_site: EvaluationSite::Plan,
-        },
-        AttributeSpec {
-            name: "handshake_timeout",
-            presence: Presence::Required,
-            domain: ValueDomain::Duration,
-            latest_site: EvaluationSite::Instance,
-        },
-        AttributeSpec {
-            name: "headers",
-            presence: Presence::Optional,
-            domain: ValueDomain::TypedHttpHeaders,
-            latest_site: EvaluationSite::Instance,
-        },
-        AttributeSpec {
-            name: "custom_headers",
-            presence: Presence::Optional,
-            domain: ValueDomain::CustomHttpHeaders,
-            latest_site: EvaluationSite::Instance,
-        },
-        AttributeSpec {
-            name: "max_message",
-            presence: Presence::Defaulted(DefaultValue::Expression(r#""8MiB""#)),
-            domain: ValueDomain::ByteSize,
-            latest_site: EvaluationSite::Plan,
-        },
-        AttributeSpec {
-            name: "subprotocols",
-            presence: Presence::Optional,
-            domain: ValueDomain::TextList,
-            latest_site: EvaluationSite::Instance,
-        },
-        AttributeSpec {
-            name: "tls_ca",
-            presence: Presence::Optional,
-            domain: ValueDomain::Bytes,
-            latest_site: EvaluationSite::Instance,
-        },
-        AttributeSpec {
-            name: "tls_certificate",
-            presence: Presence::Optional,
-            domain: ValueDomain::Bytes,
-            latest_site: EvaluationSite::Instance,
-        },
-        AttributeSpec {
-            name: "tls_private_key",
-            presence: Presence::Optional,
-            domain: ValueDomain::Bytes,
-            latest_site: EvaluationSite::Instance,
-        },
-        AttributeSpec {
-            name: "url",
-            presence: Presence::Required,
-            domain: ValueDomain::Text,
-            latest_site: EvaluationSite::Instance,
-        },
-        AttributeSpec {
-            name: "versions",
-            presence: Presence::Defaulted(DefaultValue::Expression(ALL_NETWORK_VERSIONS)),
-            domain: ValueDomain::ChoiceList(NETWORK_VERSIONS),
-            latest_site: EvaluationSite::Plan,
-        },
-        AttributeSpec {
-            name: "zero_rtt",
-            presence: Presence::Defaulted(DefaultValue::Choice("disabled")),
-            domain: ValueDomain::Choice(&["disabled"]),
-            latest_site: EvaluationSite::Plan,
-        },
-    ],
-    selector: None,
-};
-
-/// One accepted WebSocket session. The listener and every live session share
-/// one both-role Driver state; physical connection identity never enters the
-/// graph contract.
-pub const WEBSOCKET_SERVER: ConnectorContract = ConnectorContract {
-    id: WEBSOCKET_SERVER_CONNECTOR_ID,
-    name: "WebSocketServer",
-    roles: ConnectorDirection::InboundAndOutbound,
-    exchange: ConnectorExchange::Session,
-    ports: &[
-        PortContract {
-            name: "in",
-            direction: PortDirection::Input,
-
-            ty: PortTypeRule::AttributeSelected {
-                attribute: "codec",
-                choices: NETWORK_BODY_TYPES,
-            },
-        },
-        PortContract {
-            name: "out",
-            direction: PortDirection::Output,
-
-            ty: PortTypeRule::SameAs("in"),
-        },
-        PortContract {
-            name: "exit",
-            direction: PortDirection::Output,
-
-            ty: PortTypeRule::Fixed(PortDataType::WebSocketExit),
-        },
-    ],
-    common: &[
-        AttributeSpec {
-            name: "allowed_origins",
-            presence: Presence::Optional,
-            domain: ValueDomain::TextList,
-            latest_site: EvaluationSite::Instance,
-        },
-        AttributeSpec {
-            name: "auth_bearer",
-            presence: Presence::Optional,
-            domain: ValueDomain::Text,
-            latest_site: EvaluationSite::Instance,
-        },
-        AttributeSpec {
-            name: "behavior",
-            presence: Presence::Defaulted(DefaultValue::Choice("deterministic")),
-            domain: ValueDomain::Choice(&["deterministic"]),
-            latest_site: EvaluationSite::Plan,
-        },
-        AttributeSpec {
-            name: "codec",
-            presence: Presence::Required,
-            domain: ValueDomain::Choice(&["bytes", "json", "text"]),
-            latest_site: EvaluationSite::Plan,
-        },
-        AttributeSpec {
-            name: "correlate",
-            presence: Presence::Optional,
-            domain: ValueDomain::Text,
-            latest_site: EvaluationSite::Invocation,
-        },
-        AttributeSpec {
-            name: "handshake_timeout",
-            presence: Presence::Required,
-            domain: ValueDomain::Duration,
-            latest_site: EvaluationSite::Instance,
-        },
-        AttributeSpec {
-            name: "headers",
-            presence: Presence::Optional,
-            domain: ValueDomain::TypedHttpHeaders,
-            latest_site: EvaluationSite::Instance,
-        },
-        AttributeSpec {
-            name: "custom_headers",
-            presence: Presence::Optional,
-            domain: ValueDomain::CustomHttpHeaders,
-            latest_site: EvaluationSite::Instance,
-        },
-        AttributeSpec {
-            name: "listen",
-            presence: Presence::Required,
-            domain: ValueDomain::Text,
-            latest_site: EvaluationSite::Instance,
-        },
-        AttributeSpec {
-            name: "max_message",
-            presence: Presence::Defaulted(DefaultValue::Expression(r#""8MiB""#)),
-            domain: ValueDomain::ByteSize,
-            latest_site: EvaluationSite::Plan,
-        },
-        AttributeSpec {
-            name: "path",
-            presence: Presence::Defaulted(DefaultValue::Expression(r#""/""#)),
-            domain: ValueDomain::Text,
-            latest_site: EvaluationSite::Plan,
-        },
-        AttributeSpec {
-            name: "subprotocols",
-            presence: Presence::Optional,
-            domain: ValueDomain::TextList,
-            latest_site: EvaluationSite::Instance,
-        },
-        AttributeSpec {
-            name: "tls_certificate",
-            presence: Presence::Optional,
-            domain: ValueDomain::Bytes,
-            latest_site: EvaluationSite::Instance,
-        },
-        AttributeSpec {
-            name: "tls_private_key",
-            presence: Presence::Optional,
-            domain: ValueDomain::Bytes,
-            latest_site: EvaluationSite::Instance,
-        },
-        AttributeSpec {
-            name: "versions",
-            presence: Presence::Defaulted(DefaultValue::Expression(ALL_NETWORK_VERSIONS)),
-            domain: ValueDomain::ChoiceList(NETWORK_VERSIONS),
-            latest_site: EvaluationSite::Plan,
-        },
-        AttributeSpec {
-            name: "zero_rtt",
-            presence: Presence::Defaulted(DefaultValue::Choice("disabled")),
-            domain: ValueDomain::Choice(&["disabled"]),
-            latest_site: EvaluationSite::Plan,
-        },
-    ],
-    selector: None,
-};
-
-/// The catalogue names declared by `stdlib.md` whose Drivers are not
-/// in the M0 build.
 const DECLARED: &[&str] = &["Timer", "Calendar", "Memory"];
 
 const M0_FRONTENDS: &[FrontendContract] = &[
@@ -1040,9 +188,9 @@ impl ContractCatalog {
     ///
     /// # Errors
     ///
-    /// The first [`crate::contract::SheetDefect`] of the standard
+    /// The first [`crate::contract::ContractValidationError`] of the standard
     /// catalogue.
-    pub fn try_m0() -> Result<Self, crate::contract::SheetDefect> {
+    pub fn try_m0() -> Result<Self, crate::contract::ContractValidationError> {
         let base = Self {
             connectors: std::collections::BTreeMap::new(),
             declared: DECLARED.to_vec(),
@@ -1066,6 +214,8 @@ impl ContractCatalog {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::connector::contract::{DefaultValue, EvaluationSite, Presence};
+    use crate::connector::stdlib::HTTP_SERVER_CONNECTOR_ID;
     use crate::contract::Availability;
 
     #[test]
@@ -1115,7 +265,8 @@ mod tests {
             ]))
             .expect("the effective Process sheet resolves");
         assert_eq!(ports.len(), 4);
-        let process_exit = crate::boundary::process_exit_type().expect("the target type is valid");
+        let process_exit =
+            crate::connector::stdlib::process_exit_type().expect("the target type is valid");
         assert!(
             ports
                 .iter()
@@ -1156,7 +307,7 @@ mod tests {
             let id = crate::connector::ContractId::parse(sheet.id).expect("a canonical id");
             for attribute in sheet.common {
                 assert_eq!(
-                    crate::boundary::network_attribute_site(&id, attribute.name),
+                    crate::connector::stdlib::network_attribute_site(&id, attribute.name),
                     Some(attribute.latest_site),
                     "{}.{}",
                     sheet.name,
@@ -1165,13 +316,13 @@ mod tests {
             }
             if let Some(selector) = &sheet.selector {
                 assert_eq!(
-                    crate::boundary::network_attribute_site(&id, selector.attribute),
+                    crate::connector::stdlib::network_attribute_site(&id, selector.attribute),
                     Some(EvaluationSite::Plan)
                 );
                 for profile in selector.profiles {
                     for attribute in profile.attributes {
                         assert_eq!(
-                            crate::boundary::network_attribute_site(&id, attribute.name),
+                            crate::connector::stdlib::network_attribute_site(&id, attribute.name),
                             Some(attribute.latest_site),
                             "{}({}).{}",
                             sheet.name,
@@ -1196,7 +347,11 @@ mod tests {
                 for port in ports {
                     assert_eq!(
                         port.ty,
-                        crate::boundary::network_port_type(&id, port.port.name(), Some(codec)),
+                        crate::connector::stdlib::network_port_type(
+                            &id,
+                            port.port.name(),
+                            Some(codec)
+                        ),
                         "{}.{} under {codec}",
                         sheet.name,
                         port.port
@@ -1277,9 +432,12 @@ mod tests {
         assert!(!crate::plan::custom_http_headers_value_holds(
             &managed_custom
         ));
-        let client = crate::boundary::http_client_exit_type().expect("the client exit union");
-        let server = crate::boundary::http_server_exit_type().expect("the server exit union");
-        let websocket = crate::boundary::websocket_exit_type().expect("the session exit union");
+        let client =
+            crate::connector::stdlib::http_client_exit_type().expect("the client exit union");
+        let server =
+            crate::connector::stdlib::http_server_exit_type().expect("the server exit union");
+        let websocket =
+            crate::connector::stdlib::websocket_exit_type().expect("the session exit union");
         let case_names = |ty: crate::datatype::DataType| match ty {
             crate::datatype::DataType::TaggedUnion(union) => union
                 .cases()

@@ -1,10 +1,17 @@
 //! Effectless resident child: the script replaces replies, not Session state.
 use super::*;
-use crate::boundary::{
-    AdmittedIngress, InboundConnectorDriver, InboundSession, IngressProposalHandle,
-    IngressRejection, RetainedProposal, SessionConnectorDriver, SessionId, SessionObservation,
-    SessionOpen, SessionStart, SessionWrite,
-};
+use crate::connector::driver::Ingress;
+use crate::connector::driver::Session;
+use crate::connector::exchange::AdmittedIngress;
+use crate::connector::exchange::InboundSession;
+use crate::connector::exchange::IngressProposalHandle;
+use crate::connector::exchange::IngressRejection;
+use crate::connector::exchange::PendingIngress;
+use crate::connector::exchange::SessionId;
+use crate::connector::exchange::SessionObservation;
+use crate::connector::exchange::SessionOpen;
+use crate::connector::exchange::SessionStart;
+use crate::connector::exchange::SessionWrite;
 use crate::connectors::ProcessRequestSettings;
 use std::collections::VecDeque;
 
@@ -16,25 +23,25 @@ pub(super) struct Factory {
 impl Factory {
     pub(super) fn new(mocks: SharedMocks, faults: MockFaults) -> Result<Self, String> {
         Ok(Self {
-            id: ContractId::parse(crate::connector::PROCESS_SERVICE_CONNECTOR_ID)
+            id: ContractId::parse(crate::connector::stdlib::PROCESS_SERVICE_CONNECTOR_ID)
                 .map_err(|e| e.to_string())?,
             mocks,
             faults,
         })
     }
 }
-impl ConnectorDriverFactory for Factory {
-    fn connector_id(&self) -> &ContractId {
+impl DriverFactory for Factory {
+    fn contract_id(&self) -> &ContractId {
         &self.id
     }
     fn roles(&self) -> ConnectorDirection {
         ConnectorDirection::InboundAndOutbound
     }
-    fn bind<'a>(
+    fn create<'a>(
         &self,
         plan: &'a ValidatedExecutionPlan,
         nodes: &[node::Path],
-    ) -> Result<Box<dyn BoundConnectorDriver + 'a>, DriverFactoryError> {
+    ) -> Result<Box<dyn Driver + 'a>, DriverFactoryError> {
         let bindings = ProcessRequestSettings::try_bind(plan, nodes)
             .map_err(|e| DriverFactoryError::new(e.to_string()))?;
         let protocol = ProcessRequestSettings::try_bind(plan, nodes)
@@ -62,7 +69,7 @@ struct World<'plan> {
     resources: BTreeMap<SessionId, node::Path>,
     terminating: std::collections::BTreeSet<SessionId>,
     events: VecDeque<SessionObservation>,
-    proposals: VecDeque<RetainedProposal>,
+    proposals: VecDeque<PendingIngress>,
     next: u64,
 }
 impl World<'_> {
@@ -82,7 +89,7 @@ impl World<'_> {
                         return;
                     };
                     self.next = next;
-                    self.proposals.push_back(RetainedProposal {
+                    self.proposals.push_back(PendingIngress {
                         handle: IngressProposalHandle::new(next),
                         proposal: IngressProposal {
                             provenance: IngressProvenance::single(path.clone()),
@@ -100,23 +107,23 @@ impl World<'_> {
         }
     }
 }
-impl BoundConnectorDriver for World<'_> {
-    fn inbound(&mut self) -> Option<&mut dyn InboundConnectorDriver> {
+impl Driver for World<'_> {
+    fn inbound(&mut self) -> Option<&mut dyn Ingress> {
         Some(self)
     }
-    fn outbound(&mut self) -> Option<&mut dyn OutboundConnectorDriver> {
+    fn outbound(&mut self) -> Option<&mut dyn Outbound> {
         Some(self)
     }
 }
-impl OutboundConnectorDriver for World<'_> {
-    fn call(&mut self) -> Option<&mut dyn CallConnectorDriver> {
+impl Outbound for World<'_> {
+    fn call(&mut self) -> Option<&mut dyn OutboundCall> {
         None
     }
-    fn session(&mut self) -> Option<&mut dyn SessionConnectorDriver> {
+    fn session(&mut self) -> Option<&mut dyn Session> {
         Some(self)
     }
 }
-impl SessionConnectorDriver for World<'_> {
+impl Session for World<'_> {
     fn prepare_session_open(
         &mut self,
         path: &node::Path,
@@ -139,7 +146,7 @@ impl SessionConnectorDriver for World<'_> {
         _: &node::Path,
         completion: SchedulerCompletion,
     ) -> Completion {
-        crate::boundary::process_scheduler_completion(completion)
+        crate::connector::stdlib::process_scheduler_completion(completion)
     }
     fn open_session(&mut self, intent: &SessionOpen, message: &Envelope) -> SessionStart {
         if self.resources.contains_key(&intent.session_id) {
@@ -169,7 +176,7 @@ impl SessionConnectorDriver for World<'_> {
         self.answer(intent.session_id, &intent.connector_path, message);
         SessionStart::Started
     }
-    fn session_events(&mut self) -> Vec<SessionObservation> {
+    fn poll_observations(&mut self) -> Vec<SessionObservation> {
         let mut ready = Vec::new();
         let mut waiting = VecDeque::new();
         for event in self.events.drain(..) {
@@ -201,8 +208,8 @@ impl SessionConnectorDriver for World<'_> {
         });
     }
 }
-impl InboundConnectorDriver for World<'_> {
-    fn proposal(&mut self) -> Option<RetainedProposal> {
+impl Ingress for World<'_> {
+    fn poll_proposal(&mut self) -> Option<PendingIngress> {
         let proposal = self.proposals.front()?;
         // The script may answer during open_session. As with the physical
         // Driver, the opening must reach the core before its first frame.
@@ -215,7 +222,7 @@ impl InboundConnectorDriver for World<'_> {
         }
         Some(proposal.clone())
     }
-    fn decide(
+    fn notify_admission(
         &mut self,
         reference: IngressProposalHandle,
         decision: Result<AdmittedIngress, IngressRejection>,

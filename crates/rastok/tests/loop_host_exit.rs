@@ -176,7 +176,10 @@ lab app {{ simulation forged on app {{
 
 #[test]
 fn expiry_and_pending_commands_recover_on_the_resolved_host_terminal() {
-    use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
+    use rastok::connector::exchange::EnvelopeDraft;
+    use rastok::connector::exchange::IngressProposal;
+    use rastok::connector::exchange::IngressProvenance;
+    use rastok::connector::exchange::IngressSequence;
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::{
         MemJournal,

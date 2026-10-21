@@ -1,9 +1,20 @@
-use crate::boundary::{
-    AdmittedIngress, EnvelopeDraft, HttpServerExit, InboundCallConnectorDriver,
-    InboundCallObservation, InboundCallResponse, InboundCallResponseStart, InboundCallTimeout,
-    InboundCallTimeoutStart, InboundConnectorDriver, InboundExchangeId, IngressProposal,
-    IngressProposalHandle, IngressProvenance, IngressRejection, IngressSequence, RetainedProposal,
-};
+use crate::connector::driver::InboundCall;
+use crate::connector::driver::Ingress;
+use crate::connector::exchange::AdmittedIngress;
+use crate::connector::exchange::EnvelopeDraft;
+use crate::connector::exchange::InboundCallObservation;
+use crate::connector::exchange::InboundCallResponse;
+use crate::connector::exchange::InboundCallResponseStart;
+use crate::connector::exchange::InboundCallTimeout;
+use crate::connector::exchange::InboundCallTimeoutStart;
+use crate::connector::exchange::InboundExchangeId;
+use crate::connector::exchange::IngressProposal;
+use crate::connector::exchange::IngressProposalHandle;
+use crate::connector::exchange::IngressProvenance;
+use crate::connector::exchange::IngressRejection;
+use crate::connector::exchange::IngressSequence;
+use crate::connector::exchange::PendingIngress;
+use crate::connector::stdlib::HttpServerExit;
 use crate::connectors::http_server::{HttpServerMode, bind_routes};
 use crate::connectors::http_shared::{HttpVersion, decode_body};
 use crate::connectors::network::pump::{
@@ -122,16 +133,18 @@ impl HttpServerFactory {
     /// # Errors
     ///
     /// The built-in Connector id ceased to be canonical.
-    pub fn try_new(config: HttpServerConfig) -> Result<Self, crate::connector::ConnectorIdError> {
+    pub fn try_new(config: HttpServerConfig) -> Result<Self, crate::connector::ContractIdError> {
         Ok(Self {
-            id: crate::connector::ContractId::parse(crate::connector::HTTP_SERVER_CONNECTOR_ID)?,
+            id: crate::connector::ContractId::parse(
+                crate::connector::stdlib::HTTP_SERVER_CONNECTOR_ID,
+            )?,
             config,
         })
     }
 }
 
-impl crate::connectors::ConnectorDriverFactory for HttpServerFactory {
-    fn connector_id(&self) -> &crate::connector::ContractId {
+impl crate::connectors::DriverFactory for HttpServerFactory {
+    fn contract_id(&self) -> &crate::connector::ContractId {
         &self.id
     }
 
@@ -139,18 +152,16 @@ impl crate::connectors::ConnectorDriverFactory for HttpServerFactory {
         crate::connector::ConnectorDirection::Inbound
     }
 
-    fn bind<'plan>(
+    fn create<'plan>(
         &self,
         plan: &'plan crate::plan::ValidatedExecutionPlan,
         nodes: &[crate::node::Path],
     ) -> Result<
-        Box<dyn crate::connectors::BoundConnectorDriver + 'plan>,
+        Box<dyn crate::connector::driver::Driver + 'plan>,
         crate::connectors::DriverFactoryError,
     > {
         HttpServer::try_bind(plan, nodes, self.config)
-            .map(|driver| {
-                Box::new(driver) as Box<dyn crate::connectors::BoundConnectorDriver + 'plan>
-            })
+            .map(|driver| Box::new(driver) as Box<dyn crate::connector::driver::Driver + 'plan>)
             .map_err(crate::connectors::DriverFactoryError::new)
     }
 }
@@ -193,7 +204,7 @@ struct ListenerGroup {
 
 #[derive(Debug)]
 struct LiveProposal {
-    proposal: RetainedProposal,
+    proposal: PendingIngress,
     decision: tokio::sync::oneshot::Sender<ServerDecision>,
     response: Option<RetainedResponse>,
     _reservation: EventReservation,
@@ -207,7 +218,7 @@ struct RetainedResponse {
 
 #[derive(Debug)]
 struct ServerCommand {
-    call_id: crate::boundary::InboundCallId,
+    call_id: crate::connector::exchange::InboundCallId,
     peer: tokio::sync::oneshot::Sender<Response<Full<Bytes>>>,
     response: Response<Full<Bytes>>,
     terminal: HttpServerExit,
@@ -215,7 +226,7 @@ struct ServerCommand {
 
 #[derive(Clone, Copy, Debug)]
 enum ServerDecision {
-    Accepted(crate::boundary::InboundCallId),
+    Accepted(crate::connector::exchange::InboundCallId),
     Rejected(IngressRejection),
 }
 
@@ -285,19 +296,19 @@ struct HttpServer<'plan> {
     _plan: &'plan crate::plan::ValidatedExecutionPlan,
     engine: HostedNetworkEngine<ServerCommand, ServerCommand, ServerEvent>,
     pending: VecDeque<LiveProposal>,
-    retained: BTreeMap<crate::boundary::InboundCallId, RetainedResponse>,
-    writing: BTreeSet<crate::boundary::InboundCallId>,
+    retained: BTreeMap<crate::connector::exchange::InboundCallId, RetainedResponse>,
+    writing: BTreeSet<crate::connector::exchange::InboundCallId>,
     terminals: Vec<InboundCallObservation>,
     #[cfg(test)]
     local_addresses: Vec<SocketAddr>,
 }
 
-impl crate::connectors::BoundConnectorDriver for HttpServer<'_> {
-    fn inbound(&mut self) -> Option<&mut dyn InboundConnectorDriver> {
+impl crate::connector::driver::Driver for HttpServer<'_> {
+    fn inbound(&mut self) -> Option<&mut dyn Ingress> {
         Some(self)
     }
 
-    fn outbound(&mut self) -> Option<&mut dyn crate::boundary::OutboundConnectorDriver> {
+    fn outbound(&mut self) -> Option<&mut dyn crate::connector::driver::Outbound> {
         None
     }
 }
@@ -539,7 +550,7 @@ impl<'plan> HttpServer<'plan> {
                         .emit(
                             ServerEvent::Terminal(InboundCallObservation {
                                 call_id: command.call_id,
-                                completion: crate::boundary::Completion::http_server_exit(
+                                completion: crate::connector::exchange::Completion::http_server_exit(
                                     terminal,
                                 ),
                             }),
@@ -588,13 +599,13 @@ impl<'plan> HttpServer<'plan> {
     }
 }
 
-impl InboundConnectorDriver for HttpServer<'_> {
-    fn proposal(&mut self) -> Option<RetainedProposal> {
+impl Ingress for HttpServer<'_> {
+    fn poll_proposal(&mut self) -> Option<PendingIngress> {
         self.poll_events();
         self.pending.front().map(|pending| pending.proposal.clone())
     }
 
-    fn decide(
+    fn notify_admission(
         &mut self,
         reference: IngressProposalHandle,
         decision: Result<AdmittedIngress, IngressRejection>,
@@ -627,7 +638,7 @@ impl InboundConnectorDriver for HttpServer<'_> {
             Err(ServerDecision::Accepted(call_id)) => {
                 self.terminals.push(InboundCallObservation {
                     call_id,
-                    completion: crate::boundary::Completion::http_server_exit(
+                    completion: crate::connector::exchange::Completion::http_server_exit(
                         HttpServerExit::PeerDisconnected,
                     ),
                 });
@@ -636,12 +647,12 @@ impl InboundConnectorDriver for HttpServer<'_> {
         }
     }
 
-    fn call(&mut self) -> Option<&mut dyn InboundCallConnectorDriver> {
+    fn call(&mut self) -> Option<&mut dyn InboundCall> {
         Some(self)
     }
 }
 
-impl InboundCallConnectorDriver for HttpServer<'_> {
+impl InboundCall for HttpServer<'_> {
     fn start_response(&mut self, response: &InboundCallResponse) -> InboundCallResponseStart {
         self.poll_events();
         if self.writing.contains(&response.call_id) {
@@ -735,7 +746,7 @@ impl InboundCallConnectorDriver for HttpServer<'_> {
         self.start_control(timeout.call_id, route, command)
     }
 
-    fn events(&mut self) -> Vec<InboundCallObservation> {
+    fn poll_completions(&mut self) -> Vec<InboundCallObservation> {
         self.poll_events();
         self.terminals.sort_by_key(|event| event.call_id);
         std::mem::take(&mut self.terminals)
@@ -751,7 +762,7 @@ enum ServerResponseError {
 impl HttpServer<'_> {
     fn start_control(
         &mut self,
-        call_id: crate::boundary::InboundCallId,
+        call_id: crate::connector::exchange::InboundCallId,
         route: BoundRoute,
         command: ServerCommand,
     ) -> InboundCallTimeoutStart {
@@ -785,7 +796,7 @@ impl HttpServer<'_> {
         };
         self.terminals.push(InboundCallObservation {
             call_id: command.call_id,
-            completion: crate::boundary::Completion::http_server_exit(terminal),
+            completion: crate::connector::exchange::Completion::http_server_exit(terminal),
         });
     }
 }
@@ -794,7 +805,7 @@ fn graph_response(
     route: &BoundRoute,
     envelope: &crate::envelope::Envelope,
 ) -> Result<(Response<Full<Bytes>>, HttpServerExit, usize), ServerResponseError> {
-    let body = crate::boundary::network_payload_bytes(&route.codec, envelope.data())
+    let body = crate::connector::stdlib::network_payload_bytes(&route.codec, envelope.data())
         .map_err(|_| ServerResponseError::Invalid)?;
     if u64::try_from(body.len()).map_or(true, |length| length > route.max_body) {
         return Err(ServerResponseError::Oversized);
@@ -1184,7 +1195,7 @@ async fn dispatch_http3_request(
         request.path,
         HttpVersion::Http3,
     );
-    let proposal = RetainedProposal {
+    let proposal = PendingIngress {
         handle: reference,
         proposal: IngressProposal {
             provenance: IngressProvenance::single(request.route.node.clone()),
@@ -1221,7 +1232,7 @@ async fn dispatch_http3_request(
                 response_with_headers(StatusCode::ACCEPTED, &request.route.response_headers);
             let terminal = InboundCallObservation {
                 call_id,
-                completion: crate::boundary::Completion::http_server_exit(
+                completion: crate::connector::exchange::Completion::http_server_exit(
                     HttpServerExit::Completed { status: 202 },
                 ),
             };
@@ -1550,7 +1561,7 @@ async fn handle_request(
         parts.uri.to_string(),
         version,
     );
-    let proposal = RetainedProposal {
+    let proposal = PendingIngress {
         handle: reference,
         proposal: IngressProposal {
             provenance: IngressProvenance::single(route.node.clone()),
@@ -1592,7 +1603,7 @@ async fn handle_request(
                 let response = response_with_headers(StatusCode::ACCEPTED, &route.response_headers);
                 let event = ServerEvent::Terminal(InboundCallObservation {
                     call_id,
-                    completion: crate::boundary::Completion::http_server_exit(
+                    completion: crate::connector::exchange::Completion::http_server_exit(
                         HttpServerExit::Completed { status: 202 },
                     ),
                 });
@@ -1750,8 +1761,9 @@ fn response_with_headers(status: StatusCode, headers: &http::HeaderMap) -> Respo
 )]
 mod tests {
     use super::*;
-    use crate::boundary::{InboundExchangeId, IngressAdmission};
     use crate::compiler::compile;
+    use crate::connector::exchange::InboundExchangeId;
+    use crate::connector::exchange::IngressAdmission;
     use crate::contract::ContractCatalog;
     use crate::journal::{Journal, MemJournal};
     use crate::plan::GraphVersion;
@@ -1891,10 +1903,10 @@ graph api : App {
             .expect("the HTTP/3-only respond plan remains Registry-free valid")
     }
 
-    fn wait_for_proposal(server: &mut HttpServer<'_>) -> RetainedProposal {
+    fn wait_for_proposal(server: &mut HttpServer<'_>) -> PendingIngress {
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
-            if let Some(proposal) = server.proposal() {
+            if let Some(proposal) = server.poll_proposal() {
                 return proposal;
             }
             assert!(
@@ -1908,7 +1920,7 @@ graph api : App {
     fn wait_for_terminal(server: &mut HttpServer<'_>) -> InboundCallObservation {
         let deadline = Instant::now() + Duration::from_secs(3);
         loop {
-            if let Some(event) = server.events().into_iter().next() {
+            if let Some(event) = server.poll_completions().into_iter().next() {
                 return event;
             }
             assert!(
@@ -1971,7 +1983,7 @@ graph api : App {
         let Some(InboundExchangeId::Call(call_id)) = accepted.exchange else {
             panic!("an accepted server request opens one Call")
         };
-        server.decide(proposal.handle, Ok(accepted));
+        server.notify_admission(proposal.handle, Ok(accepted));
         assert_eq!(
             response
                 .recv_timeout(Duration::from_secs(3))
@@ -2200,7 +2212,7 @@ graph api : App {
         let Some(InboundExchangeId::Call(call_id)) = accepted.exchange else {
             panic!("the admitted request opens one Call")
         };
-        server.decide(proposal.handle, Ok(accepted));
+        server.notify_admission(proposal.handle, Ok(accepted));
         assert_eq!(response.try_recv(), Err(TryRecvError::Empty));
 
         vm.run_ready(&mut journal)
@@ -2256,7 +2268,7 @@ graph api : App {
         let Some(InboundExchangeId::Call(call_id)) = accepted.exchange else {
             panic!("the admitted request opens one Call")
         };
-        server.decide(proposal.handle, Ok(accepted));
+        server.notify_admission(proposal.handle, Ok(accepted));
 
         let registry = crate::connectors::DriverRegistry::default()
             .try_with(Box::new(
@@ -2264,7 +2276,7 @@ graph api : App {
                     .expect("the standard server id is valid"),
             ))
             .expect("one hosted family registers");
-        let mut bindings = crate::connectors::RuntimeBindings::try_new(&plan, &registry)
+        let mut bindings = crate::connectors::RuntimeDrivers::prepare(&plan, &registry)
             .expect("the validated server plan binds");
         vm.advance_to(&mut journal, &mut bindings, 1_000_000_000)
             .expect("the request deadline advances deterministically");
@@ -2332,7 +2344,7 @@ graph api : App {
         else {
             panic!("the HTTP/3 request must be admitted")
         };
-        server.decide(proposal.handle, Ok(accepted));
+        server.notify_admission(proposal.handle, Ok(accepted));
         vm.run_ready(&mut journal)
             .expect("the graph produces the HTTP/3 response");
         let ready = vm.ready_inbound_call_responses();
@@ -2392,7 +2404,7 @@ graph api : App {
                 }
             );
             assert!(
-                server.proposal().is_none(),
+                server.poll_proposal().is_none(),
                 "a request without a typed payload cannot open a causal Call"
             );
         }
@@ -2422,7 +2434,7 @@ graph api : App {
         else {
             panic!("the first request must be admitted")
         };
-        server.decide(first_proposal.handle, Ok(accepted));
+        server.notify_admission(first_proposal.handle, Ok(accepted));
         assert_eq!(
             first
                 .recv_timeout(Duration::from_secs(3))
@@ -2491,7 +2503,7 @@ graph api : App {
         else {
             panic!("the first retained request must be accepted")
         };
-        server.decide(proposal.handle, Ok(accepted));
+        server.notify_admission(proposal.handle, Ok(accepted));
         assert_eq!(
             accepted_response
                 .recv_timeout(Duration::from_secs(3))
@@ -2516,7 +2528,7 @@ graph api : App {
             .expect("the second proposal remains")
             .proposal
             .handle;
-        server.decide(second_reference, Err(IngressRejection::UnknownPort));
+        server.notify_admission(second_reference, Err(IngressRejection::UnknownPort));
         assert_eq!(
             rejected_response
                 .recv_timeout(Duration::from_secs(3))

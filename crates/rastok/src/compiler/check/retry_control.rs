@@ -154,7 +154,7 @@ impl Checker<'_, '_> {
             self.retry_refusal(E_RETRY_HOST, decl.name.span, "Retry/idempotence requires a finite outbound Call: Process job, File read/replace or HttpClient; no Event, Session or inbound Call");
             return None;
         };
-        let fixed_guarantee = id.as_str() == crate::connector::FILE_CONNECTOR_ID;
+        let fixed_guarantee = id.as_str() == crate::connector::stdlib::FILE_CONNECTOR_ID;
         let mut idempotent = fixed_guarantee;
         let mut signature = inherited_signature.clone();
         let mut consts = inherited_consts.clone();

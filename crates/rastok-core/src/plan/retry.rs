@@ -2,7 +2,8 @@
 //! expressions. No Registry, source spelling or Driver claim is authority.
 
 use super::*;
-use crate::connector::{ConnectorExchange, FILE_CONNECTOR_ID};
+use crate::connector::ExchangeKind;
+use crate::connector::stdlib::FILE_CONNECTOR_ID;
 use crate::node;
 use alloc::string::ToString;
 
@@ -54,7 +55,7 @@ pub(super) fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> 
         let call = connector
             .call_semantics()
             .ok_or_else(|| error("this Contract profile is not a finite outbound Call"))?;
-        if connector.exchange != ConnectorExchange::Call
+        if connector.exchange != ExchangeKind::Call
             || !connector.roles.has_outbound()
             || spec.entry.name() != call.request()
             || spec.terminal.name() != call.terminal()

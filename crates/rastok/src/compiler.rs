@@ -1034,7 +1034,10 @@ graph conflicting_instance : App {
 
     #[test]
     fn loop_fuel_reenters_without_a_spatial_cycle_and_expires_exactly() {
-        use crate::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
+        use crate::connector::exchange::EnvelopeDraft;
+        use crate::connector::exchange::IngressProposal;
+        use crate::connector::exchange::IngressProvenance;
+        use crate::connector::exchange::IngressSequence;
         use crate::envelope::{Data, Namespace};
         use crate::journal::{MemJournal, Record, loop_protocol::Fact};
         use crate::runtime::execution::Execution;
@@ -1187,7 +1190,10 @@ graph app : App {{
 
     #[test]
     fn an_open_loop_resumes_from_the_journal_without_regaining_fuel() {
-        use crate::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
+        use crate::connector::exchange::EnvelopeDraft;
+        use crate::connector::exchange::IngressProposal;
+        use crate::connector::exchange::IngressProvenance;
+        use crate::connector::exchange::IngressSequence;
         use crate::envelope::{Data, Namespace};
         use crate::journal::{MemJournal, Record, loop_protocol::Fact};
         use crate::runtime::execution::Execution;
@@ -1295,7 +1301,10 @@ graph app : App {
 
     #[test]
     fn two_roots_keep_independent_loop_runs_in_one_instance() {
-        use crate::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
+        use crate::connector::exchange::EnvelopeDraft;
+        use crate::connector::exchange::IngressProposal;
+        use crate::connector::exchange::IngressProvenance;
+        use crate::connector::exchange::IngressSequence;
         use crate::envelope::{Data, Namespace};
         use crate::journal::{
             MemJournal, Record,

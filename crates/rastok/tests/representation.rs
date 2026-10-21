@@ -121,7 +121,10 @@ fn a_shared_raw_payload_keeps_independent_reading_port_types() {
 
 #[test]
 fn raw_text_selects_the_same_key_and_handler_value_inside_a_graph() {
-    use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
+    use rastok::connector::exchange::EnvelopeDraft;
+    use rastok::connector::exchange::IngressProposal;
+    use rastok::connector::exchange::IngressProvenance;
+    use rastok::connector::exchange::IngressSequence;
     use rastok::journal::{MemJournal, Record};
     use rastok::node::{Lifecycle, Path, Trigger};
     use rastok::runtime::execution::Execution;
@@ -184,7 +187,10 @@ graph g : App {
 
 #[test]
 fn loop_expiry_materializes_last_state_by_the_host_entry_type() {
-    use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
+    use rastok::connector::exchange::EnvelopeDraft;
+    use rastok::connector::exchange::IngressProposal;
+    use rastok::connector::exchange::IngressProvenance;
+    use rastok::connector::exchange::IngressSequence;
     use rastok::journal::MemJournal;
     use rastok::node::Path;
     use rastok::runtime::execution::Execution;

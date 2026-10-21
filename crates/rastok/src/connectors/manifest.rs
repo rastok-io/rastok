@@ -5,7 +5,8 @@
 //! neither an artifact format nor a native ABI: only canonical Connector ids,
 //! closed role claims, and duplicate refusal belong here.
 
-use crate::connector::{ConnectorDirection, ContractId};
+use crate::connector::ConnectorDirection;
+use crate::connector::ContractId;
 
 /// One Connector capability advertised by a physical Driver artifact.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,7 +103,8 @@ impl std::error::Error for DriverManifestError {}
 #[cfg(test)]
 mod tests {
     use super::{DriverManifest, DriverManifestEntry, DriverManifestError};
-    use crate::connector::{ConnectorDirection, ContractId};
+    use crate::connector::ConnectorDirection;
+    use crate::connector::ContractId;
 
     fn id(spelling: &str) -> ContractId {
         ContractId::parse(spelling).expect("the test Connector id is canonical")

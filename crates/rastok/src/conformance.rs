@@ -19,14 +19,21 @@
 //! battery cannot force it. The same registry seam serves native, embedded,
 //! statically selected, and future plugin-hosted Drivers.
 
-use crate::boundary::{
-    EnvelopeDraft, IngressAdmission, IngressProposal, IngressProvenance, IngressSequence,
-    OutboundConnectorBindings, RequestPreparation, SessionConnectorBindings, SessionObservation,
-    SessionOpen, SessionWrite,
-};
 use crate::compiler::compile;
-use crate::connectors::{DriverRegistry, RuntimeBindings};
-use crate::contract::{ConnectorContract, ContractCatalog};
+use crate::connector::contract::ConnectorContract;
+use crate::connector::driver::OutboundDrivers;
+use crate::connector::driver::SessionConnectorBindings;
+use crate::connector::exchange::EnvelopeDraft;
+use crate::connector::exchange::IngressAdmission;
+use crate::connector::exchange::IngressProposal;
+use crate::connector::exchange::IngressProvenance;
+use crate::connector::exchange::IngressSequence;
+use crate::connector::exchange::RequestPreparation;
+use crate::connector::exchange::SessionObservation;
+use crate::connector::exchange::SessionOpen;
+use crate::connector::exchange::SessionWrite;
+use crate::connectors::{DriverRegistry, RuntimeDrivers};
+use crate::contract::ContractCatalog;
 use crate::datatype::DataType;
 use crate::envelope::{Data, Namespace, Value};
 use crate::journal::{
@@ -191,7 +198,7 @@ pub fn verify(
     {
         match bind(&compilation.plan, drivers) {
             Err(violation) => report.violations.push(violation),
-            Ok(mut bindings) => match bindings.events() {
+            Ok(mut bindings) => match bindings.poll_responses() {
                 Err(error) => report
                     .violations
                     .push(format!("the unstarted Driver could not be polled: {error}")),
@@ -309,7 +316,7 @@ pub fn verify(
 pub fn verify_event(profile: &EventTestFixture<'_>, drivers: &DriverRegistry) -> Report {
     let mut report = Report::default();
     sheet_completeness(profile.contract, &mut report);
-    if profile.contract.exchange != crate::connector::ConnectorExchange::Event {
+    if profile.contract.exchange != crate::connector::ExchangeKind::Event {
         report
             .violations
             .push("the Event profile names a non-Event contract".into());
@@ -393,7 +400,7 @@ pub fn verify_event(profile: &EventTestFixture<'_>, drivers: &DriverRegistry) ->
 pub fn verify_session(profile: &SessionTestFixture<'_>, drivers: &DriverRegistry) -> Report {
     let mut report = Report::default();
     sheet_completeness(profile.contract, &mut report);
-    if profile.contract.exchange != crate::connector::ConnectorExchange::Session {
+    if profile.contract.exchange != crate::connector::ExchangeKind::Session {
         report
             .violations
             .push("the Session profile names a non-Session contract".into());
@@ -418,7 +425,7 @@ pub fn verify_session(profile: &SessionTestFixture<'_>, drivers: &DriverRegistry
             .push(format!("`{}` is not a Connector", profile.connector));
         return report;
     };
-    if spec.exchange != crate::connector::ConnectorExchange::Session
+    if spec.exchange != crate::connector::ExchangeKind::Session
         || spec.contract.as_str() != profile.contract.id
     {
         report.violations.push(format!(
@@ -508,8 +515,8 @@ pub fn verify_session(profile: &SessionTestFixture<'_>, drivers: &DriverRegistry
             return report;
         }
         match SessionConnectorBindings::open_session(&mut bindings, &intent, &seed) {
-            Ok(crate::boundary::SessionStart::Started) => {}
-            Ok(crate::boundary::SessionStart::Pending) => {
+            Ok(crate::connector::exchange::SessionStart::Started) => {}
+            Ok(crate::connector::exchange::SessionStart::Pending) => {
                 report.violations.push(format!(
                     "Session opening {} remained pending in the uncongested battery",
                     index + 1
@@ -526,7 +533,7 @@ pub fn verify_session(profile: &SessionTestFixture<'_>, drivers: &DriverRegistry
         }
         sessions.push(intent.session_id);
     }
-    let opening_events = match SessionConnectorBindings::session_events(&mut bindings) {
+    let opening_events = match SessionConnectorBindings::poll_observations(&mut bindings) {
         Ok(events) => events,
         Err(error) => {
             report
@@ -599,8 +606,8 @@ pub fn verify_session(profile: &SessionTestFixture<'_>, drivers: &DriverRegistry
             return report;
         }
         match SessionConnectorBindings::write_session(&mut bindings, &intent, &seed) {
-            Ok(crate::boundary::SessionStart::Started) => {}
-            Ok(crate::boundary::SessionStart::Pending) => {
+            Ok(crate::connector::exchange::SessionStart::Started) => {}
+            Ok(crate::connector::exchange::SessionStart::Pending) => {
                 report.violations.push(format!(
                     "Session write {} remained pending in the uncongested battery",
                     index + 1
@@ -617,7 +624,7 @@ pub fn verify_session(profile: &SessionTestFixture<'_>, drivers: &DriverRegistry
         }
         expected_writes.insert((*session, intent.write_ref));
     }
-    let write_events = match SessionConnectorBindings::session_events(&mut bindings) {
+    let write_events = match SessionConnectorBindings::poll_observations(&mut bindings) {
         Ok(events) => events,
         Err(error) => {
             report
@@ -683,8 +690,8 @@ pub fn verify_session(profile: &SessionTestFixture<'_>, drivers: &DriverRegistry
 
     for session in &sessions {
         match SessionConnectorBindings::close_session(&mut bindings, &profile.connector, *session) {
-            Ok(crate::boundary::SessionStart::Started) => {}
-            Ok(crate::boundary::SessionStart::Pending) => {
+            Ok(crate::connector::exchange::SessionStart::Started) => {}
+            Ok(crate::connector::exchange::SessionStart::Pending) => {
                 report.violations.push(format!(
                     "Session {session} close remained pending in the uncongested battery"
                 ));
@@ -698,7 +705,7 @@ pub fn verify_session(profile: &SessionTestFixture<'_>, drivers: &DriverRegistry
             }
         }
     }
-    let exits = match SessionConnectorBindings::session_events(&mut bindings) {
+    let exits = match SessionConnectorBindings::poll_observations(&mut bindings) {
         Ok(events) => events,
         Err(error) => {
             report
@@ -742,7 +749,7 @@ pub fn verify_session(profile: &SessionTestFixture<'_>, drivers: &DriverRegistry
             sessions.len()
         ));
     }
-    match SessionConnectorBindings::session_events(&mut bindings) {
+    match SessionConnectorBindings::poll_observations(&mut bindings) {
         Ok(events) if events.is_empty() => {}
         Ok(events) => report
             .violations
@@ -796,9 +803,10 @@ fn sheet_completeness(contract: &ConnectorContract, report: &mut Report) {
         .filter(|port| port.name == "exit" && port.direction == crate::node::PortDirection::Output)
         .count();
     let terminal_shape_holds = match contract.exchange {
-        crate::connector::ConnectorExchange::Event => exits == 0,
-        crate::connector::ConnectorExchange::Call
-        | crate::connector::ConnectorExchange::Session => exits == 1,
+        crate::connector::ExchangeKind::Event => exits == 0,
+        crate::connector::ExchangeKind::Call | crate::connector::ExchangeKind::Session => {
+            exits == 1
+        }
     };
     if !terminal_shape_holds {
         report.violations.push(format!(
@@ -807,11 +815,11 @@ fn sheet_completeness(contract: &ConnectorContract, report: &mut Report) {
         ));
     }
     let roles_hold = match contract.exchange {
-        crate::connector::ConnectorExchange::Event => {
+        crate::connector::ExchangeKind::Event => {
             contract.roles == crate::connector::ConnectorDirection::Inbound
         }
-        crate::connector::ConnectorExchange::Call => true,
-        crate::connector::ConnectorExchange::Session => contract.roles.has_outbound(),
+        crate::connector::ExchangeKind::Call => true,
+        crate::connector::ExchangeKind::Session => contract.roles.has_outbound(),
     };
     if !roles_hold {
         report.violations.push(format!(
@@ -895,8 +903,8 @@ fn resolved_exit_cases(
 fn bind<'plan>(
     plan: &'plan ValidatedExecutionPlan,
     drivers: &DriverRegistry,
-) -> Result<RuntimeBindings<'plan>, String> {
-    RuntimeBindings::try_new(plan, drivers)
+) -> Result<RuntimeDrivers<'plan>, String> {
+    RuntimeDrivers::prepare(plan, drivers)
         .map_err(|error| format!("the conformance composition cannot bind: {error}"))
 }
 
@@ -925,7 +933,7 @@ fn submission(text: &str) -> IngressProposal {
 fn drive(
     vm: &mut Execution<'_>,
     journal: &mut MemJournal,
-    driver: &mut dyn OutboundConnectorBindings,
+    driver: &mut dyn OutboundDrivers,
     input: &str,
 ) -> Result<(), String> {
     vm.accept_input(journal, submission(input))

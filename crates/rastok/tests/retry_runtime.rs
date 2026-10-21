@@ -3,8 +3,8 @@
 #![allow(clippy::unwrap_used)]
 
 use rastok::{
-    boundary::*,
     compiler,
+    connector::{driver::*, exchange::*, stdlib::*},
     contract::ContractCatalog,
     envelope::{Data, Namespace, Value},
     journal::retry_protocol::Fact,
@@ -54,11 +54,11 @@ fn checked(
 struct World {
     preparations: usize,
     starts: Vec<CallOpen>,
-    responses: Vec<Response>,
+    responses: Vec<CallResponse>,
     cancellations: Vec<CallId>,
 }
 
-impl CallConnectorDriver for World {
+impl OutboundCall for World {
     fn prepare_request(
         &mut self,
         _: &node::Path,
@@ -72,7 +72,7 @@ impl CallConnectorDriver for World {
         self.starts.push(intent.clone());
         CallStart::Started
     }
-    fn events(&mut self) -> Vec<Response> {
+    fn poll_responses(&mut self) -> Vec<CallResponse> {
         std::mem::take(&mut self.responses)
     }
     fn cancel(&mut self, call_id: &CallId) {
@@ -105,7 +105,7 @@ fn inject(vm: &mut Execution<'_>, journal: &mut MemJournal) {
 }
 
 fn reply(world: &mut World, failure: bool) {
-    world.responses.push(Response {
+    world.responses.push(CallResponse {
         call_id: world.starts.last().unwrap().call_id,
         completion: Completion::process(
             vec![Data::materialized(Value::Text("stdout".into()))],
@@ -914,7 +914,7 @@ graph app : App {
     openings.sort_by_key(|(attempt, _)| std::cmp::Reverse(attempt.operation));
     world.responses = openings
         .iter()
-        .map(|(_, call_id)| Response {
+        .map(|(_, call_id)| CallResponse {
             call_id: *call_id,
             completion: Completion::process(vec![], vec![], ProcessExit::TimeoutExpired),
         })
@@ -1396,7 +1396,7 @@ graph app : App {
             .unwrap();
         vm.poll_drivers(&mut journal, &mut world).unwrap();
         assert_eq!(world.starts.len(), 2);
-        world.responses.push(Response {
+        world.responses.push(CallResponse {
             call_id: world.starts[1].call_id,
             completion: Completion::process(
                 (0..frames)
@@ -1540,7 +1540,7 @@ graph app : App {
             for call in &world.starts[answered..] {
                 let alice = call.prepared.bytes() == b"alice\n";
                 let failed = alice && now == 0;
-                world.responses.push(Response {
+                world.responses.push(CallResponse {
                     call_id: call.call_id,
                     completion: Completion::process(
                         if failed {
@@ -1635,7 +1635,7 @@ graph app : App {
         }
     }
     let before = journal.records().to_vec();
-    world.responses.push(Response {
+    world.responses.push(CallResponse {
         call_id: world.starts[0].call_id,
         completion: Completion::process(
             vec![],

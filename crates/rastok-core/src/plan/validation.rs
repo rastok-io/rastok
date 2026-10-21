@@ -309,14 +309,14 @@ pub enum PlanValidationError {
         /// Connector node.
         node: node::OwnerPath,
         /// Exchange whose terminal cardinality was contradicted.
-        exchange: crate::connector::ConnectorExchange,
+        exchange: crate::connector::ExchangeKind,
     },
     /// The role set cannot expose this exchange's complete generic protocol.
     ExchangeRoleMismatch {
         /// Connector node.
         node: node::OwnerPath,
         /// Incompatible exchange.
-        exchange: crate::connector::ConnectorExchange,
+        exchange: crate::connector::ExchangeKind,
         /// Incompatible roles.
         roles: crate::connector::ConnectorDirection,
     },
@@ -429,7 +429,7 @@ pub enum PlanValidationError {
     },
     /// A reference to a connector port beyond the default trio. The
     /// RESOLVED table travels in the plan (the future needs it), but
-    /// this machine's OutboundConnectorDriver seam does not carry the port yet —
+    /// this machine's Outbound seam does not carry the port yet —
     /// `CallOpen`, the response protocol, and the outcome trigger all
     /// speak `in`/`out`/`err`. A plan wiring such a port is valid in
     /// shape and NOT executable faithfully, so it refuses here; the
@@ -1797,405 +1797,6 @@ fn tree_type_at(tree: &expr::Tree, location: String) -> Result<(), PlanValidatio
     }
 }
 
-fn setting_has_type(setting: &crate::plan::AttrSetting, ty: &DataType) -> bool {
-    match setting {
-        crate::plan::AttrSetting::Value(value) => ty.accepts(value),
-        crate::plan::AttrSetting::Expr { expr, .. } => &expr.ty == ty,
-        crate::plan::AttrSetting::Word(_) => false,
-    }
-}
-
-fn network_setting_holds(name: &str, setting: &crate::plan::AttrSetting) -> bool {
-    match name {
-        "json_profile" => {
-            matches!(setting, crate::plan::AttrSetting::Word(word) if word == "projected")
-        }
-        "idempotent" => matches!(
-            setting,
-            crate::plan::AttrSetting::Value(crate::value::Value::Bool(_))
-        ),
-        "codec" => matches!(
-            setting,
-            crate::plan::AttrSetting::Word(word)
-                if matches!(word.as_str(), "bytes" | "json" | "text")
-        ),
-        "mode" => matches!(
-            setting,
-            crate::plan::AttrSetting::Word(word) if matches!(word.as_str(), "ack" | "respond")
-        ),
-        "zero_rtt" => matches!(
-            setting,
-            crate::plan::AttrSetting::Word(word) if word == "disabled"
-        ),
-        "versions" => match setting {
-            crate::plan::AttrSetting::Value(crate::value::Value::Array(items))
-                if !items.is_empty() =>
-            {
-                let mut seen = BTreeSet::new();
-                items.iter().all(|item| match item {
-                    crate::value::Value::Text(version) => {
-                        matches!(version.as_str(), "http/1.1" | "http/2" | "http/3")
-                            && seen.insert(version.as_str())
-                    }
-                    _ => false,
-                })
-            }
-            _ => false,
-        },
-        "max_body" | "max_message" => matches!(
-            setting,
-            crate::plan::AttrSetting::Value(crate::value::Value::Text(value))
-                if crate::connector::byte_size(value).is_some()
-        ),
-        "timeout" | "handshake_timeout" => match setting {
-            crate::plan::AttrSetting::Value(crate::value::Value::Duration(value)) => *value > 0,
-            crate::plan::AttrSetting::Expr { expr, .. } => expr.ty == DataType::DURATION,
-            _ => false,
-        },
-        "auth_bearer" | "correlate" | "idempotency_key" | "listen" | "method" | "path" | "url" => {
-            setting_has_type(setting, &DataType::Text)
-        }
-        "tls_ca" | "tls_certificate" | "tls_private_key" => {
-            setting_has_type(setting, &DataType::BYTES)
-        }
-        "allowed_origins" | "subprotocols" => {
-            setting_has_type(setting, &DataType::array(DataType::Text))
-        }
-        "headers" => match setting {
-            crate::plan::AttrSetting::Value(value) => {
-                crate::plan::typed_http_headers_value_holds(value)
-            }
-            crate::plan::AttrSetting::Expr { expr, .. } => {
-                crate::plan::typed_http_headers_type_holds(&expr.ty)
-            }
-            crate::plan::AttrSetting::Word(_) => false,
-        },
-        "custom_headers" => match setting {
-            crate::plan::AttrSetting::Value(value) => {
-                crate::plan::custom_http_headers_value_holds(value)
-            }
-            crate::plan::AttrSetting::Expr { expr, .. } => {
-                expr.ty == crate::plan::custom_http_headers_type()
-            }
-            crate::plan::AttrSetting::Word(_) => false,
-        },
-        _ => false,
-    }
-}
-
-fn effective_contract_port(
-    node: &Node,
-    loop_spec: Option<&crate::plan::LoopSpec>,
-    name: &str,
-    base: Option<DataType>,
-) -> Option<DataType> {
-    let Some(spec) = loop_spec.filter(|spec| {
-        spec.expired
-            .as_ref()
-            .is_some_and(|expiry| expiry.port.name() == name)
-    }) else {
-        return base;
-    };
-    let DataType::TaggedUnion(union) = base? else {
-        return None;
-    };
-    let state = node
-        .ports
-        .iter()
-        .find(|port| port.port == spec.entry)?
-        .ty
-        .clone()?;
-    node::loop_call_exit_type(&union, state).ok()
-}
-
-fn validate_network_connector(
-    node: &Node,
-    spec: &crate::plan::ConnectorSpec,
-    loop_spec: Option<&crate::plan::LoopSpec>,
-) -> Result<bool, PlanValidationError> {
-    use crate::connector::{ConnectorDirection, ConnectorExchange};
-
-    struct ContractShape {
-        roles: ConnectorDirection,
-        exchange: ConnectorExchange,
-        required: &'static [&'static str],
-        allowed: &'static [&'static str],
-        ports: &'static [(&'static str, node::PortDirection)],
-    }
-
-    let contract = spec.contract.as_str();
-    let shape = match contract {
-        crate::connector::HTTP_CLIENT_CONNECTOR_ID => ContractShape {
-            roles: ConnectorDirection::Outbound,
-            exchange: ConnectorExchange::Call,
-            required: &[
-                "codec", "max_body", "method", "timeout", "url", "versions", "zero_rtt",
-            ],
-            allowed: &[
-                "auth_bearer",
-                "codec",
-                "custom_headers",
-                "headers",
-                "idempotent",
-                "idempotency_key",
-                "json_profile",
-                "max_body",
-                "method",
-                "timeout",
-                "tls_ca",
-                "tls_certificate",
-                "tls_private_key",
-                "url",
-                "versions",
-                "zero_rtt",
-            ],
-            ports: &[
-                ("in", node::PortDirection::Input),
-                ("out", node::PortDirection::Output),
-                ("exit", node::PortDirection::Output),
-            ],
-        },
-        crate::connector::HTTP_SERVER_CONNECTOR_ID => ContractShape {
-            roles: ConnectorDirection::Inbound,
-            exchange: ConnectorExchange::Call,
-            required: &[
-                "codec", "listen", "max_body", "mode", "path", "versions", "zero_rtt",
-            ],
-            allowed: &[
-                "auth_bearer",
-                "codec",
-                "correlate",
-                "custom_headers",
-                "headers",
-                "listen",
-                "max_body",
-                "mode",
-                "path",
-                "timeout",
-                "tls_certificate",
-                "tls_private_key",
-                "versions",
-                "zero_rtt",
-            ],
-            ports: &[
-                ("in", node::PortDirection::Input),
-                ("out", node::PortDirection::Output),
-                ("exit", node::PortDirection::Output),
-            ],
-        },
-        crate::connector::WEBSOCKET_CLIENT_CONNECTOR_ID => ContractShape {
-            roles: ConnectorDirection::InboundAndOutbound,
-            exchange: ConnectorExchange::Session,
-            required: &[
-                "codec",
-                "handshake_timeout",
-                "max_message",
-                "url",
-                "versions",
-                "zero_rtt",
-            ],
-            allowed: &[
-                "auth_bearer",
-                "codec",
-                "custom_headers",
-                "handshake_timeout",
-                "headers",
-                "max_message",
-                "subprotocols",
-                "tls_ca",
-                "tls_certificate",
-                "tls_private_key",
-                "url",
-                "versions",
-                "zero_rtt",
-            ],
-            ports: &[
-                ("in", node::PortDirection::Input),
-                ("out", node::PortDirection::Output),
-                ("exit", node::PortDirection::Output),
-            ],
-        },
-        crate::connector::WEBSOCKET_SERVER_CONNECTOR_ID => ContractShape {
-            roles: ConnectorDirection::InboundAndOutbound,
-            exchange: ConnectorExchange::Session,
-            required: &[
-                "codec",
-                "handshake_timeout",
-                "listen",
-                "max_message",
-                "path",
-                "versions",
-                "zero_rtt",
-            ],
-            allowed: &[
-                "allowed_origins",
-                "auth_bearer",
-                "codec",
-                "correlate",
-                "custom_headers",
-                "handshake_timeout",
-                "headers",
-                "listen",
-                "max_message",
-                "path",
-                "subprotocols",
-                "tls_certificate",
-                "tls_private_key",
-                "versions",
-                "zero_rtt",
-            ],
-            ports: &[
-                ("in", node::PortDirection::Input),
-                ("out", node::PortDirection::Output),
-                ("exit", node::PortDirection::Output),
-            ],
-        },
-        _ => return Ok(false),
-    };
-
-    if spec.roles != shape.roles {
-        return Err(PlanValidationError::ContractRoleMismatch {
-            node: node.path.clone(),
-        });
-    }
-    if spec.exchange != shape.exchange {
-        return Err(PlanValidationError::ContractExchangeMismatch {
-            node: node.path.clone(),
-        });
-    }
-    let axes_hold = match contract {
-        crate::connector::HTTP_SERVER_CONNECTOR_ID
-        | crate::connector::WEBSOCKET_SERVER_CONNECTOR_ID => {
-            spec.behavior == node::Behavior::Deterministic
-        }
-        _ => true,
-    };
-    if !axes_hold {
-        return Err(PlanValidationError::ContractAttributeMismatch {
-            node: node.path.clone(),
-            attribute: String::from("behavior"),
-        });
-    }
-
-    for required in shape.required {
-        if spec.attribute(required).is_none() {
-            return Err(PlanValidationError::MissingContractAttribute {
-                node: node.path.clone(),
-                attribute: required,
-            });
-        }
-    }
-    for (name, setting) in &spec.attributes {
-        if !shape.allowed.contains(&name.as_str()) || !network_setting_holds(name, setting) {
-            return Err(PlanValidationError::ContractAttributeMismatch {
-                node: node.path.clone(),
-                attribute: name.clone(),
-            });
-        }
-    }
-    if contract == crate::connector::HTTP_SERVER_CONNECTOR_ID {
-        match spec.attribute("mode") {
-            Some(crate::plan::AttrSetting::Word(mode)) if mode == "ack" => {
-                if spec.attribute("correlate").is_some() || spec.attribute("timeout").is_some() {
-                    return Err(PlanValidationError::ContractAttributeMismatch {
-                        node: node.path.clone(),
-                        attribute: String::from("mode/correlate/timeout"),
-                    });
-                }
-            }
-            Some(crate::plan::AttrSetting::Word(mode)) if mode == "respond" => {
-                if spec.attribute("timeout").is_none() {
-                    return Err(PlanValidationError::MissingContractAttribute {
-                        node: node.path.clone(),
-                        attribute: "timeout",
-                    });
-                }
-                if let Some(crate::plan::AttrSetting::Expr { site, expr }) =
-                    spec.attribute("correlate")
-                    && (*site != EvaluationSite::Invocation || expr.ty != DataType::Text)
-                {
-                    return Err(PlanValidationError::ContractAttributeMismatch {
-                        node: node.path.clone(),
-                        attribute: String::from("correlate"),
-                    });
-                }
-            }
-            Some(_) => {
-                return Err(PlanValidationError::ContractAttributeMismatch {
-                    node: node.path.clone(),
-                    attribute: String::from("mode"),
-                });
-            }
-            None => {
-                return Err(PlanValidationError::MissingContractAttribute {
-                    node: node.path.clone(),
-                    attribute: "mode",
-                });
-            }
-        }
-    }
-    if spec.attribute("tls_certificate").is_some() != spec.attribute("tls_private_key").is_some() {
-        return Err(PlanValidationError::ContractAttributeMismatch {
-            node: node.path.clone(),
-            attribute: String::from("tls_certificate/tls_private_key"),
-        });
-    }
-
-    let codec = match spec.attribute("codec") {
-        Some(crate::plan::AttrSetting::Word(codec)) => Some(codec.as_str()),
-        _ => None,
-    };
-    for (name, direction) in shape.ports {
-        let Some(port) = node.ports.iter().find(|port| port.port.name() == *name) else {
-            return Err(PlanValidationError::MissingContractPort {
-                node: node.path.clone(),
-                port: name,
-            });
-        };
-        let json_output = contract == crate::connector::HTTP_CLIENT_CONNECTOR_ID
-            && *name == "out"
-            && codec == Some("json");
-        if *name == "out"
-            && spec.attribute("json_profile").is_some()
-            && (!json_output || !matches!(port.ty, Some(DataType::Struct(_))))
-        {
-            return Err(PlanValidationError::ContractAttributeMismatch {
-                node: node.path.clone(),
-                attribute: String::from("json_profile"),
-            });
-        }
-        let type_holds = if json_output {
-            port.ty.as_ref().is_some_and(crate::json::supports_type)
-        } else {
-            port.ty
-                == effective_contract_port(
-                    node,
-                    loop_spec,
-                    name,
-                    crate::boundary::network_port_type(&spec.contract, name, codec),
-                )
-        };
-        if port.direction != *direction || !type_holds {
-            return Err(PlanValidationError::ContractPortMismatch {
-                node: node.path.clone(),
-                port: port.port.clone(),
-            });
-        }
-    }
-    if let Some(port) = node.ports.iter().find(|port| {
-        !shape
-            .ports
-            .iter()
-            .any(|(name, _)| *name == port.port.name())
-    }) {
-        return Err(PlanValidationError::UnexpectedContractPort {
-            node: node.path.clone(),
-            port: port.port.clone(),
-        });
-    }
-    Ok(true)
-}
-
 /// Every type-bearing plan position passes this audit before the infallible
 /// encoder can observe the plan.
 fn data_types_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
@@ -2316,37 +1917,6 @@ fn data_types_well_formed(plan: &ExecutionPlan) -> Result<(), PlanValidationErro
         }
     }
     Ok(())
-}
-
-/// Default inbound-Call lineage is sound only while every upstream handler
-/// observes one root. A join deliberately mixes roots and inherits the
-/// trigger's origin, so walking the finite DAG backwards is the exact static
-/// proof that an explicit correlator is required.
-fn response_path_crosses_join(plan: &ExecutionPlan, target: NodeIndex) -> bool {
-    let mut pending = vec![target];
-    let mut visited = BTreeSet::new();
-    while let Some(slot) = pending.pop() {
-        if !visited.insert(slot) {
-            continue;
-        }
-        if plan.nodes[slot.index()]
-            .handlers()
-            .iter()
-            .any(|handler| matches!(handler.activation, node::HandlerActivation::Join { .. }))
-        {
-            return true;
-        }
-        for source in plan.edges.iter().filter_map(|edge| {
-            edge.to
-                .as_ref()
-                .filter(|endpoint| endpoint.node == slot)
-                .map(|_| edge.from.node)
-                .filter(|source| *source != NodeIndex::ROOT)
-        }) {
-            pending.push(source);
-        }
-    }
-    false
 }
 
 #[derive(Debug, Clone)]
@@ -3347,11 +2917,13 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                 match setting {
                     crate::plan::AttrSetting::Value(value) => value_expressible(value)?,
                     crate::plan::AttrSetting::Expr { site, expr } => {
-                        let admitted =
-                            crate::boundary::connector_attribute_site(&spec.contract, name)
-                                .is_some_and(|latest| {
-                                    latest != EvaluationSite::Plan && latest.admits(*site)
-                                });
+                        let admitted = crate::connector::stdlib::connector_attribute_site(
+                            &spec.contract,
+                            name,
+                        )
+                        .is_some_and(|latest| {
+                            latest != EvaluationSite::Plan && latest.admits(*site)
+                        });
                         if *site == EvaluationSite::Plan || !admitted {
                             return Err(PlanValidationError::BindingSiteMismatch {
                                 owner: node.path.to_string(),
@@ -3360,11 +2932,12 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                         }
                         match expr::boot_reference(&expr.root) {
                             Ok(Some(reference)) => {
-                                let admitted = crate::boundary::connector_boot_reference_policy(
-                                    &spec.contract,
-                                    name,
-                                )
-                                .is_some_and(|policy| policy.admits(&reference));
+                                let admitted =
+                                    crate::connector::stdlib::connector_boot_reference_policy(
+                                        &spec.contract,
+                                        name,
+                                    )
+                                    .is_some_and(|policy| policy.admits(&reference));
                                 if *site != EvaluationSite::Boot || !admitted {
                                     return Err(PlanValidationError::BindingSiteMismatch {
                                         owner: node.path.to_string(),
@@ -3392,14 +2965,6 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                     crate::plan::AttrSetting::Word(_) => {}
                 }
             }
-            // The codec rule is the PROCESS contract's, not the
-            // attribute name's: the runtime dispatches on it, so a
-            // `Process` plan must carry `codec` (the sheet requires
-            // it) and carry it inside the dispatch domain — an
-            // unknown or absent one must never earn a
-            // ValidatedExecutionPlan and quietly run as `lines`
-            // (D-2026-08-11-1, second amendment). Another sheet
-            // spelling its own `codec` vocabulary is untouched.
             // The Contract roles distinguish an outgoing request from a
             // retained inbound Call response delivered on an input port.
             let slot = crate::node::NodeIndex::new(u32::try_from(node_index).unwrap_or(u32::MAX));
@@ -3410,441 +2975,19 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
             let receives_inbound_call_response = receives
                 && spec.roles.has_inbound()
                 && !spec.roles.has_outbound()
-                && spec.exchange == crate::connector::ConnectorExchange::Call;
+                && spec.exchange == crate::connector::ExchangeKind::Call;
             if receives && !spec.roles.has_outbound() && !receives_inbound_call_response {
                 return Err(PlanValidationError::CallableConnectorWithoutOutboundRole {
                     node: node.path.clone(),
                 });
             }
-            if receives_inbound_call_response
-                && spec.contract.as_str() == crate::connector::HTTP_SERVER_CONNECTOR_ID
-                && !matches!(spec.attribute("mode"), Some(crate::plan::AttrSetting::Word(mode)) if mode == "respond")
-            {
-                return Err(PlanValidationError::ContractAttributeMismatch {
-                    node: node.path.clone(),
-                    attribute: String::from("mode"),
-                });
-            }
-            if receives_inbound_call_response
-                && spec.contract.as_str() == crate::connector::HTTP_SERVER_CONNECTOR_ID
-                && spec.attribute("correlate").is_none()
-                && response_path_crosses_join(plan, slot)
-            {
-                return Err(PlanValidationError::AmbiguousInboundCallCorrelation {
-                    node: node.path.clone(),
-                });
-            }
-            if matches!(
-                spec.contract.as_str(),
-                crate::connector::PROCESS_CONNECTOR_ID
-                    | crate::connector::PROCESS_SERVICE_CONNECTOR_ID
-            ) {
-                let service =
-                    spec.contract.as_str() == crate::connector::PROCESS_SERVICE_CONNECTOR_ID;
-                let roles = if service {
-                    crate::connector::ConnectorDirection::InboundAndOutbound
-                } else {
-                    crate::connector::ConnectorDirection::Outbound
-                };
-                let exchange = if service {
-                    crate::connector::ConnectorExchange::Session
-                } else {
-                    crate::connector::ConnectorExchange::Call
-                };
-                if spec.roles != roles {
-                    return Err(PlanValidationError::ContractRoleMismatch {
-                        node: node.path.clone(),
-                    });
-                }
-                if spec.exchange != exchange {
-                    return Err(PlanValidationError::ContractExchangeMismatch {
-                        node: node.path.clone(),
-                    });
-                }
-                match spec.attribute("mode") {
-                    Some(crate::plan::AttrSetting::Word(word))
-                        if word == if service { "service" } else { "job" } => {}
-                    Some(_) => {
-                        return Err(PlanValidationError::ContractAttributeMismatch {
-                            node: node.path.clone(),
-                            attribute: String::from("mode"),
-                        });
-                    }
-                    None => {
-                        return Err(PlanValidationError::MissingContractAttribute {
-                            node: node.path.clone(),
-                            attribute: "mode",
-                        });
-                    }
-                }
-                match spec.attribute("on_timeout") {
-                    None if service => {}
-                    Some(crate::plan::AttrSetting::Word(word)) if !service && word == "kill" => {}
-                    Some(_) => {
-                        return Err(PlanValidationError::ContractAttributeMismatch {
-                            node: node.path.clone(),
-                            attribute: String::from("on_timeout"),
-                        });
-                    }
-                    None => {
-                        return Err(PlanValidationError::MissingContractAttribute {
-                            node: node.path.clone(),
-                            attribute: "on_timeout",
-                        });
-                    }
-                }
-                match spec.attribute("command") {
-                    Some(crate::plan::AttrSetting::Value(crate::value::Value::Text(_))) => {}
-                    Some(crate::plan::AttrSetting::Expr { site, expr })
-                        if *site == EvaluationSite::Instance && expr.ty == DataType::Text => {}
-                    Some(_) => {
-                        return Err(PlanValidationError::ContractAttributeMismatch {
-                            node: node.path.clone(),
-                            attribute: String::from("command"),
-                        });
-                    }
-                    None => {
-                        return Err(PlanValidationError::MissingContractAttribute {
-                            node: node.path.clone(),
-                            attribute: "command",
-                        });
-                    }
-                }
-                match spec.attribute("args") {
-                    Some(crate::plan::AttrSetting::Value(crate::value::Value::Array(items)))
-                        if items
-                            .iter()
-                            .all(|item| matches!(item, crate::value::Value::Text(_))) => {}
-                    Some(crate::plan::AttrSetting::Expr { site, expr })
-                        if *site == EvaluationSite::Instance
-                            && expr.ty == DataType::array(DataType::Text) => {}
-                    Some(_) => {
-                        return Err(PlanValidationError::ContractAttributeMismatch {
-                            node: node.path.clone(),
-                            attribute: String::from("args"),
-                        });
-                    }
-                    None => {
-                        return Err(PlanValidationError::MissingContractAttribute {
-                            node: node.path.clone(),
-                            attribute: "args",
-                        });
-                    }
-                }
-                if let Some(cwd) = spec.attribute("cwd") {
-                    let valid = match cwd {
-                        crate::plan::AttrSetting::Value(crate::value::Value::Text(_)) => true,
-                        crate::plan::AttrSetting::Expr { site, expr } => {
-                            *site == EvaluationSite::Instance && expr.ty == DataType::Text
-                        }
-                        _ => false,
-                    };
-                    if !valid {
-                        return Err(PlanValidationError::ContractAttributeMismatch {
-                            node: node.path.clone(),
-                            attribute: String::from("cwd"),
-                        });
-                    }
-                }
-                if let Some(env) = spec.attribute("env") {
-                    let valid = match env {
-                        crate::plan::AttrSetting::Value(crate::value::Value::Map(entries)) => {
-                            entries
-                                .values()
-                                .all(|value| matches!(value, crate::value::Value::Text(_)))
-                        }
-                        crate::plan::AttrSetting::Expr { site, expr } => {
-                            *site == EvaluationSite::Instance
-                                && expr.ty == DataType::text_map(DataType::Text)
-                        }
-                        _ => false,
-                    };
-                    if !valid {
-                        return Err(PlanValidationError::ContractAttributeMismatch {
-                            node: node.path.clone(),
-                            attribute: String::from("env"),
-                        });
-                    }
-                }
-                if let Some(timeout) = spec.attribute("timeout") {
-                    let valid = match timeout {
-                        crate::plan::AttrSetting::Value(crate::value::Value::Duration(_)) => true,
-                        crate::plan::AttrSetting::Expr { site, expr } => {
-                            *site == EvaluationSite::Instance && expr.ty == DataType::DURATION
-                        }
-                        _ => false,
-                    };
-                    if !valid || service {
-                        return Err(PlanValidationError::ContractAttributeMismatch {
-                            node: node.path.clone(),
-                            attribute: String::from("timeout"),
-                        });
-                    }
-                }
-                let size_attribute = if service { "max_frame" } else { "max_output" };
-                match spec.attribute(size_attribute) {
-                    Some(crate::plan::AttrSetting::Value(crate::value::Value::Text(value)))
-                        if crate::connector::byte_size(value)
-                            .is_some_and(|size| !service || size > 0) => {}
-                    Some(_) => {
-                        return Err(PlanValidationError::ContractAttributeMismatch {
-                            node: node.path.clone(),
-                            attribute: String::from(size_attribute),
-                        });
-                    }
-                    None => {
-                        return Err(PlanValidationError::MissingContractAttribute {
-                            node: node.path.clone(),
-                            attribute: size_attribute,
-                        });
-                    }
-                }
-                let codec = match spec.attribute("codec") {
-                    Some(crate::plan::AttrSetting::Word(word))
-                        if matches!(word.as_str(), "bytes" | "jsonl" | "lines")
-                            && !(service && word == "bytes") =>
-                    {
-                        word.as_str()
-                    }
-                    Some(_) => {
-                        return Err(PlanValidationError::UnknownCodec {
-                            node: node.path.clone(),
-                        });
-                    }
-                    None => {
-                        return Err(PlanValidationError::MissingCodec {
-                            node: node.path.clone(),
-                        });
-                    }
-                };
-                let err_codec = match spec.attribute("err_codec") {
-                    Some(crate::plan::AttrSetting::Word(word))
-                        if matches!(word.as_str(), "bytes" | "lines")
-                            && !(service && word == "bytes") =>
-                    {
-                        word.as_str()
-                    }
-                    Some(_) => {
-                        return Err(PlanValidationError::UnknownErrCodec {
-                            node: node.path.clone(),
-                        });
-                    }
-                    None => {
-                        return Err(PlanValidationError::MissingErrCodec {
-                            node: node.path.clone(),
-                        });
-                    }
-                };
-                for (name, _) in &spec.attributes {
-                    if !matches!(
-                        name.as_str(),
-                        "args"
-                            | "codec"
-                            | "err_codec"
-                            | "command"
-                            | "cwd"
-                            | "timeout"
-                            | "env"
-                            | "mode"
-                            | "max_output"
-                            | "max_frame"
-                            | "on_timeout"
-                            | "idempotent"
-                    ) || (service
-                        && matches!(
-                            name.as_str(),
-                            "max_output" | "on_timeout" | "timeout" | "idempotent"
-                        ))
-                        || (!service && name == "max_frame")
-                    {
-                        return Err(PlanValidationError::ContractAttributeMismatch {
-                            node: node.path.clone(),
-                            attribute: name.clone(),
-                        });
-                    }
-                }
-                let expected = [
-                    ("in", node::PortDirection::Input),
-                    ("out", node::PortDirection::Output),
-                    ("err", node::PortDirection::Output),
-                    ("exit", node::PortDirection::Output),
-                ];
-                for (name, direction) in expected {
-                    let Some(port) = node.ports.iter().find(|port| port.port.name() == name) else {
-                        return Err(PlanValidationError::MissingContractPort {
-                            node: node.path.clone(),
-                            port: name,
-                        });
-                    };
-                    let expected_ty = effective_contract_port(
-                        node,
-                        node.loop_spec(),
-                        name,
-                        crate::boundary::process_port_type(
-                            &spec.contract,
-                            name,
-                            Some(codec),
-                            Some(err_codec),
-                        ),
-                    );
-                    if port.direction != direction || port.ty != expected_ty {
-                        return Err(PlanValidationError::ContractPortMismatch {
-                            node: node.path.clone(),
-                            port: port.port.clone(),
-                        });
-                    }
-                }
-                if let Some(port) = node
-                    .ports
-                    .iter()
-                    .find(|port| !matches!(port.port.name(), "in" | "out" | "err" | "exit"))
-                {
-                    return Err(PlanValidationError::UnexpectedContractPort {
-                        node: node.path.clone(),
-                        port: port.port.clone(),
-                    });
-                }
-            }
-            if spec.contract.as_str() == crate::connector::FILE_CONNECTOR_ID {
-                if spec.roles != crate::connector::ConnectorDirection::Outbound {
-                    return Err(PlanValidationError::ContractRoleMismatch {
-                        node: node.path.clone(),
-                    });
-                }
-                if spec.exchange != crate::connector::ConnectorExchange::Call {
-                    return Err(PlanValidationError::ContractExchangeMismatch {
-                        node: node.path.clone(),
-                    });
-                }
-                if spec.behavior != node::Behavior::Deterministic {
-                    return Err(PlanValidationError::ContractAttributeMismatch {
-                        node: node.path.clone(),
-                        attribute: String::from("behavior"),
-                    });
-                }
-                let mode = match spec.attribute("mode") {
-                    Some(crate::plan::AttrSetting::Word(word))
-                        if matches!(word.as_str(), "read" | "replace") =>
-                    {
-                        word.as_str()
-                    }
-                    Some(_) => {
-                        return Err(PlanValidationError::ContractAttributeMismatch {
-                            node: node.path.clone(),
-                            attribute: String::from("mode"),
-                        });
-                    }
-                    None => {
-                        return Err(PlanValidationError::MissingContractAttribute {
-                            node: node.path.clone(),
-                            attribute: "mode",
-                        });
-                    }
-                };
-                match spec.attribute("path") {
-                    Some(crate::plan::AttrSetting::Value(crate::value::Value::Text(_))) => {}
-                    Some(crate::plan::AttrSetting::Expr { site, expr })
-                        if matches!(
-                            site,
-                            EvaluationSite::Instance | EvaluationSite::Invocation
-                        ) && expr.ty == DataType::Text => {}
-                    Some(_) => {
-                        return Err(PlanValidationError::ContractAttributeMismatch {
-                            node: node.path.clone(),
-                            attribute: String::from("path"),
-                        });
-                    }
-                    None => {
-                        return Err(PlanValidationError::MissingContractAttribute {
-                            node: node.path.clone(),
-                            attribute: "path",
-                        });
-                    }
-                }
-                if let Some(timeout) = spec.attribute("timeout") {
-                    let valid = match timeout {
-                        crate::plan::AttrSetting::Value(crate::value::Value::Duration(_)) => true,
-                        crate::plan::AttrSetting::Expr { site, expr } => {
-                            *site == EvaluationSite::Instance && expr.ty == DataType::DURATION
-                        }
-                        _ => false,
-                    };
-                    if !valid {
-                        return Err(PlanValidationError::ContractAttributeMismatch {
-                            node: node.path.clone(),
-                            attribute: String::from("timeout"),
-                        });
-                    }
-                }
-                match (mode, spec.attribute("max_read")) {
-                    (
-                        "read",
-                        Some(crate::plan::AttrSetting::Value(crate::value::Value::Text(value))),
-                    ) if crate::connector::byte_size(value).is_some() => {}
-                    ("read", None) => {
-                        return Err(PlanValidationError::MissingContractAttribute {
-                            node: node.path.clone(),
-                            attribute: "max_read",
-                        });
-                    }
-                    ("replace", None) => {}
-                    _ => {
-                        return Err(PlanValidationError::ContractAttributeMismatch {
-                            node: node.path.clone(),
-                            attribute: String::from("max_read"),
-                        });
-                    }
-                }
-                for (name, _) in &spec.attributes {
-                    let allowed =
-                        matches!(name.as_str(), "mode" | "path" | "timeout" | "idempotent")
-                            || (mode == "read" && name == "max_read");
-                    if !allowed {
-                        return Err(PlanValidationError::ContractAttributeMismatch {
-                            node: node.path.clone(),
-                            attribute: name.clone(),
-                        });
-                    }
-                }
-                let expected = [
-                    ("in", node::PortDirection::Input),
-                    ("out", node::PortDirection::Output),
-                    ("exit", node::PortDirection::Output),
-                ];
-                for (name, direction) in expected {
-                    let Some(port) = node.ports.iter().find(|port| port.port.name() == name) else {
-                        return Err(PlanValidationError::MissingContractPort {
-                            node: node.path.clone(),
-                            port: name,
-                        });
-                    };
-                    if port.direction != direction
-                        || port.ty
-                            != effective_contract_port(
-                                node,
-                                node.loop_spec(),
-                                name,
-                                crate::boundary::file_port_type(&spec.contract, name, Some(mode)),
-                            )
-                    {
-                        return Err(PlanValidationError::ContractPortMismatch {
-                            node: node.path.clone(),
-                            port: port.port.clone(),
-                        });
-                    }
-                }
-                if let Some(port) = node
-                    .ports
-                    .iter()
-                    .find(|port| !matches!(port.port.name(), "in" | "out" | "exit"))
-                {
-                    return Err(PlanValidationError::UnexpectedContractPort {
-                        node: node.path.clone(),
-                        port: port.port.clone(),
-                    });
-                }
-            }
-            validate_network_connector(node, spec, node.loop_spec())?;
+            crate::connector::stdlib::validate(
+                plan,
+                slot,
+                node,
+                spec,
+                receives_inbound_call_response,
+            )?;
             // Built-in sheets above retain their more specific missing-row
             // diagnostics. Foreign families still cannot bypass the generic
             // exchange lifecycle.
@@ -3856,9 +2999,10 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                 })
                 .count();
             let terminal_shape_holds = match spec.exchange {
-                crate::connector::ConnectorExchange::Event => exits == 0,
-                crate::connector::ConnectorExchange::Call
-                | crate::connector::ConnectorExchange::Session => exits == 1,
+                crate::connector::ExchangeKind::Event => exits == 0,
+                crate::connector::ExchangeKind::Call | crate::connector::ExchangeKind::Session => {
+                    exits == 1
+                }
             };
             if !terminal_shape_holds {
                 return Err(PlanValidationError::ExchangeTerminalMismatch {
@@ -3867,11 +3011,11 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                 });
             }
             let roles_hold = match spec.exchange {
-                crate::connector::ConnectorExchange::Event => {
+                crate::connector::ExchangeKind::Event => {
                     spec.roles == crate::connector::ConnectorDirection::Inbound
                 }
-                crate::connector::ConnectorExchange::Call => true,
-                crate::connector::ConnectorExchange::Session => spec.roles.has_outbound(),
+                crate::connector::ExchangeKind::Call => true,
+                crate::connector::ExchangeKind::Session => spec.roles.has_outbound(),
             };
             if !roles_hold {
                 return Err(PlanValidationError::ExchangeRoleMismatch {
@@ -3932,7 +3076,7 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                         });
                     }
                     // The table ANSWERED for the port — but the
-                    // OutboundConnectorDriver seam cannot execute it yet: refuse by
+                    // Outbound seam cannot execute it yet: refuse by
                     // capability, distinctly from ignorance.
                     if matches!(node.body, NodeKind::Connector(_))
                         && !matches!(endpoint.port.name(), "in" | "out" | "err" | "exit")

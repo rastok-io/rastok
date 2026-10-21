@@ -1,8 +1,9 @@
 use super::*;
-use crate::boundary::CallOpen;
-use crate::connector::{
-    ConnectorDirection, ConnectorExchange, PROCESS_CONNECTOR_ID, outbound_call_semantics,
-};
+use crate::connector::ConnectorDirection;
+use crate::connector::ExchangeKind;
+use crate::connector::exchange::CallOpen;
+use crate::connector::outbound_call_semantics;
+use crate::connector::stdlib::PROCESS_CONNECTOR_ID;
 use crate::envelope::{Data, Meta, MetaSys};
 use crate::instance;
 use crate::node;
@@ -60,7 +61,7 @@ impl Fixture {
         let call = outbound_call_semantics(
             &contract,
             ConnectorDirection::Outbound,
-            ConnectorExchange::Call,
+            ExchangeKind::Call,
             Some("job"),
         )
         .unwrap();
@@ -915,9 +916,9 @@ fn opening_is_bound_to_original_plan_contract_input_and_exact_identity() {
     );
     assert_eq!(fold, RetryView::default());
     let other_call = outbound_call_semantics(
-        &ContractId::parse(crate::connector::FILE_CONNECTOR_ID).unwrap(),
+        &ContractId::parse(crate::connector::stdlib::FILE_CONNECTOR_ID).unwrap(),
         ConnectorDirection::Outbound,
-        ConnectorExchange::Call,
+        ExchangeKind::Call,
         Some("read"),
     )
     .unwrap();
@@ -942,7 +943,10 @@ fn opening_is_bound_to_original_plan_contract_input_and_exact_identity() {
             match which {
                 0 => *operation = OperationId::from_id(Id::from_bytes([0; 16])),
                 1 => *plan = SemanticHash::from_bytes([0; 32]),
-                2 => *contract = ContractId::parse(crate::connector::FILE_CONNECTOR_ID).unwrap(),
+                2 => {
+                    *contract =
+                        ContractId::parse(crate::connector::stdlib::FILE_CONNECTOR_ID).unwrap()
+                }
                 3 => pin.envelope = Id::from_bytes([0; 16]),
                 _ => pin.opened_at = 1,
             }

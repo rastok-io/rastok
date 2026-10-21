@@ -8,9 +8,11 @@
 //! scenario injections enter through the ordinary Lab boundary, never through
 //! a fake socket.
 
-use crate::boundary::{
-    Completion, HttpClientExit, PreparedRequest, RequestPreparation, SchedulerCompletion,
-};
+use crate::connector::exchange::Completion;
+use crate::connector::exchange::PreparedRequest;
+use crate::connector::exchange::RequestPreparation;
+use crate::connector::exchange::SchedulerCompletion;
+use crate::connector::stdlib::HttpClientExit;
 use crate::envelope::Data;
 use crate::plan::{AttrSetting, NodeKind, ValidatedExecutionPlan};
 use crate::value::Value;
@@ -118,7 +120,7 @@ impl HttpClientRequestSettings {
                         "the HttpClient binding path `{path}` is not a connector"
                     ))
                 })?;
-            if spec.contract.as_str() != crate::connector::HTTP_CLIENT_CONNECTOR_ID {
+            if spec.contract.as_str() != crate::connector::stdlib::HTTP_CLIENT_CONNECTOR_ID {
                 return Err(super::DriverFactoryError::new(format!(
                     "the HttpClient binder received `{}` at `{path}`",
                     spec.contract
@@ -147,8 +149,11 @@ impl HttpClientRequestSettings {
                     continue;
                 };
                 if *site != crate::plan::EvaluationSite::Boot
-                    || !crate::boundary::connector_boot_reference_policy(&spec.contract, name)
-                        .is_some_and(|policy| policy.admits(&reference))
+                    || !crate::connector::stdlib::connector_boot_reference_policy(
+                        &spec.contract,
+                        name,
+                    )
+                    .is_some_and(|policy| policy.admits(&reference))
                 {
                     return Err(super::DriverFactoryError::new(format!(
                         "the HttpClient setting `{name}` at `{path}` is not boot-compatible"
@@ -255,7 +260,7 @@ impl HttpClientRequestSettings {
             Some(AttrSetting::Word(codec)) => codec.as_str(),
             _ => return Err(HttpRequestRejection::DecodeFailed),
         };
-        let body = crate::boundary::network_payload_bytes(codec, data)
+        let body = crate::connector::stdlib::network_payload_bytes(codec, data)
             .map_err(|_| HttpRequestRejection::DecodeFailed)?;
         let max_body = match spec.attribute("max_body") {
             Some(AttrSetting::Value(Value::Text(value))) => {
@@ -412,7 +417,7 @@ pub(crate) fn decode_request(prepared: &PreparedRequest) -> Option<HttpRequest> 
     })
 }
 
-impl super::ScriptedConnectorProtocol for HttpClientRequestSettings {
+impl super::CallProtocol for HttpClientRequestSettings {
     fn prepare_request(
         &self,
         connector: &crate::node::Path,
@@ -437,7 +442,7 @@ pub(crate) fn bind_scripted_protocol(
     plan: &ValidatedExecutionPlan,
     nodes: &[crate::node::Path],
     boot: &crate::deployment::BootBindings,
-) -> Result<Box<dyn super::ScriptedConnectorProtocol>, super::DriverFactoryError> {
+) -> Result<Box<dyn super::CallProtocol>, super::DriverFactoryError> {
     HttpClientRequestSettings::try_bind_with_boot(plan, nodes, boot)
-        .map(|bindings| Box::new(bindings) as Box<dyn super::ScriptedConnectorProtocol>)
+        .map(|bindings| Box::new(bindings) as Box<dyn super::CallProtocol>)
 }

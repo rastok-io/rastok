@@ -406,7 +406,7 @@ session     open session
               └── one session exit   (no message after it)
 ```
 
-M1.6 adds `ConnectorExchange = Event | Call | Session`; it does not add
+The exchange kind is `ExchangeKind = Event | Call | Session`; it does not add
 a fourth causal record type. Session opening and inbound messages are INGRESS
 facts when initiated by the world. A client opening and every graph-to-world
 message are EGRESS intents. Session terminal publication is an ordinary

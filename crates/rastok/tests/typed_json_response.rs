@@ -245,7 +245,7 @@ fn the_independent_validator_rejects_forged_codec_capabilities() {
 #[test]
 fn malformed_native_or_undeserialized_data_cannot_enter_the_outbound_journal() {
     use rastok::{
-        boundary::*,
+        connector::{driver::*, exchange::*, stdlib::*},
         envelope::{Data, Encoding, Namespace, Value},
         journal::MemJournal,
         node,
@@ -255,9 +255,9 @@ fn malformed_native_or_undeserialized_data_cannot_enter_the_outbound_journal() {
     use std::collections::BTreeMap;
     struct Driver {
         data: Data,
-        responses: Vec<Response>,
+        responses: Vec<CallResponse>,
     }
-    impl CallConnectorDriver for Driver {
+    impl OutboundCall for Driver {
         fn prepare_request(
             &mut self,
             _: &node::Path,
@@ -267,7 +267,7 @@ fn malformed_native_or_undeserialized_data_cannot_enter_the_outbound_journal() {
             RequestPreparation::Prepared(PreparedRequest::seal(b"{}".to_vec()))
         }
         fn start(&mut self, intent: &CallOpen, _: &rastok::envelope::Envelope) -> CallStart {
-            self.responses.push(Response {
+            self.responses.push(CallResponse {
                 call_id: intent.call_id,
                 completion: Completion::http_client(
                     self.data.clone(),
@@ -277,7 +277,7 @@ fn malformed_native_or_undeserialized_data_cannot_enter_the_outbound_journal() {
             });
             CallStart::Started
         }
-        fn events(&mut self) -> Vec<Response> {
+        fn poll_responses(&mut self) -> Vec<CallResponse> {
             std::mem::take(&mut self.responses)
         }
         fn scheduler_completion(&mut self, _: &node::Path, _: SchedulerCompletion) -> Completion {

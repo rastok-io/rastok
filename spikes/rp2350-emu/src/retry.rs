@@ -4,7 +4,7 @@
 use alloc::{collections::BTreeMap, string::String, vec::Vec};
 use cortex_m_semihosting::hprintln;
 use rastok_core::{
-    boundary::*,
+    connector::{driver::*, exchange::*, stdlib::*},
     envelope::{Data, Namespace, Value},
     journal::MemJournal,
     node::{Path, Port},
@@ -13,14 +13,14 @@ use rastok_core::{
 };
 
 struct World {
-    ready: Vec<Response>,
+    ready: Vec<CallResponse>,
     starts: usize,
     preparations: usize,
     frames: usize,
     bytes: usize,
 }
 
-impl CallConnectorDriver for World {
+impl OutboundCall for World {
     fn prepare_request(
         &mut self,
         _: &Path,
@@ -37,13 +37,13 @@ impl CallConnectorDriver for World {
                 .map(|_| Data::materialized(Value::Text("x".repeat(self.bytes))))
                 .collect()
         };
-        self.ready.push(Response {
+        self.ready.push(CallResponse {
             call_id: intent.call_id,
             completion: Completion::process(channel(), channel(), ProcessExit::TimeoutExpired),
         });
         CallStart::Started
     }
-    fn events(&mut self) -> Vec<Response> {
+    fn poll_responses(&mut self) -> Vec<CallResponse> {
         core::mem::take(&mut self.ready)
     }
     fn scheduler_completion(&mut self, _: &Path, event: SchedulerCompletion) -> Completion {

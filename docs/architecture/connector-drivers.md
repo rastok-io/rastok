@@ -45,7 +45,7 @@ Contract id, for example `std/file@3`.
                          runtime assembly
 
   static factories ─┐
-                    ├──▶ DriverRegistry ──bind exact id/roles──▶ RuntimeBindings
+                    ├──▶ DriverRegistry ──bind exact id/roles──▶ RuntimeDrivers
   future loader ────┘             ▲                                │
        │                          │                                │
        └─ DriverManifest           │                      ┌─────────┴─────────┐
@@ -69,7 +69,7 @@ not reimplemented in the mock and not hidden behind a networking feature.
 Port types alone do not describe an exchange's lifecycle or cardinality.
 
 The HttpServer ack Lab model owns one bounded decoded-request proposal and one
-acknowledgement slot. It uses `RuntimeBindings::poll_inbound` and the generic
+acknowledgement slot. It uses `RuntimeDrivers::poll_inbound` and the generic
 inbound Call terminal queue; the core still assigns the root identity, Call reference,
 routes and journal records. The scenario selects `listener.out`, not an extra
 test-only App input. Pending admission cannot acknowledge or overwrite the
@@ -84,7 +84,7 @@ and D-2026-09-09-3 for the separation.
 
 ## Two roles, three exchange shapes
 
-`InboundConnectorDriver` retains and proposes one bounded external arrival at
+`Ingress` retains and proposes one bounded external arrival at
 a time. This world-originated fact enters the Connector instance's ordinary
 mailbox only after INGRESS admission. The Driver does not assign root identities:
 sequencing, routing, admission, identity and journal commit remain runtime authorities. The runtime answers
@@ -96,7 +96,7 @@ output row. An App-boundary injection remains a separate explicit API
 category, never a provenance-string heuristic.
 
 For a Call-shaped inbound contract, the same bound object also exposes
-`InboundCallConnectorDriver`. The accepting INGRESS fact returns an
+`InboundCall`. The accepting INGRESS fact returns an
 `InboundCallId` only after it has committed the root and exact source
 instance. For fixed acknowledgement, the terminal view later reports one
 correlated `Completion`; the VM validates it and commits one zero-cursor
@@ -111,9 +111,9 @@ report its one terminal event through `events`. The resulting `l:reply`
 consumes that real delivery cursor. Neither form is an outbound Call, and the
 Driver never manufactures a mailbox delivery or writes a causal record.
 
-`OutboundConnectorDriver` exposes exactly one exchange-specific outbound view:
-`CallConnectorDriver` prepares/starts calls and reports correlated typed
-completions; `SessionConnectorDriver` prepares/starts an opening and its
+`Outbound` exposes exactly one exchange-specific outbound view:
+`OutboundCall` prepares/starts calls and reports correlated typed
+completions; `Session` prepares/starts an opening and its
 individual writes, then reports correlated open/write/terminal observations.
 A correlated result for an existing outbound exchange is not a second
 world-originated INGRESS root: it settles the already committed obligation and
@@ -231,7 +231,7 @@ direct-lineage response handoff. All three versions retain the same Call and
 bounded close-once rules.
 
 H6 is the live Session consumer. WebSocketClient and WebSocketServer use the
-same `SessionConnectorDriver` fold over H1 Upgrade, RFC 8441 and RFC 9220.
+same `Session` fold over H1 Upgrade, RFC 8441 and RFC 9220.
 Opening, each write and terminal publication are separately correlated by
 journal-derived `SessionId`/`SessionWriteId`; pending work stays within the
 ordinary mailbox bound. A server object owns a multi-session table, while a
@@ -333,10 +333,10 @@ application acknowledgement.
 
 ### 4. Register one factory
 
-Implement `ConnectorDriverFactory` with the exact id and roles. `bind` validates
+Implement `DriverFactory` with the exact id and roles. `bind` validates
 settings and may reserve passive listeners as described above; it must not
 admit an external fact, acknowledge a request or launch an outbound effect.
-`RuntimeBindings::try_new` calls each
+`RuntimeDrivers::try_new` calls each
 required Contract factory once before execution and rejects missing, incomplete
 or lying implementations.
 
@@ -400,7 +400,7 @@ loaded. Its serialized file syntax, artifact locator, signature/trust policy,
 loader protocol and native ABI are intentionally not frozen.
 
 A future in-process loader or out-of-process host must ultimately provide an
-ordinary `ConnectorDriverFactory` to the same `DriverRegistry`. Discovery is a
+ordinary `DriverFactory` to the same `DriverRegistry`. Discovery is a
 physical assembly choice, never an alternate VM, plan or simulation model.
 
 ## Review checklist

@@ -11,11 +11,11 @@ use rastok::conformance::{
     DriverTestFixture, ExitCaseTest, InterleaveExpectation, InterleaveProbe, assert_conformant,
     verify,
 };
+use rastok::connector::stdlib::FILE;
 use rastok::connectors::{DriverRegistry, FileFactory};
 use rastok::contract::ContractCatalog;
 use rastok::envelope::{Data, Encoding};
 use rastok::node;
-use rastok::stdlib::FILE;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 

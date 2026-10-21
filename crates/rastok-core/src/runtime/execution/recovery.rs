@@ -42,7 +42,7 @@ impl Execution<'_> {
     pub fn recover_with_bindings(
         &mut self,
         journal: &dyn Journal,
-        bindings: &mut dyn OutboundConnectorBindings,
+        bindings: &mut dyn OutboundDrivers,
     ) -> Result<(), ExecutionFault> {
         self.preflight(journal)?;
         let resume_at = self.now;
@@ -143,7 +143,7 @@ impl Execution<'_> {
         &mut self,
         journal: &dyn Journal,
         admissions: &dyn InstanceAdmissions,
-        bindings: &mut dyn OutboundConnectorBindings,
+        bindings: &mut dyn OutboundDrivers,
         index: usize,
         record: &Record,
         resume_at: i64,

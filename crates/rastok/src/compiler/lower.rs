@@ -2205,7 +2205,7 @@ graph m0_probe : App {
         let spec = plan.nodes[2].connector().expect("a connector spec");
         assert_eq!(
             spec.contract.as_str(),
-            crate::connector::PROCESS_CONNECTOR_ID
+            crate::connector::stdlib::PROCESS_CONNECTOR_ID
         );
         assert_eq!(spec.roles, crate::connector::ConnectorDirection::Outbound);
         assert_eq!(
@@ -2688,18 +2688,18 @@ graph app : App {
         .expect("sensitive policy is executable after A3");
         let mut vm = crate::runtime::execution::Execution::new(&compilation.plan, GraphVersion(1));
         let mut journal = crate::journal::MemJournal::new(GraphVersion(1));
-        let submission = crate::boundary::IngressProposal {
-            provenance: crate::boundary::IngressProvenance::single(
+        let submission = crate::connector::exchange::IngressProposal {
+            provenance: crate::connector::exchange::IngressProvenance::single(
                 node::Path::new(["test"]).expect("valid provenance path"),
             ),
-            draft: crate::boundary::EnvelopeDraft {
+            draft: crate::connector::exchange::EnvelopeDraft {
                 port: node::Port::new("in").expect("valid port"),
                 data: crate::envelope::Data::materialized(crate::value::Value::Text(String::from(
                     "classified",
                 ))),
                 ext: crate::envelope::Namespace::new(),
             },
-            sequence: crate::boundary::IngressSequence::Next,
+            sequence: crate::connector::exchange::IngressSequence::Next,
             session: None,
         };
         vm.accept_input(&mut journal, submission)
@@ -2800,18 +2800,18 @@ graph app : App {
             crate::journal::Journal::privacy_retention(&attested_journal),
             Some(crate::deployment::PrivacyRetention::RunScoped)
         );
-        let submission = crate::boundary::IngressProposal {
-            provenance: crate::boundary::IngressProvenance::single(
+        let submission = crate::connector::exchange::IngressProposal {
+            provenance: crate::connector::exchange::IngressProvenance::single(
                 node::Path::new(["test"]).expect("valid provenance path"),
             ),
-            draft: crate::boundary::EnvelopeDraft {
+            draft: crate::connector::exchange::EnvelopeDraft {
                 port: node::Port::new("in").expect("valid port"),
                 data: crate::envelope::Data::materialized(crate::value::Value::Text(String::from(
                     "subject-42",
                 ))),
                 ext: crate::envelope::Namespace::new(),
             },
-            sequence: crate::boundary::IngressSequence::Next,
+            sequence: crate::connector::exchange::IngressSequence::Next,
             session: None,
         };
         attested

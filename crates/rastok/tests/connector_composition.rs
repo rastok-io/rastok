@@ -4,7 +4,7 @@
 #![allow(clippy::expect_used, clippy::panic)]
 
 use rastok::compiler::compile;
-use rastok::connectors::{DriverRegistry, FileFactory, ProcessFactory, RuntimeBindings};
+use rastok::connectors::{DriverRegistry, FileFactory, ProcessFactory, RuntimeDrivers};
 use rastok::contract::ContractCatalog;
 use rastok::journal::{CallStatus, EgressRecord, Record};
 use rastok::plan::GraphVersion;
@@ -146,19 +146,19 @@ fn static_builds_may_select_process_file_or_both() {
     let file = compile_one(FILE_ONLY);
     let mixed = compile_one(MIXED_GRAPH);
 
-    RuntimeBindings::try_new(&process.plan, &process_registry())
+    RuntimeDrivers::prepare(&process.plan, &process_registry())
         .expect("a Process-only build binds its plan");
-    RuntimeBindings::try_new(&file.plan, &file_registry())
+    RuntimeDrivers::prepare(&file.plan, &file_registry())
         .expect("a File-only build binds its plan");
-    RuntimeBindings::try_new(&mixed.plan, &combined_registry())
+    RuntimeDrivers::prepare(&mixed.plan, &combined_registry())
         .expect("a combined static build binds both families");
 
     assert!(
-        RuntimeBindings::try_new(&mixed.plan, &process_registry()).is_err(),
+        RuntimeDrivers::prepare(&mixed.plan, &process_registry()).is_err(),
         "a Process-only build never claims File support"
     );
     assert!(
-        RuntimeBindings::try_new(&mixed.plan, &file_registry()).is_err(),
+        RuntimeDrivers::prepare(&mixed.plan, &file_registry()).is_err(),
         "a File-only build never claims Process support"
     );
 }
@@ -177,7 +177,7 @@ fn one_lab_world_uses_both_families_without_changing_the_plan() {
         scripted.plan, real.plan,
         "real and scripted worlds execute the same categorical plan"
     );
-    RuntimeBindings::try_new(&real.plan, &combined_registry())
+    RuntimeDrivers::prepare(&real.plan, &combined_registry())
         .expect("the exact Lab plan also binds both real Drivers");
 
     let runs = rastok::lab::run(&scripted.plan, GraphVersion(1), &scripted.labs[0]);
@@ -249,7 +249,7 @@ graph websocket_only : App {
 }
 "#;
     let compilation = compile_one(source);
-    let Err(error) = RuntimeBindings::try_new(&compilation.plan, &process_registry()) else {
+    let Err(error) = RuntimeDrivers::prepare(&compilation.plan, &process_registry()) else {
         panic!("a Process-only image cannot create bindings for WebSocketClient")
     };
     assert!(

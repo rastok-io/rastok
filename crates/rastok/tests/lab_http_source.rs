@@ -79,7 +79,7 @@ fn decoded_requests_use_the_source_contract_without_a_physical_driver_or_app_inp
         "the Lab invents no transport metadata"
     );
     assert!(
-        rastok::connectors::RuntimeBindings::try_new(
+        rastok::connectors::RuntimeDrivers::prepare(
             &compilation.plan,
             &rastok::connectors::DriverRegistry::default(),
         )

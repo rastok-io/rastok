@@ -146,7 +146,10 @@ fn inject_at(
     port: &str,
     value: rastok::envelope::Value,
 ) -> Result<rastok::envelope::Id, rastok::runtime::execution::ExecutionFault> {
-    use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
+    use rastok::connector::exchange::EnvelopeDraft;
+    use rastok::connector::exchange::IngressProposal;
+    use rastok::connector::exchange::IngressProvenance;
+    use rastok::connector::exchange::IngressSequence;
     vm.accept_input(
         journal,
         IngressProposal {
@@ -577,7 +580,7 @@ lab app {{
             })
             .collect();
         assert_eq!(calls.len(), 2, "repeated stop never starts an extra effect");
-        let call_instance = |call: &rastok::boundary::CallOpen| {
+        let call_instance = |call: &rastok::connector::exchange::CallOpen| {
             run.records
                 .iter()
                 .find_map(|record| {

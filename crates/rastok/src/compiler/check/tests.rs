@@ -154,7 +154,7 @@ fn the_m0_probe_checks_into_hir() {
     assert_eq!(
         echo.connector_contract_id()
             .map(|contract| contract.as_str()),
-        Some(crate::connector::PROCESS_CONNECTOR_ID)
+        Some(crate::connector::stdlib::PROCESS_CONNECTOR_ID)
     );
     // The EFFECTIVE sheet (D-2026-08-12-1): the five written
     // attributes plus the injected defaults — `args = []`,

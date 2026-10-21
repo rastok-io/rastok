@@ -7,10 +7,12 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use rastok::compiler::compile;
+use rastok::connector::contract::{
+    AttributeSpec, ConnectorContract, ContractMode, DefaultValue, EvaluationSite, ModeSelector,
+    ModeSupport, PortContract, PortDataType, PortTypeChoice, PortTypeRule, Presence, ValueDomain,
+};
 use rastok::contract::{
-    AttributeSpec, ConnectorContract, ContractCatalog, DefaultValue, EvaluationSite,
-    FrontendContract, FrontendFraming, FrontendReader, PortContract, PortDataType, PortTypeChoice,
-    PortTypeRule, Presence, Profile, ProfileSelector, ProfileSupport, SheetDefect, ValueDomain,
+    ContractCatalog, ContractValidationError, FrontendContract, FrontendFraming, FrontendReader,
 };
 use rastok::node::PortDirection;
 
@@ -59,32 +61,32 @@ fn all_four_network_contracts_cross_the_source_to_validated_plan_boundary() {
             "HttpClient",
             "    url = \"https://example.test/v1\"\n    headers = { content_type = media_type(\"application/octet-stream\") }\n    custom_headers = { \"X-Trace-Id\": [\"one\"] }\n    tls_certificate = base64! { Y2VydA== }\n    tls_private_key = base64! { a2V5 }\n    timeout = duration(\"5s\")\n    codec = bytes\n    idempotent = true ; behavior = deterministic",
             "  in -> network -> out",
-            rastok::connector::HTTP_CLIENT_CONNECTOR_ID,
-            rastok::connector::ConnectorExchange::Call,
+            rastok::connector::stdlib::HTTP_CLIENT_CONNECTOR_ID,
+            rastok::connector::ExchangeKind::Call,
             "c071a2a881181c82d6fc52841d2f789a803c853da67dd6a3c9f9f39f87c51330",
         ),
         (
             "HttpServer",
             "    listen = \"127.0.0.1:8080\"\n    codec = bytes",
             "  network -> out",
-            rastok::connector::HTTP_SERVER_CONNECTOR_ID,
-            rastok::connector::ConnectorExchange::Call,
+            rastok::connector::stdlib::HTTP_SERVER_CONNECTOR_ID,
+            rastok::connector::ExchangeKind::Call,
             "8be9c5c663158e632bb2f9de4dd20852c59580318ad3198dbac931f46ca18638",
         ),
         (
             "WebSocketClient",
             "    url = \"wss://example.test/socket\"\n    handshake_timeout = duration(\"5s\")\n    codec = text\n    behavior = deterministic",
             "  in -> network -> out",
-            rastok::connector::WEBSOCKET_CLIENT_CONNECTOR_ID,
-            rastok::connector::ConnectorExchange::Session,
+            rastok::connector::stdlib::WEBSOCKET_CLIENT_CONNECTOR_ID,
+            rastok::connector::ExchangeKind::Session,
             "33fff893c4ea10aed45047f6b296022138c6ac3cc5528c908c06ee0c0f8b0aff",
         ),
         (
             "WebSocketServer",
             "    listen = \"127.0.0.1:8081\"\n    handshake_timeout = duration(\"5s\")\n    codec = json",
             "  in -> network -> out",
-            rastok::connector::WEBSOCKET_SERVER_CONNECTOR_ID,
-            rastok::connector::ConnectorExchange::Session,
+            rastok::connector::stdlib::WEBSOCKET_SERVER_CONNECTOR_ID,
+            rastok::connector::ExchangeKind::Session,
             "8e023ac5bed6d799511633ba858330494ae6d8e1f901de9c09be7dcd735ad6f8",
         ),
     ];
@@ -381,7 +383,7 @@ fn the_core_rejects_network_sheet_forgeries_without_a_contract_catalog() {
 
 // ---------- the metamodel holds its own door ----------
 
-fn sheet(common: &'static [AttributeSpec], selector: Option<ProfileSelector>) -> ConnectorContract {
+fn sheet(common: &'static [AttributeSpec], selector: Option<ModeSelector>) -> ConnectorContract {
     const PORTS: &[PortContract] = &[
         PortContract {
             name: "in",
@@ -412,7 +414,7 @@ fn sheet(common: &'static [AttributeSpec], selector: Option<ProfileSelector>) ->
         id: "org.rastok.test/probe@1",
         name: "Probe",
         roles: rastok::connector::ConnectorDirection::Outbound,
-        exchange: rastok::connector::ConnectorExchange::Call,
+        exchange: rastok::connector::ExchangeKind::Call,
         ports: PORTS,
         common,
         selector,
@@ -440,7 +442,7 @@ fn a_duplicate_attribute_is_a_sheet_defect() {
             .expect("the standard catalogue holds")
             .try_with(sheet(DUP, None))
             .unwrap_err(),
-        SheetDefect::DuplicateAttribute("x")
+        ContractValidationError::DuplicateAttribute("x")
     );
 }
 
@@ -448,15 +450,15 @@ fn a_duplicate_attribute_is_a_sheet_defect() {
 fn the_exchange_shape_owns_the_terminal_row_cardinality() {
     let event_with_exit = ConnectorContract {
         roles: rastok::connector::ConnectorDirection::Inbound,
-        exchange: rastok::connector::ConnectorExchange::Event,
+        exchange: rastok::connector::ExchangeKind::Event,
         ..sheet(&[], None)
     };
     assert_eq!(
         ContractCatalog::default()
             .try_with(event_with_exit)
             .unwrap_err(),
-        SheetDefect::ExchangeTerminalMismatch {
-            exchange: rastok::connector::ConnectorExchange::Event,
+        ContractValidationError::ExchangeTerminalMismatch {
+            exchange: rastok::connector::ExchangeKind::Event,
             exits: 1,
         }
     );
@@ -471,7 +473,7 @@ fn the_exchange_shape_owns_the_terminal_row_cardinality() {
         id: "org.rastok.test/event@1",
         name: "EventProbe",
         roles: rastok::connector::ConnectorDirection::Inbound,
-        exchange: rastok::connector::ConnectorExchange::Event,
+        exchange: rastok::connector::ExchangeKind::Event,
         ports: EVENT_PORTS,
         common: &[],
         selector: None,
@@ -486,12 +488,12 @@ fn the_exchange_shape_owns_the_terminal_row_cardinality() {
                 id: "org.rastok.test/call@1",
                 name: "CallProbe",
                 roles: rastok::connector::ConnectorDirection::Outbound,
-                exchange: rastok::connector::ConnectorExchange::Call,
+                exchange: rastok::connector::ExchangeKind::Call,
                 ..event
             })
             .unwrap_err(),
-        SheetDefect::ExchangeTerminalMismatch {
-            exchange: rastok::connector::ConnectorExchange::Call,
+        ContractValidationError::ExchangeTerminalMismatch {
+            exchange: rastok::connector::ExchangeKind::Call,
             exits: 0,
         }
     );
@@ -501,7 +503,7 @@ fn the_exchange_shape_owns_the_terminal_row_cardinality() {
             id: "org.rastok.test/session@1",
             name: "SessionProbe",
             roles: rastok::connector::ConnectorDirection::InboundAndOutbound,
-            exchange: rastok::connector::ConnectorExchange::Session,
+            exchange: rastok::connector::ExchangeKind::Session,
             ..sheet(&[], None)
         })
         .expect("a Session carries one terminal exit like a Call");
@@ -520,7 +522,7 @@ fn an_event_is_the_one_way_inbound_exchange() {
             id: "org.rastok.test/outbound-event@1",
             name: "OutboundEvent",
             roles: rastok::connector::ConnectorDirection::Outbound,
-            exchange: rastok::connector::ConnectorExchange::Event,
+            exchange: rastok::connector::ExchangeKind::Event,
             ports: EVENT_PORTS,
             common: &[],
             selector: None,
@@ -528,8 +530,8 @@ fn an_event_is_the_one_way_inbound_exchange() {
         .unwrap_err();
     assert_eq!(
         error,
-        SheetDefect::ExchangeRoleMismatch {
-            exchange: rastok::connector::ConnectorExchange::Event,
+        ContractValidationError::ExchangeRoleMismatch {
+            exchange: rastok::connector::ExchangeKind::Event,
             roles: rastok::connector::ConnectorDirection::Outbound,
         }
     );
@@ -539,14 +541,14 @@ fn an_event_is_the_one_way_inbound_exchange() {
             id: "org.rastok.test/inbound-session@1",
             name: "InboundSession",
             roles: rastok::connector::ConnectorDirection::Inbound,
-            exchange: rastok::connector::ConnectorExchange::Session,
+            exchange: rastok::connector::ExchangeKind::Session,
             ..sheet(&[], None)
         })
         .unwrap_err();
     assert_eq!(
         error,
-        SheetDefect::ExchangeRoleMismatch {
-            exchange: rastok::connector::ConnectorExchange::Session,
+        ContractValidationError::ExchangeRoleMismatch {
+            exchange: rastok::connector::ExchangeKind::Session,
             roles: rastok::connector::ConnectorDirection::Inbound,
         },
         "a Session needs the exchange-specific outbound observation view"
@@ -556,7 +558,8 @@ fn an_event_is_the_one_way_inbound_exchange() {
 #[test]
 fn the_catalogue_keys_source_symbols_by_stable_contract_identity() {
     let catalogue = ContractCatalog::try_m0().expect("the standard catalogue holds");
-    let id = rastok::connector::ContractId::parse(rastok::connector::PROCESS_CONNECTOR_ID).unwrap();
+    let id = rastok::connector::ContractId::parse(rastok::connector::stdlib::PROCESS_CONNECTOR_ID)
+        .unwrap();
     let process = catalogue
         .connector_by_id(&id)
         .expect("Process is keyed by its stable id");
@@ -572,21 +575,21 @@ fn the_catalogue_keys_source_symbols_by_stable_contract_identity() {
     };
     assert_eq!(
         ContractCatalog::default().try_with(invalid).unwrap_err(),
-        SheetDefect::InvalidConnectorId {
+        ContractValidationError::InvalidConnectorId {
             id: "Process",
-            reason: rastok::connector::ConnectorIdError::Shape,
+            reason: rastok::connector::ContractIdError::Shape,
         }
     );
 
     let alias = ConnectorContract {
-        id: rastok::connector::PROCESS_CONNECTOR_ID,
+        id: rastok::connector::stdlib::PROCESS_CONNECTOR_ID,
         name: "ProcessAlias",
         ..sheet(&[], None)
     };
     assert_eq!(
         catalogue.try_with(alias).unwrap_err(),
-        SheetDefect::ConnectorIdCollision {
-            id: rastok::connector::PROCESS_CONNECTOR_ID,
+        ContractValidationError::ConnectorIdCollision {
+            id: rastok::connector::stdlib::PROCESS_CONNECTOR_ID,
             existing: "Process",
             incoming: "ProcessAlias",
         }
@@ -596,12 +599,12 @@ fn the_catalogue_keys_source_symbols_by_stable_contract_identity() {
 #[test]
 fn source_connector_symbols_disappear_after_contract_resolution() {
     let process_catalogue = ContractCatalog::default()
-        .try_with(rastok::stdlib::PROCESS.clone())
+        .try_with(rastok::connector::stdlib::PROCESS.clone())
         .expect("the Process sheet holds");
     let alias_catalogue = ContractCatalog::default()
         .try_with(ConnectorContract {
             name: "Shell",
-            ..rastok::stdlib::PROCESS.clone()
+            ..rastok::connector::stdlib::PROCESS.clone()
         })
         .expect("one alternate source symbol may resolve to the same stable id");
     let process_source = process_graph(FULL);
@@ -619,7 +622,7 @@ fn port_type_cycles_are_rejected_even_when_reached_through_a_tail() {
         id: "org.rastok.test/cyclic@1",
         name: "Cyclic",
         roles: rastok::connector::ConnectorDirection::Outbound,
-        exchange: rastok::connector::ConnectorExchange::Call,
+        exchange: rastok::connector::ExchangeKind::Call,
         ports: &[
             PortContract {
                 name: "first",
@@ -647,23 +650,23 @@ fn port_type_cycles_are_rejected_even_when_reached_through_a_tail() {
         ContractCatalog::try_m0()
             .expect("the standard catalogue holds")
             .try_with(CYCLIC),
-        Err(SheetDefect::CyclicPortTypes("first"))
+        Err(ContractValidationError::CyclicPortTypes("first"))
     ));
 }
 
 #[test]
 fn same_as_and_profile_selected_ports_resolve_without_a_second_type_authority() {
-    const PROFILES: &[Profile] = &[
-        Profile {
+    const PROFILES: &[ContractMode] = &[
+        ContractMode {
             protocol: None,
             word: "textual",
-            support: ProfileSupport::Available,
+            support: ModeSupport::Available,
             attributes: &[],
         },
-        Profile {
+        ContractMode {
             protocol: None,
             word: "binary",
-            support: ProfileSupport::Available,
+            support: ModeSupport::Available,
             attributes: &[],
         },
     ];
@@ -671,7 +674,7 @@ fn same_as_and_profile_selected_ports_resolve_without_a_second_type_authority() 
         id: "org.rastok.test/parametric@1",
         name: "Parametric",
         roles: rastok::connector::ConnectorDirection::Outbound,
-        exchange: rastok::connector::ConnectorExchange::Call,
+        exchange: rastok::connector::ExchangeKind::Call,
         ports: &[
             PortContract {
                 name: "in",
@@ -705,7 +708,7 @@ fn same_as_and_profile_selected_ports_resolve_without_a_second_type_authority() 
             },
         ],
         common: &[],
-        selector: Some(ProfileSelector {
+        selector: Some(ModeSelector {
             attribute: "mode",
             default: Some("textual"),
             profiles: PROFILES,
@@ -750,7 +753,7 @@ fn a_profile_local_attribute_cannot_ambiguously_select_a_port_type() {
         id: "org.rastok.test/ambiguous@1",
         name: "Ambiguous",
         roles: rastok::connector::ConnectorDirection::Outbound,
-        exchange: rastok::connector::ConnectorExchange::Call,
+        exchange: rastok::connector::ExchangeKind::Call,
         ports: &[PortContract {
             name: "out",
             direction: PortDirection::Output,
@@ -764,20 +767,20 @@ fn a_profile_local_attribute_cannot_ambiguously_select_a_port_type() {
             },
         }],
         common: &[],
-        selector: Some(ProfileSelector {
+        selector: Some(ModeSelector {
             attribute: "mode",
             default: Some("a"),
             profiles: &[
-                Profile {
+                ContractMode {
                     protocol: None,
                     word: "a",
-                    support: ProfileSupport::Available,
+                    support: ModeSupport::Available,
                     attributes: SHAPE_TEXT,
                 },
-                Profile {
+                ContractMode {
                     protocol: None,
                     word: "b",
-                    support: ProfileSupport::Available,
+                    support: ModeSupport::Available,
                     attributes: SHAPE_BYTES,
                 },
             ],
@@ -788,7 +791,7 @@ fn a_profile_local_attribute_cannot_ambiguously_select_a_port_type() {
             .expect("the standard catalogue holds")
             .try_with(AMBIGUOUS)
             .unwrap_err(),
-        SheetDefect::UnknownPortTypeAttribute {
+        ContractValidationError::UnknownPortTypeAttribute {
             port: "out",
             attribute: "shape",
         }
@@ -807,7 +810,7 @@ fn a_port_type_selector_is_structurally_plan_bound() {
         id: "org.rastok.test/late@1",
         name: "Late",
         roles: rastok::connector::ConnectorDirection::Outbound,
-        exchange: rastok::connector::ConnectorExchange::Call,
+        exchange: rastok::connector::ExchangeKind::Call,
         ports: &[PortContract {
             name: "out",
             direction: PortDirection::Output,
@@ -828,7 +831,7 @@ fn a_port_type_selector_is_structurally_plan_bound() {
             .expect("the standard catalogue holds")
             .try_with(LATE)
             .unwrap_err(),
-        SheetDefect::LatePortTypeAttribute {
+        ContractValidationError::LatePortTypeAttribute {
             port: "out",
             attribute: "shape",
         }
@@ -841,7 +844,7 @@ fn a_call_contract_requires_its_explicit_terminal() {
         id: "org.rastok.test/invalid-sink@1",
         name: "InvalidSink",
         roles: rastok::connector::ConnectorDirection::Outbound,
-        exchange: rastok::connector::ConnectorExchange::Call,
+        exchange: rastok::connector::ExchangeKind::Call,
         ports: &[PortContract {
             name: "in",
             direction: PortDirection::Input,
@@ -856,8 +859,8 @@ fn a_call_contract_requires_its_explicit_terminal() {
             .expect("the standard catalogue holds")
             .try_with(INVALID)
             .unwrap_err(),
-        SheetDefect::ExchangeTerminalMismatch {
-            exchange: rastok::connector::ConnectorExchange::Call,
+        ContractValidationError::ExchangeTerminalMismatch {
+            exchange: rastok::connector::ExchangeKind::Call,
             exits: 0
         }
     );
@@ -867,7 +870,7 @@ fn a_call_contract_requires_its_explicit_terminal() {
 fn process_codec_choices_resolve_the_current_execution_pins() {
     for codec in ["lines", "jsonl", "bytes"] {
         for err_codec in ["lines", "bytes"] {
-            let ports = rastok::stdlib::PROCESS
+            let ports = rastok::connector::stdlib::PROCESS
                 .resolve_ports(&std::collections::BTreeMap::from([
                     (String::from("codec"), String::from(codec)),
                     (String::from("err_codec"), String::from(err_codec)),
@@ -875,9 +878,11 @@ fn process_codec_choices_resolve_the_current_execution_pins() {
                 .expect("every sheet choice resolves");
             for port in ports {
                 let sheet = port.ty.expect("the promised port is typed");
-                let core = rastok::boundary::process_port_type(
-                    &rastok::connector::ContractId::parse(rastok::connector::PROCESS_CONNECTOR_ID)
-                        .unwrap(),
+                let core = rastok::connector::stdlib::process_port_type(
+                    &rastok::connector::ContractId::parse(
+                        rastok::connector::stdlib::PROCESS_CONNECTOR_ID,
+                    )
+                    .unwrap(),
                     port.port.name(),
                     Some(codec),
                     Some(err_codec),
@@ -891,10 +896,10 @@ fn process_codec_choices_resolve_the_current_execution_pins() {
 
 #[test]
 fn file_profiles_resolve_the_same_rows_in_the_sheet_and_core_mirror() {
-    let id = rastok::connector::ContractId::parse(rastok::connector::FILE_CONNECTOR_ID)
+    let id = rastok::connector::ContractId::parse(rastok::connector::stdlib::FILE_CONNECTOR_ID)
         .expect("the standard File id");
     for mode in ["read", "replace"] {
-        let ports = rastok::stdlib::FILE
+        let ports = rastok::connector::stdlib::FILE
             .resolve_ports(&std::collections::BTreeMap::from([(
                 String::from("mode"),
                 String::from(mode),
@@ -903,26 +908,26 @@ fn file_profiles_resolve_the_same_rows_in_the_sheet_and_core_mirror() {
         for port in ports {
             assert_eq!(
                 port.ty,
-                rastok::boundary::file_port_type(&id, port.port.name(), Some(mode)),
+                rastok::connector::stdlib::file_port_type(&id, port.port.name(), Some(mode)),
                 "{mode} on {}",
                 port.port
             );
         }
     }
     for attribute in ["mode", "path", "effect", "behavior", "timeout", "max_read"] {
-        let profile = rastok::stdlib::FILE
+        let profile = rastok::connector::stdlib::FILE
             .profile("read")
             .expect("the read profile");
         let sheet_site = if attribute == "mode" {
             Some(EvaluationSite::Plan)
         } else {
-            rastok::stdlib::FILE
+            rastok::connector::stdlib::FILE
                 .attribute(Some(profile), attribute)
                 .map(|spec| spec.latest_site)
         };
         assert_eq!(
             sheet_site,
-            rastok::boundary::file_attribute_site(&id, attribute),
+            rastok::connector::stdlib::file_attribute_site(&id, attribute),
             "the Registry-free phase mirror drifted for `{attribute}`"
         );
     }
@@ -935,7 +940,10 @@ fn a_file_path_closes_at_invocation_and_defaults_travel() {
     let spec = compilation.plan.plan().nodes[1]
         .connector()
         .expect("the File connector");
-    assert_eq!(spec.contract.as_str(), rastok::connector::FILE_CONNECTOR_ID);
+    assert_eq!(
+        spec.contract.as_str(),
+        rastok::connector::stdlib::FILE_CONNECTOR_ID
+    );
     assert_eq!(
         spec.attribute("max_read"),
         Some(&rastok::plan::AttrSetting::Value(
@@ -1062,20 +1070,20 @@ fn a_forged_file_sheet_never_becomes_a_valid_plan() {
 
 #[test]
 fn a_duplicate_profile_is_a_sheet_defect() {
-    const TWICE: ProfileSelector = ProfileSelector {
+    const TWICE: ModeSelector = ModeSelector {
         attribute: "mode",
         default: Some("a"),
         profiles: &[
-            Profile {
+            ContractMode {
                 protocol: None,
                 word: "a",
-                support: ProfileSupport::Available,
+                support: ModeSupport::Available,
                 attributes: &[],
             },
-            Profile {
+            ContractMode {
                 protocol: None,
                 word: "a",
-                support: ProfileSupport::Available,
+                support: ModeSupport::Available,
                 attributes: &[],
             },
         ],
@@ -1085,19 +1093,19 @@ fn a_duplicate_profile_is_a_sheet_defect() {
             .expect("the standard catalogue holds")
             .try_with(sheet(&[], Some(TWICE)))
             .unwrap_err(),
-        SheetDefect::DuplicateProfile("a")
+        ContractValidationError::DuplicateProfile("a")
     );
 }
 
 #[test]
 fn an_unknown_default_profile_is_a_sheet_defect() {
-    const GHOST: ProfileSelector = ProfileSelector {
+    const GHOST: ModeSelector = ModeSelector {
         attribute: "mode",
         default: Some("ghost"),
-        profiles: &[Profile {
+        profiles: &[ContractMode {
             protocol: None,
             word: "a",
-            support: ProfileSupport::Available,
+            support: ModeSupport::Available,
             attributes: &[],
         }],
     };
@@ -1106,7 +1114,7 @@ fn an_unknown_default_profile_is_a_sheet_defect() {
             .expect("the standard catalogue holds")
             .try_with(sheet(&[], Some(GHOST)))
             .unwrap_err(),
-        SheetDefect::UnknownDefaultProfile("ghost")
+        ContractValidationError::UnknownDefaultProfile("ghost")
     );
 }
 
@@ -1118,13 +1126,13 @@ fn a_selector_colliding_with_an_attribute_is_a_sheet_defect() {
         domain: ValueDomain::Text,
         latest_site: EvaluationSite::Plan,
     }];
-    const SELECTOR: ProfileSelector = ProfileSelector {
+    const SELECTOR: ModeSelector = ModeSelector {
         attribute: "mode",
         default: Some("a"),
-        profiles: &[Profile {
+        profiles: &[ContractMode {
             protocol: None,
             word: "a",
-            support: ProfileSupport::Available,
+            support: ModeSupport::Available,
             attributes: &[],
         }],
     };
@@ -1133,7 +1141,7 @@ fn a_selector_colliding_with_an_attribute_is_a_sheet_defect() {
             .expect("the standard catalogue holds")
             .try_with(sheet(MODE, Some(SELECTOR)))
             .unwrap_err(),
-        SheetDefect::SelectorCollision("mode")
+        ContractValidationError::SelectorCollision("mode")
     );
 }
 
@@ -1150,7 +1158,7 @@ fn an_uncompilable_expression_default_is_a_sheet_defect() {
             .expect("the standard catalogue holds")
             .try_with(sheet(BAD, None))
             .unwrap_err(),
-        SheetDefect::InvalidDefault { attribute: "x", .. }
+        ContractValidationError::InvalidDefault { attribute: "x", .. }
     ));
 }
 
@@ -1168,7 +1176,7 @@ fn a_default_outside_its_domain_is_a_sheet_defect() {
             .expect("the standard catalogue holds")
             .try_with(sheet(MISFIT, None))
             .unwrap_err(),
-        SheetDefect::InvalidDefault { attribute: "x", .. }
+        ContractValidationError::InvalidDefault { attribute: "x", .. }
     ));
     // A Choice default must be a word of the domain.
     const OUTSIDE: &[AttributeSpec] = &[AttributeSpec {
@@ -1182,7 +1190,7 @@ fn a_default_outside_its_domain_is_a_sheet_defect() {
             .expect("the standard catalogue holds")
             .try_with(sheet(OUTSIDE, None))
             .unwrap_err(),
-        SheetDefect::InvalidDefault { attribute: "y", .. }
+        ContractValidationError::InvalidDefault { attribute: "y", .. }
     ));
 }
 
@@ -1199,7 +1207,7 @@ fn a_duplicate_choice_word_is_a_sheet_defect() {
             .expect("the standard catalogue holds")
             .try_with(sheet(DUP, None))
             .unwrap_err(),
-        SheetDefect::DuplicateChoice("x")
+        ContractValidationError::DuplicateChoice("x")
     );
 }
 
@@ -1608,7 +1616,7 @@ fn the_global_binder_requires_callable_connectors_but_skips_pure_outbound_source
     let callable = rastok::plan::ValidatedExecutionPlan::try_from(plan.clone())
         .expect("the foreign connector is structurally typed");
     let registry = rastok::connectors::DriverRegistry::default();
-    let message = rastok::connectors::RuntimeBindings::try_new(&callable, &registry)
+    let message = rastok::connectors::RuntimeDrivers::prepare(&callable, &registry)
         .expect_err("the callable foreign connector refuses")
         .to_string();
     assert!(
@@ -1639,7 +1647,7 @@ fn the_global_binder_requires_callable_connectors_but_skips_pure_outbound_source
     let validated = rastok::plan::ValidatedExecutionPlan::try_from(plan)
         .expect("the foreign pure source remains structurally valid");
     assert!(
-        rastok::connectors::RuntimeBindings::try_new(&validated, &registry).is_ok(),
+        rastok::connectors::RuntimeDrivers::prepare(&validated, &registry).is_ok(),
         "a pure outbound source requires no binding"
     );
     // An unknown codec cannot even reach the binding: the plan
@@ -1692,7 +1700,7 @@ fn a_delivery_target_requires_outbound_or_an_inbound_call_response_role() {
             spec.contract = rastok::connector::ContractId::parse("org.rastok.test/inbound-only@1")
                 .expect("the test id is canonical");
             spec.roles = rastok::connector::ConnectorDirection::Inbound;
-            spec.exchange = rastok::connector::ConnectorExchange::Event;
+            spec.exchange = rastok::connector::ExchangeKind::Event;
         }
     }
     assert!(matches!(
@@ -1710,14 +1718,14 @@ fn a_forged_event_cannot_claim_an_outbound_effect_role() {
             spec.contract =
                 rastok::connector::ContractId::parse("org.rastok.test/outbound-event@1")
                     .expect("the test id is canonical");
-            spec.exchange = rastok::connector::ConnectorExchange::Event;
+            spec.exchange = rastok::connector::ExchangeKind::Event;
             node.ports.retain(|port| port.port.name() != "exit");
         }
     }
     assert!(matches!(
         rastok::plan::ValidatedExecutionPlan::try_from(plan),
         Err(rastok::plan::PlanValidationError::ExchangeRoleMismatch {
-            exchange: rastok::connector::ConnectorExchange::Event,
+            exchange: rastok::connector::ExchangeKind::Event,
             roles: rastok::connector::ConnectorDirection::Outbound,
             ..
         })
@@ -1726,7 +1734,8 @@ fn a_forged_event_cannot_claim_an_outbound_effect_role() {
 
 #[test]
 fn byte_size_is_target_independent_and_bounded() {
-    use rastok::contract::{MAX_BYTE_SIZE, byte_size};
+    use rastok::connector::{MAX_BYTE_SIZE, byte_size};
+
     assert_eq!(byte_size("4294967295B"), Some(u64::from(u32::MAX)));
     assert_eq!(
         byte_size("4294967296B"),
@@ -1765,9 +1774,9 @@ fn an_unsatisfiable_sheet_never_enters_the_registry() {
             .expect("the standard catalogue holds")
             .try_with(sheet(EMPTY, None))
             .unwrap_err(),
-        SheetDefect::EmptyChoice("x")
+        ContractValidationError::EmptyChoice("x")
     );
-    const NOBODY: ProfileSelector = ProfileSelector {
+    const NOBODY: ModeSelector = ModeSelector {
         attribute: "mode",
         default: None,
         profiles: &[],
@@ -1777,7 +1786,7 @@ fn an_unsatisfiable_sheet_never_enters_the_registry() {
             .expect("the standard catalogue holds")
             .try_with(sheet(&[], Some(NOBODY)))
             .unwrap_err(),
-        SheetDefect::NoProfiles("mode")
+        ContractValidationError::NoProfiles("mode")
     );
     const SENTINEL: &[AttributeSpec] = &[AttributeSpec {
         name: "x",
@@ -1790,7 +1799,7 @@ fn an_unsatisfiable_sheet_never_enters_the_registry() {
             .expect("the standard catalogue holds")
             .try_with(sheet(SENTINEL, None))
             .unwrap_err(),
-        SheetDefect::InexpressibleName("nothing"),
+        ContractValidationError::InexpressibleName("nothing"),
         "the parser turns `nothing` into the no-emission sentinel"
     );
     let unnameable = ConnectorContract {
@@ -1802,7 +1811,7 @@ fn an_unsatisfiable_sheet_never_enters_the_registry() {
             .expect("the standard catalogue holds")
             .try_with(unnameable)
             .unwrap_err(),
-        SheetDefect::InexpressibleName("Not A Name")
+        ContractValidationError::InexpressibleName("Not A Name")
     );
 }
 
@@ -1881,10 +1890,10 @@ fn max_output_is_judged_at_check_not_at_spawn() {
     // Driver enforces the budget with.
     let source = process_graph(&format!("{FULL}\n    max_output = \"banana\""));
     refusal_with(&source, "E-CONTRACT-ATTR", "ByteSize");
-    assert_eq!(rastok::contract::byte_size("8MiB"), Some(8 * 1024 * 1024));
-    assert_eq!(rastok::contract::byte_size("banana"), None);
+    assert_eq!(rastok::connector::byte_size("8MiB"), Some(8 * 1024 * 1024));
+    assert_eq!(rastok::connector::byte_size("banana"), None);
     assert_eq!(
-        rastok::contract::byte_size("1024"),
+        rastok::connector::byte_size("1024"),
         None,
         "an explicit unit is required"
     );
@@ -1892,7 +1901,7 @@ fn max_output_is_judged_at_check_not_at_spawn() {
 
 #[test]
 fn process_declares_the_phase_ceiling_of_every_setting() {
-    use rastok::stdlib::PROCESS;
+    use rastok::connector::stdlib::PROCESS;
 
     for name in [
         "codec",
@@ -1927,13 +1936,15 @@ fn process_declares_the_phase_ceiling_of_every_setting() {
 
 #[test]
 fn the_core_phase_mirror_recognizes_every_process_sheet_row() {
-    use rastok::stdlib::PROCESS;
+    use rastok::connector::stdlib::PROCESS;
 
     for spec in PROCESS.common {
         assert_eq!(
-            rastok::boundary::process_attribute_site(
-                &rastok::connector::ContractId::parse(rastok::connector::PROCESS_CONNECTOR_ID,)
-                    .unwrap(),
+            rastok::connector::stdlib::process_attribute_site(
+                &rastok::connector::ContractId::parse(
+                    rastok::connector::stdlib::PROCESS_CONNECTOR_ID,
+                )
+                .unwrap(),
                 spec.name,
             ),
             Some(spec.latest_site),
@@ -1943,8 +1954,9 @@ fn the_core_phase_mirror_recognizes_every_process_sheet_row() {
     }
     let selector = PROCESS.selector.expect("Process has profiles");
     assert_eq!(
-        rastok::boundary::process_attribute_site(
-            &rastok::connector::ContractId::parse(rastok::connector::PROCESS_CONNECTOR_ID).unwrap(),
+        rastok::connector::stdlib::process_attribute_site(
+            &rastok::connector::ContractId::parse(rastok::connector::stdlib::PROCESS_CONNECTOR_ID)
+                .unwrap(),
             selector.attribute,
         ),
         Some(EvaluationSite::Plan),
@@ -1953,9 +1965,11 @@ fn the_core_phase_mirror_recognizes_every_process_sheet_row() {
     for profile in selector.profiles {
         for spec in profile.attributes {
             assert_eq!(
-                rastok::boundary::process_attribute_site(
-                    &rastok::connector::ContractId::parse(rastok::connector::PROCESS_CONNECTOR_ID,)
-                        .unwrap(),
+                rastok::connector::stdlib::process_attribute_site(
+                    &rastok::connector::ContractId::parse(
+                        rastok::connector::stdlib::PROCESS_CONNECTOR_ID,
+                    )
+                    .unwrap(),
                     spec.name,
                 ),
                 Some(spec.latest_site),
@@ -1966,14 +1980,15 @@ fn the_core_phase_mirror_recognizes_every_process_sheet_row() {
         }
     }
     assert_eq!(
-        rastok::boundary::process_attribute_site(
-            &rastok::connector::ContractId::parse(rastok::connector::PROCESS_CONNECTOR_ID).unwrap(),
+        rastok::connector::stdlib::process_attribute_site(
+            &rastok::connector::ContractId::parse(rastok::connector::stdlib::PROCESS_CONNECTOR_ID)
+                .unwrap(),
             "unknown",
         ),
         None
     );
     assert_eq!(
-        rastok::boundary::process_attribute_site(
+        rastok::connector::stdlib::process_attribute_site(
             &rastok::connector::ContractId::parse("org.rastok.test/other@1").unwrap(),
             "command",
         ),
@@ -2037,20 +2052,20 @@ fn sibling_profiles_may_share_an_attribute_name() {
         domain: ValueDomain::Text,
         latest_site: EvaluationSite::Plan,
     };
-    const SELECTOR: ProfileSelector = ProfileSelector {
+    const SELECTOR: ModeSelector = ModeSelector {
         attribute: "mode",
         default: Some("a"),
         profiles: &[
-            Profile {
+            ContractMode {
                 protocol: None,
                 word: "a",
-                support: ProfileSupport::Available,
+                support: ModeSupport::Available,
                 attributes: std::slice::from_ref(SHARED),
             },
-            Profile {
+            ContractMode {
                 protocol: None,
                 word: "b",
-                support: ProfileSupport::Available,
+                support: ModeSupport::Available,
                 attributes: std::slice::from_ref(SHARED),
             },
         ],
@@ -2069,7 +2084,7 @@ fn an_inexpressible_sheet_name_is_a_sheet_defect() {
         id: "org.rastok.test/probe@1",
         name: "Probe",
         roles: rastok::connector::ConnectorDirection::Outbound,
-        exchange: rastok::connector::ConnectorExchange::Call,
+        exchange: rastok::connector::ExchangeKind::Call,
         ports: &[PortContract {
             name: "bad port",
             direction: PortDirection::Input,
@@ -2084,7 +2099,7 @@ fn an_inexpressible_sheet_name_is_a_sheet_defect() {
             .expect("the standard catalogue holds")
             .try_with(bad_port)
             .unwrap_err(),
-        SheetDefect::InvalidPortName("bad port")
+        ContractValidationError::InvalidPortName("bad port")
     );
     const BAD_ATTR: &[AttributeSpec] = &[AttributeSpec {
         name: "not a name",
@@ -2097,19 +2112,19 @@ fn an_inexpressible_sheet_name_is_a_sheet_defect() {
             .expect("the standard catalogue holds")
             .try_with(sheet(BAD_ATTR, None))
             .unwrap_err(),
-        SheetDefect::InexpressibleName("not a name")
+        ContractValidationError::InexpressibleName("not a name")
     );
 }
 
 #[test]
 fn a_deferred_domain_carries_no_default() {
-    const LIE: ProfileSelector = ProfileSelector {
+    const LIE: ModeSelector = ModeSelector {
         attribute: "mode",
         default: Some("a"),
-        profiles: &[Profile {
+        profiles: &[ContractMode {
             protocol: None,
             word: "a",
-            support: ProfileSupport::Deferred("someday"),
+            support: ModeSupport::Deferred("someday"),
             attributes: &[AttributeSpec {
                 name: "x",
                 presence: Presence::Defaulted(DefaultValue::Expression("[]")),
@@ -2123,7 +2138,7 @@ fn a_deferred_domain_carries_no_default() {
             .expect("the standard catalogue holds")
             .try_with(sheet(&[], Some(LIE)))
             .unwrap_err(),
-        SheetDefect::InvalidDefault { attribute: "x", .. }
+        ContractValidationError::InvalidDefault { attribute: "x", .. }
     ));
 }
 
@@ -2276,7 +2291,7 @@ fn a_registered_frontend_owns_framing_without_becoming_a_keyword() {
             name: "bad name",
             reader: FrontendReader::Text,
         }),
-        Err(SheetDefect::InexpressibleName("bad name")),
+        Err(ContractValidationError::InexpressibleName("bad name")),
         "an admitted frontend contract must be writable before `!`"
     );
     let registry = ContractCatalog::try_m0()

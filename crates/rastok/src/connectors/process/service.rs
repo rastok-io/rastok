@@ -2,8 +2,10 @@
 //! Session identity, admission, deadlines and close-once belong to the core.
 
 use super::{ProcessFailure, ProcessRequestSettings, frame_channel, process_status};
-use crate::boundary::*;
-use crate::connectors::{BoundConnectorDriver, ConnectorDriverFactory, DriverFactoryError};
+use crate::connector::driver::*;
+use crate::connector::exchange::*;
+use crate::connector::stdlib::*;
+use crate::connectors::{DriverFactory, DriverFactoryError};
 use crate::envelope::{Data, Envelope, Namespace, Value};
 use crate::node;
 use crate::plan::ValidatedExecutionPlan;
@@ -142,27 +144,27 @@ impl ProcessServiceFactory {
     ///
     /// # Errors
     /// Returns an invalid built-in identity error.
-    pub fn try_new() -> Result<Self, crate::connector::ConnectorIdError> {
+    pub fn try_new() -> Result<Self, crate::connector::ContractIdError> {
         Ok(Self {
             id: crate::connector::ContractId::parse(
-                crate::connector::PROCESS_SERVICE_CONNECTOR_ID,
+                crate::connector::stdlib::PROCESS_SERVICE_CONNECTOR_ID,
             )?,
         })
     }
 }
 
-impl ConnectorDriverFactory for ProcessServiceFactory {
-    fn connector_id(&self) -> &crate::connector::ContractId {
+impl DriverFactory for ProcessServiceFactory {
+    fn contract_id(&self) -> &crate::connector::ContractId {
         &self.id
     }
     fn roles(&self) -> crate::connector::ConnectorDirection {
         crate::connector::ConnectorDirection::InboundAndOutbound
     }
-    fn bind<'a>(
+    fn create<'a>(
         &self,
         plan: &'a ValidatedExecutionPlan,
         nodes: &[node::Path],
-    ) -> Result<Box<dyn BoundConnectorDriver + 'a>, DriverFactoryError> {
+    ) -> Result<Box<dyn Driver + 'a>, DriverFactoryError> {
         if !cfg!(unix) {
             return Err(DriverFactoryError::new(
                 "resident Process requires the qualified Unix process-group Driver",
@@ -186,7 +188,7 @@ struct Service {
     resources: BTreeMap<SessionId, Resource>,
     retiring: Vec<std::thread::JoinHandle<()>>,
     events: Vec<SessionObservation>,
-    proposal: Option<RetainedProposal>,
+    proposal: Option<PendingIngress>,
     next_proposal: u64,
 }
 
@@ -209,23 +211,23 @@ enum Event {
     Exit(EnvelopeDraft),
 }
 
-impl BoundConnectorDriver for Service {
-    fn inbound(&mut self) -> Option<&mut dyn InboundConnectorDriver> {
+impl Driver for Service {
+    fn inbound(&mut self) -> Option<&mut dyn Ingress> {
         Some(self)
     }
-    fn outbound(&mut self) -> Option<&mut dyn OutboundConnectorDriver> {
+    fn outbound(&mut self) -> Option<&mut dyn Outbound> {
         Some(self)
     }
 }
-impl OutboundConnectorDriver for Service {
-    fn call(&mut self) -> Option<&mut dyn CallConnectorDriver> {
+impl Outbound for Service {
+    fn call(&mut self) -> Option<&mut dyn OutboundCall> {
         None
     }
-    fn session(&mut self) -> Option<&mut dyn SessionConnectorDriver> {
+    fn session(&mut self) -> Option<&mut dyn Session> {
         Some(self)
     }
 }
-impl SessionConnectorDriver for Service {
+impl Session for Service {
     fn prepare_session_open(
         &mut self,
         connector: &node::Path,
@@ -239,7 +241,7 @@ impl SessionConnectorDriver for Service {
         _: &node::Path,
         completion: SchedulerCompletion,
     ) -> Completion {
-        crate::boundary::process_scheduler_completion(completion)
+        crate::connector::stdlib::process_scheduler_completion(completion)
     }
     fn prepare_session_write(
         &mut self,
@@ -344,7 +346,7 @@ impl SessionConnectorDriver for Service {
             | SessionObservation::Exited { session: s, .. } => *s != reference,
         });
     }
-    fn session_events(&mut self) -> Vec<SessionObservation> {
+    fn poll_observations(&mut self) -> Vec<SessionObservation> {
         self.poll();
         std::mem::take(&mut self.events)
     }
@@ -393,8 +395,8 @@ impl Service {
         }
     }
 }
-impl InboundConnectorDriver for Service {
-    fn proposal(&mut self) -> Option<RetainedProposal> {
+impl Ingress for Service {
+    fn poll_proposal(&mut self) -> Option<PendingIngress> {
         if self.proposal.is_some() {
             return self.proposal.clone();
         }
@@ -411,7 +413,7 @@ impl InboundConnectorDriver for Service {
             }
             if let Some(Event::Frame(port, data)) = resource.waiting.front() {
                 self.next_proposal = self.next_proposal.checked_add(1)?;
-                self.proposal = Some(RetainedProposal {
+                self.proposal = Some(PendingIngress {
                     handle: IngressProposalHandle::new(self.next_proposal),
                     proposal: IngressProposal {
                         provenance: IngressProvenance::single(resource.connector.clone()),
@@ -429,7 +431,7 @@ impl InboundConnectorDriver for Service {
         }
         self.proposal.clone()
     }
-    fn decide(
+    fn notify_admission(
         &mut self,
         reference: IngressProposalHandle,
         decision: Result<AdmittedIngress, IngressRejection>,
@@ -819,15 +821,15 @@ mod tests {
             next_proposal: 0,
         };
         assert!(
-            service.proposal().is_none(),
+            service.poll_proposal().is_none(),
             "the journal has not received Opened yet"
         );
         assert_eq!(
-            service.session_events(),
+            service.poll_observations(),
             vec![SessionObservation::Opened(reference)]
         );
         assert!(
-            service.proposal().is_some(),
+            service.poll_proposal().is_some(),
             "the retained opening precedes the child frame"
         );
     }

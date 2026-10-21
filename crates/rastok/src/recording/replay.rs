@@ -1,6 +1,7 @@
 use super::Error;
-use crate::boundary::*;
-use crate::connectors::{ScriptedConnectorProtocol, scripted_protocol_binders};
+use crate::connector::driver::*;
+use crate::connector::exchange::*;
+use crate::connectors::{CallProtocol, scripted_protocol_binders};
 use crate::deployment::BootBindings;
 use crate::envelope::{Data, Envelope};
 use crate::node;
@@ -11,7 +12,7 @@ use std::collections::BTreeMap;
 /// Only pure scheduler projections are reachable. No physical registry,
 /// Process object, socket, File root or secret provider is ever constructed.
 pub(super) struct Contracts {
-    protocols: BTreeMap<node::Path, Box<dyn ScriptedConnectorProtocol>>,
+    protocols: BTreeMap<node::Path, Box<dyn CallProtocol>>,
 }
 impl Contracts {
     pub(super) fn bind(plan: &ValidatedExecutionPlan) -> Result<Self, Error> {
@@ -35,7 +36,7 @@ impl Contracts {
         Ok(Self { protocols })
     }
 }
-impl OutboundConnectorBindings for Contracts {
+impl OutboundDrivers for Contracts {
     fn scheduler_completion(
         &mut self,
         connector: &node::Path,
@@ -62,7 +63,7 @@ impl OutboundConnectorBindings for Contracts {
             intent.connector_path.clone(),
         ))
     }
-    fn events(&mut self) -> Result<Vec<Response>, DriverRouteError> {
+    fn poll_responses(&mut self) -> Result<Vec<CallResponse>, DriverRouteError> {
         Ok(Vec::new())
     }
 }

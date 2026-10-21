@@ -1,9 +1,13 @@
 use super::*;
-use crate::boundary::{file_exit_type, http_client_exit_type, process_exit_type};
-use crate::connector::{
-    FILE_CONNECTOR_ID, HTTP_CLIENT_CONNECTOR_ID, HTTP_SERVER_CONNECTOR_ID, PROCESS_CONNECTOR_ID,
-    WEBSOCKET_CLIENT_CONNECTOR_ID, WEBSOCKET_SERVER_CONNECTOR_ID,
-};
+use crate::connector::stdlib::FILE_CONNECTOR_ID;
+use crate::connector::stdlib::HTTP_CLIENT_CONNECTOR_ID;
+use crate::connector::stdlib::HTTP_SERVER_CONNECTOR_ID;
+use crate::connector::stdlib::PROCESS_CONNECTOR_ID;
+use crate::connector::stdlib::WEBSOCKET_CLIENT_CONNECTOR_ID;
+use crate::connector::stdlib::WEBSOCKET_SERVER_CONNECTOR_ID;
+use crate::connector::stdlib::file_exit_type;
+use crate::connector::stdlib::http_client_exit_type;
+use crate::connector::stdlib::process_exit_type;
 use crate::datatype::{DataType, TypeError};
 use alloc::string::ToString;
 use alloc::vec::Vec;
@@ -12,7 +16,7 @@ fn contract(id: &str, mode: Option<&str>) -> CallSemantics {
     outbound_call_semantics(
         &ContractId::parse(id).unwrap(),
         ConnectorDirection::Outbound,
-        ConnectorExchange::Call,
+        ExchangeKind::Call,
         mode,
     )
     .expect("a standard outbound Call profile")
@@ -71,7 +75,7 @@ fn retry_never_trusts_unknown_or_noncanonical_case_sets() {
         outbound_call_semantics(
             &ContractId::parse("std/http-client@2").unwrap(),
             ConnectorDirection::Outbound,
-            ConnectorExchange::Call,
+            ExchangeKind::Call,
             None
         )
         .is_none()
@@ -98,13 +102,13 @@ fn call_profiles_require_exact_identity_roles_exchange_and_mode() {
             ConnectorDirection::InboundAndOutbound,
         ] {
             for exchange in [
-                ConnectorExchange::Event,
-                ConnectorExchange::Call,
-                ConnectorExchange::Session,
+                ExchangeKind::Event,
+                ExchangeKind::Call,
+                ExchangeKind::Session,
             ] {
                 assert_eq!(
                     outbound_call_semantics(&id, roles, exchange, mode).is_some(),
-                    roles == ConnectorDirection::Outbound && exchange == ConnectorExchange::Call
+                    roles == ConnectorDirection::Outbound && exchange == ExchangeKind::Call
                 );
             }
         }
@@ -125,7 +129,7 @@ fn call_profiles_require_exact_identity_roles_exchange_and_mode() {
             outbound_call_semantics(
                 &ContractId::parse(id).unwrap(),
                 ConnectorDirection::Outbound,
-                ConnectorExchange::Call,
+                ExchangeKind::Call,
                 mode
             )
             .is_none(),
@@ -339,7 +343,7 @@ fn single_response_frames_follow_both_http_response_cases_and_replace_has_no_fra
 
 #[test]
 fn http_status_classification_is_contract_checked_not_just_a_tag() {
-    use crate::boundary::HttpClientExit;
+    use crate::connector::stdlib::HttpClientExit;
     let profile = contract(HTTP_CLIENT_CONNECTOR_ID, None);
     for status in [499, 500, 599, 600] {
         let expected = if (500..=599).contains(&status) {

@@ -101,7 +101,7 @@ fn the_lab_trace_matches_its_golden_and_seals_the_request_digest() {
         ),
         (String::from("n"), rastok::envelope::Value::Int(42)),
     ]));
-    let prepared = rastok::boundary::prepare_jsonl(&request).expect("the request frames");
+    let prepared = rastok::connector::stdlib::prepare_jsonl(&request).expect("the request frames");
     assert_eq!(
         sealed.as_slice(),
         prepared.digest().as_slice(),

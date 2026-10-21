@@ -6,8 +6,11 @@
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
 use rastok::compiler::compile;
+use rastok::connector::exchange::EnvelopeDraft;
+use rastok::connector::exchange::IngressProposal;
+use rastok::connector::exchange::IngressProvenance;
+use rastok::connector::exchange::IngressSequence;
 use rastok::contract::ContractCatalog;
 use rastok::envelope::{Data, Namespace, Value};
 use rastok::journal::MemJournal;
@@ -197,7 +200,7 @@ fn the_request_digest_is_canonical_across_spellings() {
     // Two by-name-equal structs — different write order — must open
     // ONE call identity: the canonical writer sorts keys, so the
     // digest cannot split what the seal unifies.
-    use rastok::boundary::prepare_jsonl;
+    use rastok::connector::stdlib::prepare_jsonl;
     let ab = Data::materialized(Value::Struct(vec![
         (String::from("a"), Value::Int(1)),
         (String::from("b"), Value::Int(2)),
@@ -595,7 +598,7 @@ fn another_contracts_codec_vocabulary_is_untouched() {
                     direction: rastok::node::PortDirection::Output,
 
                     ty: Some(
-                        rastok::boundary::process_exit_type()
+                        rastok::connector::stdlib::process_exit_type()
                             .expect("the standard terminal type is valid"),
                     ),
                     annotations: Default::default(),

@@ -149,7 +149,7 @@ pub enum NodeSemantics {
         /// Runtime roles declared by that contract.
         roles: crate::connector::ConnectorDirection,
         /// Interaction lifecycle declared by that contract.
-        exchange: crate::connector::ConnectorExchange,
+        exchange: crate::connector::ExchangeKind,
         /// Checked attributes, in declaration order.
         attributes: Vec<Attribute>,
     },

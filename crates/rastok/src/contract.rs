@@ -1,142 +1,15 @@
-//! The node-contract METAMODEL (D-2026-08-12-1).
+//! Hosted validation and lookup of Connector and tagged-frontend definitions.
 //!
-//! This module describes which node declarations are VALID: attribute
-//! sheets with a presence (`Required | Optional | Defaulted`), a value
-//! domain, optional PROFILES selected by one attribute, and the
-//! registry a build wires into its checker. It is compiler-layer data —
-//! never serialized, never needed by the no_std runtime. The standard
-//! catalogue instancing this metamodel (`PROCESS`, the declared names)
-//! lives in [`crate::stdlib`]; resolved, executable instances live in
-//! [`crate::plan`].
+//! Portable Connector declarations live in [`crate::connector::contract`]
+//! and the standard definitions in [`crate::connector::stdlib`]. This module
+//! validates catalogue additions and their default expressions before the
+//! compiler uses them. Frontend readers remain a compiler-only concern.
 
 use std::collections::BTreeMap;
 
 use crate::expr;
-pub use crate::plan::EvaluationSite;
 
-/// One closed logical type used by a real port contract today.
-///
-/// The enum deliberately grows only when a shipped contract pays for another
-/// constructor.  It is not a second type algebra: every case resolves to the
-/// canonical [`crate::datatype::DataType`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PortDataType {
-    /// UTF-8 text.
-    Text,
-    /// Variable-size opaque bytes.
-    Bytes,
-    /// Explicit dynamic payload tree.
-    Variant,
-    /// Canonical terminal union of one Process invocation.
-    ProcessExit,
-    /// Canonical terminal union of one File invocation.
-    FileExit,
-    /// Canonical terminal union of one outbound HTTP call.
-    HttpClientExit,
-    /// Canonical terminal union of one admitted HTTP server request.
-    HttpServerExit,
-    /// Canonical terminal union shared by WebSocket client/server sessions.
-    WebSocketExit,
-}
-
-impl PortDataType {
-    fn resolve(self) -> Result<crate::datatype::DataType, crate::datatype::TypeError> {
-        match self {
-            Self::Text => Ok(crate::datatype::DataType::Text),
-            Self::Bytes => Ok(crate::datatype::DataType::BYTES),
-            Self::Variant => Ok(crate::datatype::DataType::Variant),
-            Self::ProcessExit => crate::boundary::process_exit_type(),
-            Self::FileExit => crate::boundary::file_exit_type(),
-            Self::HttpClientExit => crate::boundary::http_client_exit_type(),
-            Self::HttpServerExit => crate::boundary::http_server_exit_type(),
-            Self::WebSocketExit => crate::boundary::websocket_exit_type(),
-        }
-    }
-}
-
-/// One word-to-type arm of an attribute-selected port rule.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PortTypeChoice {
-    /// Word admitted by the selecting attribute.
-    pub word: &'static str,
-    /// Effective logical type selected by that word.
-    pub ty: PortDataType,
-}
-
-/// How one contract port obtains its effective logical type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PortTypeRule {
-    /// One fixed logical type.
-    Fixed(PortDataType),
-    /// The exact type resolved for another port in this contract.
-    SameAs(&'static str),
-    /// A closed choice attribute selects one concrete type.
-    AttributeSelected {
-        /// Attribute name.
-        attribute: &'static str,
-        /// Total mapping of that attribute's choice words.
-        choices: &'static [PortTypeChoice],
-    },
-    /// Attribute-selected output whose JSON arm admits an explicit schema.
-    /// Other arms remain fixed, and omission preserves the selected type.
-    JsonOutput {
-        /// Codec-selecting attribute.
-        attribute: &'static str,
-        /// Default types, including the unrefined JSON `variant` arm.
-        choices: &'static [PortTypeChoice],
-    },
-}
-
-/// One port of a connector sheet under the same direction/type/routing model
-/// as every other node port.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PortContract {
-    /// Port name.
-    pub name: &'static str,
-    /// Input or output direction.
-    pub direction: crate::node::PortDirection,
-    /// Rule producing the effective logical type for this instantiation.
-    pub ty: PortTypeRule,
-}
-
-/// Why a validated sheet could not resolve one concrete port table.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PortResolutionError {
-    /// A required choice attribute is absent from the effective attributes.
-    MissingAttribute(&'static str),
-    /// The effective word is outside the validated rule's mapping.
-    UnknownChoice {
-        /// Selecting attribute.
-        attribute: &'static str,
-        /// Effective word.
-        word: String,
-    },
-    /// A same-as dependency did not resolve; sheet validation normally makes
-    /// this unreachable.
-    UnresolvedDependency(&'static str),
-    /// The canonical type constructor refused.
-    InvalidType(crate::datatype::TypeError),
-    /// A validated port name unexpectedly failed the core constructor.
-    InvalidPort(&'static str),
-}
-
-impl core::fmt::Display for PortResolutionError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::MissingAttribute(name) => write!(f, "missing effective attribute `{name}`"),
-            Self::UnknownChoice { attribute, word } => {
-                write!(f, "`{attribute}` has no port-type arm for `{word}`")
-            }
-            Self::UnresolvedDependency(port) => {
-                write!(f, "the type dependency of port `{port}` did not resolve")
-            }
-            Self::InvalidType(error) => error.fmt(f),
-            Self::InvalidPort(name) => write!(f, "`{name}` is not a valid port name"),
-        }
-    }
-}
-
-impl std::error::Error for PortResolutionError {}
+use crate::connector::contract::*;
 
 /// How a connector type name resolves against the registry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -226,424 +99,19 @@ pub struct FrontendContract {
     pub reader: FrontendReader,
 }
 
-/// One declarative connector contract sheet: the attributes every
-/// profile shares, and the profiles one selector attribute picks.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConnectorContract {
-    /// Stable semantic identity transported by the categorical plan.
-    pub id: &'static str,
-    /// The NodeType name (`Process`).
-    pub name: &'static str,
-    /// External-world roles required from a runtime Driver registration.
-    pub roles: crate::connector::ConnectorDirection,
-    /// Cardinality and terminal lifecycle of one interaction.
-    pub exchange: crate::connector::ConnectorExchange,
-    /// Ports, their directions and effective type rules.
-    pub ports: &'static [PortContract],
-    /// The attributes common to every profile.
-    pub common: &'static [AttributeSpec],
-    /// The profile selector, when the contract has profiles. The
-    /// admitted selector words are DERIVED from the profiles — they
-    /// are spelled nowhere else.
-    pub selector: Option<ProfileSelector>,
-}
-
-impl ConnectorContract {
-    fn protocol_ids(&self) -> impl Iterator<Item = &'static str> + '_ {
-        std::iter::once(self.id).chain(
-            self.selector
-                .iter()
-                .flat_map(|selector| selector.profiles)
-                .filter_map(|profile| profile.protocol.map(|protocol| protocol.id)),
-        )
-    }
-
-    /// The spec of one attribute within the given resolved profile:
-    /// the common sheet first, then the profile's own.
-    #[must_use]
-    pub fn attribute(&self, profile: Option<&Profile>, name: &str) -> Option<&AttributeSpec> {
-        self.common
-            .iter()
-            .find(|spec| spec.name == name)
-            .or_else(|| {
-                profile.and_then(|profile| profile.attributes.iter().find(|spec| spec.name == name))
-            })
-    }
-
-    /// The profile owning an attribute NAME that the resolved profile
-    /// does not — the "belongs to another profile" diagnostic's
-    /// source.
-    #[must_use]
-    pub fn owning_profile(&self, name: &str) -> Option<&Profile> {
-        let profiles = self.selector.as_ref()?.profiles;
-        profiles
-            .iter()
-            .find(|profile| profile.attributes.iter().any(|spec| spec.name == name))
-    }
-
-    /// Resolves the selector word — written or defaulted — to its
-    /// profile.
-    #[must_use]
-    pub fn profile(&self, word: &str) -> Option<&Profile> {
-        self.selector
-            .as_ref()?
-            .profiles
-            .iter()
-            .find(|profile| profile.word == word)
-    }
-
-    /// Resolves this sheet's complete travelling port table from effective
-    /// choice attributes. The caller passes attributes after defaults have
-    /// been materialized, so no runtime ContractCatalog lookup remains.
-    ///
-    /// # Errors
-    ///
-    /// A missing/unknown selector, invalid canonical type, or unresolved
-    /// same-as dependency refuses the instantiation.
-    pub fn resolve_ports(
-        &self,
-        attributes: &BTreeMap<String, String>,
-    ) -> Result<Vec<crate::plan::PortDecl>, PortResolutionError> {
-        let mut resolved: BTreeMap<&'static str, crate::datatype::DataType> = BTreeMap::new();
-        for _ in 0..self.ports.len().saturating_add(1) {
-            let mut changed = false;
-            for port in self.ports {
-                if resolved.contains_key(port.name) {
-                    continue;
-                }
-                let ty = match port.ty {
-                    PortTypeRule::Fixed(ty) => {
-                        Some(ty.resolve().map_err(PortResolutionError::InvalidType)?)
-                    }
-                    PortTypeRule::SameAs(other) => resolved.get(other).cloned(),
-                    PortTypeRule::AttributeSelected { attribute, choices }
-                    | PortTypeRule::JsonOutput { attribute, choices } => {
-                        let word = attributes
-                            .get(attribute)
-                            .ok_or(PortResolutionError::MissingAttribute(attribute))?;
-                        let choice = choices.iter().find(|choice| choice.word == word).ok_or(
-                            PortResolutionError::UnknownChoice {
-                                attribute,
-                                word: word.clone(),
-                            },
-                        )?;
-                        Some(
-                            choice
-                                .ty
-                                .resolve()
-                                .map_err(PortResolutionError::InvalidType)?,
-                        )
-                    }
-                };
-                if let Some(ty) = ty {
-                    resolved.insert(port.name, ty);
-                    changed = true;
-                }
-            }
-            if resolved.len() == self.ports.len() {
-                break;
-            }
-            if !changed {
-                return Err(PortResolutionError::UnresolvedDependency(
-                    self.ports
-                        .iter()
-                        .find(|port| !resolved.contains_key(port.name))
-                        .map_or("?", |port| port.name),
-                ));
-            }
-        }
-        let mut ports = Vec::with_capacity(self.ports.len());
-        for contract in self.ports {
-            let port = crate::node::Port::new(contract.name.to_string())
-                .map_err(|_| PortResolutionError::InvalidPort(contract.name))?;
-            let ty = resolved
-                .remove(contract.name)
-                .ok_or(PortResolutionError::UnresolvedDependency(contract.name))?;
-            ports.push(crate::plan::PortDecl {
-                port,
-                direction: contract.direction,
-
-                ty: Some(ty),
-                annotations: crate::schema_annotation::AnnotationTable::empty(),
-            });
-        }
-        Ok(ports)
-    }
-}
-
-/// The one attribute selecting a contract's profile, and the profiles
-/// themselves.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProfileSelector {
-    /// The selecting attribute's name (`mode`).
-    pub attribute: &'static str,
-    /// The profile selected when the attribute is omitted; the
-    /// checker materializes the word into the effective HIR.
-    pub default: Option<&'static str>,
-    /// The contract's profiles.
-    pub profiles: &'static [Profile],
-}
-
-/// One profile of a contract: a name the selector picks, the build's
-/// support for it, and its own attributes.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Profile {
-    /// A profile may select a different exact exchange contract. Omission
-    /// preserves the sheet's contract, roles and exchange byte for byte.
-    pub protocol: Option<ProfileProtocol>,
-    /// The selector word (`job`).
-    pub word: &'static str,
-    /// Whether THIS build executes the profile — distinct from the
-    /// contract knowing it.
-    pub support: ProfileSupport,
-    /// The attributes existing only in this profile. A field of
-    /// another profile is simply ABSENT here — there is no
-    /// `Forbidden` state (D-2026-08-12-1).
-    pub attributes: &'static [AttributeSpec],
-}
-
-/// Resolved protocol of a profile whose resource lifecycle differs from the
-/// sheet's default (for example a resident Process versus a finite job).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ProfileProtocol {
-    /// Exact versioned contract, not an alias for the default protocol.
-    pub id: &'static str,
-    /// Required Driver views.
-    pub roles: crate::connector::ConnectorDirection,
-    /// Interaction cardinality.
-    pub exchange: crate::connector::ConnectorExchange,
-}
-
-/// The build's relationship to a profile the contract knows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProfileSupport {
-    /// The build validates and executes the profile.
-    Available,
-    /// The build defers the profile with this named reason; its
-    /// attributes are declared but not validated (their domains may
-    /// be deferred-only).
-    Deferred(&'static str),
-}
-
-/// One attribute of a contract sheet.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AttributeSpec {
-    /// The attribute key.
-    pub name: &'static str,
-    /// What the source must, may, or need not provide.
-    pub presence: Presence,
-    /// The admitted value domain.
-    pub domain: ValueDomain,
-    /// The latest phase at which this attribute may become a value.
-    /// Checking chooses the earliest phase where the written expression
-    /// closes; this is a ceiling, never a request to delay a constant.
-    pub latest_site: EvaluationSite,
-}
-
-/// The presence a contract demands in the source, and what absence
-/// resolves to.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Presence {
-    /// The author must write the attribute.
-    Required,
-    /// Absence has a meaning of its own and survives into the plan.
-    Optional,
-    /// Absence is sugar for the contract's default: the checker
-    /// injects it into the effective HIR, so omission and the exact
-    /// spelling of the default are ONE identity.
-    Defaulted(DefaultValue),
-}
-
-/// A contract default — a closed-choice word or a closed, constant Rastok
-/// expression (text, lists and durations are already expressions; there is no
-/// second literal algebra).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DefaultValue {
-    /// A word of the attribute's `Choice` domain.
-    Choice(&'static str),
-    /// A constant Rastok expression source, compiled through the SAME chain as
-    /// author expressions. It must not read `data`, `meta`, node
-    /// state, application `val`s, `env()` or `secret()` — a standard
-    /// contract introduces no invisible dependency.
-    Expression(&'static str),
-}
-
-/// The value domain of a contract attribute.
-///
-/// Implemented domains are admitted on available profiles; the rest are
-/// DECLARED for deferred profiles (the sheet says exactly what it knows) and
-/// admitted only behind [`ProfileSupport::Deferred`] — [`validate_sheet`]
-/// holds that line.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ValueDomain {
-    /// A plan-constant boolean guarantee, not a choice word.
-    Boolean,
-    /// One of a closed set of bare words.
-    Choice(&'static [&'static str]),
-    /// A constant text value.
-    Text,
-    /// A constant opaque byte value.
-    Bytes,
-    /// A constant list of text values.
-    TextList,
-    /// A non-empty, duplicate-free ordered list drawn from a closed text set.
-    ChoiceList(&'static [&'static str]),
-    /// A constant duration value.
-    Duration,
-    /// A constant byte-size string (`"8MiB"`) — judged by
-    /// [`byte_size`], the ONE parser the contract and the Driver
-    /// share: what validates is what executes.
-    ByteSize,
-    /// A text-keyed map whose values are all text.
-    TextMap,
-    /// Known request fields as a typed, width-subtyped struct. V1 owns
-    /// `content_type: media_type`; absent fields remain absent.
-    TypedHttpHeaders,
-    /// Extension request fields: ordinary-case names to ordered UTF-8 lines.
-    CustomHttpHeaders,
-    /// A text-valued Rastok expression path over invocation data
-    /// (`correlate = data.id`) — never a boot-phase constant or an arbitrary
-    /// computed expression.
-    ExprPath,
-    /// A typed struct value. Deferred-only.
-    Struct,
-    /// A typed map value. Deferred-only.
-    Map,
-}
-
-impl ValueDomain {
-    /// Whether this domain is implemented by the current build's
-    /// validation — the others may only appear behind a deferred
-    /// profile.
-    #[must_use]
-    pub fn implemented(&self) -> bool {
-        matches!(
-            self,
-            Self::Boolean
-                | Self::Choice(_)
-                | Self::Text
-                | Self::Bytes
-                | Self::TextList
-                | Self::ChoiceList(_)
-                | Self::Duration
-                | Self::ByteSize
-                | Self::TextMap
-                | Self::TypedHttpHeaders
-                | Self::CustomHttpHeaders
-                | Self::ExprPath
-        )
-    }
-
-    /// The canonical static type expected from one implemented expression
-    /// domain. Choice words are syntax rather than expressions; deferred-only
-    /// domains deliberately have no executable type here.
-    #[must_use]
-    pub fn expression_type(&self) -> Option<crate::datatype::DataType> {
-        match self {
-            Self::Boolean => Some(crate::datatype::DataType::Bool),
-            Self::Text | Self::ByteSize => Some(crate::datatype::DataType::Text),
-            Self::Bytes => Some(crate::datatype::DataType::BYTES),
-            Self::TextList => Some(crate::datatype::DataType::array(
-                crate::datatype::DataType::Text,
-            )),
-            Self::ChoiceList(_) => Some(crate::datatype::DataType::array(
-                crate::datatype::DataType::Text,
-            )),
-            Self::Duration => Some(crate::datatype::DataType::DURATION),
-            Self::TextMap => Some(crate::datatype::DataType::text_map(
-                crate::datatype::DataType::Text,
-            )),
-            Self::TypedHttpHeaders => None,
-            Self::CustomHttpHeaders => Some(crate::plan::custom_http_headers_type()),
-            Self::ExprPath => Some(crate::datatype::DataType::Text),
-            Self::Choice(_) | Self::Struct | Self::Map => None,
-        }
-    }
-
-    /// Judges the resolved static type of one expression before a Driver can
-    /// observe it. Typed HTTP fields are width-subtyped; other implemented
-    /// expression domains own one exact type.
-    #[must_use]
-    pub fn admits_type(&self, ty: &crate::datatype::DataType) -> bool {
-        match self {
-            Self::TypedHttpHeaders => crate::plan::typed_http_headers_type_holds(ty),
-            Self::Choice(_) | Self::Struct | Self::Map => false,
-            _ => self.expression_type().as_ref() == Some(ty),
-        }
-    }
-
-    /// Judges a CONSTANT value against the domain — the ONE
-    /// predicate shared by author-written values and sheet defaults.
-    #[must_use]
-    pub fn admits(&self, value: &crate::value::Value) -> bool {
-        match self {
-            Self::Boolean => matches!(value, crate::value::Value::Bool(_)),
-            Self::Choice(_) | Self::ExprPath | Self::Struct | Self::Map => false,
-            Self::Text => matches!(value, crate::value::Value::Text(_)),
-            Self::Bytes => matches!(value, crate::value::Value::Bytes(_)),
-            Self::TextList => match value {
-                crate::value::Value::Array(items) => items
-                    .iter()
-                    .all(|item| matches!(item, crate::value::Value::Text(_))),
-                _ => false,
-            },
-            Self::ChoiceList(words) => match value {
-                crate::value::Value::Array(items) if !items.is_empty() => {
-                    let mut seen = std::collections::BTreeSet::new();
-                    items.iter().all(|item| match item {
-                        crate::value::Value::Text(word) => {
-                            words.contains(&word.as_str()) && seen.insert(word.as_str())
-                        }
-                        _ => false,
-                    })
-                }
-                _ => false,
-            },
-            Self::Duration => matches!(value, crate::value::Value::Duration(_)),
-            Self::ByteSize => {
-                matches!(value, crate::value::Value::Text(text) if byte_size(text).is_some())
-            }
-            Self::TextMap => match value {
-                crate::value::Value::Map(entries) => entries
-                    .values()
-                    .all(|value| matches!(value, crate::value::Value::Text(_))),
-                _ => false,
-            },
-            Self::TypedHttpHeaders => crate::plan::typed_http_headers_value_holds(value),
-            Self::CustomHttpHeaders => crate::plan::custom_http_headers_value_holds(value),
-        }
-    }
-}
-
-/// The normative ceiling of a declared byte size: 4 GiB, inclusive
-/// — target-independent, so the same source validates identically
-/// on every machine (a 32-bit host compares lengths in `u64` and
-/// never allocates the bound up front).
-pub use crate::connector::MAX_BYTE_SIZE;
-
-/// Reads a declared byte size (`"8MiB"`, `"512KiB"`, `"100B"`) — an
-/// explicit unit is required, and the result is bounded by
-/// [`MAX_BYTE_SIZE`]. The ONE rule shared by the contract's domain
-/// judgement and the Driver's budget: a size the checker accepted
-/// is a size the runtime enforces, on every target width.
-#[must_use]
-pub fn byte_size(text: &str) -> Option<u64> {
-    crate::connector::byte_size(text)
-}
-
 /// Why a contract sheet cannot enter the registry — the sheet is an
 /// AUTHORITY once admitted (the checker materializes port tables and
 /// injects defaults from it without re-checking), so it is held at
 /// the door. A defect is the Rust contract's fault, never the RKG
 /// author's.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SheetDefect {
+pub enum ContractValidationError {
     /// The stable contract identity is not canonical.
     InvalidConnectorId {
         /// Exact spelling supplied by the sheet.
         id: &'static str,
         /// Canonical grammar category that refused it.
-        reason: crate::connector::ConnectorIdError,
+        reason: crate::connector::ContractIdError,
     },
     /// Two source symbols claim one stable semantic identity.
     ConnectorIdCollision {
@@ -664,7 +132,7 @@ pub enum SheetDefect {
     /// Event has none; Call and Session have exactly one output `exit`.
     ExchangeTerminalMismatch {
         /// Exchange declared by the sheet.
-        exchange: crate::connector::ConnectorExchange,
+        exchange: crate::connector::ExchangeKind,
         /// Number of conventional output terminal rows found.
         exits: usize,
     },
@@ -673,7 +141,7 @@ pub enum SheetDefect {
     /// reports open/write/terminal observations.
     ExchangeRoleMismatch {
         /// Exchange declared by the sheet.
-        exchange: crate::connector::ConnectorExchange,
+        exchange: crate::connector::ExchangeKind,
         /// Incompatible Driver roles declared by the sheet.
         roles: crate::connector::ConnectorDirection,
     },
@@ -746,7 +214,7 @@ pub enum SheetDefect {
     },
 }
 
-impl core::fmt::Display for SheetDefect {
+impl core::fmt::Display for ContractValidationError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::InvalidConnectorId { id, reason } => {
@@ -836,7 +304,7 @@ impl core::fmt::Display for SheetDefect {
     }
 }
 
-impl std::error::Error for SheetDefect {}
+impl std::error::Error for ContractValidationError {}
 
 /// Whether a sheet-declared name is expressible in the DSL — the
 /// identifier grammar the sheet's ports, attributes, selector,
@@ -858,27 +326,27 @@ fn expressible_name(text: &str) -> bool {
 /// Judges one default against its spec — compiling a Rastok expression default
 /// through the real chain (closed signature, no consts: a standard
 /// contract reads nothing).
-fn validate_default(spec: &AttributeSpec) -> Result<(), SheetDefect> {
+fn validate_default(spec: &AttributeSpec) -> Result<(), ContractValidationError> {
     let Presence::Defaulted(default) = &spec.presence else {
         return Ok(());
     };
     match default {
         DefaultValue::Choice(word) => match &spec.domain {
             ValueDomain::Choice(words) if words.contains(word) => Ok(()),
-            _ => Err(SheetDefect::InvalidDefault {
+            _ => Err(ContractValidationError::InvalidDefault {
                 attribute: spec.name,
                 reason: format!("`{word}` is not a word of the attribute's domain"),
             }),
         },
         DefaultValue::Expression(source) => {
             let tree = expr::compile(source, &expr::Signature::new()).map_err(|_| {
-                SheetDefect::InvalidDefault {
+                ContractValidationError::InvalidDefault {
                     attribute: spec.name,
                     reason: format!("`{source}` does not compile as closed Rastok expression"),
                 }
             })?;
             let value = expr::const_eval(&tree, &BTreeMap::new()).map_err(|error| {
-                SheetDefect::InvalidDefault {
+                ContractValidationError::InvalidDefault {
                     attribute: spec.name,
                     reason: format!("`{source}` is not constant: {}", error.message),
                 }
@@ -886,7 +354,7 @@ fn validate_default(spec: &AttributeSpec) -> Result<(), SheetDefect> {
             if spec.domain.admits(&value) {
                 Ok(())
             } else {
-                Err(SheetDefect::InvalidDefault {
+                Err(ContractValidationError::InvalidDefault {
                     attribute: spec.name,
                     reason: format!("`{source}` reduces outside the {:?} domain", spec.domain),
                 })
@@ -899,37 +367,37 @@ fn validate_attributes(
     specs: &[AttributeSpec],
     seen: &mut std::collections::BTreeSet<&'static str>,
     deferred_profile: bool,
-) -> Result<(), SheetDefect> {
+) -> Result<(), ContractValidationError> {
     let mut local = std::collections::BTreeSet::new();
     for spec in specs {
         if !expressible_name(spec.name) {
-            return Err(SheetDefect::InexpressibleName(spec.name));
+            return Err(ContractValidationError::InexpressibleName(spec.name));
         }
         if !local.insert(spec.name) || seen.contains(spec.name) {
-            return Err(SheetDefect::DuplicateAttribute(spec.name));
+            return Err(ContractValidationError::DuplicateAttribute(spec.name));
         }
         if let ValueDomain::Choice(words) = &spec.domain {
             if words.is_empty() {
-                return Err(SheetDefect::EmptyChoice(spec.name));
+                return Err(ContractValidationError::EmptyChoice(spec.name));
             }
             let mut unique = std::collections::BTreeSet::new();
             for word in *words {
                 if !expressible_name(word) {
-                    return Err(SheetDefect::InexpressibleName(word));
+                    return Err(ContractValidationError::InexpressibleName(word));
                 }
                 if !unique.insert(*word) {
-                    return Err(SheetDefect::DuplicateChoice(spec.name));
+                    return Err(ContractValidationError::DuplicateChoice(spec.name));
                 }
             }
         }
         if let ValueDomain::ChoiceList(words) = &spec.domain {
             if words.is_empty() {
-                return Err(SheetDefect::EmptyChoice(spec.name));
+                return Err(ContractValidationError::EmptyChoice(spec.name));
             }
             let mut unique = std::collections::BTreeSet::new();
             for word in *words {
                 if !unique.insert(*word) {
-                    return Err(SheetDefect::DuplicateChoice(spec.name));
+                    return Err(ContractValidationError::DuplicateChoice(spec.name));
                 }
             }
         }
@@ -937,12 +405,12 @@ fn validate_attributes(
             validate_default(spec)?;
         } else {
             if !deferred_profile {
-                return Err(SheetDefect::UnimplementedDomain(spec.name));
+                return Err(ContractValidationError::UnimplementedDomain(spec.name));
             }
             // A domain nobody can judge carries no default — a
             // default that cannot be validated is a lie waiting.
             if matches!(spec.presence, Presence::Defaulted(_)) {
-                return Err(SheetDefect::InvalidDefault {
+                return Err(ContractValidationError::InvalidDefault {
                     attribute: spec.name,
                     reason: String::from("a deferred-only domain cannot carry a default"),
                 });
@@ -953,25 +421,25 @@ fn validate_attributes(
 }
 
 /// Holds a sheet to the rules the checker will assume forever after.
-pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), SheetDefect> {
+pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), ContractValidationError> {
     crate::connector::ContractId::parse(contract.id).map_err(|reason| {
-        SheetDefect::InvalidConnectorId {
+        ContractValidationError::InvalidConnectorId {
             id: contract.id,
             reason,
         }
     })?;
     if !expressible_name(contract.name) {
-        return Err(SheetDefect::InexpressibleName(contract.name));
+        return Err(ContractValidationError::InexpressibleName(contract.name));
     }
     let mut seen = std::collections::BTreeSet::new();
     for port in contract.ports {
         let name = port.name;
         let direction = port.direction;
         if !expressible_name(name) || crate::node::Port::new(name.to_string()).is_err() {
-            return Err(SheetDefect::InvalidPortName(name));
+            return Err(ContractValidationError::InvalidPortName(name));
         }
         if !seen.insert(name) {
-            return Err(SheetDefect::ConflictingPort(name));
+            return Err(ContractValidationError::ConflictingPort(name));
         }
         let implicit = match name {
             "in" => Some(crate::node::PortDirection::Input),
@@ -981,7 +449,7 @@ pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), SheetDefect> {
         if let Some(expected) = implicit
             && expected != direction
         {
-            return Err(SheetDefect::MisdirectedDefault(name));
+            return Err(ContractValidationError::MisdirectedDefault(name));
         }
     }
     let mut names = std::collections::BTreeSet::new();
@@ -991,27 +459,31 @@ pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), SheetDefect> {
     }
     if let Some(selector) = &contract.selector {
         if !expressible_name(selector.attribute) {
-            return Err(SheetDefect::InexpressibleName(selector.attribute));
+            return Err(ContractValidationError::InexpressibleName(
+                selector.attribute,
+            ));
         }
         if selector.profiles.is_empty() {
-            return Err(SheetDefect::NoProfiles(selector.attribute));
+            return Err(ContractValidationError::NoProfiles(selector.attribute));
         }
         if names.contains(selector.attribute) {
-            return Err(SheetDefect::SelectorCollision(selector.attribute));
+            return Err(ContractValidationError::SelectorCollision(
+                selector.attribute,
+            ));
         }
         let mut words = std::collections::BTreeSet::new();
         let mut identities = std::collections::BTreeSet::from([contract.id]);
         for profile in selector.profiles {
             if let Some(protocol) = profile.protocol {
                 if !identities.insert(protocol.id) {
-                    return Err(SheetDefect::ConnectorIdCollision {
+                    return Err(ContractValidationError::ConnectorIdCollision {
                         id: protocol.id,
                         existing: contract.name,
                         incoming: profile.word,
                     });
                 }
                 crate::connector::ContractId::parse(protocol.id).map_err(|reason| {
-                    SheetDefect::InvalidConnectorId {
+                    ContractValidationError::InvalidConnectorId {
                         id: protocol.id,
                         reason,
                     }
@@ -1023,38 +495,39 @@ pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), SheetDefect> {
                         p.name == "exit" && p.direction == crate::node::PortDirection::Output
                     })
                     .count();
-                if (protocol.exchange == crate::connector::ConnectorExchange::Event && exits != 0)
-                    || (protocol.exchange != crate::connector::ConnectorExchange::Event
-                        && exits != 1)
+                if (protocol.exchange == crate::connector::ExchangeKind::Event && exits != 0)
+                    || (protocol.exchange != crate::connector::ExchangeKind::Event && exits != 1)
                 {
-                    return Err(SheetDefect::ExchangeTerminalMismatch {
+                    return Err(ContractValidationError::ExchangeTerminalMismatch {
                         exchange: protocol.exchange,
                         exits,
                     });
                 }
-                if (protocol.exchange == crate::connector::ConnectorExchange::Event
+                if (protocol.exchange == crate::connector::ExchangeKind::Event
                     && protocol.roles != crate::connector::ConnectorDirection::Inbound)
-                    || (protocol.exchange == crate::connector::ConnectorExchange::Session
+                    || (protocol.exchange == crate::connector::ExchangeKind::Session
                         && !protocol.roles.has_outbound())
                 {
-                    return Err(SheetDefect::ExchangeRoleMismatch {
+                    return Err(ContractValidationError::ExchangeRoleMismatch {
                         exchange: protocol.exchange,
                         roles: protocol.roles,
                     });
                 }
             }
             if !expressible_name(profile.word) {
-                return Err(SheetDefect::InexpressibleName(profile.word));
+                return Err(ContractValidationError::InexpressibleName(profile.word));
             }
             if !words.insert(profile.word) {
-                return Err(SheetDefect::DuplicateProfile(profile.word));
+                return Err(ContractValidationError::DuplicateProfile(profile.word));
             }
             if profile
                 .attributes
                 .iter()
                 .any(|spec| spec.name == selector.attribute)
             {
-                return Err(SheetDefect::SelectorCollision(selector.attribute));
+                return Err(ContractValidationError::SelectorCollision(
+                    selector.attribute,
+                ));
             }
             // Common-vs-profile collisions refuse; two PROFILES may
             // each own a name (none does today).
@@ -1062,13 +535,13 @@ pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), SheetDefect> {
             validate_attributes(
                 profile.attributes,
                 &mut shared,
-                matches!(profile.support, ProfileSupport::Deferred(_)),
+                matches!(profile.support, ModeSupport::Deferred(_)),
             )?;
         }
         if let Some(default) = selector.default
             && !words.contains(default)
         {
-            return Err(SheetDefect::UnknownDefaultProfile(default));
+            return Err(ContractValidationError::UnknownDefaultProfile(default));
         }
     }
     // A port type may depend on one common closed choice, or on the profile
@@ -1102,18 +575,18 @@ pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), SheetDefect> {
     for port in contract.ports {
         match port.ty {
             PortTypeRule::Fixed(ty) => {
-                let resolved = ty
-                    .resolve()
-                    .map_err(|reason| SheetDefect::InvalidPortType {
+                let resolved =
+                    ty.resolve()
+                        .map_err(|reason| ContractValidationError::InvalidPortType {
+                            port: port.name,
+                            reason: reason.to_string(),
+                        })?;
+                resolved.check_bounds().map_err(|reason| {
+                    ContractValidationError::InvalidPortType {
                         port: port.name,
                         reason: reason.to_string(),
-                    })?;
-                resolved
-                    .check_bounds()
-                    .map_err(|reason| SheetDefect::InvalidPortType {
-                        port: port.name,
-                        reason: reason.to_string(),
-                    })?;
+                    }
+                })?;
             }
             PortTypeRule::SameAs(dependency) => {
                 if !contract
@@ -1121,7 +594,7 @@ pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), SheetDefect> {
                     .iter()
                     .any(|candidate| candidate.name == dependency)
                 {
-                    return Err(SheetDefect::UnknownPortDependency {
+                    return Err(ContractValidationError::UnknownPortDependency {
                         port: port.name,
                         dependency,
                     });
@@ -1130,7 +603,7 @@ pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), SheetDefect> {
                 let mut next = port.name;
                 loop {
                     if !visited.insert(next) {
-                        return Err(SheetDefect::CyclicPortTypes(port.name));
+                        return Err(ContractValidationError::CyclicPortTypes(port.name));
                     }
                     let Some(candidate) = contract.ports.iter().find(|item| item.name == next)
                     else {
@@ -1150,13 +623,13 @@ pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), SheetDefect> {
                             choice.word == "json" && choice.ty == PortDataType::Variant
                         }))
                 {
-                    return Err(SheetDefect::PortTypeChoiceMismatch {
+                    return Err(ContractValidationError::PortTypeChoiceMismatch {
                         port: port.name,
                         attribute,
                     });
                 }
                 let Some(words) = choice_domain(attribute) else {
-                    return Err(SheetDefect::UnknownPortTypeAttribute {
+                    return Err(ContractValidationError::UnknownPortTypeAttribute {
                         port: port.name,
                         attribute,
                     });
@@ -1167,7 +640,7 @@ pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), SheetDefect> {
                     .find(|spec| spec.name == attribute)
                     .is_some_and(|spec| spec.latest_site != EvaluationSite::Plan)
                 {
-                    return Err(SheetDefect::LatePortTypeAttribute {
+                    return Err(ContractValidationError::LatePortTypeAttribute {
                         port: port.name,
                         attribute,
                     });
@@ -1175,28 +648,26 @@ pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), SheetDefect> {
                 let mut arms = std::collections::BTreeSet::new();
                 for choice in choices {
                     if !arms.insert(choice.word) || !words.contains(&choice.word) {
-                        return Err(SheetDefect::PortTypeChoiceMismatch {
+                        return Err(ContractValidationError::PortTypeChoiceMismatch {
                             port: port.name,
                             attribute,
                         });
                     }
-                    let resolved =
-                        choice
-                            .ty
-                            .resolve()
-                            .map_err(|reason| SheetDefect::InvalidPortType {
-                                port: port.name,
-                                reason: reason.to_string(),
-                            })?;
-                    resolved
-                        .check_bounds()
-                        .map_err(|reason| SheetDefect::InvalidPortType {
+                    let resolved = choice.ty.resolve().map_err(|reason| {
+                        ContractValidationError::InvalidPortType {
                             port: port.name,
                             reason: reason.to_string(),
-                        })?;
+                        }
+                    })?;
+                    resolved.check_bounds().map_err(|reason| {
+                        ContractValidationError::InvalidPortType {
+                            port: port.name,
+                            reason: reason.to_string(),
+                        }
+                    })?;
                 }
                 if words.iter().any(|word| !arms.contains(word)) {
-                    return Err(SheetDefect::PortTypeChoiceMismatch {
+                    return Err(ContractValidationError::PortTypeChoiceMismatch {
                         port: port.name,
                         attribute,
                     });
@@ -1210,25 +681,26 @@ pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), SheetDefect> {
         .filter(|port| port.name == "exit" && port.direction == crate::node::PortDirection::Output)
         .count();
     let terminal_shape_holds = match contract.exchange {
-        crate::connector::ConnectorExchange::Event => exits == 0,
-        crate::connector::ConnectorExchange::Call
-        | crate::connector::ConnectorExchange::Session => exits == 1,
+        crate::connector::ExchangeKind::Event => exits == 0,
+        crate::connector::ExchangeKind::Call | crate::connector::ExchangeKind::Session => {
+            exits == 1
+        }
     };
     if !terminal_shape_holds {
-        return Err(SheetDefect::ExchangeTerminalMismatch {
+        return Err(ContractValidationError::ExchangeTerminalMismatch {
             exchange: contract.exchange,
             exits,
         });
     }
     let roles_hold = match contract.exchange {
-        crate::connector::ConnectorExchange::Event => {
+        crate::connector::ExchangeKind::Event => {
             contract.roles == crate::connector::ConnectorDirection::Inbound
         }
-        crate::connector::ConnectorExchange::Call => true,
-        crate::connector::ConnectorExchange::Session => contract.roles.has_outbound(),
+        crate::connector::ExchangeKind::Call => true,
+        crate::connector::ExchangeKind::Session => contract.roles.has_outbound(),
     };
     if !roles_hold {
-        return Err(SheetDefect::ExchangeRoleMismatch {
+        return Err(ContractValidationError::ExchangeRoleMismatch {
             exchange: contract.exchange,
             roles: contract.roles,
         });
@@ -1256,11 +728,14 @@ impl ContractCatalog {
     ///
     /// # Errors
     ///
-    /// The first [`SheetDefect`], named.
-    pub fn try_with(mut self, contract: ConnectorContract) -> Result<Self, SheetDefect> {
+    /// The first [`ContractValidationError`], named.
+    pub fn try_with(
+        mut self,
+        contract: ConnectorContract,
+    ) -> Result<Self, ContractValidationError> {
         validate_sheet(&contract)?;
         let id = crate::connector::ContractId::parse(contract.id).map_err(|reason| {
-            SheetDefect::InvalidConnectorId {
+            ContractValidationError::InvalidConnectorId {
                 id: contract.id,
                 reason,
             }
@@ -1270,7 +745,7 @@ impl ContractCatalog {
                 existing.name != contract.name
                     && existing.protocol_ids().any(|id| id == protocol_id)
             }) {
-                return Err(SheetDefect::ConnectorIdCollision {
+                return Err(ContractValidationError::ConnectorIdCollision {
                     id: protocol_id,
                     existing: existing.name,
                     incoming: contract.name,
@@ -1322,11 +797,14 @@ impl ContractCatalog {
     ///
     /// # Errors
     ///
-    /// Returns [`SheetDefect::InexpressibleName`] when the frontend name cannot
+    /// Returns [`ContractValidationError::InexpressibleName`] when the frontend name cannot
     /// be written as the `IDENT` before `!`.
-    pub fn try_with_frontend(mut self, frontend: FrontendContract) -> Result<Self, SheetDefect> {
+    pub fn try_with_frontend(
+        mut self,
+        frontend: FrontendContract,
+    ) -> Result<Self, ContractValidationError> {
         if !expressible_name(frontend.name) {
-            return Err(SheetDefect::InexpressibleName(frontend.name));
+            return Err(ContractValidationError::InexpressibleName(frontend.name));
         }
         self.frontends
             .retain(|existing| existing.name != frontend.name);

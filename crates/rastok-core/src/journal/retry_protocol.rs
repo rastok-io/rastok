@@ -4,8 +4,10 @@
 //! establish the original plan, exact carrying transaction and spatial context;
 //! a successful protocol fold alone is not permission to execute a Driver.
 
-use crate::boundary::{CallId, PreparedRequest};
-use crate::connector::{CallSemantics, ContractId};
+use crate::connector::CallSemantics;
+use crate::connector::ContractId;
+use crate::connector::exchange::CallId;
+use crate::connector::exchange::PreparedRequest;
 use crate::envelope::{Envelope, Id};
 use crate::instance;
 

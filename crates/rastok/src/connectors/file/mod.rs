@@ -4,14 +4,20 @@
 //! The real one-file Driver behind `std/file@3`.
 //!
 //! Request preparation is pure: it validates the logical path and seals one
-//! complete operation descriptor. Only [`OutboundConnectorDriver::start`],
+//! complete operation descriptor. Only [`OutboundCall::start`],
 //! called after the EGRESS open is journaled, hands that descriptor to a
 //! worker that may observe or mutate the filesystem.
 
-use crate::boundary::{
-    CallConnectorDriver, CallOpen, CallStart, Completion, FileExit, OutboundConnectorDriver,
-    PreparedRequest, RequestPreparation, Response, SchedulerCompletion,
-};
+use crate::connector::driver::Outbound;
+use crate::connector::driver::OutboundCall;
+use crate::connector::exchange::CallOpen;
+use crate::connector::exchange::CallResponse;
+use crate::connector::exchange::CallStart;
+use crate::connector::exchange::Completion;
+use crate::connector::exchange::PreparedRequest;
+use crate::connector::exchange::RequestPreparation;
+use crate::connector::exchange::SchedulerCompletion;
+use crate::connector::stdlib::FileExit;
 use crate::envelope::{Data, Encoding, Envelope, Value};
 use crate::plan::{AttrSetting, NodeKind};
 use std::collections::BTreeMap;
@@ -43,14 +49,15 @@ impl FileBinding {
     fn try_from(spec: &crate::plan::ConnectorSpec) -> Result<Self, FileSettingsError> {
         use FileSettingsError as E;
 
-        if spec.contract.as_str() != crate::connector::FILE_CONNECTOR_ID {
+        if spec.contract.as_str() != crate::connector::stdlib::FILE_CONNECTOR_ID {
             return Err(E::NotFile(spec.contract.clone()));
         }
         let mode = match spec.attribute("mode") {
             Some(AttrSetting::Word(word)) if word == "read" => {
                 let max_read = match spec.attribute("max_read") {
                     Some(AttrSetting::Value(Value::Text(text))) => {
-                        crate::contract::byte_size(text).ok_or_else(|| E::NotASize(text.clone()))?
+                        crate::connector::byte_size(text)
+                            .ok_or_else(|| E::NotASize(text.clone()))?
                     }
                     _ => return Err(E::Unresolved("max_read")),
                 };
@@ -155,7 +162,8 @@ impl FileRequestSettings {
         let operation = match binding.mode {
             FileMode::Read { max_read } => FileOperation::Read { path, max_read },
             FileMode::Replace => {
-                let bytes = crate::boundary::bytes_payload(data).map_err(|_| FileExit::IoFailed)?;
+                let bytes = crate::connector::stdlib::bytes_payload(data)
+                    .map_err(|_| FileExit::IoFailed)?;
                 return FileOperation::encode_replace(&path, bytes);
             }
         };
@@ -175,7 +183,7 @@ impl FileRequestSettings {
     }
 }
 
-impl super::ScriptedConnectorProtocol for FileRequestSettings {
+impl super::CallProtocol for FileRequestSettings {
     fn prepare_request(
         &self,
         connector: &crate::node::Path,
@@ -186,7 +194,7 @@ impl super::ScriptedConnectorProtocol for FileRequestSettings {
     }
 
     fn scheduler_completion(&self, completion: SchedulerCompletion) -> Completion {
-        crate::boundary::file_scheduler_completion(completion)
+        crate::connector::stdlib::file_scheduler_completion(completion)
     }
 }
 
@@ -194,9 +202,9 @@ pub(super) fn bind_scripted_protocol(
     plan: &crate::plan::ValidatedExecutionPlan,
     nodes: &[crate::node::Path],
     _boot: &crate::deployment::BootBindings,
-) -> Result<Box<dyn super::ScriptedConnectorProtocol>, super::DriverFactoryError> {
+) -> Result<Box<dyn super::CallProtocol>, super::DriverFactoryError> {
     FileRequestSettings::try_bind(plan, nodes)
-        .map(|bindings| Box::new(bindings) as Box<dyn super::ScriptedConnectorProtocol>)
+        .map(|bindings| Box::new(bindings) as Box<dyn super::CallProtocol>)
         .map_err(|error| super::DriverFactoryError::new(error.to_string()))
 }
 
@@ -285,16 +293,16 @@ impl FileFactory {
     /// # Errors
     ///
     /// The built-in stable id ceased to be canonical.
-    pub fn try_new(root: impl Into<PathBuf>) -> Result<Self, crate::connector::ConnectorIdError> {
+    pub fn try_new(root: impl Into<PathBuf>) -> Result<Self, crate::connector::ContractIdError> {
         Ok(Self {
-            id: crate::connector::ContractId::parse(crate::connector::FILE_CONNECTOR_ID)?,
+            id: crate::connector::ContractId::parse(crate::connector::stdlib::FILE_CONNECTOR_ID)?,
             root: root.into(),
         })
     }
 }
 
-impl super::ConnectorDriverFactory for FileFactory {
-    fn connector_id(&self) -> &crate::connector::ContractId {
+impl super::DriverFactory for FileFactory {
+    fn contract_id(&self) -> &crate::connector::ContractId {
         &self.id
     }
 
@@ -302,20 +310,20 @@ impl super::ConnectorDriverFactory for FileFactory {
         crate::connector::ConnectorDirection::Outbound
     }
 
-    fn bind<'plan>(
+    fn create<'plan>(
         &self,
         plan: &'plan crate::plan::ValidatedExecutionPlan,
         nodes: &[crate::node::Path],
-    ) -> Result<Box<dyn super::BoundConnectorDriver + 'plan>, super::DriverFactoryError> {
+    ) -> Result<Box<dyn crate::connector::driver::Driver + 'plan>, super::DriverFactoryError> {
         File::try_bind(plan, nodes, self.root.clone())
-            .map(|driver| Box::new(driver) as Box<dyn super::BoundConnectorDriver + 'plan>)
+            .map(|driver| Box::new(driver) as Box<dyn crate::connector::driver::Driver + 'plan>)
             .map_err(|error| super::DriverFactoryError::new(error.to_string()))
     }
 }
 
 #[derive(Debug)]
 struct WorkerResult {
-    call_id: crate::boundary::CallId,
+    call_id: crate::connector::exchange::CallId,
     completion: Option<Completion>,
 }
 
@@ -330,10 +338,10 @@ pub struct File<'plan> {
     _plan: &'plan crate::plan::ValidatedExecutionPlan,
     root: PathBuf,
     bindings: FileRequestSettings,
-    runs: BTreeMap<crate::boundary::CallId, Arc<AtomicBool>>,
+    runs: BTreeMap<crate::connector::exchange::CallId, Arc<AtomicBool>>,
     sender: mpsc::Sender<WorkerResult>,
     receiver: mpsc::Receiver<WorkerResult>,
-    answers: Vec<Response>,
+    answers: Vec<CallResponse>,
 }
 
 impl Drop for File<'_> {
@@ -344,12 +352,12 @@ impl Drop for File<'_> {
     }
 }
 
-impl super::BoundConnectorDriver for File<'_> {
-    fn inbound(&mut self) -> Option<&mut dyn crate::boundary::InboundConnectorDriver> {
+impl crate::connector::driver::Driver for File<'_> {
+    fn inbound(&mut self) -> Option<&mut dyn crate::connector::driver::Ingress> {
         None
     }
 
-    fn outbound(&mut self) -> Option<&mut dyn OutboundConnectorDriver> {
+    fn outbound(&mut self) -> Option<&mut dyn Outbound> {
         Some(self)
     }
 }
@@ -374,7 +382,7 @@ impl<'plan> File<'plan> {
     }
 }
 
-impl CallConnectorDriver for File<'_> {
+impl OutboundCall for File<'_> {
     fn prepare_request(
         &mut self,
         connector: &crate::node::Path,
@@ -390,10 +398,10 @@ impl CallConnectorDriver for File<'_> {
         _connector: &crate::node::Path,
         completion: SchedulerCompletion,
     ) -> Completion {
-        crate::boundary::file_scheduler_completion(completion)
+        crate::connector::stdlib::file_scheduler_completion(completion)
     }
 
-    fn cancel(&mut self, call_id: &crate::boundary::CallId) {
+    fn cancel(&mut self, call_id: &crate::connector::exchange::CallId) {
         if let Some(cancelled) = self.runs.get(call_id) {
             cancelled.store(true, Ordering::Release);
         }
@@ -401,7 +409,7 @@ impl CallConnectorDriver for File<'_> {
 
     fn start(&mut self, intent: &CallOpen, _request: &Envelope) -> CallStart {
         let Some(binding) = self.bindings.get(&intent.connector_path) else {
-            self.answers.push(Response {
+            self.answers.push(CallResponse {
                 call_id: intent.call_id,
                 completion: Completion::file_exit(FileExit::IoFailed),
             });
@@ -410,7 +418,7 @@ impl CallConnectorDriver for File<'_> {
         let operation = match FileOperation::decode(intent.prepared.bytes()) {
             Some(operation) => operation,
             None => {
-                self.answers.push(Response {
+                self.answers.push(CallResponse {
                     call_id: intent.call_id,
                     completion: Completion::file_exit(FileExit::IoFailed),
                 });
@@ -418,14 +426,14 @@ impl CallConnectorDriver for File<'_> {
             }
         };
         if validate_logical_path(operation.path()).is_err() {
-            self.answers.push(Response {
+            self.answers.push(CallResponse {
                 call_id: intent.call_id,
                 completion: Completion::file_exit(FileExit::InvalidPath),
             });
             return CallStart::Started;
         }
         if !binding.admits(&operation, &intent.resolved_settings) {
-            self.answers.push(Response {
+            self.answers.push(CallResponse {
                 call_id: intent.call_id,
                 completion: Completion::file_exit(FileExit::IoFailed),
             });
@@ -446,7 +454,7 @@ impl CallConnectorDriver for File<'_> {
                 });
             });
         if spawn.is_err() {
-            self.answers.push(Response {
+            self.answers.push(CallResponse {
                 call_id,
                 completion: Completion::file_exit(FileExit::IoFailed),
             });
@@ -456,12 +464,12 @@ impl CallConnectorDriver for File<'_> {
         CallStart::Started
     }
 
-    fn events(&mut self) -> Vec<Response> {
+    fn poll_responses(&mut self) -> Vec<CallResponse> {
         let mut answers = std::mem::take(&mut self.answers);
         for result in self.receiver.try_iter() {
             self.runs.remove(&result.call_id);
             if let Some(completion) = result.completion {
-                answers.push(Response {
+                answers.push(CallResponse {
                     call_id: result.call_id,
                     completion,
                 });
@@ -606,7 +614,7 @@ fn execute(
     root: &Path,
     operation: FileOperation,
     cancelled: &AtomicBool,
-    call_id: crate::boundary::CallId,
+    call_id: crate::connector::exchange::CallId,
 ) -> Option<Completion> {
     if cancelled.load(Ordering::Acquire) {
         return None;
@@ -687,7 +695,7 @@ fn execute_replace(
     target: &Path,
     bytes: &[u8],
     cancelled: &AtomicBool,
-    call_id: crate::boundary::CallId,
+    call_id: crate::connector::exchange::CallId,
 ) -> Option<Completion> {
     if let Ok(metadata) = std::fs::metadata(target)
         && !metadata.is_file()
@@ -732,7 +740,7 @@ fn execute_replace(
 fn open_staging(
     parent: &Path,
     target: &Path,
-    call_id: crate::boundary::CallId,
+    call_id: crate::connector::exchange::CallId,
 ) -> Result<(PathBuf, FsFile), FileExit> {
     // `create_new` makes collision handling non-destructive. The explicit
     // target inequality also protects the commit boundary when a user-chosen
@@ -873,10 +881,14 @@ mod tests {
 
     #[test]
     fn scheduler_facts_inhabit_the_file_exit_contract() {
-        let ty = crate::boundary::file_exit_type().expect("the FileExit type is valid");
+        let ty = crate::connector::stdlib::file_exit_type().expect("the FileExit type is valid");
         for completion in [
-            crate::boundary::file_scheduler_completion(SchedulerCompletion::TimeoutExpired),
-            crate::boundary::file_scheduler_completion(SchedulerCompletion::OutcomeUnknown),
+            crate::connector::stdlib::file_scheduler_completion(
+                SchedulerCompletion::TimeoutExpired,
+            ),
+            crate::connector::stdlib::file_scheduler_completion(
+                SchedulerCompletion::OutcomeUnknown,
+            ),
         ] {
             let exit = &completion.outputs()[0].data;
             let Data::Materialized(value) = exit else {
@@ -894,7 +906,8 @@ mod tests {
         let target = root.join("artifact.bin");
         std::fs::write(&target, b"before").expect("the seed writes");
         let cancelled = AtomicBool::new(true);
-        let call_id = crate::boundary::CallId::new(crate::envelope::Id::from_bytes([7; 16]));
+        let call_id =
+            crate::connector::exchange::CallId::new(crate::envelope::Id::from_bytes([7; 16]));
 
         let completion = execute(
             &root,
@@ -922,7 +935,8 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("the test root is writable");
-        let call_id = crate::boundary::CallId::new(crate::envelope::Id::from_bytes([8; 16]));
+        let call_id =
+            crate::connector::exchange::CallId::new(crate::envelope::Id::from_bytes([8; 16]));
         let filename = format!(".rastok-{call_id}-0.tmp");
         let target = root.join(&filename);
         std::fs::write(&target, b"before").expect("the seed writes");

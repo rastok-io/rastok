@@ -10,8 +10,11 @@
 //! This module adds no thread, clock or scheduler. The semantic transitions
 //! remain in `rastok-core`; presentation and recording remain with the caller.
 
-use crate::boundary::{DriverRouteError, IngressAdmission, IngressProposal, IngressRejection};
-use crate::connectors::{InboundPollError, RuntimeBindings};
+use crate::connector::driver::DriverRouteError;
+use crate::connector::exchange::IngressAdmission;
+use crate::connector::exchange::IngressProposal;
+use crate::connector::exchange::IngressRejection;
+use crate::connectors::{InboundPollError, RuntimeDrivers};
 use crate::deployment::BootBindings;
 use crate::envelope::Id;
 use crate::journal::MemJournal;
@@ -154,7 +157,7 @@ struct PollProgress {
 pub struct Worker<'plan> {
     execution: Execution<'plan>,
     journal: MemJournal,
-    bindings: RuntimeBindings<'plan>,
+    bindings: RuntimeDrivers<'plan>,
 }
 
 impl<'plan> Worker<'plan> {
@@ -168,7 +171,7 @@ impl<'plan> Worker<'plan> {
         version: GraphVersion,
         logical_time: i64,
         boot: Option<&BootBindings>,
-        bindings: RuntimeBindings<'plan>,
+        bindings: RuntimeDrivers<'plan>,
     ) -> Self {
         let journal = boot.map_or_else(
             || MemJournal::new(version),
@@ -472,7 +475,9 @@ impl<'plan> Worker<'plan> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::boundary::{EnvelopeDraft, IngressProvenance, IngressSequence};
+    use crate::connector::exchange::EnvelopeDraft;
+    use crate::connector::exchange::IngressProvenance;
+    use crate::connector::exchange::IngressSequence;
     use crate::connectors::DriverRegistry;
     use crate::envelope::{Data, Namespace, Value};
     use crate::node;
@@ -536,7 +541,7 @@ mod tests {
         .unwrap();
         let plan = &compilation.plan;
         let version = GraphVersion(1);
-        let bindings = || RuntimeBindings::try_new(plan, &DriverRegistry::default()).unwrap();
+        let bindings = || RuntimeDrivers::prepare(plan, &DriverRegistry::default()).unwrap();
         let new_worker = || Worker::new(plan, Some(compilation.hash), version, 0, None, bindings());
         let mut hosted = new_worker();
         let mut continuous = new_worker();
@@ -593,8 +598,8 @@ mod tests {
     /// execution alone decides when its explicit timeout becomes due.
     struct SilentProcess(crate::connector::ContractId);
 
-    impl crate::connectors::ConnectorDriverFactory for SilentProcess {
-        fn connector_id(&self) -> &crate::connector::ContractId {
+    impl crate::connectors::DriverFactory for SilentProcess {
+        fn contract_id(&self) -> &crate::connector::ContractId {
             &self.0
         }
 
@@ -602,55 +607,58 @@ mod tests {
             crate::connector::ConnectorDirection::Outbound
         }
 
-        fn bind<'plan>(
+        fn create<'plan>(
             &self,
             _: &'plan ValidatedExecutionPlan,
             _: &[node::Path],
         ) -> Result<
-            Box<dyn crate::connectors::BoundConnectorDriver + 'plan>,
+            Box<dyn crate::connector::driver::Driver + 'plan>,
             crate::connectors::DriverFactoryError,
         > {
             Ok(Box::new(Self(self.0.clone())))
         }
     }
 
-    impl crate::connectors::BoundConnectorDriver for SilentProcess {
-        fn inbound(&mut self) -> Option<&mut dyn crate::boundary::InboundConnectorDriver> {
+    impl crate::connector::driver::Driver for SilentProcess {
+        fn inbound(&mut self) -> Option<&mut dyn crate::connector::driver::Ingress> {
             None
         }
 
-        fn outbound(&mut self) -> Option<&mut dyn crate::boundary::OutboundConnectorDriver> {
+        fn outbound(&mut self) -> Option<&mut dyn crate::connector::driver::Outbound> {
             Some(self)
         }
     }
 
-    impl crate::boundary::CallConnectorDriver for SilentProcess {
+    impl crate::connector::driver::OutboundCall for SilentProcess {
         fn prepare_request(
             &mut self,
             _: &node::Path,
             data: &Data,
             _: &std::collections::BTreeMap<String, Value>,
-        ) -> crate::boundary::RequestPreparation {
-            crate::boundary::prepare_process_request(crate::boundary::RequestCodec::Lines, data)
+        ) -> crate::connector::exchange::RequestPreparation {
+            crate::connector::stdlib::prepare_process_request(
+                crate::connector::stdlib::RequestCodec::Lines,
+                data,
+            )
         }
 
         fn scheduler_completion(
             &mut self,
             _: &node::Path,
-            completion: crate::boundary::SchedulerCompletion,
-        ) -> crate::boundary::Completion {
-            crate::boundary::process_scheduler_completion(completion)
+            completion: crate::connector::exchange::SchedulerCompletion,
+        ) -> crate::connector::exchange::Completion {
+            crate::connector::stdlib::process_scheduler_completion(completion)
         }
 
         fn start(
             &mut self,
-            _: &crate::boundary::CallOpen,
+            _: &crate::connector::exchange::CallOpen,
             _: &crate::envelope::Envelope,
-        ) -> crate::boundary::CallStart {
-            crate::boundary::CallStart::Started
+        ) -> crate::connector::exchange::CallStart {
+            crate::connector::exchange::CallStart::Started
         }
 
-        fn events(&mut self) -> Vec<crate::boundary::Response> {
+        fn poll_responses(&mut self) -> Vec<crate::connector::exchange::CallResponse> {
             Vec::new()
         }
     }
@@ -673,11 +681,11 @@ mod tests {
         .unwrap();
         let registry = DriverRegistry::default()
             .try_with(Box::new(SilentProcess(
-                crate::connector::ContractId::parse(crate::connector::PROCESS_CONNECTOR_ID)
+                crate::connector::ContractId::parse(crate::connector::stdlib::PROCESS_CONNECTOR_ID)
                     .unwrap(),
             )))
             .unwrap();
-        let bindings = RuntimeBindings::try_new(&compilation.plan, &registry).unwrap();
+        let bindings = RuntimeDrivers::prepare(&compilation.plan, &registry).unwrap();
         let mut worker = Worker::new(
             &compilation.plan,
             Some(compilation.hash),
@@ -717,7 +725,7 @@ mod tests {
         assert_eq!(worker.execution().outputs().len(), 1);
         assert_eq!(
             worker.execution().outputs()[0].envelope.data(),
-            &Data::materialized(crate::boundary::ProcessExit::TimeoutExpired.into_value())
+            &Data::materialized(crate::connector::stdlib::ProcessExit::TimeoutExpired.into_value())
         );
     }
 
@@ -729,7 +737,7 @@ mod tests {
         )
         .unwrap();
         let bindings =
-            RuntimeBindings::try_new(&compilation.plan, &DriverRegistry::default()).unwrap();
+            RuntimeDrivers::prepare(&compilation.plan, &DriverRegistry::default()).unwrap();
         let mut worker = Worker::new(
             &compilation.plan,
             Some(compilation.hash),
@@ -782,7 +790,7 @@ mod tests {
         .unwrap();
         for (input, recording_fails) in [(0, false), (1, true)] {
             let bindings =
-                RuntimeBindings::try_new(&compilation.plan, &DriverRegistry::default()).unwrap();
+                RuntimeDrivers::prepare(&compilation.plan, &DriverRegistry::default()).unwrap();
             let mut worker = Worker::new(
                 &compilation.plan,
                 Some(compilation.hash),
@@ -844,7 +852,7 @@ mod tests {
         )
         .unwrap();
         let bindings =
-            RuntimeBindings::try_new(&compilation.plan, &DriverRegistry::default()).unwrap();
+            RuntimeDrivers::prepare(&compilation.plan, &DriverRegistry::default()).unwrap();
         let mut worker = Worker::new(
             &compilation.plan,
             Some(compilation.hash),

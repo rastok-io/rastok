@@ -5,7 +5,10 @@
 //! projection of this stream; the retained stream itself remains available to
 //! read-only inspection at the selected journal prefix.
 
-use crate::boundary::{CallId, InboundCallId, SessionId, SessionWriteId};
+use crate::connector::exchange::CallId;
+use crate::connector::exchange::InboundCallId;
+use crate::connector::exchange::SessionId;
+use crate::connector::exchange::SessionWriteId;
 use crate::envelope::Id;
 use crate::instance;
 

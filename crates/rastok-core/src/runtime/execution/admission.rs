@@ -6,7 +6,7 @@ use crate::journal::{CommittedIngress, PreparedIngress, SessionIngressRecord};
 
 struct IngressEndpoint {
     from: Endpoint,
-    exchange: Option<ConnectorExchange>,
+    exchange: Option<ExchangeKind>,
 }
 
 /// The five source cases have different instance and routing obligations.
@@ -271,7 +271,7 @@ impl Execution<'_> {
             ExecutionFault::PlanInvariant {
                 node: self.plan.nodes[source.index()].path.clone(),
                 reason: match endpoint.exchange {
-                    Some(ConnectorExchange::Call) => "an inbound Call source has no owner chain",
+                    Some(ExchangeKind::Call) => "an inbound Call source has no owner chain",
                     _ => "an inbound Session source has no owner chain",
                 },
             }
@@ -279,7 +279,7 @@ impl Execution<'_> {
         let target =
             self.prepare_target(&journal, scope, None, &endpoint.from, envelope, candidates)?;
         let held = match endpoint.exchange {
-            Some(ConnectorExchange::Call) => self
+            Some(ExchangeKind::Call) => self
                 .inbound_calls
                 .values()
                 .filter(|pending| pending.slot == source && pending.instance == target.reference)
@@ -311,7 +311,7 @@ impl Execution<'_> {
             .map(|exchange| (endpoint.from.node, exchange));
         // Preserve the existing admission order: Call selection and its
         // journal marker precede refusal of contradictory Session framing.
-        let call = if let Some((source, ConnectorExchange::Call)) = source {
+        let call = if let Some((source, ExchangeKind::Call)) = source {
             let target = self.reserve_source_instance(
                 journal,
                 endpoint,
@@ -341,7 +341,7 @@ impl Execution<'_> {
             PreparedExchange::Event
         };
         let exchange = match (source, session) {
-            (Some((source, ConnectorExchange::Session)), Some(InboundSession::Open)) => {
+            (Some((source, ExchangeKind::Session)), Some(InboundSession::Open)) => {
                 if self.plan.nodes[source.index()]
                     .connector()
                     .and_then(|spec| session_opening(&spec.contract, spec.roles, spec.exchange))
@@ -371,10 +371,7 @@ impl Execution<'_> {
                     session,
                 }
             }
-            (
-                Some((source, ConnectorExchange::Session)),
-                Some(InboundSession::Message(session)),
-            ) => {
+            (Some((source, ExchangeKind::Session)), Some(InboundSession::Message(session))) => {
                 let Some(pending) = self.sessions.get(&session) else {
                     return Err(ExecutionFault::PlanInvariant {
                         node: self.plan.nodes[source.index()].path.clone(),
@@ -396,19 +393,19 @@ impl Execution<'_> {
                     },
                 }
             }
-            (Some((source, ConnectorExchange::Session)), None) => {
+            (Some((source, ExchangeKind::Session)), None) => {
                 return Err(ExecutionFault::PlanInvariant {
                     node: self.plan.nodes[source.index()].path.clone(),
                     reason: "a Session source arrived without Session framing",
                 });
             }
-            (Some((source, ConnectorExchange::Event | ConnectorExchange::Call)), Some(_)) => {
+            (Some((source, ExchangeKind::Event | ExchangeKind::Call)), Some(_)) => {
                 return Err(ExecutionFault::PlanInvariant {
                     node: self.plan.nodes[source.index()].path.clone(),
                     reason: "Session framing reached a non-Session source",
                 });
             }
-            (Some((_, ConnectorExchange::Event | ConnectorExchange::Call)), None) => call,
+            (Some((_, ExchangeKind::Event | ExchangeKind::Call)), None) => call,
             (None, _) => PreparedExchange::Boundary,
         };
         Ok((ingress, exchange))
@@ -526,14 +523,14 @@ impl Execution<'_> {
             .as_deref()
             .map(|exchange| match exchange {
                 crate::journal::InboundExchangeRecord::Call(call) => {
-                    crate::boundary::InboundExchangeId::Call(call.reference)
+                    crate::connector::exchange::InboundExchangeId::Call(call.reference)
                 }
                 crate::journal::InboundExchangeRecord::Session(session) => {
                     let reference = match session {
                         SessionIngressRecord::Open(reference)
                         | SessionIngressRecord::Message(reference) => *reference,
                     };
-                    crate::boundary::InboundExchangeId::Session(reference)
+                    crate::connector::exchange::InboundExchangeId::Session(reference)
                 }
             });
         AdmittedIngress {

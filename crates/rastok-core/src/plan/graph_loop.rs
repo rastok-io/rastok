@@ -2,7 +2,8 @@
 //! saturated at two: the proof distinguishes silence, one verdict and conflict.
 
 use super::*;
-use crate::connector::{CallSemantics, FrameProduction};
+use crate::connector::CallSemantics;
+use crate::connector::FrameProduction;
 use crate::instance;
 use crate::node;
 use alloc::collections::{BTreeMap, BTreeSet};

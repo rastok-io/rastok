@@ -9,13 +9,23 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::rc::Rc;
 
-use crate::boundary::{
-    AdmittedIngress, Completion, HttpServerExit, InboundCallConnectorDriver,
-    InboundCallObservation, InboundCallResponse, InboundCallResponseStart, InboundCallTimeout,
-    InboundCallTimeoutStart, InboundConnectorDriver, InboundExchangeId, IngressProposal,
-    IngressProposalHandle, IngressRejection, RetainedProposal,
-};
-use crate::connector::{ConnectorDirection, ContractId};
+use crate::connector::ConnectorDirection;
+use crate::connector::ContractId;
+use crate::connector::driver::InboundCall;
+use crate::connector::driver::Ingress;
+use crate::connector::exchange::AdmittedIngress;
+use crate::connector::exchange::Completion;
+use crate::connector::exchange::InboundCallObservation;
+use crate::connector::exchange::InboundCallResponse;
+use crate::connector::exchange::InboundCallResponseStart;
+use crate::connector::exchange::InboundCallTimeout;
+use crate::connector::exchange::InboundCallTimeoutStart;
+use crate::connector::exchange::InboundExchangeId;
+use crate::connector::exchange::IngressProposal;
+use crate::connector::exchange::IngressProposalHandle;
+use crate::connector::exchange::IngressRejection;
+use crate::connector::exchange::PendingIngress;
+use crate::connector::stdlib::HttpServerExit;
 use crate::plan::ValidatedExecutionPlan;
 #[cfg(feature = "hosted-http12")]
 use crate::plan::{AttrSetting, NodeKind};
@@ -169,7 +179,7 @@ pub(crate) fn bind_routes(
                     "the HttpServer binding path `{path}` is not a connector"
                 ))
             })?;
-        if spec.contract.as_str() != crate::connector::HTTP_SERVER_CONNECTOR_ID {
+        if spec.contract.as_str() != crate::connector::stdlib::HTTP_SERVER_CONNECTOR_ID {
             return Err(super::DriverFactoryError::new(format!(
                 "the HttpServer binder received `{}` at `{path}`",
                 spec.contract
@@ -256,7 +266,7 @@ pub(crate) fn bind_routes(
 /// owns envelopes, sequence allocation or journal records.
 #[derive(Debug, Default)]
 pub(crate) struct HttpServerLabInput {
-    pending: Option<RetainedProposal>,
+    pending: Option<PendingIngress>,
     terminal: Option<InboundCallObservation>,
     fault: Option<String>,
 }
@@ -268,7 +278,7 @@ impl HttpServerLabInput {
                 "the preceding HttpServer Lab request has not settled",
             ));
         }
-        self.pending = Some(RetainedProposal {
+        self.pending = Some(PendingIngress {
             handle: IngressProposalHandle::new(action),
             proposal: submission,
         });
@@ -288,12 +298,12 @@ struct HttpServerLabDriver {
     input: Rc<RefCell<HttpServerLabInput>>,
 }
 
-impl InboundConnectorDriver for HttpServerLabDriver {
-    fn proposal(&mut self) -> Option<RetainedProposal> {
+impl Ingress for HttpServerLabDriver {
+    fn poll_proposal(&mut self) -> Option<PendingIngress> {
         self.input.borrow().pending.clone()
     }
 
-    fn decide(
+    fn notify_admission(
         &mut self,
         reference: IngressProposalHandle,
         decision: Result<AdmittedIngress, IngressRejection>,
@@ -331,12 +341,12 @@ impl InboundConnectorDriver for HttpServerLabDriver {
         }
     }
 
-    fn call(&mut self) -> Option<&mut dyn InboundCallConnectorDriver> {
+    fn call(&mut self) -> Option<&mut dyn InboundCall> {
         Some(self)
     }
 }
 
-impl InboundCallConnectorDriver for HttpServerLabDriver {
+impl InboundCall for HttpServerLabDriver {
     fn start_response(&mut self, _: &InboundCallResponse) -> InboundCallResponseStart {
         InboundCallResponseStart::Pending
     }
@@ -345,7 +355,7 @@ impl InboundCallConnectorDriver for HttpServerLabDriver {
         InboundCallTimeoutStart::Pending
     }
 
-    fn events(&mut self) -> Vec<InboundCallObservation> {
+    fn poll_completions(&mut self) -> Vec<InboundCallObservation> {
         self.input
             .borrow_mut()
             .terminal
@@ -360,8 +370,8 @@ struct HttpServerLabFactory {
     input: Rc<RefCell<HttpServerLabInput>>,
 }
 
-impl super::ConnectorDriverFactory for HttpServerLabFactory {
-    fn connector_id(&self) -> &ContractId {
+impl super::DriverFactory for HttpServerLabFactory {
+    fn contract_id(&self) -> &ContractId {
         &self.id
     }
 
@@ -369,11 +379,11 @@ impl super::ConnectorDriverFactory for HttpServerLabFactory {
         ConnectorDirection::Inbound
     }
 
-    fn bind<'plan>(
+    fn create<'plan>(
         &self,
         plan: &'plan ValidatedExecutionPlan,
         nodes: &[crate::node::Path],
-    ) -> Result<Box<dyn super::BoundConnectorDriver + 'plan>, super::DriverFactoryError> {
+    ) -> Result<Box<dyn crate::connector::driver::Driver + 'plan>, super::DriverFactoryError> {
         let expected: BTreeSet<_> = nodes.iter().collect();
         let actual: BTreeSet<_> = plan
             .plan()
@@ -381,7 +391,7 @@ impl super::ConnectorDriverFactory for HttpServerLabFactory {
             .iter()
             .filter(|node| {
                 node.connector().is_some_and(|spec| {
-                    spec.contract.as_str() == crate::connector::HTTP_SERVER_CONNECTOR_ID
+                    spec.contract.as_str() == crate::connector::stdlib::HTTP_SERVER_CONNECTOR_ID
                 })
             })
             .filter_map(|node| node.executor_path())
@@ -397,20 +407,20 @@ impl super::ConnectorDriverFactory for HttpServerLabFactory {
     }
 }
 
-impl super::BoundConnectorDriver for HttpServerLabDriver {
-    fn inbound(&mut self) -> Option<&mut dyn InboundConnectorDriver> {
+impl crate::connector::driver::Driver for HttpServerLabDriver {
+    fn inbound(&mut self) -> Option<&mut dyn Ingress> {
         Some(self)
     }
 
-    fn outbound(&mut self) -> Option<&mut dyn crate::boundary::OutboundConnectorDriver> {
+    fn outbound(&mut self) -> Option<&mut dyn crate::connector::driver::Outbound> {
         None
     }
 }
 
 pub(crate) fn lab_factory(
     input: Rc<RefCell<HttpServerLabInput>>,
-) -> Result<Box<dyn super::ConnectorDriverFactory>, super::DriverFactoryError> {
-    let id = ContractId::parse(crate::connector::HTTP_SERVER_CONNECTOR_ID)
+) -> Result<Box<dyn super::DriverFactory>, super::DriverFactoryError> {
+    let id = ContractId::parse(crate::connector::stdlib::HTTP_SERVER_CONNECTOR_ID)
         .map_err(|error| super::DriverFactoryError::new(error.to_string()))?;
     Ok(Box::new(HttpServerLabFactory { id, input }))
 }
@@ -418,10 +428,12 @@ pub(crate) fn lab_factory(
 #[cfg(test)]
 mod lab_tests {
     use super::*;
-    use crate::boundary::{
-        EnvelopeDraft, IngressAdmission, IngressProvenance, IngressRejection, IngressSequence,
-    };
-    use crate::connectors::{DriverRegistry, RuntimeBindings};
+    use crate::connector::exchange::EnvelopeDraft;
+    use crate::connector::exchange::IngressAdmission;
+    use crate::connector::exchange::IngressProvenance;
+    use crate::connector::exchange::IngressRejection;
+    use crate::connector::exchange::IngressSequence;
+    use crate::connectors::{DriverRegistry, RuntimeDrivers};
     use crate::envelope::{Data, Value};
     use crate::journal::{Journal, MemJournal, Record};
     use crate::plan::GraphVersion;
@@ -455,7 +467,7 @@ mod lab_tests {
         let registry = DriverRegistry::default()
             .try_with(lab_factory(Rc::clone(&input)).unwrap())
             .unwrap();
-        let mut bindings = RuntimeBindings::try_new(&compilation.plan, &registry).unwrap();
+        let mut bindings = RuntimeDrivers::prepare(&compilation.plan, &registry).unwrap();
         let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
         input
@@ -526,7 +538,7 @@ mod lab_tests {
         let registry = DriverRegistry::default()
             .try_with(lab_factory(Rc::clone(&input)).unwrap())
             .unwrap();
-        let mut bindings = RuntimeBindings::try_new(&compilation.plan, &registry).unwrap();
+        let mut bindings = RuntimeDrivers::prepare(&compilation.plan, &registry).unwrap();
         let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
         let capacity = vm.inspection().mailbox_capacity;

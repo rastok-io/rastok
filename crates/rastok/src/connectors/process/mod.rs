@@ -4,16 +4,22 @@
 //! The real Process Driver behind its Connector contract — where the graph's
 //! intent becomes an actual effect on the machine.
 //!
-//! A Driver is an [`OutboundConnectorDriver`]: the Driver poller hands it
+//! A Driver is an [`Outbound`]: the Driver poller hands it
 //! journaled intents and collects its answers. Nothing else changes shape —
 //! the Lab's scripted worlds and real Drivers are interchangeable
 //! behind the same trait, which is the point: a simulation exercises
 //! exactly the machinery a run does, minus this file.
 
-use crate::boundary::{
-    CallConnectorDriver, CallOpen, CallStart, Completion, OutboundConnectorDriver,
-    OutputOverflowReason, ProcessExit, RequestPreparation, Response, SchedulerCompletion,
-};
+use crate::connector::driver::Outbound;
+use crate::connector::driver::OutboundCall;
+use crate::connector::exchange::CallOpen;
+use crate::connector::exchange::CallResponse;
+use crate::connector::exchange::CallStart;
+use crate::connector::exchange::Completion;
+use crate::connector::exchange::RequestPreparation;
+use crate::connector::exchange::SchedulerCompletion;
+use crate::connector::stdlib::OutputOverflowReason;
+use crate::connector::stdlib::ProcessExit;
 use crate::envelope::{Data, Envelope, Value};
 use crate::plan::{AttrSetting, NodeKind};
 use std::io::Read;
@@ -37,8 +43,8 @@ struct ProcessSettings {
     args: Vec<String>,
     cwd: Option<String>,
     env: std::collections::BTreeMap<String, String>,
-    codec: crate::boundary::RequestCodec,
-    err_codec: crate::boundary::RequestCodec,
+    codec: crate::connector::stdlib::RequestCodec,
+    err_codec: crate::connector::stdlib::RequestCodec,
     max_output: u64,
 }
 
@@ -50,7 +56,7 @@ struct ProcessSettings {
 struct ProcessBinding {
     spec: rastok_core::plan::ConnectorSpec,
     static_settings: Option<ProcessSettings>,
-    request_codec: crate::boundary::RequestCodec,
+    request_codec: crate::connector::stdlib::RequestCodec,
 }
 
 impl ProcessBinding {
@@ -183,11 +189,11 @@ impl ProcessRequestSettings {
                 .into_completion(),
             );
         };
-        crate::boundary::prepare_process_request(binding.request_codec, data)
+        crate::connector::stdlib::prepare_process_request(binding.request_codec, data)
     }
 }
 
-impl super::ScriptedConnectorProtocol for ProcessRequestSettings {
+impl super::CallProtocol for ProcessRequestSettings {
     fn prepare_request(
         &self,
         connector: &crate::node::Path,
@@ -198,7 +204,7 @@ impl super::ScriptedConnectorProtocol for ProcessRequestSettings {
     }
 
     fn scheduler_completion(&self, completion: SchedulerCompletion) -> Completion {
-        crate::boundary::process_scheduler_completion(completion)
+        crate::connector::stdlib::process_scheduler_completion(completion)
     }
 }
 
@@ -206,9 +212,9 @@ pub(super) fn bind_scripted_protocol(
     plan: &crate::plan::ValidatedExecutionPlan,
     nodes: &[crate::node::Path],
     _boot: &crate::deployment::BootBindings,
-) -> Result<Box<dyn super::ScriptedConnectorProtocol>, super::DriverFactoryError> {
+) -> Result<Box<dyn super::CallProtocol>, super::DriverFactoryError> {
     ProcessRequestSettings::try_bind(plan, nodes)
-        .map(|bindings| Box::new(bindings) as Box<dyn super::ScriptedConnectorProtocol>)
+        .map(|bindings| Box::new(bindings) as Box<dyn super::CallProtocol>)
         .map_err(|error| super::DriverFactoryError::new(error.to_string()))
 }
 
@@ -345,11 +351,13 @@ impl ProcessSettings {
         use ProcessSettingsError as E;
         if !matches!(
             spec.contract.as_str(),
-            crate::connector::PROCESS_CONNECTOR_ID | crate::connector::PROCESS_SERVICE_CONNECTOR_ID
+            crate::connector::stdlib::PROCESS_CONNECTOR_ID
+                | crate::connector::stdlib::PROCESS_SERVICE_CONNECTOR_ID
         ) {
             return Err(E::NotProcess(spec.contract.clone()));
         }
-        let service = spec.contract.as_str() == crate::connector::PROCESS_SERVICE_CONNECTOR_ID;
+        let service =
+            spec.contract.as_str() == crate::connector::stdlib::PROCESS_SERVICE_CONNECTOR_ID;
         match spec.attribute("mode") {
             Some(AttrSetting::Word(word)) if word == if service { "service" } else { "job" } => {}
             Some(AttrSetting::Word(word)) => return Err(E::UnknownMode(word.clone())),
@@ -408,23 +416,23 @@ impl ProcessSettings {
         // this path.
         let codec = match spec.attribute("codec") {
             Some(AttrSetting::Word(word)) if word == "lines" => {
-                crate::boundary::RequestCodec::Lines
+                crate::connector::stdlib::RequestCodec::Lines
             }
             Some(AttrSetting::Word(word)) if word == "jsonl" => {
-                crate::boundary::RequestCodec::Jsonl
+                crate::connector::stdlib::RequestCodec::Jsonl
             }
             Some(AttrSetting::Word(word)) if word == "bytes" => {
-                crate::boundary::RequestCodec::Bytes
+                crate::connector::stdlib::RequestCodec::Bytes
             }
             Some(AttrSetting::Word(word)) => return Err(E::UnknownCodec(word.clone())),
             _ => return Err(E::Unresolved("codec")),
         };
         let err_codec = match spec.attribute("err_codec") {
             Some(AttrSetting::Word(word)) if word == "lines" => {
-                crate::boundary::RequestCodec::Lines
+                crate::connector::stdlib::RequestCodec::Lines
             }
             Some(AttrSetting::Word(word)) if word == "bytes" => {
-                crate::boundary::RequestCodec::Bytes
+                crate::connector::stdlib::RequestCodec::Bytes
             }
             Some(AttrSetting::Word(word)) => return Err(E::UnknownCodec(word.clone())),
             _ => return Err(E::Unresolved("err_codec")),
@@ -432,7 +440,7 @@ impl ProcessSettings {
         let budget_name = if service { "max_frame" } else { "max_output" };
         let max_output = match spec.attribute(budget_name) {
             Some(AttrSetting::Value(crate::value::Value::Text(text))) => {
-                match crate::contract::byte_size(text) {
+                match crate::connector::byte_size(text) {
                     Some(size) => {
                         // The SYNTAX bound is target-independent
                         // (contract::MAX_BYTE_SIZE). The binding
@@ -476,10 +484,10 @@ impl ProcessSettings {
 /// carries the codec-framed request; the complete stdout at exit
 /// becomes the one reply. The process boundary is the correlation.
 ///
-/// The Driver is asynchronous, as the [`OutboundConnectorDriver`] contract
+/// The Driver is asynchronous, as the [`Outbound`] contract
 /// demands: a Driver answers or stays silent — it never times itself out. Only
 /// the scheduler constructs TimeoutExpired; when the machine closes a
-/// call, [`CallConnectorDriver::cancel`] kills the child. Every pipe drains on
+/// call, [`OutboundCall::cancel`] kills the child. Every pipe drains on
 /// its own detached thread through a channel, so a descendant that
 /// inherits the pipes can never hang this process: readers are never
 /// joined, only drained.
@@ -498,7 +506,7 @@ pub struct Process<'plan> {
     /// intent and are converted once per logical instance.
     bindings: ProcessRequestSettings,
     runs: Vec<Run>,
-    answers: Vec<Response>,
+    answers: Vec<CallResponse>,
 }
 
 /// Why a plan cannot BIND to the Process Driver — surfaced at
@@ -530,9 +538,9 @@ impl std::error::Error for ProcessBindError {}
 /// One in-flight child.
 #[derive(Debug)]
 struct Run {
-    call_id: crate::boundary::CallId,
-    codec: crate::boundary::RequestCodec,
-    err_codec: crate::boundary::RequestCodec,
+    call_id: crate::connector::exchange::CallId,
+    codec: crate::connector::stdlib::RequestCodec,
+    err_codec: crate::connector::stdlib::RequestCodec,
     child: std::process::Child,
     chunks: std::sync::mpsc::Receiver<Chunk>,
     capture: Capture,
@@ -682,15 +690,17 @@ impl ProcessFactory {
     /// # Errors
     ///
     /// The built-in constant ceased to be a canonical Connector id.
-    pub fn try_new() -> Result<Self, crate::connector::ConnectorIdError> {
+    pub fn try_new() -> Result<Self, crate::connector::ContractIdError> {
         Ok(Self {
-            id: crate::connector::ContractId::parse(crate::connector::PROCESS_CONNECTOR_ID)?,
+            id: crate::connector::ContractId::parse(
+                crate::connector::stdlib::PROCESS_CONNECTOR_ID,
+            )?,
         })
     }
 }
 
-impl super::ConnectorDriverFactory for ProcessFactory {
-    fn connector_id(&self) -> &crate::connector::ContractId {
+impl super::DriverFactory for ProcessFactory {
+    fn contract_id(&self) -> &crate::connector::ContractId {
         &self.id
     }
 
@@ -698,23 +708,23 @@ impl super::ConnectorDriverFactory for ProcessFactory {
         crate::connector::ConnectorDirection::Outbound
     }
 
-    fn bind<'plan>(
+    fn create<'plan>(
         &self,
         plan: &'plan crate::plan::ValidatedExecutionPlan,
         nodes: &[crate::node::Path],
-    ) -> Result<Box<dyn super::BoundConnectorDriver + 'plan>, super::DriverFactoryError> {
+    ) -> Result<Box<dyn crate::connector::driver::Driver + 'plan>, super::DriverFactoryError> {
         Process::try_bind(plan, nodes)
-            .map(|driver| Box::new(driver) as Box<dyn super::BoundConnectorDriver + 'plan>)
+            .map(|driver| Box::new(driver) as Box<dyn crate::connector::driver::Driver + 'plan>)
             .map_err(|error| super::DriverFactoryError::new(error.to_string()))
     }
 }
 
-impl super::BoundConnectorDriver for Process<'_> {
-    fn inbound(&mut self) -> Option<&mut dyn crate::boundary::InboundConnectorDriver> {
+impl crate::connector::driver::Driver for Process<'_> {
+    fn inbound(&mut self) -> Option<&mut dyn crate::connector::driver::Ingress> {
         None
     }
 
-    fn outbound(&mut self) -> Option<&mut dyn OutboundConnectorDriver> {
+    fn outbound(&mut self) -> Option<&mut dyn Outbound> {
         Some(self)
     }
 }
@@ -730,7 +740,7 @@ impl<'plan> Process<'plan> {
     ///
     /// The first Process connector whose resolved settings refuse. Other
     /// contract families are deliberately ignored: application-wide coverage
-    /// belongs to [`super::RuntimeBindings`], never to one specialized Driver.
+    /// belongs to [`super::RuntimeDrivers`], never to one specialized Driver.
     pub fn try_new(
         plan: &'plan crate::plan::ValidatedExecutionPlan,
     ) -> Result<Self, ProcessBindError> {
@@ -740,7 +750,9 @@ impl<'plan> Process<'plan> {
             .iter()
             .filter_map(|node| {
                 node.connector()
-                    .filter(|spec| spec.contract.as_str() == crate::connector::PROCESS_CONNECTOR_ID)
+                    .filter(|spec| {
+                        spec.contract.as_str() == crate::connector::stdlib::PROCESS_CONNECTOR_ID
+                    })
                     .and_then(|_| node.executor_path().cloned())
             })
             .collect();
@@ -926,14 +938,14 @@ impl Run {
 
     /// Whether the reply is final: the child exited and both streams
     /// marked EOF — a protocol, not a grace delay. The markers are
-    /// guaranteed: at the leader's exit [`Process::events`] kills the
+    /// guaranteed: at the leader's exit [`Process::poll_responses`] kills the
     /// remaining group, so the pipes close and the EOFs follow.
     fn finished(&self) -> bool {
         self.exit.is_some() && self.capture.out_eof && self.capture.err_eof
     }
 
     /// The reply of a finished run.
-    fn settle(mut self, status: std::process::ExitStatus) -> Response {
+    fn settle(mut self, status: std::process::ExitStatus) -> CallResponse {
         self.collect();
         let completion = if let Some(failure) = self.capture.verdict() {
             failure.into_completion()
@@ -951,7 +963,7 @@ impl Run {
                 (Err(failure), _) | (_, Err(failure)) => failure.into_completion(),
             }
         };
-        Response {
+        CallResponse {
             call_id: self.call_id,
             completion,
         }
@@ -976,15 +988,15 @@ fn process_status(status: std::process::ExitStatus) -> (i32, Option<i32>) {
 /// No caller publishes until both channels and the terminal fact are ready.
 fn frame_channel(
     bytes: Vec<u8>,
-    codec: crate::boundary::RequestCodec,
+    codec: crate::connector::stdlib::RequestCodec,
     channel: &'static str,
 ) -> Result<Vec<Data>, ProcessFailure> {
     match codec {
-        crate::boundary::RequestCodec::Bytes => Ok((!bytes.is_empty())
+        crate::connector::stdlib::RequestCodec::Bytes => Ok((!bytes.is_empty())
             .then(|| Data::materialized(Value::Bytes(bytes)))
             .into_iter()
             .collect()),
-        crate::boundary::RequestCodec::Lines => {
+        crate::connector::stdlib::RequestCodec::Lines => {
             let text = String::from_utf8(bytes).map_err(|_| ProcessFailure::DecodeFailed {
                 message: format!("{channel} is not valid UTF-8"),
                 line: None,
@@ -994,7 +1006,7 @@ fn frame_channel(
                 .map(|line| Data::materialized(Value::Text(line)))
                 .collect())
         }
-        crate::boundary::RequestCodec::Jsonl => {
+        crate::connector::stdlib::RequestCodec::Jsonl => {
             let text = String::from_utf8(bytes).map_err(|_| ProcessFailure::DecodeFailed {
                 message: format!("{channel} is not valid UTF-8"),
                 line: None,
@@ -1056,7 +1068,7 @@ fn decode_jsonl(stdout: &str) -> Result<Vec<Value>, ProcessFailure> {
     Ok(items)
 }
 
-impl CallConnectorDriver for Process<'_> {
+impl OutboundCall for Process<'_> {
     fn prepare_request(
         &mut self,
         connector: &crate::node::Path,
@@ -1071,13 +1083,13 @@ impl CallConnectorDriver for Process<'_> {
         _connector: &crate::node::Path,
         completion: SchedulerCompletion,
     ) -> Completion {
-        crate::boundary::process_scheduler_completion(completion)
+        crate::connector::stdlib::process_scheduler_completion(completion)
     }
 
     fn start(&mut self, intent: &CallOpen, request: &Envelope) -> CallStart {
         match self.launch(intent, request) {
             Ok(run) => self.runs.push(run),
-            Err(completion) => self.answers.push(Response {
+            Err(completion) => self.answers.push(CallResponse {
                 call_id: intent.call_id,
                 completion,
             }),
@@ -1085,7 +1097,7 @@ impl CallConnectorDriver for Process<'_> {
         CallStart::Started
     }
 
-    fn events(&mut self) -> Vec<Response> {
+    fn poll_responses(&mut self) -> Vec<CallResponse> {
         let mut answers = std::mem::take(&mut self.answers);
         let mut still_running = Vec::new();
         for mut run in self.runs.drain(..) {
@@ -1099,7 +1111,7 @@ impl CallConnectorDriver for Process<'_> {
                     .verdict()
                     .unwrap_or(ProcessFailure::CaptureFailed)
                     .into_completion();
-                answers.push(Response {
+                answers.push(CallResponse {
                     call_id: run.call_id,
                     completion,
                 });
@@ -1112,7 +1124,7 @@ impl CallConnectorDriver for Process<'_> {
                     Err(_error) => {
                         let call_id = run.call_id;
                         kill_group(&mut run.child);
-                        answers.push(Response {
+                        answers.push(CallResponse {
                             call_id,
                             // No child status was observed, and inventing one
                             // would make policy nondeterministic. The closed
@@ -1145,7 +1157,7 @@ impl CallConnectorDriver for Process<'_> {
         answers
     }
 
-    fn cancel(&mut self, call_id: &crate::boundary::CallId) {
+    fn cancel(&mut self, call_id: &crate::connector::exchange::CallId) {
         if let Some(run) = self.runs.iter_mut().find(|run| &run.call_id == call_id) {
             // The whole process GROUP dies: descendants inherited the
             // pipes with the group, and the group takes them down. Keep the
@@ -1161,8 +1173,11 @@ impl CallConnectorDriver for Process<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
     use crate::compiler::compile;
+    use crate::connector::exchange::EnvelopeDraft;
+    use crate::connector::exchange::IngressProposal;
+    use crate::connector::exchange::IngressProvenance;
+    use crate::connector::exchange::IngressSequence;
     use crate::contract::ContractCatalog;
     use crate::envelope::Namespace;
     use crate::journal::{CallStatus, MemJournal, Record};
@@ -1931,7 +1946,7 @@ graph unframeable : App {
 
     #[test]
     fn every_driver_terminal_inhabits_process_exit() {
-        let ty = crate::boundary::process_exit_type().expect("ProcessExit is canonical");
+        let ty = crate::connector::stdlib::process_exit_type().expect("ProcessExit is canonical");
         let failures = [
             ProcessFailure::SpawnFailed {
                 message: String::new(),

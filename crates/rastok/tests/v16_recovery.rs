@@ -2,8 +2,11 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
 use rastok::compiler;
+use rastok::connector::exchange::EnvelopeDraft;
+use rastok::connector::exchange::IngressProposal;
+use rastok::connector::exchange::IngressProvenance;
+use rastok::connector::exchange::IngressSequence;
 use rastok::contract::ContractCatalog;
 use rastok::envelope::{Data, Namespace, Value};
 use rastok::journal::{DeadlineKind, Journal, MemJournal, Record, ids};
@@ -151,37 +154,40 @@ graph app : App {
 #[derive(Default)]
 struct World {
     starts: usize,
-    answers: Vec<rastok::boundary::Response>,
+    answers: Vec<rastok::connector::exchange::CallResponse>,
 }
 
-impl rastok::boundary::CallConnectorDriver for World {
+impl rastok::connector::driver::OutboundCall for World {
     fn prepare_request(
         &mut self,
         _: &rastok::node::Path,
         data: &Data,
         _: &std::collections::BTreeMap<String, Value>,
-    ) -> rastok::boundary::RequestPreparation {
-        rastok::boundary::prepare_process_request(rastok::boundary::RequestCodec::Jsonl, data)
+    ) -> rastok::connector::exchange::RequestPreparation {
+        rastok::connector::stdlib::prepare_process_request(
+            rastok::connector::stdlib::RequestCodec::Jsonl,
+            data,
+        )
     }
 
     fn scheduler_completion(
         &mut self,
         _: &rastok::node::Path,
-        completion: rastok::boundary::SchedulerCompletion,
-    ) -> rastok::boundary::Completion {
-        rastok::boundary::process_scheduler_completion(completion)
+        completion: rastok::connector::exchange::SchedulerCompletion,
+    ) -> rastok::connector::exchange::Completion {
+        rastok::connector::stdlib::process_scheduler_completion(completion)
     }
 
     fn start(
         &mut self,
-        _: &rastok::boundary::CallOpen,
+        _: &rastok::connector::exchange::CallOpen,
         _: &rastok::envelope::Envelope,
-    ) -> rastok::boundary::CallStart {
+    ) -> rastok::connector::exchange::CallStart {
         self.starts += 1;
-        rastok::boundary::CallStart::Started
+        rastok::connector::exchange::CallStart::Started
     }
 
-    fn events(&mut self) -> Vec<rastok::boundary::Response> {
+    fn poll_responses(&mut self) -> Vec<rastok::connector::exchange::CallResponse> {
         std::mem::take(&mut self.answers)
     }
 }
@@ -243,15 +249,17 @@ graph app : App + Loop {
             vm.advance_to(&mut journal, &mut world, 7_000_000_000)
                 .unwrap();
         } else {
-            world.answers.push(rastok::boundary::Response {
-                call_id: journal.open_calls()[0].call_id,
-                completion: rastok::boundary::Completion::process_exit(
-                    rastok::boundary::ProcessExit::Exited {
-                        exit_code: 0,
-                        signal: None,
-                    },
-                ),
-            });
+            world
+                .answers
+                .push(rastok::connector::exchange::CallResponse {
+                    call_id: journal.open_calls()[0].call_id,
+                    completion: rastok::connector::exchange::Completion::process_exit(
+                        rastok::connector::stdlib::ProcessExit::Exited {
+                            exit_code: 0,
+                            signal: None,
+                        },
+                    ),
+                });
             vm.poll_drivers(&mut journal, &mut world).unwrap();
         }
         for _ in 0..100 {
@@ -383,17 +391,19 @@ fn graph_commands_wait_for_calls_and_recovery_never_restarts_them() {
 
     for iteration in 0..2 {
         let call = journal.open_calls()[0].call_id;
-        world.answers.push(rastok::boundary::Response {
-            call_id: call,
-            completion: rastok::boundary::Completion::process(
-                vec![Data::materialized(Value::Int(42))],
-                vec![],
-                rastok::boundary::ProcessExit::Exited {
-                    exit_code: 0,
-                    signal: None,
-                },
-            ),
-        });
+        world
+            .answers
+            .push(rastok::connector::exchange::CallResponse {
+                call_id: call,
+                completion: rastok::connector::exchange::Completion::process(
+                    vec![Data::materialized(Value::Int(42))],
+                    vec![],
+                    rastok::connector::stdlib::ProcessExit::Exited {
+                        exit_code: 0,
+                        signal: None,
+                    },
+                ),
+            });
         restored.poll_drivers(&mut journal, &mut world).unwrap();
         // The retained closure is not yet the consuming transaction. From
         // here, restore before every commit, including the frame's audit.
@@ -496,17 +506,19 @@ fn a_graph_call_from_another_instance_does_not_delay_run_quiescence() {
         .find(|call| call.emitting_id == state.state.meta().sys().id())
         .unwrap()
         .call_id;
-    world.answers.push(rastok::boundary::Response {
-        call_id: call,
-        completion: rastok::boundary::Completion::process(
-            vec![],
-            vec![],
-            rastok::boundary::ProcessExit::Exited {
-                exit_code: 0,
-                signal: None,
-            },
-        ),
-    });
+    world
+        .answers
+        .push(rastok::connector::exchange::CallResponse {
+            call_id: call,
+            completion: rastok::connector::exchange::Completion::process(
+                vec![],
+                vec![],
+                rastok::connector::stdlib::ProcessExit::Exited {
+                    exit_code: 0,
+                    signal: None,
+                },
+            ),
+        });
     vm.poll_drivers(&mut journal, &mut world).unwrap();
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
@@ -594,14 +606,16 @@ fn call_recovery_restores_the_held_delivery_without_restarting_the_driver() {
     assert_eq!(journal.records(), before);
 
     let call = journal.open_calls()[0].call_id;
-    world.answers.push(rastok::boundary::Response {
-        call_id: call,
-        completion: rastok::boundary::Completion::process(
-            vec![],
-            vec![],
-            rastok::boundary::ProcessExit::TimeoutExpired,
-        ),
-    });
+    world
+        .answers
+        .push(rastok::connector::exchange::CallResponse {
+            call_id: call,
+            completion: rastok::connector::exchange::Completion::process(
+                vec![],
+                vec![],
+                rastok::connector::stdlib::ProcessExit::TimeoutExpired,
+            ),
+        });
     restored.poll_drivers(&mut journal, &mut world).unwrap();
     let retained = journal.records().to_vec();
     let mut after_response = Execution::new_at(&plan, GraphVersion(1), 750_000_000);

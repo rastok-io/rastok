@@ -10,7 +10,9 @@
 
 pub mod execution;
 
-use crate::boundary::{Completion, InboundCallId, SessionId};
+use crate::connector::exchange::Completion;
+use crate::connector::exchange::InboundCallId;
+use crate::connector::exchange::SessionId;
 use crate::datatype::DataType;
 use crate::envelope::{self, Data, Envelope, Meta, MetaSys, MetaValue, Scalar};
 use crate::expr;

@@ -3,7 +3,7 @@
 use alloc::string::String;
 use core::fmt;
 
-use super::{ConnectorDirection, ConnectorExchange, ContractId};
+use super::{ConnectorDirection, ContractId, ExchangeKind};
 
 #[cfg(test)]
 mod tests;
@@ -272,17 +272,17 @@ impl core::error::Error for RetryCaseError {}
 pub fn outbound_call_semantics(
     contract: &ContractId,
     roles: ConnectorDirection,
-    exchange: ConnectorExchange,
+    exchange: ExchangeKind,
     mode: Option<&str>,
 ) -> Option<CallSemantics> {
     use FrameProduction::{ExactlyOneOn, Never, ZeroOrMore};
     use TerminalVisibility::{AfterEffect, BeforeEffect, OutcomeUnknown};
 
-    if roles != ConnectorDirection::Outbound || exchange != ConnectorExchange::Call {
+    if roles != ConnectorDirection::Outbound || exchange != ExchangeKind::Call {
         return None;
     }
     let (frames, cases): (&'static [_], &'static [_]) = match (contract.as_str(), mode) {
-        (super::PROCESS_CONNECTOR_ID, Some("job")) => (
+        (super::stdlib::PROCESS_CONNECTOR_ID, Some("job")) => (
             &[("err", ZeroOrMore), ("out", ZeroOrMore)],
             &[
                 ("CaptureFailed", OutcomeUnknown),
@@ -294,7 +294,7 @@ pub fn outbound_call_semantics(
                 ("TimeoutExpired", OutcomeUnknown),
             ],
         ),
-        (super::FILE_CONNECTOR_ID, Some("read" | "replace")) => (
+        (super::stdlib::FILE_CONNECTOR_ID, Some("read" | "replace")) => (
             if mode == Some("read") {
                 &[("out", ExactlyOneOn(&["Completed"]))]
             } else {
@@ -313,7 +313,7 @@ pub fn outbound_call_semantics(
                 ("TimeoutExpired", OutcomeUnknown),
             ],
         ),
-        (super::HTTP_CLIENT_CONNECTOR_ID, None) => (
+        (super::stdlib::HTTP_CLIENT_CONNECTOR_ID, None) => (
             &[("out", ExactlyOneOn(&["Completed", "ServerError"]))],
             &[
                 ("BodyTooLarge", OutcomeUnknown),
@@ -335,7 +335,7 @@ pub fn outbound_call_semantics(
         terminal: "exit",
         frames,
         cases,
-        terminal_data: if contract.as_str() == super::HTTP_CLIENT_CONNECTOR_ID {
+        terminal_data: if contract.as_str() == super::stdlib::HTTP_CLIENT_CONNECTOR_ID {
             TerminalData::HttpStatus
         } else {
             TerminalData::UnionCase

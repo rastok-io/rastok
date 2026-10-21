@@ -1091,7 +1091,7 @@ mod tests {
 
     #[test]
     fn short_circuit_and_projects_policy_through_the_proven_case() {
-        let ty = crate::boundary::http_client_exit_type()
+        let ty = crate::connector::stdlib::http_client_exit_type()
             .unwrap_or_else(|error| panic!("HTTP terminal type: {error}"));
         let status = SchemaPath::root()
             .child(SchemaPathSegment::TaggedUnionCase("Completed".into()))

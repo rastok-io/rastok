@@ -16,7 +16,8 @@ use rastok::conformance::{
     DriverTestFixture, ExitCaseTest, InterleaveExpectation, InterleaveProbe, assert_conformant,
     verify,
 };
-use rastok::connectors::{DriverRegistry, HttpClientConfig, HttpClientFactory, RuntimeBindings};
+use rastok::connector::stdlib::HTTP_CLIENT;
+use rastok::connectors::{DriverRegistry, HttpClientConfig, HttpClientFactory, RuntimeDrivers};
 use rastok::contract::ContractCatalog;
 use rastok::deployment::{
     BootBindings, DeploymentProfile, EnvironmentName, SecretBinding, SecretMaterial, SecretName,
@@ -27,7 +28,6 @@ use rastok::journal::MemJournal;
 use rastok::node;
 use rastok::plan::GraphVersion;
 use rastok::runtime::execution::Execution;
-use rastok::stdlib::HTTP_CLIENT;
 use std::collections::BTreeMap;
 use std::io::{Read as _, Write as _};
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -265,7 +265,7 @@ fn authenticated_boot(url: String) -> BootBindings {
     BootBindings::resolve(profile, &FixedSecretProvider).expect("all boot bindings resolve")
 }
 
-fn drive(vm: &mut Execution<'_>, journal: &mut MemJournal, world: &mut RuntimeBindings<'_>) {
+fn drive(vm: &mut Execution<'_>, journal: &mut MemJournal, world: &mut RuntimeDrivers<'_>) {
     let mut settled = false;
     for _ in 0..250 {
         vm.run_ready_with_bindings(journal, world)
@@ -322,23 +322,23 @@ lab authenticated {
     )
     .expect("the boot-bound client compiles");
     let boot = authenticated_boot(server.url("/authenticated"));
-    let mut world = RuntimeBindings::try_new_with_boot(&compilation.plan, &registry(), &boot)
+    let mut world = RuntimeDrivers::prepare_with_boot(&compilation.plan, &registry(), &boot)
         .expect("the real Driver resolves its exact boot inputs");
     let version = GraphVersion(1);
     let mut journal = MemJournal::new_with_deployment(version, boot.attestation().clone());
     let mut vm = Execution::new_with_deployment(&compilation.plan, version, &boot);
     vm.accept_input(
         &mut journal,
-        rastok::boundary::IngressProposal {
-            provenance: rastok::boundary::IngressProvenance::single(
+        rastok::connector::exchange::IngressProposal {
+            provenance: rastok::connector::exchange::IngressProvenance::single(
                 node::Path::new(["test"]).expect("valid provenance"),
             ),
-            draft: rastok::boundary::EnvelopeDraft {
+            draft: rastok::connector::exchange::EnvelopeDraft {
                 port: node::Port::new("in").expect("valid input port"),
                 data: Data::materialized(Value::Text(String::from("request"))),
                 ext: Namespace::new(),
             },
-            sequence: rastok::boundary::IngressSequence::Next,
+            sequence: rastok::connector::exchange::IngressSequence::Next,
             session: None,
         },
     )
@@ -503,22 +503,22 @@ graph app : App {{
     let compilation =
         rastok::compiler::compile(&[&source], &ContractCatalog::try_m0().expect("catalogue"))
             .expect("projected Retry");
-    let mut world = RuntimeBindings::try_new(&compilation.plan, &registry()).expect("HTTP binder");
+    let mut world = RuntimeDrivers::prepare(&compilation.plan, &registry()).expect("HTTP binder");
     let version = GraphVersion(1);
     let mut journal = MemJournal::new(version);
     let mut vm = Execution::new_program(&compilation.plan, compilation.hash, version, 0, None);
     vm.accept_input(
         &mut journal,
-        rastok::boundary::IngressProposal {
-            provenance: rastok::boundary::IngressProvenance::single(
+        rastok::connector::exchange::IngressProposal {
+            provenance: rastok::connector::exchange::IngressProvenance::single(
                 node::Path::new(["wire-test"]).expect("provenance"),
             ),
-            draft: rastok::boundary::EnvelopeDraft {
+            draft: rastok::connector::exchange::EnvelopeDraft {
                 port: node::Port::new("in").expect("port"),
                 data: Data::materialized(Value::Map(BTreeMap::new())),
                 ext: Namespace::new(),
             },
-            sequence: rastok::boundary::IngressSequence::Next,
+            sequence: rastok::connector::exchange::IngressSequence::Next,
             session: None,
         },
     )

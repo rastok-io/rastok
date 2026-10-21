@@ -314,7 +314,10 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
+    use crate::connector::exchange::EnvelopeDraft;
+    use crate::connector::exchange::IngressProposal;
+    use crate::connector::exchange::IngressProvenance;
+    use crate::connector::exchange::IngressSequence;
     use crate::envelope::{Data, Namespace, Value};
     use crate::journal::MemJournal;
     use crate::node;

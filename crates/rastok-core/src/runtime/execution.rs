@@ -17,18 +17,41 @@
 //! before commit leaves the delivery in its mailbox. Applying the committed
 //! transaction to live state introduces no further admission decision.
 
-use crate::boundary::{
-    AdmittedIngress, BoundaryObservation, CallId, CallOpen, ClosingDeadline, Completion,
-    CompletionCheck, DriverPoller, InboundCallId, InboundCallObservation, InboundCallResponse,
-    InboundCallTimeout, InboundSession, IngressAdmission, IngressProposal, IngressRejection,
-    InstanceDeadline, Obligation, OutboundConnectorBindings, RequestPreparation, Response,
-    RetainedProposal, SchedulerCompletion, SessionId, SessionObservation, SessionOpen,
-    SessionStart, SessionWrite, SessionWriteId,
-};
-use crate::connector::{ConnectorExchange, SessionOpening, session_opening};
+use crate::connector::ExchangeKind;
+use crate::connector::SessionOpening;
+use crate::connector::driver::OutboundDrivers;
+use crate::connector::exchange::AdmittedIngress;
+use crate::connector::exchange::CallId;
+use crate::connector::exchange::CallOpen;
+use crate::connector::exchange::CallResponse;
+use crate::connector::exchange::ClosedCall;
+use crate::connector::exchange::Completion;
+use crate::connector::exchange::InboundCallId;
+use crate::connector::exchange::InboundCallObservation;
+use crate::connector::exchange::InboundCallResponse;
+use crate::connector::exchange::InboundCallTimeout;
+use crate::connector::exchange::InboundSession;
+use crate::connector::exchange::IngressAdmission;
+use crate::connector::exchange::IngressProposal;
+use crate::connector::exchange::IngressRejection;
+use crate::connector::exchange::PendingIngress;
+use crate::connector::exchange::RequestPreparation;
+use crate::connector::exchange::SchedulerCompletion;
+use crate::connector::exchange::SessionId;
+use crate::connector::exchange::SessionObservation;
+use crate::connector::exchange::SessionOpen;
+use crate::connector::exchange::SessionStart;
+use crate::connector::exchange::SessionWrite;
+use crate::connector::exchange::SessionWriteId;
+use crate::connector::session_opening;
 use crate::envelope;
 use crate::envelope::{Data, Envelope, Id, Meta, MetaSys};
 use crate::instance;
+use crate::runtime::execution::driver_polling::CompletionCheck;
+use crate::runtime::execution::driver_polling::DriverPoller;
+use crate::runtime::execution::timing::ClosingDeadline;
+use crate::runtime::execution::timing::InstanceDeadline;
+use crate::runtime::execution::timing::Obligation;
 
 use crate::journal::admission::InstanceAdmissions;
 use crate::journal::{Emission, Journal, LoopRunId, RouteTarget, RoutedDelivery, ids};
@@ -56,11 +79,12 @@ mod closing;
 mod graph_loop;
 pub mod inspection;
 use inspection::EnvelopeView;
+pub mod driver_polling;
 mod instance_stop;
 mod loop_manager;
 mod recovery;
 mod retry_manager;
-mod timing;
+pub mod timing;
 use core::fmt;
 
 /// Failure of an execution operation: invalid admission, transaction preparation,
@@ -128,7 +152,7 @@ pub enum ExecutionFault {
     /// Instance command capacity is checked with the other producer products.
     InstanceCommandQueueFull,
     /// The Driver poller raised an integrity fault.
-    Dispatch(crate::boundary::PollFault),
+    Dispatch(crate::runtime::execution::driver_polling::PollFault),
     /// A target mailbox has no room for a transaction's deliveries —
     /// backpressure surfaced before the commit.
     MailboxFull {
@@ -352,12 +376,12 @@ pub struct PollReport {
     pub settled: usize,
     /// Late answers to already-closed calls — observations, not
     /// causal facts.
-    pub discarded: Vec<Response>,
+    pub discarded: Vec<CallResponse>,
     /// Answers matching no journaled call at all.
-    pub uncorrelated: Vec<Response>,
+    pub uncorrelated: Vec<CallResponse>,
     /// Answers the contract refused before closure, with reasons —
     /// the call stays open for the timeout machinery.
-    pub rejected: Vec<(Response, String)>,
+    pub rejected: Vec<(CallResponse, String)>,
     /// Duplicate or post-terminal Session observations.
     pub discarded_sessions: Vec<SessionObservation>,
     /// Session observations matching no live logical Session.
@@ -601,14 +625,14 @@ struct PlanCompletionCheck<'plan> {
 /// fails loudly instead of falling back to a concrete built-in contract.
 struct NoOutboundBindings;
 
-impl OutboundConnectorBindings for NoOutboundBindings {
+impl OutboundDrivers for NoOutboundBindings {
     fn prepare_request(
         &mut self,
         connector: &node::Path,
         _: &Data,
         _: &BTreeMap<String, crate::value::Value>,
-    ) -> Result<RequestPreparation, crate::boundary::DriverRouteError> {
-        Err(crate::boundary::DriverRouteError::UnboundOutbound(
+    ) -> Result<RequestPreparation, crate::connector::driver::DriverRouteError> {
+        Err(crate::connector::driver::DriverRouteError::UnboundOutbound(
             connector.clone(),
         ))
     }
@@ -617,8 +641,8 @@ impl OutboundConnectorBindings for NoOutboundBindings {
         &mut self,
         connector: &node::Path,
         _: SchedulerCompletion,
-    ) -> Result<Completion, crate::boundary::DriverRouteError> {
-        Err(crate::boundary::DriverRouteError::UnboundOutbound(
+    ) -> Result<Completion, crate::connector::driver::DriverRouteError> {
+        Err(crate::connector::driver::DriverRouteError::UnboundOutbound(
             connector.clone(),
         ))
     }
@@ -627,8 +651,8 @@ impl OutboundConnectorBindings for NoOutboundBindings {
         &mut self,
         connector: &node::Path,
         _: &CallId,
-    ) -> Result<(), crate::boundary::DriverRouteError> {
-        Err(crate::boundary::DriverRouteError::UnboundOutbound(
+    ) -> Result<(), crate::connector::driver::DriverRouteError> {
+        Err(crate::connector::driver::DriverRouteError::UnboundOutbound(
             connector.clone(),
         ))
     }
@@ -637,19 +661,22 @@ impl OutboundConnectorBindings for NoOutboundBindings {
         &mut self,
         intent: &CallOpen,
         _: &Envelope,
-    ) -> Result<crate::boundary::CallStart, crate::boundary::DriverRouteError> {
-        Err(crate::boundary::DriverRouteError::UnboundOutbound(
+    ) -> Result<crate::connector::exchange::CallStart, crate::connector::driver::DriverRouteError>
+    {
+        Err(crate::connector::driver::DriverRouteError::UnboundOutbound(
             intent.connector_path.clone(),
         ))
     }
 
-    fn events(&mut self) -> Result<Vec<Response>, crate::boundary::DriverRouteError> {
+    fn poll_responses(
+        &mut self,
+    ) -> Result<Vec<CallResponse>, crate::connector::driver::DriverRouteError> {
         Ok(Vec::new())
     }
 }
 
-impl crate::boundary::CompletionCheck for PlanCompletionCheck<'_> {
-    fn admit(&self, connector: &node::Path, completion: &Completion) -> Result<(), String> {
+impl crate::runtime::execution::driver_polling::CompletionCheck for PlanCompletionCheck<'_> {
+    fn check(&self, connector: &node::Path, completion: &Completion) -> Result<(), String> {
         let Some((index, planned)) = self
             .plan
             .plan()
@@ -689,7 +716,7 @@ impl crate::boundary::CompletionCheck for PlanCompletionCheck<'_> {
             // The resolved table is therefore the sole admission authority
             // here too, independently of the concrete Connector family.
             let expected = resolved.ty();
-            if spec.contract.as_str() == crate::connector::HTTP_CLIENT_CONNECTOR_ID
+            if spec.contract.as_str() == crate::connector::stdlib::HTTP_CLIENT_CONNECTOR_ID
                 && matches!(spec.attribute("codec"), Some(crate::plan::AttrSetting::Word(word)) if word == "json")
                 && output.port.name() == "out"
                 && expected != &crate::datatype::DataType::Variant
@@ -773,7 +800,7 @@ pub struct BoundaryOutput {
 /// budget.
 #[derive(Debug, Clone, PartialEq)]
 struct SettledEntry {
-    event: BoundaryObservation,
+    event: ClosedCall,
     trigger: node::Trigger,
 }
 
@@ -1341,7 +1368,7 @@ impl<'plan> Execution<'plan> {
     pub fn accept_connector_output(
         &mut self,
         journal: &mut dyn Journal,
-        proposal: &RetainedProposal,
+        proposal: &PendingIngress,
     ) -> Result<IngressAdmission, ExecutionFault> {
         let connector_path = proposal.proposal.provenance.connector_path().clone();
         match self.admit_proposal(journal, proposal.proposal.clone(), Some(connector_path)) {
@@ -1409,7 +1436,7 @@ impl<'plan> Execution<'plan> {
                     .push((event, String::from("an inbound Call has no Executor")));
                 continue;
             };
-            if let Err(reason) = gate.admit(connector, &event.completion) {
+            if let Err(reason) = gate.check(connector, &event.completion) {
                 report.rejected.push((event, reason));
                 continue;
             }
@@ -1583,7 +1610,7 @@ impl<'plan> Execution<'plan> {
     pub fn step_with_bindings(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut dyn OutboundConnectorBindings,
+        bindings: &mut dyn OutboundDrivers,
     ) -> Result<bool, ExecutionFault> {
         self.preflight(journal)?;
         self.synchronize_retry_closures(journal)?;
@@ -1699,7 +1726,7 @@ impl<'plan> Execution<'plan> {
     fn step_join_mailboxes(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut dyn OutboundConnectorBindings,
+        bindings: &mut dyn OutboundDrivers,
     ) -> Result<bool, ExecutionFault> {
         let mut after = None;
         while let Some((slot, instance, delivery)) =
@@ -1816,7 +1843,7 @@ impl<'plan> Execution<'plan> {
     pub fn run_ready_with_bindings(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut dyn OutboundConnectorBindings,
+        bindings: &mut dyn OutboundDrivers,
     ) -> Result<(), ExecutionFault> {
         while self.step_with_bindings(journal, bindings)? {}
         Ok(())
@@ -1833,7 +1860,7 @@ impl<'plan> Execution<'plan> {
     pub fn poll_drivers(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut dyn OutboundConnectorBindings,
+        bindings: &mut dyn OutboundDrivers,
     ) -> Result<PollReport, ExecutionFault> {
         self.preflight(journal)?;
         let mut report = core::mem::take(&mut self.buffered_poll);
@@ -1844,7 +1871,7 @@ impl<'plan> Execution<'plan> {
     fn poll_outbound_driver(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut dyn OutboundConnectorBindings,
+        bindings: &mut dyn OutboundDrivers,
     ) -> Result<PollReport, ExecutionFault> {
         let gate = PlanCompletionCheck { plan: self.plan };
         let retry = self.retry_manager.as_deref();
@@ -1853,7 +1880,7 @@ impl<'plan> Execution<'plan> {
             .poller
             .poll_drivers_with_timing(journal, bindings, &gate, now, &mut |intent, completion| {
                 retry_manager::closure_schedule(retry, intent, completion, now).map_err(|error| {
-                    crate::boundary::PollFault::Journal(
+                    crate::runtime::execution::driver_polling::PollFault::Journal(
                         crate::journal::Error::InvalidRetryProtocol(error),
                     )
                 })
@@ -1880,8 +1907,8 @@ impl<'plan> Execution<'plan> {
             rejected_sessions: Vec::new(),
         };
         let session_events = bindings
-            .session_events()
-            .map_err(crate::boundary::PollFault::Driver)
+            .poll_observations()
+            .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
             .map_err(ExecutionFault::Dispatch)?;
         for event in session_events {
             match event.clone() {
@@ -1980,20 +2007,20 @@ impl<'plan> Execution<'plan> {
                         ExecutionFault::PlanInvariant {
                             node: self.plan.nodes[session.slot.index()].path.clone(),
                             reason: match error {
-                                crate::boundary::CompletionError::MissingExit => {
+                                crate::connector::exchange::CompletionError::MissingExit => {
                                     "a Session Driver omitted its exit"
                                 }
-                                crate::boundary::CompletionError::MultipleExits(_) => {
+                                crate::connector::exchange::CompletionError::MultipleExits(_) => {
                                     "a Session Driver repeated its exit"
                                 }
-                                crate::boundary::CompletionError::OutputAfterExit => {
+                                crate::connector::exchange::CompletionError::OutputAfterExit => {
                                     "a Session Driver emitted after exit"
                                 }
                             },
                         }
                     })?;
                     let connector = self.executor_path(session.slot)?;
-                    if let Err(reason) = gate.admit(connector, &completion) {
+                    if let Err(reason) = gate.check(connector, &completion) {
                         report.rejected_sessions.push((event, reason));
                         continue;
                     }
@@ -2033,7 +2060,7 @@ impl<'plan> Execution<'plan> {
     /// and spin the deterministic transaction drain.
     fn retry_session_actions(
         &mut self,
-        bindings: &mut dyn OutboundConnectorBindings,
+        bindings: &mut dyn OutboundDrivers,
     ) -> Result<(), ExecutionFault> {
         let openings = self
             .sessions
@@ -2079,7 +2106,7 @@ impl<'plan> Execution<'plan> {
                     })?;
             if bindings
                 .open_session(intent, &session.opening)
-                .map_err(crate::boundary::PollFault::Driver)
+                .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
                 .map_err(ExecutionFault::Dispatch)?
                 == SessionStart::Started
                 && let Some(session) = self.sessions.get_mut(&reference)
@@ -2118,7 +2145,7 @@ impl<'plan> Execution<'plan> {
                 })?;
             if bindings
                 .write_session(&write.intent, &write.delivery.envelope)
-                .map_err(crate::boundary::PollFault::Driver)
+                .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
                 .map_err(ExecutionFault::Dispatch)?
                 == SessionStart::Started
                 && let Some(write) = self.session_writes.get_mut(&reference)
@@ -2131,7 +2158,7 @@ impl<'plan> Execution<'plan> {
 
     fn retry_session_closes(
         &mut self,
-        bindings: &mut dyn OutboundConnectorBindings,
+        bindings: &mut dyn OutboundDrivers,
     ) -> Result<(), ExecutionFault> {
         let pending: Vec<SessionId> = self
             .sessions
@@ -2164,7 +2191,7 @@ impl<'plan> Execution<'plan> {
             let connector = self.executor_path(session.slot)?.clone();
             if bindings
                 .close_session(&connector, reference)
-                .map_err(crate::boundary::PollFault::Driver)
+                .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
                 .map_err(ExecutionFault::Dispatch)?
                 == SessionStart::Started
                 && let Some(session) = self.sessions.get_mut(&reference)
@@ -2190,7 +2217,7 @@ impl<'plan> Execution<'plan> {
     pub fn advance_to(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut dyn OutboundConnectorBindings,
+        bindings: &mut dyn OutboundDrivers,
         target: i64,
     ) -> Result<(), ExecutionFault> {
         let mut advance = TimeAdvance::new(target);
@@ -2211,7 +2238,7 @@ impl<'plan> Execution<'plan> {
     fn expire(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut dyn OutboundConnectorBindings,
+        bindings: &mut dyn OutboundDrivers,
         payload: Obligation,
     ) -> Result<(), ExecutionFault> {
         let (connector, edge, delivery, instance) = match payload {
@@ -2287,7 +2314,7 @@ impl<'plan> Execution<'plan> {
         let slot = self.slot_of(&connector);
         if self.plan.nodes[slot.index()]
             .connector()
-            .is_some_and(|spec| spec.exchange == ConnectorExchange::Session)
+            .is_some_and(|spec| spec.exchange == ExchangeKind::Session)
         {
             return self
                 .expire_session_handshake(journal, bindings, slot, instance, &edge, delivery);
@@ -2329,14 +2356,14 @@ impl<'plan> Execution<'plan> {
             // integrity refusal cannot strand a journaled obligation.
             let completion = bindings
                 .scheduler_completion(&connector, SchedulerCompletion::TimeoutExpired)
-                .map_err(crate::boundary::PollFault::Driver)
+                .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
                 .map_err(ExecutionFault::Dispatch)?;
             // Cancellation is a fallible Driver boundary. Prove it before
             // close-once so a refusal leaves both the call and its deadline
             // replayable; no terminal fact can strand a claimed mailbox.
             bindings
                 .cancel(&connector, &call_id)
-                .map_err(crate::boundary::PollFault::Driver)
+                .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
                 .map_err(ExecutionFault::Dispatch)?;
             let intent = journal
                 .find_call(&call_id)
@@ -2365,7 +2392,7 @@ impl<'plan> Execution<'plan> {
                 .find_call(&call_id)
                 .unwrap_or_else(|| unreachable!("a closed call is journaled"));
             self.settled.push_back(SettledEntry {
-                event: BoundaryObservation {
+                event: ClosedCall {
                     call_id,
                     connector_path: intent.connector_path,
                     emitting_id: intent.emitting_id,
@@ -2395,7 +2422,7 @@ impl<'plan> Execution<'plan> {
             let NodeKind::Connector(spec) = &planned.body else {
                 unreachable!("budgets apply to connectors only")
             };
-            if !spec.roles.has_outbound() || spec.exchange != ConnectorExchange::Call {
+            if !spec.roles.has_outbound() || spec.exchange != ExchangeKind::Call {
                 return Err(ExecutionFault::PlanInvariant {
                     node: planned.path.clone(),
                     reason: "a request requires an outbound Call Contract",
@@ -2416,7 +2443,7 @@ impl<'plan> Execution<'plan> {
                         queued.envelope.data(),
                         &resolved_settings,
                     )
-                    .map_err(crate::boundary::PollFault::Driver)
+                    .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
                     .map_err(ExecutionFault::Dispatch)?
                 {
                     RequestPreparation::Rejected(completion) => Err(completion),
@@ -2509,7 +2536,7 @@ impl<'plan> Execution<'plan> {
                 // before the open/close facts or mailbox state can move.
                 let completion = bindings
                     .scheduler_completion(&connector, SchedulerCompletion::TimeoutExpired)
-                    .map_err(crate::boundary::PollFault::Driver)
+                    .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
                     .map_err(ExecutionFault::Dispatch)?;
                 self.admit_expiring_call_loop(journal, slot, &instance, &edge, delivery)?;
                 let queued = self
@@ -2580,7 +2607,7 @@ impl<'plan> Execution<'plan> {
                     },
                 );
                 self.settled.push_back(SettledEntry {
-                    event: BoundaryObservation {
+                    event: ClosedCall {
                         call_id,
                         connector_path,
                         emitting_id,
@@ -2596,7 +2623,7 @@ impl<'plan> Execution<'plan> {
     fn expire_session_handshake(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut dyn OutboundConnectorBindings,
+        bindings: &mut dyn OutboundDrivers,
         slot: NodeIndex,
         instance: instance::Generation,
         edge: &str,
@@ -2629,12 +2656,12 @@ impl<'plan> Execution<'plan> {
             }
             let completion = bindings
                 .scheduler_session_completion(&connector, SchedulerCompletion::TimeoutExpired)
-                .map_err(crate::boundary::PollFault::Driver)
+                .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
                 .map_err(ExecutionFault::Dispatch)?;
             if session.opening_started {
                 let _ = bindings
                     .close_session(&connector, session_id)
-                    .map_err(crate::boundary::PollFault::Driver)
+                    .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
                     .map_err(ExecutionFault::Dispatch)?;
             } else if !session.opening_claimed {
                 let retained = self
@@ -2686,7 +2713,7 @@ impl<'plan> Execution<'plan> {
             self.resolve_invocation_settings(&instance, spec, &connector, &queued.envelope)?;
         let preparation = bindings
             .prepare_session_open(&connector, queued.envelope.data(), &settings)
-            .map_err(crate::boundary::PollFault::Driver)
+            .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
             .map_err(ExecutionFault::Dispatch)?;
         let prepared = match preparation {
             RequestPreparation::Rejected(completion) => {
@@ -2738,7 +2765,7 @@ impl<'plan> Execution<'plan> {
         );
         let completion = bindings
             .scheduler_session_completion(&connector, SchedulerCompletion::TimeoutExpired)
-            .map_err(crate::boundary::PollFault::Driver)
+            .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
             .map_err(ExecutionFault::Dispatch)?;
         self.settled_sessions.push_back(SettledSession {
             session: session_id,
@@ -3340,7 +3367,7 @@ impl<'plan> Execution<'plan> {
     fn expire_closing(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut dyn OutboundConnectorBindings,
+        bindings: &mut dyn OutboundDrivers,
         reference: &instance::Generation,
         cause: Id,
         deadline: ClosingDeadline,
@@ -3378,7 +3405,7 @@ impl<'plan> Execution<'plan> {
                     let connector = self.executor_path(pending.slot)?;
                     bindings
                         .cancel(connector, &call_id)
-                        .map_err(crate::boundary::PollFault::Driver)
+                        .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
                         .map_err(ExecutionFault::Dispatch)?;
                 }
                 // Session closure is requested in canonical logical-reference
@@ -3401,7 +3428,7 @@ impl<'plan> Execution<'plan> {
                     let connector = self.executor_path(session.slot)?.clone();
                     if bindings
                         .close_session(&connector, session_id)
-                        .map_err(crate::boundary::PollFault::Driver)
+                        .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
                         .map_err(ExecutionFault::Dispatch)?
                         == SessionStart::Started
                         && let Some(session) = self.sessions.get_mut(&session_id)
@@ -3426,7 +3453,7 @@ impl<'plan> Execution<'plan> {
                     let connector = self.executor_path(pending.slot)?.clone();
                     let completion = bindings
                         .scheduler_completion(&connector, SchedulerCompletion::OutcomeUnknown)
-                        .map_err(crate::boundary::PollFault::Driver)
+                        .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
                         .map_err(ExecutionFault::Dispatch)?;
                     match journal
                         .abandon_egress(&call_id, self.now)
@@ -3435,7 +3462,7 @@ impl<'plan> Execution<'plan> {
                         crate::journal::CloseVerdict::AlreadyClosed => {}
                         crate::journal::CloseVerdict::Won => {
                             self.settled.push_back(SettledEntry {
-                                event: BoundaryObservation {
+                                event: ClosedCall {
                                     call_id,
                                     connector_path: connector.clone(),
                                     emitting_id: pending.delivery.envelope.meta().sys().id(),
@@ -3490,14 +3517,14 @@ impl<'plan> Execution<'plan> {
                             &connector,
                             SchedulerCompletion::OutcomeUnknown,
                         )
-                        .map_err(crate::boundary::PollFault::Driver)
+                        .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
                         .map_err(ExecutionFault::Dispatch)?;
                     // The committed Closing request sealed this deadline.
                     // Forced cleanup must not wait for exit-route capacity or
                     // terminal storage; it proves no successful outcome.
                     bindings
                         .abort_session(&connector, session_id)
-                        .map_err(crate::boundary::PollFault::Driver)
+                        .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
                         .map_err(ExecutionFault::Dispatch)?;
                     self.settled_sessions.push_back(SettledSession {
                         session: session_id,
@@ -3899,7 +3926,7 @@ impl<'plan> Execution<'plan> {
     fn settle_session_next(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut dyn OutboundConnectorBindings,
+        bindings: &mut dyn OutboundDrivers,
         index: usize,
     ) -> Result<(), ExecutionFault> {
         let settled = self
@@ -3956,7 +3983,7 @@ impl<'plan> Execution<'plan> {
         // cannot leave this committed transaction's deliveries unapplied.
         bindings
             .forget_session(settled.session)
-            .map_err(crate::boundary::PollFault::Driver)
+            .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
             .map_err(ExecutionFault::Dispatch)?;
         Ok(())
     }
@@ -4223,7 +4250,7 @@ impl<'plan> Execution<'plan> {
     fn fire_connector(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut dyn OutboundConnectorBindings,
+        bindings: &mut dyn OutboundDrivers,
         slot: NodeIndex,
         instance: &instance::Generation,
         delivery: &envelope::Delivery,
@@ -4236,21 +4263,19 @@ impl<'plan> Execution<'plan> {
             });
         };
         match spec.exchange {
-            ConnectorExchange::Call if spec.roles.has_outbound() => {
+            ExchangeKind::Call if spec.roles.has_outbound() => {
                 self.open_call(journal, bindings, slot, instance, delivery)
             }
-            ConnectorExchange::Call if spec.roles.has_inbound() => {
+            ExchangeKind::Call if spec.roles.has_inbound() => {
                 self.open_inbound_call_response(journal, slot, instance, delivery)
             }
-            ConnectorExchange::Session => {
+            ExchangeKind::Session => {
                 self.progress_session(journal, bindings, slot, instance, delivery)
             }
-            ConnectorExchange::Event | ConnectorExchange::Call => {
-                Err(ExecutionFault::PlanInvariant {
-                    node: planned.path.clone(),
-                    reason: "a delivery reached a Connector without a compatible world role",
-                })
-            }
+            ExchangeKind::Event | ExchangeKind::Call => Err(ExecutionFault::PlanInvariant {
+                node: planned.path.clone(),
+                reason: "a delivery reached a Connector without a compatible world role",
+            }),
         }
     }
 
@@ -4424,7 +4449,7 @@ impl<'plan> Execution<'plan> {
         };
         if !spec.roles.has_inbound()
             || spec.roles.has_outbound()
-            || spec.exchange != ConnectorExchange::Call
+            || spec.exchange != ExchangeKind::Call
         {
             return Err(ExecutionFault::PlanInvariant {
                 node: planned.path.clone(),
@@ -4530,7 +4555,7 @@ impl<'plan> Execution<'plan> {
     fn progress_session(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut dyn OutboundConnectorBindings,
+        bindings: &mut dyn OutboundDrivers,
         slot: NodeIndex,
         instance: &instance::Generation,
         delivery: &envelope::Delivery,
@@ -4542,7 +4567,7 @@ impl<'plan> Execution<'plan> {
                 reason: "Session dispatch reached a non-connector",
             });
         };
-        if spec.exchange != ConnectorExchange::Session || !spec.roles.has_outbound() {
+        if spec.exchange != ExchangeKind::Session || !spec.roles.has_outbound() {
             return Err(ExecutionFault::PlanInvariant {
                 node: planned.path.clone(),
                 reason: "a Session delivery reached a Connector without an outbound Session role",
@@ -4638,7 +4663,7 @@ impl<'plan> Execution<'plan> {
     ) -> Result<Option<SessionId>, ExecutionFault> {
         // The resident child belongs to this exact Node instance. An upstream
         // socket's session_id is provenance, not an address for this resource.
-        if spec.contract.as_str() == crate::connector::PROCESS_SERVICE_CONNECTOR_ID {
+        if spec.contract.as_str() == crate::connector::stdlib::PROCESS_SERVICE_CONNECTOR_ID {
             return Ok(None);
         }
         if spec.attribute("correlate").is_some() {
@@ -4674,7 +4699,7 @@ impl<'plan> Execution<'plan> {
     fn open_session(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut dyn OutboundConnectorBindings,
+        bindings: &mut dyn OutboundDrivers,
         slot: NodeIndex,
         instance: &instance::Generation,
         delivery: &envelope::Delivery,
@@ -4687,7 +4712,7 @@ impl<'plan> Execution<'plan> {
                 delivery.envelope.data(),
                 settings,
             )
-            .map_err(crate::boundary::PollFault::Driver)
+            .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
             .map_err(ExecutionFault::Dispatch)?;
         let prepared = match preparation {
             RequestPreparation::Prepared(prepared) => prepared,
@@ -4740,7 +4765,7 @@ impl<'plan> Execution<'plan> {
         }
         match bindings
             .open_session(&intent, &delivery.envelope)
-            .map_err(crate::boundary::PollFault::Driver)
+            .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
             .map_err(ExecutionFault::Dispatch)?
         {
             SessionStart::Pending => Ok(()),
@@ -4760,7 +4785,7 @@ impl<'plan> Execution<'plan> {
     fn write_session(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut dyn OutboundConnectorBindings,
+        bindings: &mut dyn OutboundDrivers,
         dispatch: SessionDispatch<'_>,
         session_id: SessionId,
         settings: &BTreeMap<String, crate::value::Value>,
@@ -4778,7 +4803,7 @@ impl<'plan> Execution<'plan> {
                 delivery.envelope.data(),
                 settings,
             )
-            .map_err(crate::boundary::PollFault::Driver)
+            .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
             .map_err(ExecutionFault::Dispatch)?;
         let prepared = match preparation {
             RequestPreparation::Prepared(prepared) => prepared,
@@ -4848,7 +4873,7 @@ impl<'plan> Execution<'plan> {
         }
         match bindings
             .write_session(&intent, &delivery.envelope)
-            .map_err(crate::boundary::PollFault::Driver)
+            .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
             .map_err(ExecutionFault::Dispatch)?
         {
             SessionStart::Pending => Ok(()),
@@ -4914,7 +4939,7 @@ impl<'plan> Execution<'plan> {
     fn open_call(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut dyn OutboundConnectorBindings,
+        bindings: &mut dyn OutboundDrivers,
         slot: NodeIndex,
         instance: &instance::Generation,
         delivery: &envelope::Delivery,
@@ -4938,7 +4963,7 @@ impl<'plan> Execution<'plan> {
         let NodeKind::Connector(spec) = &planned.body else {
             unreachable!("routed here by kind");
         };
-        if !spec.roles.has_outbound() || spec.exchange != ConnectorExchange::Call {
+        if !spec.roles.has_outbound() || spec.exchange != ExchangeKind::Call {
             return Err(ExecutionFault::PlanInvariant {
                 node: planned.path.clone(),
                 reason: "a request requires an outbound Call Contract",
@@ -4962,7 +4987,7 @@ impl<'plan> Execution<'plan> {
                 delivery.envelope.data(),
                 &resolved_settings,
             )
-            .map_err(crate::boundary::PollFault::Driver)
+            .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
             .map_err(ExecutionFault::Dispatch)?
         {
             RequestPreparation::Prepared(prepared) => prepared,
@@ -5252,7 +5277,7 @@ impl<'plan> Execution<'plan> {
         };
         if !spec.roles.has_inbound()
             || spec.roles.has_outbound()
-            || spec.exchange != ConnectorExchange::Call
+            || spec.exchange != ExchangeKind::Call
         {
             return Ok(None);
         }

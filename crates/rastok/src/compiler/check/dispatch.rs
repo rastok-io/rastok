@@ -171,7 +171,7 @@ impl Checker<'_, '_> {
         let mut signature = if matches!(
             &node.semantics,
             NodeSemantics::Connector {
-                exchange: crate::connector::ConnectorExchange::Session,
+                exchange: crate::connector::ExchangeKind::Session,
                 ..
             }
         ) {

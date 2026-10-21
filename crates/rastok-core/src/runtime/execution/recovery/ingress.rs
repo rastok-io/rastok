@@ -81,8 +81,8 @@ impl Execution<'_> {
         let mut timeout = None;
         let exchange = inbound.exchange.as_deref();
         match (source, exchange) {
-            (None | Some((_, ConnectorExchange::Event)), None) => {}
-            (Some((slot, ConnectorExchange::Call)), Some(InboundExchangeRecord::Call(call))) => {
+            (None | Some((_, ExchangeKind::Event)), None) => {}
+            (Some((slot, ExchangeKind::Call)), Some(InboundExchangeRecord::Call(call))) => {
                 let selected = self.restore_source_target(
                     admissions,
                     index,
@@ -116,7 +116,7 @@ impl Execution<'_> {
                 target = Some((slot, selected));
             }
             (
-                Some((slot, ConnectorExchange::Session)),
+                Some((slot, ExchangeKind::Session)),
                 Some(InboundExchangeRecord::Session(SessionIngressRecord::Open(reference))),
             ) => {
                 if self.plan.nodes[slot.index()]
@@ -160,7 +160,7 @@ impl Execution<'_> {
                 target = Some((slot, selected));
             }
             (
-                Some((slot, ConnectorExchange::Session)),
+                Some((slot, ExchangeKind::Session)),
                 Some(InboundExchangeRecord::Session(SessionIngressRecord::Message(reference))),
             ) => {
                 let pending = self

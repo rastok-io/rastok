@@ -7,23 +7,29 @@
 //! test turns the harness against a lying Driver to prove the
 //! battery itself bites.
 
-use rastok::boundary::{
-    CallConnectorDriver, CallOpen, CallStart, Completion, EnvelopeDraft, OutboundConnectorDriver,
-    ProcessExit, RequestPreparation, Response, SchedulerCompletion,
-};
 use rastok::conformance::{
     DriverTestFixture, ExitCaseTest, InterleaveExpectation, InterleaveProbe, assert_conformant,
     verify,
 };
-use rastok::connector::{ConnectorDirection, ContractId, PROCESS_CONNECTOR_ID};
-use rastok::connectors::{
-    BoundConnectorDriver, ConnectorDriverFactory, DriverFactoryError, DriverRegistry,
-    ProcessFactory,
-};
+use rastok::connector::ConnectorDirection;
+use rastok::connector::ContractId;
+use rastok::connector::driver::Driver;
+use rastok::connector::driver::Outbound;
+use rastok::connector::driver::OutboundCall;
+use rastok::connector::exchange::CallOpen;
+use rastok::connector::exchange::CallResponse;
+use rastok::connector::exchange::CallStart;
+use rastok::connector::exchange::Completion;
+use rastok::connector::exchange::EnvelopeDraft;
+use rastok::connector::exchange::RequestPreparation;
+use rastok::connector::exchange::SchedulerCompletion;
+use rastok::connector::stdlib::PROCESS;
+use rastok::connector::stdlib::PROCESS_CONNECTOR_ID;
+use rastok::connector::stdlib::ProcessExit;
+use rastok::connectors::{DriverFactory, DriverFactoryError, DriverRegistry, ProcessFactory};
 use rastok::contract::ContractCatalog;
 use rastok::envelope::{Data, Envelope, Value};
 use rastok::plan::ValidatedExecutionPlan;
-use rastok::stdlib::PROCESS;
 
 const HAPPY: &str = r#"
 graph happy : App {
@@ -272,17 +278,20 @@ fn process_passes_the_whole_battery() {
 /// declares — the completion gate must refuse it, and the harness must
 /// call that a violation.
 struct Liar {
-    pending: Vec<Response>,
+    pending: Vec<CallResponse>,
 }
 
-impl CallConnectorDriver for Liar {
+impl OutboundCall for Liar {
     fn prepare_request(
         &mut self,
         _: &rastok::node::Path,
         data: &Data,
         _: &std::collections::BTreeMap<String, rastok::value::Value>,
     ) -> RequestPreparation {
-        rastok::boundary::prepare_process_request(rastok::boundary::RequestCodec::Lines, data)
+        rastok::connector::stdlib::prepare_process_request(
+            rastok::connector::stdlib::RequestCodec::Lines,
+            data,
+        )
     }
 
     fn scheduler_completion(
@@ -290,11 +299,11 @@ impl CallConnectorDriver for Liar {
         _: &rastok::node::Path,
         completion: SchedulerCompletion,
     ) -> Completion {
-        rastok::boundary::process_scheduler_completion(completion)
+        rastok::connector::stdlib::process_scheduler_completion(completion)
     }
 
     fn start(&mut self, intent: &CallOpen, _request: &Envelope) -> CallStart {
-        self.pending.push(Response {
+        self.pending.push(CallResponse {
             call_id: intent.call_id,
             completion: Completion::try_new(vec![EnvelopeDraft {
                 port: rastok::node::Port::conventional_exit(),
@@ -311,25 +320,25 @@ impl CallConnectorDriver for Liar {
         CallStart::Started
     }
 
-    fn events(&mut self) -> Vec<Response> {
+    fn poll_responses(&mut self) -> Vec<CallResponse> {
         std::mem::take(&mut self.pending)
     }
 }
 
-impl BoundConnectorDriver for Liar {
-    fn inbound(&mut self) -> Option<&mut dyn rastok::boundary::InboundConnectorDriver> {
+impl Driver for Liar {
+    fn inbound(&mut self) -> Option<&mut dyn rastok::connector::driver::Ingress> {
         None
     }
 
-    fn outbound(&mut self) -> Option<&mut dyn OutboundConnectorDriver> {
+    fn outbound(&mut self) -> Option<&mut dyn Outbound> {
         Some(self)
     }
 }
 
 struct LiarFactory(ContractId);
 
-impl ConnectorDriverFactory for LiarFactory {
-    fn connector_id(&self) -> &ContractId {
+impl DriverFactory for LiarFactory {
+    fn contract_id(&self) -> &ContractId {
         &self.0
     }
 
@@ -337,11 +346,11 @@ impl ConnectorDriverFactory for LiarFactory {
         ConnectorDirection::Outbound
     }
 
-    fn bind<'plan>(
+    fn create<'plan>(
         &self,
         _plan: &'plan ValidatedExecutionPlan,
         _nodes: &[rastok::node::Path],
-    ) -> Result<Box<dyn BoundConnectorDriver + 'plan>, DriverFactoryError> {
+    ) -> Result<Box<dyn Driver + 'plan>, DriverFactoryError> {
         Ok(Box::new(Liar {
             pending: Vec::new(),
         }))
@@ -385,17 +394,20 @@ fn a_malformed_terminal_case_fails_the_battery() {
 /// crossed payloads — the correlation defect a single-call battery
 /// cannot see.
 struct Swapper {
-    pending: Vec<Response>,
+    pending: Vec<CallResponse>,
 }
 
-impl CallConnectorDriver for Swapper {
+impl OutboundCall for Swapper {
     fn prepare_request(
         &mut self,
         _: &rastok::node::Path,
         data: &Data,
         _: &std::collections::BTreeMap<String, rastok::value::Value>,
     ) -> RequestPreparation {
-        rastok::boundary::prepare_process_request(rastok::boundary::RequestCodec::Lines, data)
+        rastok::connector::stdlib::prepare_process_request(
+            rastok::connector::stdlib::RequestCodec::Lines,
+            data,
+        )
     }
 
     fn scheduler_completion(
@@ -403,13 +415,13 @@ impl CallConnectorDriver for Swapper {
         _: &rastok::node::Path,
         completion: SchedulerCompletion,
     ) -> Completion {
-        rastok::boundary::process_scheduler_completion(completion)
+        rastok::connector::stdlib::process_scheduler_completion(completion)
     }
 
     fn start(&mut self, intent: &CallOpen, _request: &Envelope) -> CallStart {
         let framed = String::from_utf8_lossy(intent.prepared.bytes());
         let echoed = framed.strip_suffix('\n').unwrap_or(&framed).to_owned();
-        self.pending.push(Response {
+        self.pending.push(CallResponse {
             call_id: intent.call_id,
             completion: Completion::process(
                 vec![Data::materialized(Value::Text(echoed))],
@@ -423,7 +435,7 @@ impl CallConnectorDriver for Swapper {
         CallStart::Started
     }
 
-    fn events(&mut self) -> Vec<Response> {
+    fn poll_responses(&mut self) -> Vec<CallResponse> {
         let mut batch = std::mem::take(&mut self.pending);
         if batch.len() >= 2 {
             let crossed = batch[0].completion.clone();
@@ -434,20 +446,20 @@ impl CallConnectorDriver for Swapper {
     }
 }
 
-impl BoundConnectorDriver for Swapper {
-    fn inbound(&mut self) -> Option<&mut dyn rastok::boundary::InboundConnectorDriver> {
+impl Driver for Swapper {
+    fn inbound(&mut self) -> Option<&mut dyn rastok::connector::driver::Ingress> {
         None
     }
 
-    fn outbound(&mut self) -> Option<&mut dyn OutboundConnectorDriver> {
+    fn outbound(&mut self) -> Option<&mut dyn Outbound> {
         Some(self)
     }
 }
 
 struct SwapperFactory(ContractId);
 
-impl ConnectorDriverFactory for SwapperFactory {
-    fn connector_id(&self) -> &ContractId {
+impl DriverFactory for SwapperFactory {
+    fn contract_id(&self) -> &ContractId {
         &self.0
     }
 
@@ -455,11 +467,11 @@ impl ConnectorDriverFactory for SwapperFactory {
         ConnectorDirection::Outbound
     }
 
-    fn bind<'plan>(
+    fn create<'plan>(
         &self,
         _plan: &'plan ValidatedExecutionPlan,
         _nodes: &[rastok::node::Path],
-    ) -> Result<Box<dyn BoundConnectorDriver + 'plan>, DriverFactoryError> {
+    ) -> Result<Box<dyn Driver + 'plan>, DriverFactoryError> {
         Ok(Box::new(Swapper {
             pending: Vec::new(),
         }))

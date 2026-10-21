@@ -2,7 +2,10 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
+use rastok::connector::exchange::EnvelopeDraft;
+use rastok::connector::exchange::IngressProposal;
+use rastok::connector::exchange::IngressProvenance;
+use rastok::connector::exchange::IngressSequence;
 use rastok::envelope::{Data, Namespace, Value};
 use rastok::journal::{MemJournal, Record};
 use rastok::runtime::execution::Execution;

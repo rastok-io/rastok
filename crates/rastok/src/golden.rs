@@ -928,7 +928,7 @@ fn record_tree(record: &Record) -> Cbor {
 /// A completion is raw world material — no envelope identity exists yet.
 /// The Execution later constructs every output in one TRANSACTION; this canonical form
 /// seals only the ordered `(port, data)` drafts that won the close race.
-fn completion_form(completion: &crate::boundary::Completion) -> Cbor {
+fn completion_form(completion: &crate::connector::exchange::Completion) -> Cbor {
     Cbor::Array(
         completion
             .outputs()
@@ -1074,7 +1074,7 @@ mod tests {
         let record = Record::Ingress(Box::new(crate::journal::IngressRecord {
             deadlines: None,
             instance_commands: None,
-            provenance: crate::boundary::IngressProvenance::single(source.clone()),
+            provenance: crate::connector::exchange::IngressProvenance::single(source.clone()),
             port: crate::node::Port::new("out").unwrap(),
             connector_path: Some(source),
             seq: 0,

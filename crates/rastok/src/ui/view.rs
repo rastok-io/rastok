@@ -1580,7 +1580,9 @@ fn hex(bytes: &[u8]) -> String {
 mod tests {
     #[test]
     fn exchange_snapshots_name_recorded_completion_without_an_alias() {
-        use crate::boundary::{CallId, InboundCallId, SessionId};
+        use crate::connector::exchange::CallId;
+        use crate::connector::exchange::InboundCallId;
+        use crate::connector::exchange::SessionId;
         use crate::envelope::Id;
         use crate::runtime::execution::inspection::{CallInspection, SessionInspection};
 

@@ -231,7 +231,7 @@ impl Execution<'_> {
             record
                 .emissions
                 .iter()
-                .map(|emission| crate::boundary::EnvelopeDraft {
+                .map(|emission| crate::connector::exchange::EnvelopeDraft {
                     port: emission.port.clone(),
                     data: emission.envelope.data().clone(),
                     ext: emission.envelope.meta().ext().clone(),
@@ -240,7 +240,7 @@ impl Execution<'_> {
         )
         .map_err(|_| invalid(index, "an exchange terminal has no unique final exit"))?;
         PlanCompletionCheck { plan: self.plan }
-            .admit(self.executor_path(slot)?, &completion)
+            .check(self.executor_path(slot)?, &completion)
             .map_err(|_| invalid(index, "an exchange terminal violates its Contract"))?;
         let executor = TransactionPreparer::at(
             self.plan,
@@ -428,7 +428,7 @@ impl Execution<'_> {
                         .is_some_and(|spec| {
                             spec.roles.has_inbound()
                                 && !spec.roles.has_outbound()
-                                && spec.exchange == ConnectorExchange::Call
+                                && spec.exchange == ExchangeKind::Call
                         })
                         && !self.lifecycle.iter().any(|work| {
                             work.instance == *instance && work.lifecycle == node::Lifecycle::Start

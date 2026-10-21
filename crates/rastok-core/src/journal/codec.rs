@@ -3,9 +3,9 @@
 //! prepared bytes and deadlines survive. File framing, version negotiation,
 //! checksums, policy and I/O belong to the hosted recorder, not this codec.
 
-use crate::boundary::*;
 use crate::canonical;
 use crate::canonical_cbor::Value as Cbor;
+use crate::connector::exchange::*;
 use crate::envelope::{Data, Encoding, Envelope, Id, Meta, MetaSys, MetaValue, Namespace, Scalar};
 use crate::instance;
 

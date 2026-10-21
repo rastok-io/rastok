@@ -6,7 +6,10 @@ use rastok::{compiler, contract::ContractCatalog, plan};
 
 #[test]
 fn recovered_graph_outputs_and_expiry_are_redacted_before_logging() {
-    use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
+    use rastok::connector::exchange::EnvelopeDraft;
+    use rastok::connector::exchange::IngressProposal;
+    use rastok::connector::exchange::IngressProvenance;
+    use rastok::connector::exchange::IngressSequence;
     use rastok::envelope::{Data, Namespace, Value};
     use rastok::journal::{Journal, MemJournal};
     use rastok::plan::GraphVersion;

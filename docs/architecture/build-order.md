@@ -118,16 +118,14 @@ distinct hashes across semantically distinct programs.
 Exit: ordering and close-once invariant tests, per
 [`../spec/delivery-semantics.md`](../spec/delivery-semantics.md).
 
-### Stage 10 — `boundary`
+### Stage 10 — Connector interfaces and execution polling
 
-The world-facing traits (`InboundConnectorDriver`,
-`OutboundConnectorDriver`, `Supervisor`) and the VM's explicit logical-time
-input
-and the journal-driven machinery: `IngressProposal`,
-`IngressProvenance`, `CallOpen`, `Response`, `CallId`, `DriverPoller`,
-`Obligation`, `LifecycleObservation`.
+The world-facing interfaces live in `connector::driver`; Call, Session and
+ingress data live in `connector::exchange`. The portable standard definitions
+live in `connector::stdlib`. Execution owns the journal-driven `DriverPoller`
+and explicit-time `Obligation`s under `runtime::execution`.
 
-Exit: dispatcher tests against a scripted Outbound Driver, asserting journaled
+Exit: polling tests against a scripted Outbound Driver, asserting journaled
 intents and correlated responses.
 
 ### Stage 11 — `runtime` core

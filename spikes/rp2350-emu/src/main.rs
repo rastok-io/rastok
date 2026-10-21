@@ -20,9 +20,10 @@ use cortex_m_semihosting::{debug, hprintln};
 use embedded_alloc::LlffHeap as Heap;
 use panic_semihosting as _;
 
-use rastok_core::boundary::{
-    EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence,
-};
+use rastok_core::connector::exchange::EnvelopeDraft;
+use rastok_core::connector::exchange::IngressProposal;
+use rastok_core::connector::exchange::IngressProvenance;
+use rastok_core::connector::exchange::IngressSequence;
 use rastok_core::envelope::{Data, Id, Namespace, Value};
 use rastok_core::journal;
 use rastok_core::journal::{MemJournal, Record};

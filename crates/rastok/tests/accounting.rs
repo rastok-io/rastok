@@ -5,8 +5,11 @@
 use rastok::accounting::{
     ExactDecimal, PriceBook, PriceBookName, UnitPrice, accounting_observations,
 };
-use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
 use rastok::compiler::compile;
+use rastok::connector::exchange::EnvelopeDraft;
+use rastok::connector::exchange::IngressProposal;
+use rastok::connector::exchange::IngressProvenance;
+use rastok::connector::exchange::IngressSequence;
 use rastok::contract::ContractCatalog;
 use rastok::deployment::{
     BootBindings, DeploymentProfile, SecretBinding, SecretMaterial, SecretProvider,

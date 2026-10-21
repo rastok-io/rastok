@@ -157,7 +157,10 @@ fn keyed_retries_loops_and_bounded_joins_survive_recording_and_prefix_reconstruc
 
 #[test]
 fn encoded_data_and_nan_metadata_are_lossless_not_a_golden_only_projection() {
-    use crate::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
+    use crate::connector::exchange::EnvelopeDraft;
+    use crate::connector::exchange::IngressProposal;
+    use crate::connector::exchange::IngressProvenance;
+    use crate::connector::exchange::IngressSequence;
     use crate::envelope::{Data, Encoding, MetaValue, Scalar};
     let mut journal = MemJournal::new(GraphVersion(1));
     for data in [

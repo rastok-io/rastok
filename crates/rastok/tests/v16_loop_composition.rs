@@ -2,8 +2,11 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use rastok::boundary::{EnvelopeDraft, IngressProposal, IngressProvenance, IngressSequence};
 use rastok::compiler;
+use rastok::connector::exchange::EnvelopeDraft;
+use rastok::connector::exchange::IngressProposal;
+use rastok::connector::exchange::IngressProvenance;
+use rastok::connector::exchange::IngressSequence;
 use rastok::contract::ContractCatalog;
 use rastok::envelope::{Data, Namespace, Value};
 use rastok::journal::{
@@ -269,7 +272,7 @@ graph app : App {{
                         })
                         .min()
                     {
-                        let mut bindings = rastok::connectors::RuntimeBindings::try_new(
+                        let mut bindings = rastok::connectors::RuntimeDrivers::prepare(
                             &plan,
                             &rastok::connectors::DriverRegistry::default(),
                         )

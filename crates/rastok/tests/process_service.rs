@@ -51,7 +51,7 @@ fn resident_mock_keeps_one_session_across_writes() {
         compilation.plan.plan().nodes[1]
             .connector()
             .map(|s| s.exchange),
-        Some(rastok::connector::ConnectorExchange::Session)
+        Some(rastok::connector::ExchangeKind::Session)
     );
     let runs = rastok::lab::run(
         &compilation.plan,
@@ -172,39 +172,45 @@ fn session_mock_frames_need_no_terminal_but_nothing_may_follow_one() {
 
 #[test]
 fn the_service_profile_cannot_alias_a_job_or_another_catalogue_entry() {
-    use rastok::{connector::*, contract::*};
-    let mut alias = rastok::stdlib::PROCESS;
+    use rastok::{
+        connector::{contract::*, stdlib::*, *},
+        contract::*,
+    };
+    let mut alias = rastok::connector::stdlib::PROCESS;
     alias.name = "Alias";
     alias.id = PROCESS_SERVICE_CONNECTOR_ID;
     alias.selector = None;
     assert!(matches!(
         ContractCatalog::try_m0().unwrap().try_with(alias),
-        Err(SheetDefect::ConnectorIdCollision { .. })
+        Err(ContractValidationError::ConnectorIdCollision { .. })
     ));
-    let mut broken = rastok::stdlib::PROCESS;
-    broken.selector = Some(ProfileSelector {
+    let mut broken = rastok::connector::stdlib::PROCESS;
+    broken.selector = Some(ModeSelector {
         attribute: "mode",
         default: Some("service"),
-        profiles: &[Profile {
+        profiles: &[ContractMode {
             word: "service",
-            support: ProfileSupport::Available,
+            support: ModeSupport::Available,
             attributes: &[],
             protocol: Some(ProfileProtocol {
                 id: PROCESS_CONNECTOR_ID,
                 roles: ConnectorDirection::InboundAndOutbound,
-                exchange: ConnectorExchange::Session,
+                exchange: ExchangeKind::Session,
             }),
         }],
     });
     assert!(matches!(
         ContractCatalog::default().try_with(broken),
-        Err(SheetDefect::ConnectorIdCollision { .. })
+        Err(ContractValidationError::ConnectorIdCollision { .. })
     ));
 }
 
 #[test]
 fn independent_core_validation_rejects_forged_service_profiles() {
-    use rastok::{connector::*, plan::*};
+    use rastok::{
+        connector::{stdlib::PROCESS_CONNECTOR_ID, *},
+        plan::*,
+    };
     let compiled = compile(&[SERVICE], &ContractCatalog::try_m0().unwrap()).unwrap();
     for sabotage in 0..4 {
         let mut plan = compiled.plan.clone().into_inner();
@@ -213,7 +219,7 @@ fn independent_core_validation_rejects_forged_service_profiles() {
         };
         match sabotage {
             0 => spec.roles = ConnectorDirection::Outbound,
-            1 => spec.exchange = ConnectorExchange::Call,
+            1 => spec.exchange = ExchangeKind::Call,
             2 => spec.contract = ContractId::parse(PROCESS_CONNECTOR_ID).unwrap(),
             _ => spec.attributes.retain(|(name, _)| name != "max_frame"),
         }
@@ -229,8 +235,8 @@ fn independent_core_validation_rejects_forged_service_profiles() {
 mod real {
     use super::*;
     use rastok::{
-        boundary::*,
-        connectors::{RuntimeBindings, hosted_registry},
+        connector::exchange::*,
+        connectors::{RuntimeDrivers, hosted_registry},
         envelope::*,
         journal::{EgressRecord, MemJournal, Record, SessionStatus},
         plan::GraphVersion,
@@ -252,7 +258,7 @@ mod real {
     fn until<'a>(
         vm: &mut Execution<'a>,
         journal: &mut MemJournal,
-        world: &mut RuntimeBindings<'a>,
+        world: &mut RuntimeDrivers<'a>,
         predicate: impl Fn(&Execution<'a>, &MemJournal) -> bool,
     ) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
@@ -284,7 +290,7 @@ mod real {
         let mut vm = Execution::new(&compiled.plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
         let registry = hosted_registry(None).unwrap();
-        let mut world = RuntimeBindings::try_new(&compiled.plan, &registry).unwrap();
+        let mut world = RuntimeDrivers::prepare(&compiled.plan, &registry).unwrap();
         for (i, text) in ["hello", "again", "quit", "fresh", "quit"]
             .iter()
             .enumerate()
@@ -326,7 +332,7 @@ mod real {
             let compiled =
                 compile(&[source.as_str()], &ContractCatalog::try_m0().unwrap()).unwrap();
             let registry = hosted_registry(None).unwrap();
-            let mut world = RuntimeBindings::try_new(&compiled.plan, &registry).unwrap();
+            let mut world = RuntimeDrivers::prepare(&compiled.plan, &registry).unwrap();
             let mut vm = Execution::new(&compiled.plan, GraphVersion(1));
             let mut journal = MemJournal::new(GraphVersion(1));
             vm.accept_input(&mut journal, input("in", "ready")).unwrap();
@@ -373,7 +379,7 @@ mod real {
         let graph = source.split("lab resident").next().unwrap();
         let compiled = compile(&[graph], &ContractCatalog::try_m0().unwrap()).unwrap();
         let registry = hosted_registry(None).unwrap();
-        let mut world = RuntimeBindings::try_new(&compiled.plan, &registry).unwrap();
+        let mut world = RuntimeDrivers::prepare(&compiled.plan, &registry).unwrap();
         let mut vm = Execution::new(&compiled.plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
         vm.accept_input(&mut journal, input("in", "start")).unwrap();

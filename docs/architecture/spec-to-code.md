@@ -1,6 +1,6 @@
 # Specification-to-implementation map
 
-> Non-normative implementation map, updated 2026-10-14. Current format:
+> Non-normative implementation map, updated 2026-10-21. Current format:
 > [identity.md](../spec/identity.md).
 > The first table describes current ownership; subsequent milestone tables
 > preserve dated landing evidence, including superseded types and ids. They

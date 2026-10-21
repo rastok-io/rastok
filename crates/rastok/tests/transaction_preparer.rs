@@ -6,7 +6,9 @@
 // correct report is a panic.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use rastok::boundary::{Completion, EnvelopeDraft, ProcessExit};
+use rastok::connector::exchange::Completion;
+use rastok::connector::exchange::EnvelopeDraft;
+use rastok::connector::stdlib::ProcessExit;
 use rastok::envelope;
 use rastok::envelope::{Data, Envelope, Meta, MetaSys, MetaValue, Namespace, Scalar};
 use rastok::instance;

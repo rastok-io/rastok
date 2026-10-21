@@ -7,12 +7,25 @@
 // correct report is a panic.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use rastok::boundary::{
-    CallConnectorDriver, CallOpen, CallStart, DriverRouteError, InboundExchangeId, InboundSession,
-    IngressAdmission, IngressProposal, IngressProposalHandle, OutboundConnectorBindings,
-    PreparedRequest, RetainedProposal, SessionId, SessionObservation, SessionOpen, SessionStart,
-    SessionWrite, SessionWriteId, WebSocketExit,
-};
+use rastok::connector::driver::DriverRouteError;
+use rastok::connector::driver::OutboundCall;
+use rastok::connector::driver::OutboundDrivers;
+use rastok::connector::exchange::CallOpen;
+use rastok::connector::exchange::CallStart;
+use rastok::connector::exchange::InboundExchangeId;
+use rastok::connector::exchange::InboundSession;
+use rastok::connector::exchange::IngressAdmission;
+use rastok::connector::exchange::IngressProposal;
+use rastok::connector::exchange::IngressProposalHandle;
+use rastok::connector::exchange::PendingIngress;
+use rastok::connector::exchange::PreparedRequest;
+use rastok::connector::exchange::SessionId;
+use rastok::connector::exchange::SessionObservation;
+use rastok::connector::exchange::SessionOpen;
+use rastok::connector::exchange::SessionStart;
+use rastok::connector::exchange::SessionWrite;
+use rastok::connector::exchange::SessionWriteId;
+use rastok::connector::stdlib::WebSocketExit;
 use rastok::envelope::{Data, Envelope};
 use rastok::instance;
 
@@ -21,11 +34,15 @@ use rastok::node;
 use rastok::plan::{AttrSetting, EvaluationSite, GraphVersion, OwnerValue, ValidatedExecutionPlan};
 use rastok::runtime::execution::{Execution, ExecutionFault};
 
-use rastok::boundary::{
-    Completion, EnvelopeDraft, IngressProvenance, IngressSequence, ProcessExit, RequestPreparation,
-    Response, SchedulerCompletion,
-};
 use rastok::compiler::compile;
+use rastok::connector::exchange::CallResponse;
+use rastok::connector::exchange::Completion;
+use rastok::connector::exchange::EnvelopeDraft;
+use rastok::connector::exchange::IngressProvenance;
+use rastok::connector::exchange::IngressSequence;
+use rastok::connector::exchange::RequestPreparation;
+use rastok::connector::exchange::SchedulerCompletion;
+use rastok::connector::stdlib::ProcessExit;
 use rastok::contract::ContractCatalog;
 use rastok::envelope::{Encoding, Namespace, Value};
 use rastok::journal::loop_protocol::{Fact as LoopFact, LoopView as LoopFold, Phase as LoopPhase};
@@ -100,14 +117,14 @@ struct ProjectionRefusal {
     refuse_cancel: bool,
 }
 
-impl OutboundConnectorBindings for ProjectionRefusal {
+impl OutboundDrivers for ProjectionRefusal {
     fn prepare_request(
         &mut self,
         connector: &node::Path,
         data: &Data,
         resolved_settings: &std::collections::BTreeMap<String, rastok::value::Value>,
     ) -> Result<RequestPreparation, DriverRouteError> {
-        Ok(CallConnectorDriver::prepare_request(
+        Ok(OutboundCall::prepare_request(
             &mut self.inner,
             connector,
             data,
@@ -123,7 +140,7 @@ impl OutboundConnectorBindings for ProjectionRefusal {
         if self.refuse_scheduler_completion {
             return Err(DriverRouteError::UnavailableOutbound(connector.clone()));
         }
-        Ok(CallConnectorDriver::scheduler_completion(
+        Ok(OutboundCall::scheduler_completion(
             &mut self.inner,
             connector,
             completion,
@@ -133,12 +150,12 @@ impl OutboundConnectorBindings for ProjectionRefusal {
     fn cancel(
         &mut self,
         connector: &node::Path,
-        call_id: &rastok::boundary::CallId,
+        call_id: &rastok::connector::exchange::CallId,
     ) -> Result<(), DriverRouteError> {
         if self.refuse_cancel {
             return Err(DriverRouteError::UnavailableOutbound(connector.clone()));
         }
-        CallConnectorDriver::cancel(&mut self.inner, call_id);
+        OutboundCall::cancel(&mut self.inner, call_id);
         Ok(())
     }
 
@@ -147,11 +164,11 @@ impl OutboundConnectorBindings for ProjectionRefusal {
         intent: &CallOpen,
         request: &Envelope,
     ) -> Result<CallStart, DriverRouteError> {
-        Ok(CallConnectorDriver::start(&mut self.inner, intent, request))
+        Ok(OutboundCall::start(&mut self.inner, intent, request))
     }
 
-    fn events(&mut self) -> Result<Vec<Response>, DriverRouteError> {
-        Ok(CallConnectorDriver::events(&mut self.inner))
+    fn poll_responses(&mut self) -> Result<Vec<CallResponse>, DriverRouteError> {
+        Ok(OutboundCall::poll_responses(&mut self.inner))
     }
 }
 
@@ -160,20 +177,23 @@ impl OutboundConnectorBindings for ProjectionRefusal {
 /// silent so bounded settlement has to produce `OutcomeUnknown`.
 #[derive(Default)]
 struct ClosingWorld {
-    started: Vec<rastok::boundary::CallId>,
-    cancelled: Vec<rastok::boundary::CallId>,
-    answers: Vec<Response>,
+    started: Vec<rastok::connector::exchange::CallId>,
+    cancelled: Vec<rastok::connector::exchange::CallId>,
+    answers: Vec<CallResponse>,
     confirm_cancel: bool,
 }
 
-impl CallConnectorDriver for ClosingWorld {
+impl OutboundCall for ClosingWorld {
     fn prepare_request(
         &mut self,
         _: &node::Path,
         data: &Data,
         _: &std::collections::BTreeMap<String, rastok::value::Value>,
     ) -> RequestPreparation {
-        rastok::boundary::prepare_process_request(rastok::boundary::RequestCodec::Lines, data)
+        rastok::connector::stdlib::prepare_process_request(
+            rastok::connector::stdlib::RequestCodec::Lines,
+            data,
+        )
     }
 
     fn scheduler_completion(
@@ -181,7 +201,7 @@ impl CallConnectorDriver for ClosingWorld {
         _: &node::Path,
         completion: SchedulerCompletion,
     ) -> Completion {
-        rastok::boundary::process_scheduler_completion(completion)
+        rastok::connector::stdlib::process_scheduler_completion(completion)
     }
 
     fn start(&mut self, intent: &CallOpen, _: &Envelope) -> CallStart {
@@ -189,10 +209,10 @@ impl CallConnectorDriver for ClosingWorld {
         CallStart::Started
     }
 
-    fn cancel(&mut self, call_id: &rastok::boundary::CallId) {
+    fn cancel(&mut self, call_id: &rastok::connector::exchange::CallId) {
         self.cancelled.push(*call_id);
         if self.confirm_cancel {
-            self.answers.push(Response {
+            self.answers.push(CallResponse {
                 call_id: *call_id,
                 completion: Completion::process(
                     vec![],
@@ -206,7 +226,7 @@ impl CallConnectorDriver for ClosingWorld {
         }
     }
 
-    fn events(&mut self) -> Vec<Response> {
+    fn poll_responses(&mut self) -> Vec<CallResponse> {
         core::mem::take(&mut self.answers)
     }
 }
@@ -233,14 +253,17 @@ graph bounded_closing : App {
 }
 "#;
 
-impl CallConnectorDriver for EchoWorld {
+impl OutboundCall for EchoWorld {
     fn prepare_request(
         &mut self,
         _: &node::Path,
         data: &Data,
         _: &std::collections::BTreeMap<String, rastok::value::Value>,
     ) -> RequestPreparation {
-        rastok::boundary::prepare_process_request(rastok::boundary::RequestCodec::Lines, data)
+        rastok::connector::stdlib::prepare_process_request(
+            rastok::connector::stdlib::RequestCodec::Lines,
+            data,
+        )
     }
 
     fn scheduler_completion(
@@ -248,7 +271,7 @@ impl CallConnectorDriver for EchoWorld {
         _: &node::Path,
         completion: SchedulerCompletion,
     ) -> Completion {
-        rastok::boundary::process_scheduler_completion(completion)
+        rastok::connector::stdlib::process_scheduler_completion(completion)
     }
 
     fn start(&mut self, intent: &CallOpen, request: &Envelope) -> CallStart {
@@ -257,10 +280,10 @@ impl CallConnectorDriver for EchoWorld {
         CallStart::Started
     }
 
-    fn events(&mut self) -> Vec<Response> {
+    fn poll_responses(&mut self) -> Vec<CallResponse> {
         self.seen
             .drain(..)
-            .map(|intent| Response {
+            .map(|intent| CallResponse {
                 call_id: intent.call_id,
                 completion: if self.fail_next {
                     Completion::process(
@@ -291,7 +314,7 @@ struct FileSettingsWorld {
     prepared: Vec<std::collections::BTreeMap<String, Value>>,
 }
 
-impl CallConnectorDriver for FileSettingsWorld {
+impl OutboundCall for FileSettingsWorld {
     fn prepare_request(
         &mut self,
         _: &node::Path,
@@ -299,7 +322,9 @@ impl CallConnectorDriver for FileSettingsWorld {
         settings: &std::collections::BTreeMap<String, Value>,
     ) -> RequestPreparation {
         self.prepared.push(settings.clone());
-        RequestPreparation::Prepared(rastok::boundary::PreparedRequest::seal(Vec::new()))
+        RequestPreparation::Prepared(rastok::connector::exchange::PreparedRequest::seal(
+            Vec::new(),
+        ))
     }
 
     fn scheduler_completion(&mut self, _: &node::Path, _: SchedulerCompletion) -> Completion {
@@ -320,7 +345,7 @@ impl CallConnectorDriver for FileSettingsWorld {
         CallStart::Started
     }
 
-    fn events(&mut self) -> Vec<Response> {
+    fn poll_responses(&mut self) -> Vec<CallResponse> {
         Vec::new()
     }
 }
@@ -412,8 +437,8 @@ fn text_submission(text: &str) -> IngressProposal {
     }
 }
 
-fn websocket_proposal(reference: u64, text: &str, session: InboundSession) -> RetainedProposal {
-    RetainedProposal {
+fn websocket_proposal(reference: u64, text: &str, session: InboundSession) -> PendingIngress {
+    PendingIngress {
         handle: IngressProposalHandle::new(reference),
         proposal: IngressProposal {
             provenance: IngressProvenance::single(
@@ -2163,7 +2188,7 @@ fn silent_cancel_becomes_one_unknown_only_after_settlement() {
         )),
         "the invocation exit precedes lifecycle reclamation"
     );
-    world.answers.push(Response {
+    world.answers.push(CallResponse {
         call_id: world.started[0],
         completion: Completion::process(
             vec![],
@@ -2218,7 +2243,7 @@ fn bounded_closing_interleavings_are_model_checked() {
             .unwrap();
         vm.poll_drivers(&mut journal, &mut world).unwrap();
         let call = world.started[0];
-        let reply = || Response {
+        let reply = || CallResponse {
             call_id: call,
             completion: Completion::process(
                 vec![],
@@ -3060,7 +3085,7 @@ fn malformed_terminal_facts_are_refused_loudly() {
     let open = journal.open_calls();
     let mut world = ScriptedWorld {
         answers: vec![
-            Response {
+            CallResponse {
                 call_id: open[0].call_id,
                 completion: Completion::try_new(vec![EnvelopeDraft {
                     port: node::Port::conventional_exit(),
@@ -3074,7 +3099,7 @@ fn malformed_terminal_facts_are_refused_loudly() {
                 }])
                 .unwrap(),
             },
-            Response {
+            CallResponse {
                 call_id: open[0].call_id,
                 completion: Completion::try_new(vec![EnvelopeDraft {
                     port: node::Port::conventional_exit(),
@@ -3104,17 +3129,20 @@ fn malformed_terminal_facts_are_refused_loudly() {
 
 /// A world answering from a script, for integrity tests.
 struct ScriptedWorld {
-    answers: Vec<Response>,
+    answers: Vec<CallResponse>,
 }
 
-impl CallConnectorDriver for ScriptedWorld {
+impl OutboundCall for ScriptedWorld {
     fn prepare_request(
         &mut self,
         _: &node::Path,
         data: &Data,
         _: &std::collections::BTreeMap<String, rastok::value::Value>,
     ) -> RequestPreparation {
-        rastok::boundary::prepare_process_request(rastok::boundary::RequestCodec::Lines, data)
+        rastok::connector::stdlib::prepare_process_request(
+            rastok::connector::stdlib::RequestCodec::Lines,
+            data,
+        )
     }
 
     fn scheduler_completion(
@@ -3122,13 +3150,13 @@ impl CallConnectorDriver for ScriptedWorld {
         _: &node::Path,
         completion: SchedulerCompletion,
     ) -> Completion {
-        rastok::boundary::process_scheduler_completion(completion)
+        rastok::connector::stdlib::process_scheduler_completion(completion)
     }
 
     fn start(&mut self, _: &CallOpen, _: &Envelope) -> CallStart {
         CallStart::Started
     }
-    fn events(&mut self) -> Vec<Response> {
+    fn poll_responses(&mut self) -> Vec<CallResponse> {
         std::mem::take(&mut self.answers)
     }
 }
@@ -3166,7 +3194,7 @@ impl SessionWorld {
     }
 }
 
-impl OutboundConnectorBindings for SessionWorld {
+impl OutboundDrivers for SessionWorld {
     fn prepare_request(
         &mut self,
         connector: &node::Path,
@@ -3187,7 +3215,7 @@ impl OutboundConnectorBindings for SessionWorld {
     fn cancel(
         &mut self,
         connector: &node::Path,
-        _: &rastok::boundary::CallId,
+        _: &rastok::connector::exchange::CallId,
     ) -> Result<(), DriverRouteError> {
         Err(DriverRouteError::UnboundOutbound(connector.clone()))
     }
@@ -3198,7 +3226,7 @@ impl OutboundConnectorBindings for SessionWorld {
         ))
     }
 
-    fn events(&mut self) -> Result<Vec<Response>, DriverRouteError> {
+    fn poll_responses(&mut self) -> Result<Vec<CallResponse>, DriverRouteError> {
         Ok(Vec::new())
     }
 
@@ -3283,7 +3311,7 @@ impl OutboundConnectorBindings for SessionWorld {
         Ok(SessionStart::Started)
     }
 
-    fn session_events(&mut self) -> Result<Vec<SessionObservation>, DriverRouteError> {
+    fn poll_observations(&mut self) -> Result<Vec<SessionObservation>, DriverRouteError> {
         Ok(std::mem::take(&mut self.events))
     }
 
@@ -4663,7 +4691,7 @@ struct FlakyJournal {
     refuse_commits: bool,
     refuse_opens: bool,
     refuse_closes: bool,
-    refuse_call: Option<rastok::boundary::CallId>,
+    refuse_call: Option<rastok::connector::exchange::CallId>,
     refuse_close_requests: bool,
     recovery_records: Option<Vec<Record>>,
 }
@@ -4779,7 +4807,7 @@ impl Journal for FlakyJournal {
     }
     fn close_egress(
         &mut self,
-        call_id: &rastok::boundary::CallId,
+        call_id: &rastok::connector::exchange::CallId,
         closure: rastok::journal::Closure,
         closed_at: i64,
         schedule: Option<Box<rastok::journal::deadline::Deadlines>>,
@@ -4792,7 +4820,7 @@ impl Journal for FlakyJournal {
     }
     fn abandon_egress(
         &mut self,
-        call_id: &rastok::boundary::CallId,
+        call_id: &rastok::connector::exchange::CallId,
         closed_at: i64,
     ) -> Result<rastok::journal::CloseVerdict, rastok::journal::Error> {
         if self.refuse_closes {
@@ -4803,7 +4831,7 @@ impl Journal for FlakyJournal {
     fn find_envelope(&self, id: rastok::envelope::Id) -> Option<Envelope> {
         self.inner.find_envelope(id)
     }
-    fn find_call(&self, call_id: &rastok::boundary::CallId) -> Option<CallOpen> {
+    fn find_call(&self, call_id: &rastok::connector::exchange::CallId) -> Option<CallOpen> {
         self.inner.find_call(call_id)
     }
     fn open_calls(&self) -> Vec<CallOpen> {
@@ -5108,7 +5136,7 @@ fn graph_call_commits_and_openings_are_atomic_under_storage_refusal() {
             }
             vm.poll_drivers(&mut journal, &mut world).unwrap();
             if world.started.len() > answered {
-                world.answers.push(Response {
+                world.answers.push(CallResponse {
                     call_id: world.started[answered],
                     completion: Completion::process(
                         vec![Data::materialized(Value::Text("frame".into()))],
@@ -5146,7 +5174,7 @@ fn graph_call_recovery_refuses_missing_contexts_and_unsettled_obligations() {
     vm.run_ready_with_bindings(&mut journal, &mut world)
         .unwrap();
     vm.poll_drivers(&mut journal, &mut world).unwrap();
-    world.answers.push(Response {
+    world.answers.push(CallResponse {
         call_id: world.started[0],
         completion: Completion::process(
             vec![Data::materialized(Value::Text("frame".into()))],
@@ -5367,9 +5395,11 @@ graph app : App {
                         matches!(
                             error,
                             ExecutionFault::Journal(rastok::journal::Error::Storage(_))
-                                | ExecutionFault::Dispatch(rastok::boundary::PollFault::Journal(
-                                    rastok::journal::Error::Storage(_)
-                                ))
+                                | ExecutionFault::Dispatch(
+                                    rastok::runtime::execution::driver_polling::PollFault::Journal(
+                                        rastok::journal::Error::Storage(_)
+                                    )
+                                )
                         ),
                         "{error:?}"
                     );
@@ -5396,7 +5426,7 @@ graph app : App {
             advance(&mut vm, &mut journal, &mut world, now, faulted);
             vm.poll_drivers(&mut journal, &mut world).unwrap();
             assert_eq!(world.started.len(), attempt, "faulted={faulted}, now={now}");
-            world.answers.push(Response {
+            world.answers.push(CallResponse {
                 call_id: *world.started.last().unwrap(),
                 completion: Completion::process(
                     vec![Data::materialized(Value::Text(format!("stdout {attempt}")))],
@@ -5418,7 +5448,9 @@ graph app : App {
                 assert!(matches!(
                     vm.poll_drivers(&mut journal, &mut world),
                     Err(ExecutionFault::Dispatch(
-                        rastok::boundary::PollFault::Journal(rastok::journal::Error::Storage(_))
+                        rastok::runtime::execution::driver_polling::PollFault::Journal(
+                            rastok::journal::Error::Storage(_)
+                        )
                     ))
                 ));
                 assert_eq!(journal.inner.records(), records);
@@ -5508,7 +5540,7 @@ graph app : App {
         vm.poll_drivers(&mut journal, &mut world).unwrap();
         assert_eq!(world.started.len(), 2);
         for call_id in &world.started {
-            world.answers.push(Response {
+            world.answers.push(CallResponse {
                 call_id: *call_id,
                 completion: Completion::process(
                     vec![Data::materialized(Value::Text("answer".into()))],
@@ -5523,7 +5555,7 @@ graph app : App {
         let late = world.answers[0].clone();
         world.answers.insert(
             0,
-            Response {
+            CallResponse {
                 call_id: world.started[0],
                 completion: Completion::process(
                     vec![Data::materialized(Value::Uint(0))],
@@ -5539,7 +5571,9 @@ graph app : App {
         assert!(matches!(
             vm.poll_drivers(&mut journal, &mut world),
             Err(ExecutionFault::Dispatch(
-                rastok::boundary::PollFault::Journal(rastok::journal::Error::Storage(_))
+                rastok::runtime::execution::driver_polling::PollFault::Journal(
+                    rastok::journal::Error::Storage(_)
+                )
             ))
         ));
         assert_eq!(journal.inner.open_calls().len(), 2 - refused);
@@ -5614,7 +5648,7 @@ graph app : App {
     vm.poll_drivers(&mut journal, &mut world).unwrap();
     assert_eq!(world.started.len(), 1);
     let opening = journal.inner.records().to_vec();
-    world.answers.push(Response {
+    world.answers.push(CallResponse {
         call_id: world.started[0],
         completion: Completion::process(
             vec![],
@@ -5982,7 +6016,9 @@ fn a_scheduler_projection_refusal_precedes_the_timeout_close() {
     assert!(matches!(
         vm.advance_to(&mut journal, &mut bindings, 5_000_000_000),
         Err(ExecutionFault::Dispatch(
-            rastok::boundary::PollFault::Driver(DriverRouteError::UnavailableOutbound(_))
+            rastok::runtime::execution::driver_polling::PollFault::Driver(
+                DriverRouteError::UnavailableOutbound(_)
+            )
         ))
     ));
     assert_eq!(journal.records().len(), facts_before);
@@ -6015,7 +6051,9 @@ fn a_cancel_refusal_cannot_strand_an_expiring_call() {
     assert!(matches!(
         vm.advance_to(&mut journal, &mut bindings, 5_000_000_000),
         Err(ExecutionFault::Dispatch(
-            rastok::boundary::PollFault::Driver(DriverRouteError::UnavailableOutbound(_))
+            rastok::runtime::execution::driver_polling::PollFault::Driver(
+                DriverRouteError::UnavailableOutbound(_)
+            )
         ))
     ));
     assert_eq!(
@@ -6239,7 +6277,7 @@ fn a_late_answer_is_a_reported_observation_not_a_silence() {
         .unwrap();
     // …then the world answers a closed call.
     let mut late = ScriptedWorld {
-        answers: vec![Response {
+        answers: vec![CallResponse {
             call_id,
             completion: Completion::process(
                 vec![Data::encoded(Encoding::Raw, *b"tard")],
