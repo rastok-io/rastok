@@ -9,7 +9,6 @@ use crate::connector::driver::Outbound;
 use crate::connector::driver::OutboundCall;
 use crate::connector::driver::OutboundDrivers;
 use crate::connector::driver::Session;
-use crate::connector::driver::SessionConnectorBindings;
 use crate::connector::drivers::registry::{
     DriverFactory, DriverFactoryError, DriverRegistrationError,
 };
@@ -731,10 +730,10 @@ fn one_both_role_session_driver_correlates_concurrent_openings_and_writes() {
     let second = opening(2);
     for intent in [&first, &second] {
         journal.open_outbound_session(intent.clone()).unwrap();
-        SessionConnectorBindings::open_session(&mut bindings, intent, &request).unwrap();
+        OutboundDrivers::open_session(&mut bindings, intent, &request).unwrap();
     }
     assert_eq!(
-        SessionConnectorBindings::poll_observations(&mut bindings).unwrap(),
+        OutboundDrivers::poll_observations(&mut bindings).unwrap(),
         [
             SessionObservation::Opened(second.session_id),
             SessionObservation::Opened(first.session_id),
@@ -759,10 +758,10 @@ fn one_both_role_session_driver_correlates_concurrent_openings_and_writes() {
     let second_write = write(second.session_id, 4);
     for intent in [&first_write, &second_write] {
         journal.open_session_write(intent.clone()).unwrap();
-        SessionConnectorBindings::write_session(&mut bindings, intent, &request).unwrap();
+        OutboundDrivers::write_session(&mut bindings, intent, &request).unwrap();
     }
     assert_eq!(
-        SessionConnectorBindings::poll_observations(&mut bindings).unwrap(),
+        OutboundDrivers::poll_observations(&mut bindings).unwrap(),
         [
             SessionObservation::WriteSettled {
                 session: second.session_id,
@@ -779,8 +778,8 @@ fn one_both_role_session_driver_correlates_concurrent_openings_and_writes() {
         ["inbound", "open", "open", "write", "write"]
     );
 
-    SessionConnectorBindings::abort_session(&mut bindings, &connector, first.session_id).unwrap();
-    SessionConnectorBindings::abort_session(&mut bindings, &connector, first.session_id).unwrap();
+    OutboundDrivers::abort_session(&mut bindings, &connector, first.session_id).unwrap();
+    OutboundDrivers::abort_session(&mut bindings, &connector, first.session_id).unwrap();
     assert_eq!(
         observations
             .lock()
@@ -792,12 +791,12 @@ fn one_both_role_session_driver_correlates_concurrent_openings_and_writes() {
     );
     assert!(bindings.sessions.contains_key(&first.session_id));
     assert!(
-        SessionConnectorBindings::poll_observations(&mut bindings)
+        OutboundDrivers::poll_observations(&mut bindings)
             .unwrap()
             .is_empty()
     );
-    SessionConnectorBindings::forget_session(&mut bindings, first.session_id).unwrap();
-    SessionConnectorBindings::forget_session(&mut bindings, first.session_id).unwrap();
+    OutboundDrivers::forget_session(&mut bindings, first.session_id).unwrap();
+    OutboundDrivers::forget_session(&mut bindings, first.session_id).unwrap();
     assert_eq!(
         observations
             .lock()
@@ -811,10 +810,10 @@ fn one_both_role_session_driver_correlates_concurrent_openings_and_writes() {
     assert!(!bindings.sessions.contains_key(&first.session_id));
     assert!(bindings.sessions.contains_key(&second.session_id));
     assert!(matches!(
-        SessionConnectorBindings::abort_session(&mut bindings, &connector, first.session_id),
+        OutboundDrivers::abort_session(&mut bindings, &connector, first.session_id),
         Err(crate::connector::driver::DriverRouteError::UncorrelatedSession(reference)) if reference == first.session_id
     ));
-    SessionConnectorBindings::write_session(&mut bindings, &second_write, &request).unwrap();
+    OutboundDrivers::write_session(&mut bindings, &second_write, &request).unwrap();
 }
 
 #[test]

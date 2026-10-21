@@ -273,14 +273,14 @@ mod tests {
         replies: Vec<CallResponse>,
     }
 
-    impl OutboundCall for Scripted {
+    impl OutboundDrivers for Scripted {
         fn prepare_request(
             &mut self,
             _: &node::Path,
             data: &Data,
             _: &alloc::collections::BTreeMap<String, crate::value::Value>,
-        ) -> RequestPreparation {
-            match prepare_lines(data) {
+        ) -> Result<RequestPreparation, DriverRouteError> {
+            Ok(match prepare_lines(data) {
                 Ok(prepared) => RequestPreparation::Prepared(prepared),
                 Err(message) => RequestPreparation::Rejected(Completion::process_exit(
                     ProcessExit::DecodeFailed {
@@ -288,27 +288,35 @@ mod tests {
                         line: None,
                     },
                 )),
-            }
+            })
         }
 
         fn scheduler_completion(
             &mut self,
             _: &node::Path,
             completion: SchedulerCompletion,
-        ) -> Completion {
-            Completion::process_exit(match completion {
+        ) -> Result<Completion, DriverRouteError> {
+            Ok(Completion::process_exit(match completion {
                 SchedulerCompletion::TimeoutExpired => ProcessExit::TimeoutExpired,
                 SchedulerCompletion::OutcomeUnknown => ProcessExit::OutcomeUnknown,
-            })
+            }))
         }
 
-        fn start(&mut self, intent: &CallOpen, request: &Envelope) -> CallStart {
+        fn cancel(&mut self, _: &node::Path, _: &CallId) -> Result<(), DriverRouteError> {
+            Ok(())
+        }
+
+        fn start(
+            &mut self,
+            intent: &CallOpen,
+            request: &Envelope,
+        ) -> Result<CallStart, DriverRouteError> {
             self.started.push((intent.clone(), request.clone()));
-            CallStart::Started
+            Ok(CallStart::Started)
         }
 
-        fn poll_responses(&mut self) -> Vec<CallResponse> {
-            core::mem::take(&mut self.replies)
+        fn poll_responses(&mut self) -> Result<Vec<CallResponse>, DriverRouteError> {
+            Ok(core::mem::take(&mut self.replies))
         }
     }
 

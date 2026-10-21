@@ -7,6 +7,10 @@
 // correct report is a panic.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+#[path = "support/call_driver.rs"]
+mod call_driver;
+use call_driver::CallDriver;
+
 use rastok::connector::driver::DriverRouteError;
 use rastok::connector::driver::OutboundCall;
 use rastok::connector::driver::OutboundDrivers;
@@ -547,10 +551,11 @@ fn run_probe() -> (MemJournal, Vec<rastok::runtime::execution::BoundaryOutput>) 
     let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
     let mut world = EchoWorld::default();
     vm.accept_input(&mut journal, submission("salut")).unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
     assert!(vm.is_stable());
     (journal, vm.outputs().to_vec())
@@ -583,7 +588,7 @@ graph file_path : App {
 
     vm.accept_input(&mut journal, text_submission("objects/report.bin"))
         .expect("the text path is admitted");
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .expect("resolution and call opening succeed");
 
     let expected = std::collections::BTreeMap::from([(
@@ -1155,7 +1160,7 @@ fn within_evicts_only_a_still_buffered_candidate() {
     expired
         .advance_to(
             &mut expired_journal,
-            &mut EchoWorld::default(),
+            &mut CallDriver(&mut EchoWorld::default()),
             1_000_000_000,
         )
         .unwrap();
@@ -1179,7 +1184,7 @@ fn within_evicts_only_a_still_buffered_candidate() {
     joined
         .advance_to(
             &mut joined_journal,
-            &mut EchoWorld::default(),
+            &mut CallDriver(&mut EchoWorld::default()),
             1_000_000_000,
         )
         .unwrap();
@@ -1559,10 +1564,11 @@ graph dynamic_binding : App {
         .unwrap();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
-        vm.run_ready_with_bindings(&mut journal, &mut process)
+        vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut process))
             .unwrap();
-        vm.poll_drivers(&mut journal, &mut process).unwrap();
-        vm.run_ready_with_bindings(&mut journal, &mut process)
+        vm.poll_drivers(&mut journal, &mut CallDriver(&mut process))
+            .unwrap();
+        vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut process))
             .unwrap();
         if vm.is_stable() {
             break;
@@ -1824,7 +1830,7 @@ graph lifecycle : App {
     );
 
     let mut world = EchoWorld::default();
-    vm.advance_to(&mut journal, &mut world, 1_000_000_000)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 1_000_000_000)
         .unwrap();
     assert_eq!(
         vm.outputs()
@@ -1977,11 +1983,11 @@ graph nested_lifetimes : App {
         .accept_input(&mut journal, text_submission("salut"))
         .unwrap();
     let mut world = EchoWorld::default();
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
     assert!(vm.has_open_obligations());
 
-    vm.advance_to(&mut journal, &mut world, 1_000_000_000)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 1_000_000_000)
         .unwrap();
     assert!(
         journal.records().iter().all(|record| !matches!(
@@ -1993,7 +1999,8 @@ graph nested_lifetimes : App {
         "instance expiry cannot replace an open call's terminal fact"
     );
 
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
     vm.run_ready(&mut journal).unwrap();
     let shell_transactions: Vec<_> = journal
         .records()
@@ -2068,15 +2075,16 @@ graph draining : App {
 
     vm.accept_input(&mut journal, text_submission("salut"))
         .unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
     assert!(vm.has_open_obligations());
     assert_eq!(vm.outputs().len(), 1, "the seed creates collect first");
 
-    vm.advance_to(&mut journal, &mut world, 1_000_000_000)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 1_000_000_000)
         .unwrap();
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
 
     assert_eq!(vm.outputs().len(), 2);
@@ -2110,18 +2118,19 @@ fn a_confirmed_cancel_keeps_the_observed_exit_and_never_invents_unknown() {
 
     vm.accept_input(&mut journal, text_submission("salut"))
         .unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
     assert_eq!(world.started.len(), 1);
 
-    vm.advance_to(&mut journal, &mut world, 1_000_000_000)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 1_000_000_000)
         .unwrap();
     assert!(
         world.cancelled.is_empty(),
         "Closing first offers the drain budget"
     );
-    vm.advance_to(&mut journal, &mut world, 2_000_000_000)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 2_000_000_000)
         .unwrap();
 
     assert_eq!(world.cancelled, world.started);
@@ -2151,10 +2160,11 @@ fn silent_cancel_becomes_one_unknown_only_after_settlement() {
 
     vm.accept_input(&mut journal, text_submission("salut"))
         .unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
-    vm.advance_to(&mut journal, &mut world, 2_000_000_000)
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 2_000_000_000)
         .unwrap();
     assert_eq!(world.cancelled.len(), 1);
     assert!(source_exit_cases(&vm).is_empty());
@@ -2163,7 +2173,7 @@ fn silent_cancel_becomes_one_unknown_only_after_settlement() {
         "settlement is a real grace interval"
     );
 
-    vm.advance_to(&mut journal, &mut world, 3_000_000_000)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 3_000_000_000)
         .unwrap();
     assert_eq!(source_exit_cases(&vm), ["OutcomeUnknown"]);
     assert_eq!(
@@ -2199,7 +2209,9 @@ fn silent_cancel_becomes_one_unknown_only_after_settlement() {
             },
         ),
     });
-    let report = vm.poll_drivers(&mut journal, &mut world).unwrap();
+    let report = vm
+        .poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
     assert_eq!(
         report.discarded.len(),
         1,
@@ -2239,9 +2251,10 @@ fn bounded_closing_interleavings_are_model_checked() {
         };
         vm.accept_input(&mut journal, text_submission("one"))
             .unwrap();
-        vm.run_ready_with_bindings(&mut journal, &mut world)
+        vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
             .unwrap();
-        vm.poll_drivers(&mut journal, &mut world).unwrap();
+        vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+            .unwrap();
         let call = world.started[0];
         let reply = || CallResponse {
             call_id: call,
@@ -2257,26 +2270,29 @@ fn bounded_closing_interleavings_are_model_checked() {
 
         // t=1 requests Closing; t=2 ends drain and requests cancel;
         // t=3 ends settlement. Reply placement is the model dimension.
-        vm.advance_to(&mut journal, &mut world, 1_000_000_000)
+        vm.advance_to(&mut journal, &mut CallDriver(&mut world), 1_000_000_000)
             .unwrap();
         if matches!(reply_at, ReplyAt::BeforeDrain) {
             world.answers.push(reply());
-            vm.poll_drivers(&mut journal, &mut world).unwrap();
-            vm.run_ready_with_bindings(&mut journal, &mut world)
+            vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+                .unwrap();
+            vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
                 .unwrap();
         }
-        vm.advance_to(&mut journal, &mut world, 2_000_000_000)
+        vm.advance_to(&mut journal, &mut CallDriver(&mut world), 2_000_000_000)
             .unwrap();
         if matches!(reply_at, ReplyAt::DuringSettlement) {
             world.answers.push(reply());
-            vm.poll_drivers(&mut journal, &mut world).unwrap();
+            vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+                .unwrap();
             vm.run_ready(&mut journal).unwrap();
         }
-        vm.advance_to(&mut journal, &mut world, 3_000_000_000)
+        vm.advance_to(&mut journal, &mut CallDriver(&mut world), 3_000_000_000)
             .unwrap();
         let late = if matches!(reply_at, ReplyAt::AfterSettlement) {
             world.answers.push(reply());
-            vm.poll_drivers(&mut journal, &mut world).unwrap()
+            vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+                .unwrap()
         } else {
             Default::default()
         };
@@ -2353,10 +2369,11 @@ fn external_arrival_waits_for_the_clean_successor_generation() {
 
     vm.accept_input(&mut journal, text_submission("first"))
         .unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
-    vm.advance_to(&mut journal, &mut world, 1_000_000_000)
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 1_000_000_000)
         .unwrap();
     let second = vm
         .accept_input(&mut journal, text_submission("second"))
@@ -2369,7 +2386,7 @@ fn external_arrival_waits_for_the_clean_successor_generation() {
         "the committed arrival has not executed in the closing generation"
     );
 
-    vm.advance_to(&mut journal, &mut world, 2_000_000_000)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 2_000_000_000)
         .unwrap();
     let root_lifecycle: Vec<_> = journal
         .records()
@@ -2443,15 +2460,16 @@ graph two_calls : App {
         .unwrap();
     vm.accept_input(&mut journal, text_submission("queued"))
         .unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
     assert_eq!(
         world.started.len(),
         2,
         "one call per claimed connector starts"
     );
-    vm.advance_to(&mut journal, &mut world, 2_000_000_000)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 2_000_000_000)
         .unwrap();
     let mut sorted = world.cancelled.clone();
     sorted.sort();
@@ -2459,7 +2477,7 @@ graph two_calls : App {
         world.cancelled, sorted,
         "cancels follow canonical CallId order"
     );
-    vm.advance_to(&mut journal, &mut world, 3_000_000_000)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 3_000_000_000)
         .unwrap();
 
     let residual_count: usize = journal
@@ -2524,7 +2542,7 @@ graph finite : App {{
         vm.accept_input(&mut journal, int_submission(1)).unwrap();
         vm.run_ready(&mut journal).unwrap();
         if needs_advance {
-            vm.advance_to(&mut journal, &mut world, 1_000_000_000)
+            vm.advance_to(&mut journal, &mut CallDriver(&mut world), 1_000_000_000)
                 .unwrap();
         }
         vm.accept_input(&mut journal, int_submission(2)).unwrap();
@@ -2592,7 +2610,8 @@ graph persistent : App {
     let mut world = EchoWorld::default();
 
     vm.accept_input(&mut journal, int_submission(1)).unwrap();
-    vm.advance_to(&mut journal, &mut world, i64::MAX).unwrap();
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), i64::MAX)
+        .unwrap();
 
     let lifecycle: Vec<_> = journal
         .records()
@@ -2642,10 +2661,10 @@ graph keyed_fixed : App {
     let mut world = EchoWorld::default();
 
     vm.accept_input(&mut journal, int_submission(1)).unwrap();
-    vm.advance_to(&mut journal, &mut world, 500_000_000)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 500_000_000)
         .unwrap();
     vm.accept_input(&mut journal, int_submission(2)).unwrap();
-    vm.advance_to(&mut journal, &mut world, 1_000_000_000)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 1_000_000_000)
         .unwrap();
 
     let stopped: Vec<_> = journal
@@ -2663,7 +2682,7 @@ graph keyed_fixed : App {
         .collect();
     assert_eq!(stopped.len(), 1, "only the t=0 key reaches its deadline");
 
-    vm.advance_to(&mut journal, &mut world, 1_500_000_000)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 1_500_000_000)
         .unwrap();
     let stopped = journal
         .records()
@@ -2822,7 +2841,7 @@ graph windows : App {
 
     vm.accept_input(&mut journal, int_submission(1)).unwrap();
     vm.accept_input(&mut journal, int_submission(2)).unwrap();
-    vm.advance_to(&mut journal, &mut world, 5_000_000_000)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 5_000_000_000)
         .unwrap();
     vm.accept_input(&mut journal, int_submission(3)).unwrap();
     vm.run_ready(&mut journal).unwrap();
@@ -2909,13 +2928,13 @@ graph clipped : App {
     let mut world = EchoWorld::default();
 
     vm.accept_input(&mut journal, int_submission(1)).unwrap();
-    vm.advance_to(&mut journal, &mut world, 1_000_000_000)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 1_000_000_000)
         .unwrap();
     assert!(matches!(
         vm.accept_input(&mut journal, int_submission(2)),
         Err(ExecutionFault::ClosedTimeBox { owner, start_ns: 0 }) if owner.to_string() == "window"
     ));
-    vm.advance_to(&mut journal, &mut world, 5_000_000_000)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 5_000_000_000)
         .unwrap();
     vm.accept_input(&mut journal, int_submission(2)).unwrap();
     vm.run_ready(&mut journal).unwrap();
@@ -2948,15 +2967,15 @@ graph parent : App {
     let mut world = EchoWorld::default();
 
     vm.accept_input(&mut journal, int_submission(1)).unwrap();
-    vm.advance_to(&mut journal, &mut world, 1_000_000_000)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 1_000_000_000)
         .unwrap();
     vm.accept_input(&mut journal, int_submission(2)).unwrap();
     vm.run_ready(&mut journal).unwrap();
-    vm.advance_to(&mut journal, &mut world, 2_000_000_000)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 2_000_000_000)
         .unwrap();
 
     let records_after_successor = journal.records().len();
-    vm.advance_to(&mut journal, &mut world, 5_000_000_000)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 5_000_000_000)
         .unwrap();
 
     let child_stops: Vec<u64> = journal
@@ -3006,8 +3025,12 @@ graph ties : App {
         let mut journal = MemJournal::new(GraphVersion(1));
         let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
         vm.accept_input(&mut journal, int_submission(1)).unwrap();
-        vm.advance_to(&mut journal, &mut EchoWorld::default(), 1_000_000_000)
-            .unwrap();
+        vm.advance_to(
+            &mut journal,
+            &mut CallDriver(&mut EchoWorld::default()),
+            1_000_000_000,
+        )
+        .unwrap();
         journal
     };
     let once = run();
@@ -3042,10 +3065,11 @@ fn stderr_and_terminal_status_leave_on_independent_ports() {
         ..EchoWorld::default()
     };
     vm.accept_input(&mut journal, submission("salut")).unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
     // stderr is ordinary data on `err`; the non-zero child status is an
     // independent, typed `Exited` terminal fact.
@@ -3080,7 +3104,7 @@ fn malformed_terminal_facts_are_refused_loudly() {
     let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
     let mut opener = EchoWorld::default();
     vm.accept_input(&mut journal, submission("salut")).unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut opener)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut opener))
         .unwrap();
     let open = journal.open_calls();
     let mut world = ScriptedWorld {
@@ -3110,7 +3134,9 @@ fn malformed_terminal_facts_are_refused_loudly() {
             },
         ],
     };
-    let report = vm.poll_drivers(&mut journal, &mut world).unwrap();
+    let report = vm
+        .poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
     // Refused BEFORE the causal fact: the reply is rejected with
     // its reason, and the call stays open — the timeout machinery
     // can still settle it honestly.
@@ -5124,7 +5150,7 @@ fn graph_call_commits_and_openings_are_atomic_under_storage_refusal() {
                     journal.refuse_commits = true;
                     journal.refuse_opens = true;
                     assert!(matches!(
-                        vm.step_with_bindings(&mut journal, &mut world),
+                        vm.step_with_bindings(&mut journal, &mut CallDriver(&mut world)),
                         Err(ExecutionFault::Journal(rastok::journal::Error::Storage(_)))
                     ));
                     assert_eq!(vm.inspection(), before);
@@ -5132,9 +5158,13 @@ fn graph_call_commits_and_openings_are_atomic_under_storage_refusal() {
                     journal.refuse_commits = false;
                     journal.refuse_opens = false;
                 }
-                assert!(vm.step_with_bindings(&mut journal, &mut world).unwrap());
+                assert!(
+                    vm.step_with_bindings(&mut journal, &mut CallDriver(&mut world))
+                        .unwrap()
+                );
             }
-            vm.poll_drivers(&mut journal, &mut world).unwrap();
+            vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+                .unwrap();
             if world.started.len() > answered {
                 world.answers.push(CallResponse {
                     call_id: world.started[answered],
@@ -5148,7 +5178,8 @@ fn graph_call_commits_and_openings_are_atomic_under_storage_refusal() {
                     ),
                 });
                 answered += 1;
-                vm.poll_drivers(&mut journal, &mut world).unwrap();
+                vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+                    .unwrap();
             }
             if vm.is_stable() {
                 break;
@@ -5171,9 +5202,10 @@ fn graph_call_recovery_refuses_missing_contexts_and_unsettled_obligations() {
     let mut world = ClosingWorld::default();
     vm.accept_input(&mut journal, text_submission("same"))
         .unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
     world.answers.push(CallResponse {
         call_id: world.started[0],
         completion: Completion::process(
@@ -5185,10 +5217,11 @@ fn graph_call_recovery_refuses_missing_contexts_and_unsettled_obligations() {
             },
         ),
     });
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
     while !journal.inner.records().iter().any(|record| matches!(record, Record::Transaction(record)
         if record.loop_protocol().is_some_and(|packet| packet.facts.iter().any(|fact| matches!(fact, Fact::Advance { .. }))))) {
-        assert!(vm.step_with_bindings(&mut journal, &mut world).unwrap());
+        assert!(vm.step_with_bindings(&mut journal, &mut CallDriver(&mut world)).unwrap());
     }
     let original = journal.inner.records().to_vec();
     let completed = original.iter().position(|record| matches!(record, Record::Transaction(record)
@@ -5197,7 +5230,7 @@ fn graph_call_recovery_refuses_missing_contexts_and_unsettled_obligations() {
         journal.recovery_records = Some(original[..cut].to_vec());
         let mut restored = Execution::new(&compilation.plan, GraphVersion(1));
         restored
-            .recover_with_bindings(&journal, &mut world)
+            .recover_with_bindings(&journal, &mut CallDriver(&mut world))
             .unwrap_or_else(|error| panic!("prefix {cut}: {error}"));
         assert_eq!(world.started.len(), 1);
     }
@@ -5226,7 +5259,7 @@ fn graph_call_recovery_refuses_missing_contexts_and_unsettled_obligations() {
         let before = vm.inspection();
         assert!(
             matches!(
-                vm.recover_with_bindings(&journal, &mut world),
+                vm.recover_with_bindings(&journal, &mut CallDriver(&mut world)),
                 Err(ExecutionFault::InvalidRecovery { .. })
             ),
             "sabotage {sabotage}"
@@ -5385,7 +5418,7 @@ graph app : App {
             let effects = world.started.clone();
             journal.refuse_commits = faulted;
             journal.refuse_opens = faulted;
-            let result = sweep.advance_once(vm, journal, world);
+            let result = sweep.advance_once(vm, journal, &mut CallDriver(world));
             journal.refuse_commits = false;
             journal.refuse_opens = false;
             match result {
@@ -5407,7 +5440,11 @@ graph app : App {
                     assert_eq!(vm.inspection(), inspection);
                     assert_eq!(vm.envelope_views(), observations);
                     assert_eq!(world.started, effects);
-                    assert!(sweep.advance_once(vm, journal, world).unwrap());
+                    assert!(
+                        sweep
+                            .advance_once(vm, journal, &mut CallDriver(world))
+                            .unwrap()
+                    );
                 }
                 Err(error) => panic!("unfaulted transition: {error:?}"),
             }
@@ -5424,7 +5461,8 @@ graph app : App {
         advance(&mut vm, &mut journal, &mut world, 0, faulted);
         for (attempt, now) in [(1, 0), (2, 100_000_000)] {
             advance(&mut vm, &mut journal, &mut world, now, faulted);
-            vm.poll_drivers(&mut journal, &mut world).unwrap();
+            vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+                .unwrap();
             assert_eq!(world.started.len(), attempt, "faulted={faulted}, now={now}");
             world.answers.push(CallResponse {
                 call_id: *world.started.last().unwrap(),
@@ -5446,7 +5484,7 @@ graph app : App {
                 let inspection = vm.inspection();
                 journal.refuse_closes = true;
                 assert!(matches!(
-                    vm.poll_drivers(&mut journal, &mut world),
+                    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world)),
                     Err(ExecutionFault::Dispatch(
                         rastok::runtime::execution::driver_polling::PollFault::Journal(
                             rastok::journal::Error::Storage(_)
@@ -5458,7 +5496,8 @@ graph app : App {
                 assert_eq!(world.started.len(), attempt);
                 journal.refuse_closes = false;
             }
-            vm.poll_drivers(&mut journal, &mut world).unwrap();
+            vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+                .unwrap();
             advance(&mut vm, &mut journal, &mut world, now, faulted);
             assert_eq!(vm.outputs().len(), if attempt == 1 { 0 } else { 3 });
         }
@@ -5535,9 +5574,10 @@ graph app : App {
         let mut world = ClosingWorld::default();
         vm.accept_input(&mut journal, text_submission("one fan-out"))
             .unwrap();
-        vm.run_ready_with_bindings(&mut journal, &mut world)
+        vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
             .unwrap();
-        vm.poll_drivers(&mut journal, &mut world).unwrap();
+        vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+            .unwrap();
         assert_eq!(world.started.len(), 2);
         for call_id in &world.started {
             world.answers.push(CallResponse {
@@ -5569,7 +5609,7 @@ graph app : App {
         );
         journal.refuse_call = Some(world.started[refused]);
         assert!(matches!(
-            vm.poll_drivers(&mut journal, &mut world),
+            vm.poll_drivers(&mut journal, &mut CallDriver(&mut world)),
             Err(ExecutionFault::Dispatch(
                 rastok::runtime::execution::driver_polling::PollFault::Journal(
                     rastok::journal::Error::Storage(_)
@@ -5583,14 +5623,19 @@ graph app : App {
             "the Driver already handed off both responses"
         );
         world.answers.push(late);
-        assert!(vm.poll_drivers(&mut journal, &mut world).is_err());
+        assert!(
+            vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+                .is_err()
+        );
         assert_eq!(
             world.answers.len(),
             1,
             "store pressure cannot pull another Driver batch"
         );
         journal.refuse_call = None;
-        let report = vm.poll_drivers(&mut journal, &mut world).unwrap();
+        let report = vm
+            .poll_drivers(&mut journal, &mut CallDriver(&mut world))
+            .unwrap();
         assert_eq!(
             report.settled, 2,
             "both winners must reach the Execution exactly once"
@@ -5602,13 +5647,15 @@ graph app : App {
             "the invalid first answer stays observable"
         );
         assert_eq!(world.answers.len(), 1);
-        vm.run_ready_with_bindings(&mut journal, &mut world)
+        vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
             .unwrap();
         assert_eq!(vm.outputs().len(), 2);
         assert!(vm.is_stable());
         assert_eq!(world.started.len(), 2);
         let records = journal.inner.records().to_vec();
-        let late = vm.poll_drivers(&mut journal, &mut world).unwrap();
+        let late = vm
+            .poll_drivers(&mut journal, &mut CallDriver(&mut world))
+            .unwrap();
         assert_eq!(late.settled, 0);
         assert_eq!(late.discarded.len(), 1);
         assert_eq!(journal.inner.records(), records);
@@ -5643,9 +5690,10 @@ graph app : App {
     let mut world = ClosingWorld::default();
     vm.accept_input(&mut journal, text_submission("request"))
         .unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
     assert_eq!(world.started.len(), 1);
     let opening = journal.inner.records().to_vec();
     world.answers.push(CallResponse {
@@ -5659,13 +5707,15 @@ graph app : App {
             },
         ),
     });
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
-    vm.step_with_bindings(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
+    vm.step_with_bindings(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
     let completed = journal.inner.records().to_vec();
     for prefix in [&opening, &completed] {
         journal.recovery_records = Some(prefix.clone());
         Execution::new(&compilation.plan, GraphVersion(1))
-            .recover_with_bindings(&journal, &mut world)
+            .recover_with_bindings(&journal, &mut CallDriver(&mut world))
             .unwrap();
     }
 
@@ -5701,7 +5751,7 @@ graph app : App {
         let mut recovered = Execution::new(&compilation.plan, GraphVersion(1));
         let before = recovered.inspection();
         let Err(ExecutionFault::InvalidRecovery { reason, .. }) =
-            recovered.recover_with_bindings(&journal, &mut world)
+            recovered.recover_with_bindings(&journal, &mut CallDriver(&mut world))
         else {
             panic!("sabotage {sabotage} did not refuse as invalid recovery");
         };
@@ -5744,7 +5794,7 @@ graph app : App {
     let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
     let mut world = ClosingWorld::default();
     vm.accept_input(&mut journal, text_submission("x")).unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
     let call = journal.inner.open_calls()[0].call_id;
     journal
@@ -5814,7 +5864,7 @@ graph app : App {
         let before = recovered.inspection();
         assert!(
             recovered
-                .recover_with_bindings(&journal, &mut world)
+                .recover_with_bindings(&journal, &mut CallDriver(&mut world))
                 .is_err(),
             "sabotage {sabotage}"
         );
@@ -5873,11 +5923,12 @@ graph logical_time : App {
     let mut world = EchoWorld::default();
 
     vm.accept_input(&mut journal, submission("first")).unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
-    vm.advance_to(&mut journal, &mut world, 2_000).unwrap();
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 2_000)
+        .unwrap();
     vm.accept_input(&mut journal, submission("second")).unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
 
     let instants: Vec<_> = vm
@@ -5934,7 +5985,7 @@ graph logical_time_guard : App {
 
     vm.accept_input(&mut journal, submission("filtered"))
         .unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
 
     assert!(vm.outputs().is_empty(), "the false guard emits nothing");
@@ -5960,11 +6011,11 @@ fn a_silent_driver_expires_into_a_typed_timeout() {
     let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
     let mut world = EchoWorld::default();
     vm.accept_input(&mut journal, submission("salut")).unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
     assert!(vm.has_open_obligations());
     // Nobody answers; the budget expires at the discrete advance.
-    vm.advance_to(&mut journal, &mut world, 5_000_000_000)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 5_000_000_000)
         .unwrap();
     assert!(vm.is_stable(), "the expiry released the machine");
     assert_eq!(vm.logical_time(), 5_000_000_000);
@@ -5987,7 +6038,7 @@ fn a_silent_driver_expires_into_a_typed_timeout() {
     assert_eq!(source_exit_cases(&vm), ["TimeoutExpired"]);
     // The claim lifted: a second submission opens a second call.
     vm.accept_input(&mut journal, submission("encore")).unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
     assert_eq!(journal.open_calls().len(), 1);
 }
@@ -6090,11 +6141,11 @@ fn a_budget_runs_from_delivery_and_covers_queue_time() {
     let mut world = EchoWorld::default();
     vm.accept_input(&mut journal, submission("un")).unwrap();
     vm.accept_input(&mut journal, submission("deux")).unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
     assert_eq!(journal.open_calls().len(), 1, "one open, one queued");
     // Nobody answers; both budgets expire at the same sweep.
-    vm.advance_to(&mut journal, &mut world, 5_000_000_000)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 5_000_000_000)
         .unwrap();
     assert!(vm.is_stable());
     assert_eq!(
@@ -6201,11 +6252,11 @@ on in { out = data.text }
     let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
     let mut world = EchoWorld::default();
     vm.accept_input(&mut journal, submission("salut")).unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
     assert_eq!(journal.open_calls().len(), 2, "both calls opened");
     // Only beta's budget is due at 100ms.
-    vm.advance_to(&mut journal, &mut world, 100_000_000)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 100_000_000)
         .unwrap();
     let open = journal.open_calls();
     assert_eq!(open.len(), 1);
@@ -6227,14 +6278,15 @@ fn an_answer_and_an_expiry_race_to_a_single_closure() {
     let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
     let mut world = EchoWorld::default();
     vm.accept_input(&mut journal, submission("salut")).unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
     // The driver answers first; the expiry then loses the race —
     // one closure fact, one completion transaction, no duplicate.
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
-    vm.advance_to(&mut journal, &mut world, 5_000_000_000)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 5_000_000_000)
         .unwrap();
     assert!(vm.is_stable());
     let closures = journal
@@ -6269,11 +6321,11 @@ fn a_late_answer_is_a_reported_observation_not_a_silence() {
     let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
     let mut world = EchoWorld::default();
     vm.accept_input(&mut journal, submission("salut")).unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
     let call_id = journal.open_calls()[0].call_id;
     // The budget expires first…
-    vm.advance_to(&mut journal, &mut world, 5_000_000_000)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 5_000_000_000)
         .unwrap();
     // …then the world answers a closed call.
     let mut late = ScriptedWorld {
@@ -6289,7 +6341,9 @@ fn a_late_answer_is_a_reported_observation_not_a_silence() {
             ),
         }],
     };
-    let report = vm.poll_drivers(&mut journal, &mut late).unwrap();
+    let report = vm
+        .poll_drivers(&mut journal, &mut CallDriver(&mut late))
+        .unwrap();
     assert_eq!(report.settled, 0);
     assert_eq!(report.discarded.len(), 1, "the late answer is visible");
     assert!(report.uncorrelated.is_empty());
@@ -6313,16 +6367,16 @@ fn a_refused_expiry_stays_scheduled_and_replays() {
     let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
     let mut world = EchoWorld::default();
     vm.accept_input(&mut journal, submission("salut")).unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
     assert!(
-        vm.advance_to(&mut journal, &mut world, 5_000_000_000)
+        vm.advance_to(&mut journal, &mut CallDriver(&mut world), 5_000_000_000)
             .is_err(),
         "the refused closure surfaces"
     );
     // Heal and replay: the deadline was never acknowledged.
     journal.refuse_closes = false;
-    vm.advance_to(&mut journal, &mut world, 5_000_000_000)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 5_000_000_000)
         .unwrap();
     assert!(vm.is_stable());
     assert_eq!(source_exit_cases(&vm), ["TimeoutExpired"]);
@@ -6341,16 +6395,16 @@ fn a_refused_open_on_a_queued_expiry_replays_without_duplicates() {
     let mut world = EchoWorld::default();
     vm.accept_input(&mut journal, submission("un")).unwrap();
     vm.accept_input(&mut journal, submission("deux")).unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
     assert_eq!(journal.inner.open_calls().len(), 1, "one open, one queued");
     journal.refuse_opens = true;
     assert!(
-        vm.advance_to(&mut journal, &mut world, 5_000_000_000)
+        vm.advance_to(&mut journal, &mut CallDriver(&mut world), 5_000_000_000)
             .is_err()
     );
     journal.refuse_opens = false;
-    vm.advance_to(&mut journal, &mut world, 5_000_000_000)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 5_000_000_000)
         .unwrap();
     assert!(vm.is_stable());
     assert_eq!(
@@ -6390,7 +6444,7 @@ fn a_refused_commit_on_a_queued_expiry_loses_nothing() {
     let facts_before = journal.inner.records().len();
     journal.refuse_commits = true;
     assert!(
-        vm.advance_to(&mut journal, &mut world, 5_000_000_000)
+        vm.advance_to(&mut journal, &mut CallDriver(&mut world), 5_000_000_000)
             .is_err()
     );
     assert!(
@@ -6402,7 +6456,7 @@ fn a_refused_commit_on_a_queued_expiry_loses_nothing() {
     // Heal and replay: the delivery was never removed, the deadline
     // never acked — exactly one typed terminal fact results.
     journal.refuse_commits = false;
-    vm.advance_to(&mut journal, &mut world, 5_000_000_000)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 5_000_000_000)
         .unwrap();
     vm.run_ready(&mut journal).unwrap();
     assert!(vm.is_stable());
@@ -6445,18 +6499,20 @@ fn a_suspended_call_keeps_its_mailbox_claimed() {
     let mut world = EchoWorld::default();
     vm.accept_input(&mut journal, submission("un")).unwrap();
     vm.accept_input(&mut journal, submission("deux")).unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
     // Two requests reached the connector, but only one call is
     // open: the second waits for the mailbox claim to lift.
     assert_eq!(journal.open_calls().len(), 1);
     assert!(vm.has_open_obligations());
     // Settle, then the claim lifts and the second call opens.
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
     assert_eq!(journal.open_calls().len(), 1, "the second call is now open");
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
     vm.run_ready(&mut journal).unwrap();
     assert!(vm.is_stable());
     assert_eq!(vm.outputs().len(), 2);
@@ -6534,17 +6590,17 @@ graph countdown : App + Loop {
         .expect("a duplicate recovery observation may reschedule but cannot re-enter twice");
     let mut world = EchoWorld::default();
     recovered
-        .advance_to(&mut journal, &mut world, 1_999_999_999)
+        .advance_to(&mut journal, &mut CallDriver(&mut world), 1_999_999_999)
         .expect("advancing short of the date is inert");
     assert_eq!(loop_state(&journal, run).iteration, 1);
     recovered
-        .advance_to(&mut journal, &mut world, 2_000_000_000)
+        .advance_to(&mut journal, &mut CallDriver(&mut world), 2_000_000_000)
         .expect("the exact date admits one traversal");
     let second = loop_state(&journal, run);
     assert_eq!(second.iteration, 2);
     assert_eq!(second.due_at, Some(4_000_000_000));
     recovered
-        .advance_to(&mut journal, &mut world, 4_000_000_000)
+        .advance_to(&mut journal, &mut CallDriver(&mut world), 4_000_000_000)
         .expect("the second exact date reaches the terminal branch");
     assert_eq!(recovered.outputs().len(), 1);
     assert_eq!(
@@ -6615,13 +6671,13 @@ graph countdown : App + Loop {
     vm.run_ready(&mut journal).unwrap();
     let run = first_loop(&journal);
     assert_eq!(loop_state(&journal, run).due_at, Some(1_000_000_000));
-    vm.advance_to(&mut journal, &mut world, 1_000_000_000)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 1_000_000_000)
         .unwrap();
     assert_eq!(loop_state(&journal, run).due_at, Some(3_000_000_000));
-    vm.advance_to(&mut journal, &mut world, 3_000_000_000)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 3_000_000_000)
         .unwrap();
     assert_eq!(loop_state(&journal, run).due_at, Some(6_000_000_000));
-    vm.advance_to(&mut journal, &mut world, 6_000_000_000)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 6_000_000_000)
         .unwrap();
     assert_eq!(vm.outputs().len(), 1);
     assert_eq!(loop_state(&journal, run).remaining, 1);
@@ -6663,14 +6719,14 @@ graph countdown : App + Loop {
     vm.run_ready(&mut journal).unwrap();
     let old_run = first_loop(&journal);
 
-    vm.advance_to(&mut journal, &mut world, 1_000_000_000)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 1_000_000_000)
         .expect("the lifetime closes before the later Loop wakeup");
     vm.accept_input(&mut journal, int_submission(0))
         .expect("the next root reserves a clean successor generation");
     vm.run_ready(&mut journal)
         .expect("the successor run reaches its own terminal branch");
     assert_eq!(vm.outputs().len(), 1);
-    vm.advance_to(&mut journal, &mut world, 2_000_000_000)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 2_000_000_000)
         .expect("the stale predecessor wakeup is a harmless observation");
     assert_eq!(vm.outputs().len(), 1, "the stale wakeup did not re-enter");
     let old = loop_state(&journal, old_run);
@@ -6736,8 +6792,12 @@ graph countdown : App + Loop {
         &Data::materialized(Value::Int(1)),
         "the second input opened the second run"
     );
-    vm.advance_to(&mut journal, &mut EchoWorld::default(), 1_000_000_000)
-        .unwrap();
+    vm.advance_to(
+        &mut journal,
+        &mut CallDriver(&mut EchoWorld::default()),
+        1_000_000_000,
+    )
+    .unwrap();
     let transitions: Vec<_> = journal.records()[before..]
         .iter()
         .filter_map(|record| match record {
@@ -6763,7 +6823,11 @@ graph countdown : App + Loop {
         let mut restored = Execution::new_at(&compilation.plan, GraphVersion(1), vm.logical_time());
         restored.recover_from_journal(&retained).unwrap();
         restored
-            .advance_to(&mut retained, &mut EchoWorld::default(), 1_000_000_000)
+            .advance_to(
+                &mut retained,
+                &mut CallDriver(&mut EchoWorld::default()),
+                1_000_000_000,
+            )
             .unwrap();
         assert_eq!(retained.records(), journal.records(), "recovery at {cut}");
         assert_eq!(restored.outputs(), vm.outputs(), "recovery at {cut}");
@@ -6817,12 +6881,12 @@ graph retry : App + Loop {
 
     vm.accept_input(&mut journal, text_submission("again"))
         .unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
     assert_eq!(journal.open_calls().len(), 1);
     let run = first_loop(&journal);
 
-    vm.advance_to(&mut journal, &mut world, 1_000_000_000)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 1_000_000_000)
         .expect("the Call budget publishes TimeoutExpired first");
     let after_timeout = loop_state(&journal, run);
     assert_eq!(after_timeout.iteration, 1);
@@ -6830,14 +6894,14 @@ graph retry : App + Loop {
     assert_eq!(after_timeout.phase, LoopPhase::AwaitingAdmission);
     assert!(journal.open_calls().is_empty());
 
-    vm.advance_to(&mut journal, &mut world, 2_999_999_999)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 2_999_999_999)
         .expect("the Loop delay has not elapsed");
     assert!(journal.open_calls().is_empty());
-    vm.advance_to(&mut journal, &mut world, 3_000_000_000)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 3_000_000_000)
         .expect("the delayed state re-enters the spatial Call body");
     assert_eq!(journal.open_calls().len(), 1);
 
-    vm.advance_to(&mut journal, &mut world, 4_000_000_000)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 4_000_000_000)
         .expect("the second independent Call timeout exhausts fuel");
     assert!(journal.open_calls().is_empty());
     assert_eq!(vm.outputs().len(), 1);
@@ -6913,28 +6977,28 @@ graph retry : App + Loop {
 
     vm.accept_input(&mut journal, text_submission("again"))
         .unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
-    vm.advance_to(&mut journal, &mut world, 1_000_000_000)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 1_000_000_000)
         .expect("the first Call timeout selects delayed recurrence");
     drop(vm);
 
     let mut recovered = Execution::new_at(&compilation.plan, GraphVersion(1), 2_000_000_000);
     let before = journal.records().to_vec();
     recovered
-        .recover_with_bindings(&journal, &mut world)
+        .recover_with_bindings(&journal, &mut CallDriver(&mut world))
         .expect("the spatial fold retains the first timeout and delayed command");
     assert_eq!(journal.records(), before);
     recovered
-        .advance_to(&mut journal, &mut world, 2_999_999_999)
+        .advance_to(&mut journal, &mut CallDriver(&mut world), 2_999_999_999)
         .unwrap();
     assert!(journal.open_calls().is_empty());
     recovered
-        .advance_to(&mut journal, &mut world, 3_000_000_000)
+        .advance_to(&mut journal, &mut CallDriver(&mut world), 3_000_000_000)
         .unwrap();
     assert_eq!(journal.open_calls().len(), 1);
     recovered
-        .advance_to(&mut journal, &mut world, 4_000_000_000)
+        .advance_to(&mut journal, &mut CallDriver(&mut world), 4_000_000_000)
         .unwrap();
     assert_eq!(recovered.outputs().len(), 1);
     assert_eq!(

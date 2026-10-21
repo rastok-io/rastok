@@ -2,6 +2,10 @@
 
 #![allow(clippy::expect_used, clippy::panic)]
 
+#[path = "support/call_driver.rs"]
+mod call_driver;
+use call_driver::CallDriver;
+
 use rastok::compiler::{Compilation, compile};
 use rastok::connector::contract::ContractCatalog;
 use rastok::diagnostics::Bag;
@@ -313,11 +317,11 @@ fn malformed_native_or_undeserialized_data_cannot_enter_the_outbound_journal() {
             },
         )
         .expect("admission");
-        vm.run_ready_with_bindings(&mut journal, &mut driver)
+        vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut driver))
             .expect("Call opened");
         let retained = journal.records().to_vec();
         let report = vm
-            .poll_drivers(&mut journal, &mut driver)
+            .poll_drivers(&mut journal, &mut CallDriver(&mut driver))
             .expect("the Driver fault is a rejected observation");
         assert_eq!(report.settled, 0);
         assert_eq!(report.rejected.len(), 1);

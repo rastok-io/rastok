@@ -23,7 +23,6 @@ use crate::compiler::compile;
 use crate::connector::contract::ConnectorContract;
 use crate::connector::contract::ContractCatalog;
 use crate::connector::driver::OutboundDrivers;
-use crate::connector::driver::SessionConnectorBindings;
 use crate::connector::drivers::{DriverRegistry, RuntimeDrivers};
 use crate::connector::exchange::EnvelopeDraft;
 use crate::connector::exchange::IngressAdmission;
@@ -474,7 +473,7 @@ pub fn verify_session(profile: &SessionTestFixture<'_>, drivers: &DriverRegistry
 
     let mut sessions = Vec::new();
     for (index, data) in profile.openings.iter().enumerate() {
-        let preparation = match SessionConnectorBindings::prepare_session_open(
+        let preparation = match OutboundDrivers::prepare_session_open(
             &mut bindings,
             &profile.connector,
             data,
@@ -514,7 +513,7 @@ pub fn verify_session(profile: &SessionTestFixture<'_>, drivers: &DriverRegistry
             ));
             return report;
         }
-        match SessionConnectorBindings::open_session(&mut bindings, &intent, &seed) {
+        match OutboundDrivers::open_session(&mut bindings, &intent, &seed) {
             Ok(crate::connector::exchange::SessionStart::Started) => {}
             Ok(crate::connector::exchange::SessionStart::Pending) => {
                 report.violations.push(format!(
@@ -533,7 +532,7 @@ pub fn verify_session(profile: &SessionTestFixture<'_>, drivers: &DriverRegistry
         }
         sessions.push(intent.session_id);
     }
-    let opening_events = match SessionConnectorBindings::poll_observations(&mut bindings) {
+    let opening_events = match OutboundDrivers::poll_observations(&mut bindings) {
         Ok(events) => events,
         Err(error) => {
             report
@@ -568,7 +567,7 @@ pub fn verify_session(profile: &SessionTestFixture<'_>, drivers: &DriverRegistry
 
     let mut expected_writes = BTreeSet::new();
     for (index, (session, data)) in sessions.iter().zip(&profile.writes).enumerate() {
-        let preparation = match SessionConnectorBindings::prepare_session_write(
+        let preparation = match OutboundDrivers::prepare_session_write(
             &mut bindings,
             &profile.connector,
             *session,
@@ -605,7 +604,7 @@ pub fn verify_session(profile: &SessionTestFixture<'_>, drivers: &DriverRegistry
             ));
             return report;
         }
-        match SessionConnectorBindings::write_session(&mut bindings, &intent, &seed) {
+        match OutboundDrivers::write_session(&mut bindings, &intent, &seed) {
             Ok(crate::connector::exchange::SessionStart::Started) => {}
             Ok(crate::connector::exchange::SessionStart::Pending) => {
                 report.violations.push(format!(
@@ -624,7 +623,7 @@ pub fn verify_session(profile: &SessionTestFixture<'_>, drivers: &DriverRegistry
         }
         expected_writes.insert((*session, intent.write_ref));
     }
-    let write_events = match SessionConnectorBindings::poll_observations(&mut bindings) {
+    let write_events = match OutboundDrivers::poll_observations(&mut bindings) {
         Ok(events) => events,
         Err(error) => {
             report
@@ -657,7 +656,7 @@ pub fn verify_session(profile: &SessionTestFixture<'_>, drivers: &DriverRegistry
 
     // Crash ambiguity is a journal fact, never permission to replay bytes.
     let ambiguous_data = &profile.writes[0];
-    let preparation = SessionConnectorBindings::prepare_session_write(
+    let preparation = OutboundDrivers::prepare_session_write(
         &mut bindings,
         &profile.connector,
         sessions[0],
@@ -689,7 +688,7 @@ pub fn verify_session(profile: &SessionTestFixture<'_>, drivers: &DriverRegistry
     }
 
     for session in &sessions {
-        match SessionConnectorBindings::close_session(&mut bindings, &profile.connector, *session) {
+        match OutboundDrivers::close_session(&mut bindings, &profile.connector, *session) {
             Ok(crate::connector::exchange::SessionStart::Started) => {}
             Ok(crate::connector::exchange::SessionStart::Pending) => {
                 report.violations.push(format!(
@@ -705,7 +704,7 @@ pub fn verify_session(profile: &SessionTestFixture<'_>, drivers: &DriverRegistry
             }
         }
     }
-    let exits = match SessionConnectorBindings::poll_observations(&mut bindings) {
+    let exits = match OutboundDrivers::poll_observations(&mut bindings) {
         Ok(events) => events,
         Err(error) => {
             report
@@ -749,7 +748,7 @@ pub fn verify_session(profile: &SessionTestFixture<'_>, drivers: &DriverRegistry
             sessions.len()
         ));
     }
-    match SessionConnectorBindings::poll_observations(&mut bindings) {
+    match OutboundDrivers::poll_observations(&mut bindings) {
         Ok(events) if events.is_empty() => {}
         Ok(events) => report
             .violations

@@ -20,17 +20,21 @@ struct World {
     bytes: usize,
 }
 
-impl OutboundCall for World {
+impl OutboundDrivers for World {
     fn prepare_request(
         &mut self,
         _: &Path,
         data: &Data,
         _: &BTreeMap<String, Value>,
-    ) -> RequestPreparation {
+    ) -> Result<RequestPreparation, DriverRouteError> {
         self.preparations += 1;
-        prepare_process_request(RequestCodec::Lines, data)
+        Ok(prepare_process_request(RequestCodec::Lines, data))
     }
-    fn start(&mut self, intent: &CallOpen, _: &rastok_core::envelope::Envelope) -> CallStart {
+    fn start(
+        &mut self,
+        intent: &CallOpen,
+        _: &rastok_core::envelope::Envelope,
+    ) -> Result<CallStart, DriverRouteError> {
         self.starts += 1;
         let channel = || {
             (0..self.frames)
@@ -41,13 +45,20 @@ impl OutboundCall for World {
             call_id: intent.call_id,
             completion: Completion::process(channel(), channel(), ProcessExit::TimeoutExpired),
         });
-        CallStart::Started
+        Ok(CallStart::Started)
     }
-    fn poll_responses(&mut self) -> Vec<CallResponse> {
-        core::mem::take(&mut self.ready)
+    fn poll_responses(&mut self) -> Result<Vec<CallResponse>, DriverRouteError> {
+        Ok(core::mem::take(&mut self.ready))
     }
-    fn scheduler_completion(&mut self, _: &Path, event: SchedulerCompletion) -> Completion {
-        process_scheduler_completion(event)
+    fn scheduler_completion(
+        &mut self,
+        _: &Path,
+        event: SchedulerCompletion,
+    ) -> Result<Completion, DriverRouteError> {
+        Ok(process_scheduler_completion(event))
+    }
+    fn cancel(&mut self, _: &Path, _: &CallId) -> Result<(), DriverRouteError> {
+        Ok(())
     }
 }
 

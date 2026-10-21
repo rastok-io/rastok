@@ -364,74 +364,9 @@ pub trait Session {
     fn poll_observations(&mut self) -> Vec<SessionObservation>;
 }
 
-/// Verified Session routing table used when polling Drivers.
-pub trait SessionConnectorBindings {
-    /// Frames one outbound session opening through its exact Driver.
-    fn prepare_session_open(
-        &mut self,
-        connector: &node::Path,
-        data: &envelope::Data,
-        resolved_settings: &alloc::collections::BTreeMap<String, crate::value::Value>,
-    ) -> Result<RequestPreparation, DriverRouteError>;
-
-    /// Projects a scheduler-owned session terminal through the bound Driver.
-    fn scheduler_session_completion(
-        &mut self,
-        connector: &node::Path,
-        completion: SchedulerCompletion,
-    ) -> Result<Completion, DriverRouteError>;
-
-    /// Executes an already-journaled opening intent.
-    fn open_session(
-        &mut self,
-        intent: &SessionOpen,
-        request: &Envelope,
-    ) -> Result<SessionStart, DriverRouteError>;
-
-    /// Frames one outbound message for an existing logical session.
-    fn prepare_session_write(
-        &mut self,
-        connector: &node::Path,
-        session: SessionId,
-        data: &envelope::Data,
-        resolved_settings: &alloc::collections::BTreeMap<String, crate::value::Value>,
-    ) -> Result<RequestPreparation, DriverRouteError>;
-
-    /// Offers one already-journaled write to the protocol stack.
-    fn write_session(
-        &mut self,
-        intent: &SessionWrite,
-        message: &Envelope,
-    ) -> Result<SessionStart, DriverRouteError>;
-
-    /// Requests closure through the owning Driver.
-    fn close_session(
-        &mut self,
-        connector: &node::Path,
-        session: SessionId,
-    ) -> Result<SessionStart, DriverRouteError>;
-
-    /// Requests forced cleanup through the exact Session's owning Driver,
-    /// without forgetting its correlation before terminal commit.
-    fn abort_session(
-        &mut self,
-        connector: &node::Path,
-        session: SessionId,
-    ) -> Result<(), DriverRouteError>;
-
-    /// Collects Session observations from every bound Session family.
-    fn poll_observations(&mut self) -> Result<Vec<SessionObservation>, DriverRouteError>;
-
-    /// Notifies the owning Driver after the terminal transaction commits,
-    /// then releases routing-table ownership. An already forgotten reference
-    /// is inert; a missing bound Driver is an integrity fault.
-    fn forget_session(&mut self, session: SessionId) -> Result<(), DriverRouteError>;
-}
-
 /// The verified outbound routing table consumed by the core Execution.
 ///
-/// A single Driver implements this automatically. The application-level
-/// `RuntimeDrivers` implementation selects among several contract families
+/// The hosted `RuntimeDrivers` implementation selects among prepared Drivers
 /// and returns a typed error if its pre-execution proof is ever contradicted. The Execution
 /// therefore never matches `Process`, `File`, or another concrete contract.
 /// Execution entry points borrow this object-safe boundary dynamically: the scheduler
@@ -573,55 +508,5 @@ pub trait OutboundDrivers {
     fn forget_session(&mut self, session: SessionId) -> Result<(), DriverRouteError> {
         let _ = session;
         Ok(())
-    }
-}
-
-impl<T> OutboundDrivers for T
-where
-    T: OutboundCall + ?Sized,
-{
-    fn prepare_request(
-        &mut self,
-        connector: &node::Path,
-        data: &envelope::Data,
-        resolved_settings: &alloc::collections::BTreeMap<String, crate::value::Value>,
-    ) -> Result<RequestPreparation, DriverRouteError> {
-        Ok(OutboundCall::prepare_request(
-            self,
-            connector,
-            data,
-            resolved_settings,
-        ))
-    }
-
-    fn scheduler_completion(
-        &mut self,
-        connector: &node::Path,
-        completion: SchedulerCompletion,
-    ) -> Result<Completion, DriverRouteError> {
-        Ok(OutboundCall::scheduler_completion(
-            self, connector, completion,
-        ))
-    }
-
-    fn cancel(
-        &mut self,
-        _connector: &node::Path,
-        call_id: &CallId,
-    ) -> Result<(), DriverRouteError> {
-        OutboundCall::cancel(self, call_id);
-        Ok(())
-    }
-
-    fn start(
-        &mut self,
-        intent: &CallOpen,
-        request: &Envelope,
-    ) -> Result<CallStart, DriverRouteError> {
-        Ok(OutboundCall::start(self, intent, request))
-    }
-
-    fn poll_responses(&mut self) -> Result<Vec<CallResponse>, DriverRouteError> {
-        Ok(OutboundCall::poll_responses(self))
     }
 }

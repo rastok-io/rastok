@@ -12,7 +12,6 @@ use crate::connector::driver::Ingress;
 use crate::connector::driver::OutboundCall;
 use crate::connector::driver::OutboundDrivers;
 use crate::connector::driver::Session;
-use crate::connector::driver::SessionConnectorBindings;
 use crate::connector::exchange::AdmittedIngress;
 use crate::connector::exchange::CallId;
 use crate::connector::exchange::CallOpen;
@@ -743,81 +742,6 @@ impl OutboundDrivers for RuntimeDrivers<'_> {
         Ok(responses)
     }
 
-    fn prepare_session_open(
-        &mut self,
-        connector: &node::Path,
-        data: &Data,
-        resolved_settings: &BTreeMap<String, crate::value::Value>,
-    ) -> Result<RequestPreparation, DriverRouteError> {
-        SessionConnectorBindings::prepare_session_open(self, connector, data, resolved_settings)
-    }
-
-    fn scheduler_session_completion(
-        &mut self,
-        connector: &node::Path,
-        completion: SchedulerCompletion,
-    ) -> Result<Completion, DriverRouteError> {
-        SessionConnectorBindings::scheduler_session_completion(self, connector, completion)
-    }
-
-    fn open_session(
-        &mut self,
-        intent: &SessionOpen,
-        request: &Envelope,
-    ) -> Result<crate::connector::exchange::SessionStart, DriverRouteError> {
-        SessionConnectorBindings::open_session(self, intent, request)
-    }
-
-    fn prepare_session_write(
-        &mut self,
-        connector: &node::Path,
-        session: SessionId,
-        data: &Data,
-        resolved_settings: &BTreeMap<String, crate::value::Value>,
-    ) -> Result<RequestPreparation, DriverRouteError> {
-        SessionConnectorBindings::prepare_session_write(
-            self,
-            connector,
-            session,
-            data,
-            resolved_settings,
-        )
-    }
-
-    fn write_session(
-        &mut self,
-        intent: &SessionWrite,
-        message: &Envelope,
-    ) -> Result<crate::connector::exchange::SessionStart, DriverRouteError> {
-        SessionConnectorBindings::write_session(self, intent, message)
-    }
-
-    fn close_session(
-        &mut self,
-        connector: &node::Path,
-        session: SessionId,
-    ) -> Result<crate::connector::exchange::SessionStart, DriverRouteError> {
-        SessionConnectorBindings::close_session(self, connector, session)
-    }
-
-    fn poll_observations(&mut self) -> Result<Vec<SessionObservation>, DriverRouteError> {
-        SessionConnectorBindings::poll_observations(self)
-    }
-
-    fn abort_session(
-        &mut self,
-        connector: &node::Path,
-        session: SessionId,
-    ) -> Result<(), DriverRouteError> {
-        SessionConnectorBindings::abort_session(self, connector, session)
-    }
-
-    fn forget_session(&mut self, session: SessionId) -> Result<(), DriverRouteError> {
-        SessionConnectorBindings::forget_session(self, session)
-    }
-}
-
-impl SessionConnectorBindings for RuntimeDrivers<'_> {
     fn prepare_session_open(
         &mut self,
         connector: &node::Path,

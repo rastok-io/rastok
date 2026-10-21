@@ -9,6 +9,10 @@
 //! The compact format-20 movement is enumerated before approval in
 //! docs/architecture/human-review-v20-identity.md.
 
+#[path = "support/call_driver.rs"]
+mod call_driver;
+use call_driver::CallDriver;
+
 use rastok::compiler::compile;
 use rastok::connector::contract::ContractCatalog;
 use rastok::connector::driver::OutboundCall;
@@ -129,10 +133,11 @@ fn run(source: &str) -> Vec<Record> {
         },
     )
     .unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
     assert!(vm.is_stable());
     journal.records().to_vec()

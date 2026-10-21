@@ -1,13 +1,13 @@
 # Connector rework — qualification
 
-21 October 2026. Branch: `realign/node-ontology`. This report records the
+21–22 October 2026. Branch: `realign/node-ontology`. This report records the
 T5/T9 implementation checks; it does not approve the separate Process
 Contract identity proposal. Package format 21, Process `std/process@4`
 (job) and `std/process@5` (service) remain current at this checkpoint.
 
-**Status: the A-T5-2 portable-core split and hosted module move are
-qualified. Routing consolidation and subsequent actions remain separate
-work.**
+**Status: A-T5-1, A-T5-2 and A-T5-3 are qualified. The Process identity
+proposal, multi-implementation selection and final catalogue/documentation
+remain separate actions.**
 
 ## Reference after A-T5-1
 
@@ -188,3 +188,43 @@ sweep remain A-T5-6; the path references affected by this move are updated.
 
 Host executable startup delays persisted, but this gate had no failed check
 and used unchanged timeouts. No push, tag or publication occurred.
+
+## A-T5-3 — one execution routing interface
+
+Session routing now belongs directly to `OutboundDrivers`; the separate
+`SessionConnectorBindings` trait and its method-for-method delegation are
+removed. The per-object Call and Session interfaces remain distinct. This
+changes no preparation, polling, closure or resource-ownership rule.
+
+The global implementation which treated any Call Driver as an execution-wide
+routing table is removed. Its consumers were test fixtures and the Retry
+qualification spike, not the production hosted association. Integration
+tests use an explicitly named, test-only Call adapter; core fixtures and the
+spike state their routing implementation locally. The production replay
+adapter and the named no-outbound/start-refusal adapters already implement
+the routing interface explicitly and remain unchanged. The Process unit
+probe now uses its real factory and `RuntimeDrivers`, like hosted execution.
+
+### Checks and measurements
+
+The sequential CLI gate passed formatting, strict all-target/all-feature
+Clippy, **1,598 tests in 61 groups, zero failures and zero ignored tests**,
+and rustdoc with `-D warnings`. Separate checks passed: site content 12/12,
+browser tests 35/35, the three no_std targets listed above, and the rustdoc
+Markdown-link lint. No assertion or test timeout was relaxed.
+
+Both Cortex-M33 workloads ended in `SPIKE_OK`, using the same commands,
+release profile and Retry workload parameters recorded above:
+
+| Workload | Decode peak heap | Total peak heap | `.text` | `.rodata` | Code total | Heap margin | Code margin |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Echo | 36,160 B | 111,404 B | 897,820 B | 74,048 B | 971,868 B | 19,668 B | 76,708 B |
+| Retry and recovery | 30,684 B | 129,188 B | 958,948 B | 84,816 B | 1,043,764 B | 1,884 B | 4,812 B |
+
+All **73 protected artifacts are byte-identical**. No example, fixture,
+golden, package, trace or recording was regenerated. The old Session routing
+trait and global Call-to-routing implementation have no remaining reference
+in the crates or spikes. Host startup pauses persisted before several test
+executables produced their first output; this gate nevertheless completed
+without a failed check. No security setting changed, and no push, tag or
+publication occurred.

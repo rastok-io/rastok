@@ -2,6 +2,10 @@
 
 #![allow(clippy::disallowed_methods, clippy::unwrap_used, clippy::expect_used)]
 
+#[path = "support/call_driver.rs"]
+mod call_driver;
+use call_driver::CallDriver;
+
 use rastok::accounting::{
     ExactDecimal, PriceBook, PriceBookName, UnitPrice, accounting_observations,
 };
@@ -232,15 +236,15 @@ graph priced_call : App {
         },
     )
     .expect("inbound commits");
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .expect("the Call opens");
     for _ in 0..200 {
         if vm.is_stable() && !vm.has_open_obligations() {
             break;
         }
-        vm.poll_drivers(&mut journal, &mut world)
+        vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
             .expect("the Driver progresses");
-        vm.run_ready_with_bindings(&mut journal, &mut world)
+        vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
             .expect("the reply routes");
         std::thread::sleep(std::time::Duration::from_millis(5));
     }

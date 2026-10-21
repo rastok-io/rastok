@@ -6,6 +6,10 @@
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+#[path = "support/call_driver.rs"]
+mod call_driver;
+use call_driver::CallDriver;
+
 use rastok::compiler::compile;
 use rastok::connector::contract::ContractCatalog;
 use rastok::connector::exchange::EnvelopeDraft;
@@ -49,15 +53,15 @@ fn drive(
         },
     )
     .expect("the injection lands");
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .expect("the request opens");
     for _ in 0..200 {
         if vm.is_stable() && !vm.has_open_obligations() {
             break;
         }
-        vm.poll_drivers(&mut journal, &mut world)
+        vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
             .expect("the world answers");
-        vm.run_ready_with_bindings(&mut journal, &mut world)
+        vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
             .expect("the reply routes");
         std::thread::sleep(std::time::Duration::from_millis(5));
     }

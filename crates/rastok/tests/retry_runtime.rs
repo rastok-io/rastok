@@ -2,6 +2,10 @@
 //! the test world substitutes effects only, not recurrence or disposition.
 #![allow(clippy::unwrap_used)]
 
+#[path = "support/call_driver.rs"]
+mod call_driver;
+use call_driver::CallDriver;
+
 use rastok::{
     compiler,
     connector::contract::ContractCatalog,
@@ -129,25 +133,31 @@ fn only_the_final_batch_is_routed_and_preparation_runs_once() {
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut world = World::default();
     inject(&mut vm, &mut journal);
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
     assert_eq!(world.preparations, 1);
     for ordinal in 1..=3 {
         assert_eq!(world.starts.len(), ordinal);
         reply(&mut world, true);
-        vm.poll_drivers(&mut journal, &mut world).unwrap();
-        vm.run_ready_with_bindings(&mut journal, &mut world)
+        vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+            .unwrap();
+        vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
             .unwrap();
         if ordinal < 3 {
             assert!(vm.outputs().is_empty());
             assert!(!vm.is_stable());
             let due = ordinal as i64 * 100_000_000;
-            vm.advance_to(&mut journal, &mut world, due - 1).unwrap();
-            vm.poll_drivers(&mut journal, &mut world).unwrap();
+            vm.advance_to(&mut journal, &mut CallDriver(&mut world), due - 1)
+                .unwrap();
+            vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+                .unwrap();
             assert_eq!(world.starts.len(), ordinal);
-            vm.advance_to(&mut journal, &mut world, due).unwrap();
-            vm.poll_drivers(&mut journal, &mut world).unwrap();
+            vm.advance_to(&mut journal, &mut CallDriver(&mut world), due)
+                .unwrap();
+            vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+                .unwrap();
         }
     }
     assert_eq!(
@@ -229,16 +239,19 @@ fn success_publishes_once_without_waiting_for_the_retry_bound() {
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut world = World::default();
     inject(&mut vm, &mut journal);
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
     reply(&mut world, false);
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
-    vm.advance_to(&mut journal, &mut world, 10_000_000_000)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 10_000_000_000)
+        .unwrap();
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
     assert_eq!(world.starts.len(), 1);
     assert_eq!(vm.outputs().len(), 3);
     assert!(vm.is_stable());
@@ -252,15 +265,16 @@ fn real_timeout_retains_its_original_backoff_and_queue_time() {
     let mut world = World::default();
     inject(&mut vm, &mut journal);
     inject(&mut vm, &mut journal);
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
     assert_eq!(
         world.starts.len(),
         1,
         "the second request waits in the same instance"
     );
-    vm.advance_to(&mut journal, &mut world, 1_000_000_000)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 1_000_000_000)
         .unwrap();
     assert!(vm.outputs().is_empty());
     let closures: Vec<_> = journal
@@ -281,13 +295,15 @@ fn real_timeout_retains_its_original_backoff_and_queue_time() {
             .iter()
             .all(|call| call.deadlines.as_ref().unwrap().items()[0].due_at == 1_100_000_000)
     );
-    vm.advance_to(&mut journal, &mut world, 1_099_999_999)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 1_099_999_999)
         .unwrap();
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
     assert_eq!(world.starts.len(), 1);
-    vm.advance_to(&mut journal, &mut world, 1_100_000_000)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 1_100_000_000)
         .unwrap();
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
     assert_eq!(world.starts.len(), 2);
     assert_eq!(
         world.preparations, 2,
@@ -305,16 +321,19 @@ fn closing_in_backoff_does_not_publish_a_held_failure() {
         let mut journal = MemJournal::new(GraphVersion(1));
         let mut world = World::default();
         inject(&mut vm, &mut journal);
-        vm.run_ready_with_bindings(&mut journal, &mut world)
+        vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
             .unwrap();
-        vm.poll_drivers(&mut journal, &mut world).unwrap();
+        vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+            .unwrap();
         reply(&mut world, true);
-        vm.poll_drivers(&mut journal, &mut world).unwrap();
-        vm.run_ready_with_bindings(&mut journal, &mut world)
+        vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
             .unwrap();
-        vm.advance_to(&mut journal, &mut world, 1_000_000_000)
+        vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
             .unwrap();
-        vm.poll_drivers(&mut journal, &mut world).unwrap();
+        vm.advance_to(&mut journal, &mut CallDriver(&mut world), 1_000_000_000)
+            .unwrap();
+        vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+            .unwrap();
         assert_eq!(world.starts.len(), 1);
         assert!(vm.outputs().is_empty());
         assert!(journal.records().iter().any(|r| matches!(r,
@@ -354,7 +373,8 @@ graph app : App {{
         let mut world = World::default();
         inject(&mut vm, &mut journal);
         for _ in 0..16 {
-            vm.step_with_bindings(&mut journal, &mut world).unwrap();
+            vm.step_with_bindings(&mut journal, &mut CallDriver(&mut world))
+                .unwrap();
             if journal.records().iter().any(|record| {
                 matches!(record,
                 Record::Transaction(record) if record.owner_path.to_string() == "call"
@@ -380,21 +400,24 @@ graph app : App {{
             )
             .unwrap();
         }
-        vm.run_ready_with_bindings(&mut journal, &mut world)
+        vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
             .unwrap();
-        vm.poll_drivers(&mut journal, &mut world).unwrap();
+        vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+            .unwrap();
         assert_eq!(
             world.starts.len(),
             1,
             "{lifetime}: admitted work must drain"
         );
         reply(&mut world, true);
-        vm.poll_drivers(&mut journal, &mut world).unwrap();
-        vm.run_ready_with_bindings(&mut journal, &mut world)
+        vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
             .unwrap();
-        vm.advance_to(&mut journal, &mut world, 3_000_000_000)
+        vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
             .unwrap();
-        vm.poll_drivers(&mut journal, &mut world).unwrap();
+        vm.advance_to(&mut journal, &mut CallDriver(&mut world), 3_000_000_000)
+            .unwrap();
+        vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+            .unwrap();
         assert_eq!(
             world.starts.len(),
             1,
@@ -417,7 +440,7 @@ graph app : App {{
             let mut restored =
                 Execution::new_program(&plan, hash, GraphVersion(1), 3_000_000_000, None);
             let mut world = World::default();
-            let result = restored.recover_with_bindings(&prefix, &mut world);
+            let result = restored.recover_with_bindings(&prefix, &mut CallDriver(&mut world));
             assert!(result.is_ok(), "{lifetime}, prefix {cut}: {result:?}");
             assert_eq!(world.preparations, 0);
             assert!(world.starts.is_empty());
@@ -440,7 +463,8 @@ fn single_pass_drain_never_transfers_an_operation_into_the_successor_generation(
     // The successor is selected by the retained Closing fact, not a pending
     // lifecycle request. Before that commit, ordinary admission backpressures.
     for _ in 0..16 {
-        vm.step_with_bindings(&mut journal, &mut world).unwrap();
+        vm.step_with_bindings(&mut journal, &mut CallDriver(&mut world))
+            .unwrap();
         if journal.records().iter().any(|record| {
             matches!(record,
             Record::Transaction(record) if record.owner_path.to_string() == "call"
@@ -454,18 +478,21 @@ fn single_pass_drain_never_transfers_an_operation_into_the_successor_generation(
             && record.trigger == node::Trigger::Lifecycle(node::Lifecycle::Closing))));
     inject(&mut vm, &mut journal);
     for count in 1..=2 {
-        vm.run_ready_with_bindings(&mut journal, &mut world)
+        vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
             .unwrap();
-        vm.poll_drivers(&mut journal, &mut world).unwrap();
+        vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+            .unwrap();
         assert_eq!(world.starts.len(), count, "one Call per exact generation");
         reply(&mut world, true);
-        vm.poll_drivers(&mut journal, &mut world).unwrap();
+        vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+            .unwrap();
     }
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
-    vm.advance_to(&mut journal, &mut world, 3_000_000_000)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 3_000_000_000)
         .unwrap();
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
     assert_eq!(world.starts.len(), 2);
     assert_eq!(vm.outputs().len(), 6);
     assert!(vm.is_stable());
@@ -494,7 +521,7 @@ fn single_pass_drain_never_transfers_an_operation_into_the_successor_generation(
         let mut restored =
             Execution::new_program(&plan, hash, GraphVersion(1), 3_000_000_000, None);
         let mut world = World::default();
-        let result = restored.recover_with_bindings(&prefix, &mut world);
+        let result = restored.recover_with_bindings(&prefix, &mut CallDriver(&mut world));
         assert!(result.is_ok(), "prefix {cut}: {result:?}");
         assert_eq!(world.preparations, 0);
         assert!(world.starts.is_empty());
@@ -508,7 +535,7 @@ fn recovery_cannot_bypass_retry_without_the_exact_retained_closing() {
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut world = World::default();
     inject(&mut vm, &mut journal);
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
     let forged: Vec<_> = journal
         .records()
@@ -527,7 +554,7 @@ fn recovery_cannot_bypass_retry_without_the_exact_retained_closing() {
     let mut restored = Execution::new_program(&plan, hash, GraphVersion(1), 0, None);
     let mut world = World::default();
     let error = restored
-        .recover_with_bindings(&forged, &mut world)
+        .recover_with_bindings(&forged, &mut CallDriver(&mut world))
         .unwrap_err();
     assert!(
         error
@@ -547,24 +574,29 @@ fn every_retained_prefix_recovers_without_preparing_or_starting_an_effect() {
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut world = World::default();
     inject(&mut vm, &mut journal);
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
     reply(&mut world, true);
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
-    vm.advance_to(&mut journal, &mut world, 100_000_000)
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 100_000_000)
+        .unwrap();
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
     reply(&mut world, false);
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
     for cut in 0..=journal.records().len() {
         let retained =
             MemJournal::from_records(GraphVersion(1), None, &journal.records()[..cut]).unwrap();
         let mut recovery_world = World::default();
         let mut restored = Execution::new_program(&plan, hash, GraphVersion(1), 250_000_000, None);
-        let result = restored.recover_with_bindings(&retained, &mut recovery_world);
+        let result =
+            restored.recover_with_bindings(&retained, &mut CallDriver(&mut recovery_world));
         assert!(
             result.is_ok(),
             "cut {cut}: {result:?}; last {:?}",
@@ -587,12 +619,15 @@ fn recovery_after_held_consumes_once_and_does_not_renew_the_backoff() {
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut world = World::default();
     inject(&mut vm, &mut journal);
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
     reply(&mut world, true);
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
-    vm.step_with_bindings(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
+    vm.step_with_bindings(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
     assert!(
         matches!(journal.records().last(), Some(Record::Transaction(r))
         if r.retry_record.as_ref().is_some_and(|packet| matches!(packet.facts.as_slice(), [Fact::Held(_)])))
@@ -600,13 +635,13 @@ fn recovery_after_held_consumes_once_and_does_not_renew_the_backoff() {
     let mut restored = Execution::new_program(&plan, hash, GraphVersion(1), 250_000_000, None);
     let mut world_after = World::default();
     restored
-        .recover_with_bindings(&journal, &mut world_after)
+        .recover_with_bindings(&journal, &mut CallDriver(&mut world_after))
         .unwrap();
     restored
-        .run_ready_with_bindings(&mut journal, &mut world_after)
+        .run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world_after))
         .unwrap();
     restored
-        .poll_drivers(&mut journal, &mut world_after)
+        .poll_drivers(&mut journal, &mut CallDriver(&mut world_after))
         .unwrap();
     assert_eq!(
         world_after.starts.len(),
@@ -618,10 +653,10 @@ fn recovery_after_held_consumes_once_and_does_not_renew_the_backoff() {
     assert_ne!(world_after.starts[0].call_id, world.starts[0].call_id);
     reply(&mut world_after, false);
     restored
-        .poll_drivers(&mut journal, &mut world_after)
+        .poll_drivers(&mut journal, &mut CallDriver(&mut world_after))
         .unwrap();
     restored
-        .run_ready_with_bindings(&mut journal, &mut world_after)
+        .run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world_after))
         .unwrap();
     assert_eq!(restored.outputs().len(), 3);
     assert_eq!(journal.records().iter().filter(|r| matches!(r, Record::Transaction(r)
@@ -667,7 +702,7 @@ lab app {
     let first = MemJournal::from_records(GraphVersion(1), None, &runs[0].records).unwrap();
     let mut restored = Execution::new_program(&plan, hash, GraphVersion(1), 1_100_000_000, None);
     restored
-        .recover_with_bindings(&first, &mut World::default())
+        .recover_with_bindings(&first, &mut CallDriver(&mut World::default()))
         .unwrap();
     assert_eq!(restored.outputs().len(), 1);
 }
@@ -701,21 +736,25 @@ graph app : App + Loop {
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut world = World::default();
     inject(&mut vm, &mut journal);
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
     reply(&mut world, true);
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
     assert!(!vm.is_stable());
     assert!(vm.outputs().is_empty());
-    vm.advance_to(&mut journal, &mut world, 100_000_000)
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 100_000_000)
         .unwrap();
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
     reply(&mut world, false);
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
     assert_eq!(vm.outputs().len(), 1);
     assert!(vm.is_stable());
@@ -723,7 +762,8 @@ graph app : App + Loop {
         let prefix =
             MemJournal::from_records(GraphVersion(1), None, &journal.records()[..cut]).unwrap();
         let mut restored = Execution::new_program(&plan, hash, GraphVersion(1), 100_000_000, None);
-        let result = restored.recover_with_bindings(&prefix, &mut World::default());
+        let result =
+            restored.recover_with_bindings(&prefix, &mut CallDriver(&mut World::default()));
         assert!(
             result.is_ok(),
             "cut {cut}: {result:?}; last {:?}",
@@ -758,12 +798,14 @@ graph app : App {
     let mut vm = Execution::new_program(&plan, hash, GraphVersion(1), 0, None);
     let mut world = World::default();
     inject(&mut vm, &mut journal);
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
     reply(&mut world, false);
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
     let mut records = journal.records().to_vec();
     let mut packet = records
@@ -796,7 +838,7 @@ graph app : App {
     let mut restored = Execution::new_program(&plan, hash, GraphVersion(1), 0, None);
     assert!(
         restored
-            .recover_with_bindings(&forged, &mut World::default())
+            .recover_with_bindings(&forged, &mut CallDriver(&mut World::default()))
             .is_err(),
         "a well-shaped Retry packet is not authority to give an Operator the Call's publication"
     );
@@ -813,17 +855,21 @@ fn a_retry_recording_restores_held_batches_at_every_selected_prefix() {
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut world = World::default();
     inject(&mut vm, &mut journal);
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
     reply(&mut world, true);
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
-    vm.advance_to(&mut journal, &mut world, 100_000_000)
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 100_000_000)
+        .unwrap();
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
     reply(&mut world, false);
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
     let compilation = compiler::Compilation {
         symbols: plan::SymbolTable {
@@ -865,7 +911,7 @@ fn a_retry_recording_restores_held_batches_at_every_selected_prefix() {
     );
     assert!(
         wrong_program
-            .recover_with_bindings(&journal, &mut World::default())
+            .recover_with_bindings(&journal, &mut CallDriver(&mut World::default()))
             .is_err()
     );
     assert!(wrong_program.outputs().is_empty());
@@ -897,9 +943,10 @@ graph app : App {
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut world = World::default();
     inject(&mut vm, &mut journal);
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
     let mut openings: Vec<_> = journal
         .records()
         .iter()
@@ -919,10 +966,12 @@ graph app : App {
             completion: Completion::process(vec![], vec![], ProcessExit::TimeoutExpired),
         })
         .collect();
-    vm.poll_drivers(&mut journal, &mut world).unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut world)
+    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
-    vm.advance_to(&mut journal, &mut world, 1_000_000).unwrap();
+    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
+    vm.advance_to(&mut journal, &mut CallDriver(&mut world), 1_000_000)
+        .unwrap();
     let admissions: Vec<_> = journal
         .records()
         .iter()
@@ -1015,18 +1064,21 @@ graph app : App {
                 },
             )
             .unwrap();
-            vm.run_ready_with_bindings(&mut journal, &mut world)
+            vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
                 .unwrap();
             if port == "retry" {
-                vm.poll_drivers(&mut journal, &mut world).unwrap();
+                vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+                    .unwrap();
                 reply(&mut world, true);
-                vm.poll_drivers(&mut journal, &mut world).unwrap();
-                vm.run_ready_with_bindings(&mut journal, &mut world)
+                vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+                    .unwrap();
+                vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
                     .unwrap();
             }
         }
         let before = journal.records().len();
-        vm.advance_to(&mut journal, &mut world, 1_000_000).unwrap();
+        vm.advance_to(&mut journal, &mut CallDriver(&mut world), 1_000_000)
+            .unwrap();
         let admissions: Vec<_> = journal.records()[before..]
             .iter()
             .filter_map(|record| {
@@ -1075,10 +1127,14 @@ graph app : App {
                         && call.status != rastok::journal::CallStatus::Open)
             });
             restored
-                .recover_with_bindings(&retained, &mut resumed_world)
+                .recover_with_bindings(&retained, &mut CallDriver(&mut resumed_world))
                 .unwrap();
             restored
-                .advance_to(&mut retained, &mut resumed_world, 1_000_000)
+                .advance_to(
+                    &mut retained,
+                    &mut CallDriver(&mut resumed_world),
+                    1_000_000,
+                )
                 .unwrap();
             assert_eq!(retained.records().len(), journal.records().len());
             for (index, (actual, expected)) in
@@ -1173,19 +1229,22 @@ graph app : App {
                     },
                 )
                 .unwrap();
-                vm.run_ready_with_bindings(&mut journal, &mut world)
+                vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
                     .unwrap();
                 if port == "retry" {
-                    vm.poll_drivers(&mut journal, &mut world).unwrap();
+                    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+                        .unwrap();
                     reply(&mut world, true);
-                    vm.poll_drivers(&mut journal, &mut world).unwrap();
-                    vm.run_ready_with_bindings(&mut journal, &mut world)
+                    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+                        .unwrap();
+                    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
                         .unwrap();
                 }
             }
             assert!(vm.outputs().is_empty());
             let before = journal.records().len();
-            vm.advance_to(&mut journal, &mut world, 1_000_000).unwrap();
+            vm.advance_to(&mut journal, &mut CallDriver(&mut world), 1_000_000)
+                .unwrap();
             assert_eq!(vm.outputs().len(), 2);
             assert!(vm.outputs().iter().any(|output| matches!(
                 output.envelope.data(),
@@ -1215,10 +1274,14 @@ graph app : App {
                     Execution::new_program(&plan, hash, GraphVersion(1), resume_at, None);
                 let mut resumed_world = World::default();
                 restored
-                    .recover_with_bindings(&retained, &mut resumed_world)
+                    .recover_with_bindings(&retained, &mut CallDriver(&mut resumed_world))
                     .unwrap();
                 restored
-                    .advance_to(&mut retained, &mut resumed_world, 1_000_000)
+                    .advance_to(
+                        &mut retained,
+                        &mut CallDriver(&mut resumed_world),
+                        1_000_000,
+                    )
                     .unwrap();
                 assert_eq!(retained.records().len(), journal.records().len());
                 for (index, (actual, expected)) in
@@ -1283,12 +1346,14 @@ graph app : App {{
                     },
                 )
                 .unwrap();
-                vm.run_ready_with_bindings(&mut journal, &mut world)
+                vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
                     .unwrap();
-                vm.poll_drivers(&mut journal, &mut world).unwrap();
+                vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+                    .unwrap();
                 if port == "retry" {
                     reply(&mut world, true);
-                    vm.poll_drivers(&mut journal, &mut world).unwrap();
+                    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+                        .unwrap();
                 } else {
                     vm.accept_input(
                         &mut journal,
@@ -1307,12 +1372,13 @@ graph app : App {{
                     )
                     .unwrap();
                 }
-                vm.run_ready_with_bindings(&mut journal, &mut world)
+                vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
                     .unwrap();
             }
             let before = journal.records().len();
             let due = delay_ms * 1_000_000;
-            vm.advance_to(&mut journal, &mut world, due).unwrap();
+            vm.advance_to(&mut journal, &mut CallDriver(&mut world), due)
+                .unwrap();
             assert_eq!(vm.outputs().len(), usize::from(delay_ms == 2));
             if delay_ms == 2 {
                 assert!(matches!(vm.outputs()[0].envelope.data(),
@@ -1334,14 +1400,14 @@ graph app : App {{
                     Execution::new_program(&plan, hash, GraphVersion(1), resume_at, None);
                 let mut resumed_world = World::default();
                 restored
-                    .recover_with_bindings(&retained, &mut resumed_world)
+                    .recover_with_bindings(&retained, &mut CallDriver(&mut resumed_world))
                     .unwrap();
                 assert!(
                     resumed_world.cancellations.is_empty(),
                     "reconstruction has no effects"
                 );
                 restored
-                    .advance_to(&mut retained, &mut resumed_world, due)
+                    .advance_to(&mut retained, &mut CallDriver(&mut resumed_world), due)
                     .unwrap();
                 assert_eq!(retained.records().len(), journal.records().len());
                 for (index, (actual, expected)) in
@@ -1387,14 +1453,17 @@ graph app : App {
         let mut journal = MemJournal::new(GraphVersion(1));
         let mut world = World::default();
         inject(&mut vm, &mut journal);
-        vm.run_ready_with_bindings(&mut journal, &mut world)
+        vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
             .unwrap();
-        vm.poll_drivers(&mut journal, &mut world).unwrap();
+        vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+            .unwrap();
         reply(&mut world, true);
-        vm.poll_drivers(&mut journal, &mut world).unwrap();
-        vm.advance_to(&mut journal, &mut world, 100_000_000)
+        vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
             .unwrap();
-        vm.poll_drivers(&mut journal, &mut world).unwrap();
+        vm.advance_to(&mut journal, &mut CallDriver(&mut world), 100_000_000)
+            .unwrap();
+        vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+            .unwrap();
         assert_eq!(world.starts.len(), 2);
         world.responses.push(CallResponse {
             call_id: world.starts[1].call_id,
@@ -1409,11 +1478,12 @@ graph app : App {
                 },
             ),
         });
-        vm.poll_drivers(&mut journal, &mut world).unwrap();
+        vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+            .unwrap();
         let before = journal.records().to_vec();
         let inspection = vm.inspection();
         let observations = vm.envelope_views().to_vec();
-        let result = vm.step_with_bindings(&mut journal, &mut world);
+        let result = vm.step_with_bindings(&mut journal, &mut CallDriver(&mut world));
         if frames == capacity {
             assert!(result.unwrap());
             let Some(Record::Transaction(record)) = journal.records().last() else {
@@ -1450,7 +1520,7 @@ graph app : App {
             assert_eq!(vm.inspection(), inspection);
             assert_eq!(vm.envelope_views(), observations);
             assert!(matches!(
-                vm.step_with_bindings(&mut journal, &mut world),
+                vm.step_with_bindings(&mut journal, &mut CallDriver(&mut world)),
                 Err(rastok::runtime::execution::ExecutionFault::MailboxFull { .. })
             ));
             assert_eq!(
@@ -1465,9 +1535,10 @@ graph app : App {
             Execution::new_program(&plan, hash, GraphVersion(1), vm.logical_time(), None);
         let mut resumed_world = World::default();
         restored
-            .recover_with_bindings(&retained, &mut resumed_world)
+            .recover_with_bindings(&retained, &mut CallDriver(&mut resumed_world))
             .unwrap();
-        let result = restored.step_with_bindings(&mut retained, &mut resumed_world);
+        let result =
+            restored.step_with_bindings(&mut retained, &mut CallDriver(&mut resumed_world));
         if frames == capacity {
             assert!(result.unwrap());
         } else {
@@ -1530,9 +1601,11 @@ graph app : App {
     }
     let mut answered = 0;
     for now in [0, 100_000_000] {
-        vm.advance_to(&mut journal, &mut world, now).unwrap();
+        vm.advance_to(&mut journal, &mut CallDriver(&mut world), now)
+            .unwrap();
         for round in 0..8 {
-            vm.poll_drivers(&mut journal, &mut world).unwrap();
+            vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+                .unwrap();
             if answered == world.starts.len() {
                 break;
             }
@@ -1563,8 +1636,9 @@ graph app : App {
                 });
             }
             answered = world.starts.len();
-            vm.poll_drivers(&mut journal, &mut world).unwrap();
-            vm.run_ready_with_bindings(&mut journal, &mut world)
+            vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+                .unwrap();
+            vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
                 .unwrap();
         }
         assert_eq!(vm.outputs().len(), if now == 0 { 2 } else { 4 });
@@ -1624,7 +1698,7 @@ graph app : App {
             Execution::new_program(&plan, hash, GraphVersion(1), vm.logical_time(), None);
         let mut resumed_world = World::default();
         restored
-            .recover_with_bindings(&retained, &mut resumed_world)
+            .recover_with_bindings(&retained, &mut CallDriver(&mut resumed_world))
             .unwrap();
         assert_eq!(resumed_world.preparations, 0, "prefix {cut}");
         assert!(resumed_world.starts.is_empty());
@@ -1646,7 +1720,9 @@ graph app : App {
             },
         ),
     });
-    let late = vm.poll_drivers(&mut journal, &mut world).unwrap();
+    let late = vm
+        .poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
     assert_eq!(late.discarded.len(), 1);
     assert_eq!(
         journal.records(),
@@ -1682,13 +1758,18 @@ graph app : App {
         let mut journal = MemJournal::new(GraphVersion(1));
         let mut world = World::default();
         inject(&mut vm, &mut journal);
-        vm.run_ready_with_bindings(&mut journal, &mut world)
+        vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
             .unwrap();
-        vm.poll_drivers(&mut journal, &mut world).unwrap();
+        vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+            .unwrap();
         reply(&mut world, true);
-        vm.poll_drivers(&mut journal, &mut world).unwrap();
+        vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+            .unwrap();
         for _ in 0..steps_after_closure {
-            assert!(vm.step_with_bindings(&mut journal, &mut world).unwrap());
+            assert!(
+                vm.step_with_bindings(&mut journal, &mut CallDriver(&mut world))
+                    .unwrap()
+            );
         }
         match (steps_after_closure, journal.records().last().unwrap()) {
             (0, Record::Egress(EgressRecord::Call(call))) => {
@@ -1718,7 +1799,7 @@ graph app : App {
         )
         .unwrap();
         let before_close = journal.records().len();
-        vm.advance_to(&mut journal, &mut world, 3_000_000_000)
+        vm.advance_to(&mut journal, &mut CallDriver(&mut world), 3_000_000_000)
             .unwrap();
         assert!(vm.outputs().is_empty());
         assert!(vm.is_stable());
@@ -1766,10 +1847,14 @@ graph app : App {
             let mut restored = Execution::new_program(&plan, hash, GraphVersion(1), 0, None);
             let mut resumed_world = World::default();
             restored
-                .recover_with_bindings(&retained, &mut resumed_world)
+                .recover_with_bindings(&retained, &mut CallDriver(&mut resumed_world))
                 .unwrap();
             restored
-                .advance_to(&mut retained, &mut resumed_world, 3_000_000_000)
+                .advance_to(
+                    &mut retained,
+                    &mut CallDriver(&mut resumed_world),
+                    3_000_000_000,
+                )
                 .unwrap();
             assert_eq!(
                 retained.records(),
@@ -1852,7 +1937,9 @@ lab app {
             MemJournal::from_records(GraphVersion(1), None, &runs[0].records[..cut]).unwrap();
         let mut restored = Execution::new_program(&plan, hash, GraphVersion(1), 100_000_000, None);
         let mut world = World::default();
-        restored.recover_with_bindings(&prefix, &mut world).unwrap();
+        restored
+            .recover_with_bindings(&prefix, &mut CallDriver(&mut world))
+            .unwrap();
         assert_eq!(world.preparations, 0);
         assert!(world.starts.is_empty());
         if cut == runs[0].records.len() {
@@ -1922,7 +2009,7 @@ lab app {{
             let mut restored =
                 Execution::new_program(&plan, hash, GraphVersion(1), 100_000_000, None);
             let mut world = World::default();
-            let result = restored.recover_with_bindings(&prefix, &mut world);
+            let result = restored.recover_with_bindings(&prefix, &mut CallDriver(&mut world));
             assert!(result.is_ok(), "{mode}, prefix {cut}: {result:?}");
             assert_eq!(world.preparations, 0);
             assert!(world.starts.is_empty());
@@ -2273,7 +2360,9 @@ fn assert_original_attempt_measurements(
             MemJournal::from_records(GraphVersion(1), None, &decoded.records()[..cut]).unwrap();
         let mut restored = Execution::new_program(plan, hash, GraphVersion(1), 100_000_000, None);
         let mut world = World::default();
-        restored.recover_with_bindings(&prefix, &mut world).unwrap();
+        restored
+            .recover_with_bindings(&prefix, &mut CallDriver(&mut world))
+            .unwrap();
         assert_eq!(world.preparations, 0);
         assert!(world.starts.is_empty());
         assert_eq!(prefix.records(), &records[..cut]);

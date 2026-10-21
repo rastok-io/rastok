@@ -1241,7 +1241,12 @@ graph real : App {
         .expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
         let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
-        let mut world = Process::try_new(&compilation.plan).expect("the plan binds");
+        let registry = crate::connector::drivers::DriverRegistry::default()
+            .try_with(Box::new(ProcessFactory::try_new().unwrap()))
+            .unwrap();
+        let mut world =
+            crate::connector::drivers::RuntimeDrivers::prepare(&compilation.plan, &registry)
+                .expect("the plan binds");
         vm.accept_input(&mut journal, submission).unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         loop {
