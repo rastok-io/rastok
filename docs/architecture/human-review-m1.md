@@ -1322,6 +1322,42 @@ No dynamic plugin loader, native ABI, new parallelism, changes to
 Event/Call/Session semantics, automatic provider fallback or new Driver
 selection syntax is authorized by this entry. No push, tag or publication.
 
+**Fable's review — 21 October, and Yoann's decision.** Fable verified the
+six actions against the code (`c57fbd7`) and the specification. Nothing in
+A-T5-2, A-T5-3, A-T5-5 or A-T5-6 moves a byte: no Rust type or module
+name reaches an identity path (no `type_name`, `stringify!` or
+`module_path!`; no `{:?}` in `canonical.rs`, `plan/serialization.rs`,
+`journal/codec.rs`, `golden.rs`, `recording/codec.rs`); the public paths of
+both crates change, without aliases. A-T5-4 is the identity movement the
+ledger already names: the Contract id is key 1 of the connector node in
+the plan, hence the semantic hash; D-2026-09-14-1 made the two Process ids
+normative; the spike witness `spikes/rp2350-emu/echo.rkp` carries
+`std/process@4` in clear; Retry records seal `plan: SemanticHash`, so the
+gallery traces of a Retry-and-Process plan move; `contracts.rs` and
+`literals.rs` pin hashes of Process plans; the three package goldens are to
+be checked by decoding. Complements Fable adds for the implementation:
+the core mirror is larger than `boundary.rs` — `ContractShape` in
+`plan/validation.rs` (roles, exchange, required and allowed attributes,
+ports, one arm per id, plus id-conditioned rules) is the other half, so
+`connector/stdlib/` should hold one value per standard Contract that
+`validation.rs` consumes, the three existing parity tests proving the
+merge; `CompletionCheck` belongs with the poller (its only core
+implementor is `PlanCompletionCheck`, its callers are `execution.rs` and
+recovery), not with the Driver interfaces; `Supervisor` and
+`LifecycleObservation` have no caller in either crate or the spikes and can
+go in the same lot; `SessionConnectorBindings` has one implementor and one
+use, the delegation inside `RuntimeBindings`' own `OutboundConnectorBindings`
+impl, so its removal is a fold, not an equivalence proof; the blanket
+`impl<T: CallConnectorDriver> OutboundConnectorBindings for T` is to be
+checked for test-only use; `CallProtocol` may be a supertrait of
+`OutboundCall` if the two signatures coincide. Fable also proposed folding
+`driver::Outbound` into `driver::Driver` (four optional views, five
+implementer traits) and deferring A-T5-4 and A-T5-5 past the freeze.
+**Yoann's decision (21 October): the rework is taken in full as Astra
+recorded it**, actions A-T5-2 to A-T5-6 with their gates and order; Fable's
+complements are implementation notes for Astra, the view fusion and the
+re-ordering are not taken.
+
 ## Realignment on the Node ontology — decided 2026-10-11
 
 Astra's 11 October proposal, verified by Fable against the code, and
