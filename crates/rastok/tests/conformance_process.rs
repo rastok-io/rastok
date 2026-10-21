@@ -7,15 +7,19 @@
 //! test turns the harness against a lying Driver to prove the
 //! battery itself bites.
 
-use rastok::conformance::{
-    DriverTestFixture, ExitCaseTest, InterleaveExpectation, InterleaveProbe, assert_conformant,
-    verify,
-};
 use rastok::connector::ConnectorDirection;
 use rastok::connector::ContractId;
+use rastok::connector::contract::ContractCatalog;
 use rastok::connector::driver::Driver;
 use rastok::connector::driver::Outbound;
 use rastok::connector::driver::OutboundCall;
+use rastok::connector::drivers::conformance::{
+    DriverTestFixture, ExitCaseTest, InterleaveExpectation, InterleaveProbe, assert_conformant,
+    verify,
+};
+use rastok::connector::drivers::{
+    DriverFactory, DriverFactoryError, DriverRegistry, ProcessFactory,
+};
 use rastok::connector::exchange::CallOpen;
 use rastok::connector::exchange::CallResponse;
 use rastok::connector::exchange::CallStart;
@@ -26,8 +30,6 @@ use rastok::connector::exchange::SchedulerCompletion;
 use rastok::connector::stdlib::PROCESS;
 use rastok::connector::stdlib::PROCESS_CONNECTOR_ID;
 use rastok::connector::stdlib::ProcessExit;
-use rastok::connectors::{DriverFactory, DriverFactoryError, DriverRegistry, ProcessFactory};
-use rastok::contract::ContractCatalog;
 use rastok::envelope::{Data, Envelope, Value};
 use rastok::plan::ValidatedExecutionPlan;
 

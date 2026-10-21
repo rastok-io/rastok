@@ -2,7 +2,7 @@
 #![allow(clippy::expect_used, clippy::panic)]
 
 use rastok::compiler::compile;
-use rastok::contract::ContractCatalog;
+use rastok::connector::contract::ContractCatalog;
 use rastok::journal::retry_protocol::Fact;
 use rastok::journal::{CallStatus, EgressRecord, Record};
 use rastok::plan::GraphVersion;

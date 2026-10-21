@@ -4,7 +4,9 @@
 #![allow(clippy::unwrap_used)]
 
 use rastok::node::Port;
-use rastok::{compiler, contract::ContractCatalog, datatype::DataType, expr, plan, value::Value};
+use rastok::{
+    compiler, connector::contract::ContractCatalog, datatype::DataType, expr, plan, value::Value,
+};
 
 fn compile(settings: &str) -> compiler::Compilation {
     compiler::compile(

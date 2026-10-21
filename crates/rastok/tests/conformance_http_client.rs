@@ -12,13 +12,15 @@
     clippy::expect_used
 )]
 
-use rastok::conformance::{
+use rastok::connector::contract::ContractCatalog;
+use rastok::connector::drivers::conformance::{
     DriverTestFixture, ExitCaseTest, InterleaveExpectation, InterleaveProbe, assert_conformant,
     verify,
 };
+use rastok::connector::drivers::{
+    DriverRegistry, HttpClientConfig, HttpClientFactory, RuntimeDrivers,
+};
 use rastok::connector::stdlib::HTTP_CLIENT;
-use rastok::connectors::{DriverRegistry, HttpClientConfig, HttpClientFactory, RuntimeDrivers};
-use rastok::contract::ContractCatalog;
 use rastok::deployment::{
     BootBindings, DeploymentProfile, EnvironmentName, SecretBinding, SecretMaterial, SecretName,
     SecretProvider, SecretProviderError, SecretProviderId, SecretVersion,

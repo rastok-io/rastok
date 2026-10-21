@@ -7,11 +7,11 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use rastok::compiler::compile;
+use rastok::connector::contract::ContractCatalog;
 use rastok::connector::exchange::EnvelopeDraft;
 use rastok::connector::exchange::IngressProposal;
 use rastok::connector::exchange::IngressProvenance;
 use rastok::connector::exchange::IngressSequence;
-use rastok::contract::ContractCatalog;
 use rastok::envelope::{Data, Namespace, Value};
 use rastok::journal::MemJournal;
 use rastok::plan::GraphVersion;
@@ -34,7 +34,7 @@ fn drive(
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
     let mut world =
-        rastok::connectors::Process::try_new(&compilation.plan).expect("the plan binds");
+        rastok::connector::drivers::Process::try_new(&compilation.plan).expect("the plan binds");
     vm.accept_input(
         &mut journal,
         IngressProposal {

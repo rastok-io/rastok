@@ -8,7 +8,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use rastok::compiler::compile;
-use rastok::contract::ContractCatalog;
+use rastok::connector::contract::ContractCatalog;
 
 fn refuses_with(source: &str, code: &str) -> Vec<String> {
     let bag = compile(

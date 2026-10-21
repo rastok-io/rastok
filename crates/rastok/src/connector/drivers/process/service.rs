@@ -3,9 +3,9 @@
 
 use super::{ProcessFailure, ProcessRequestSettings, frame_channel, process_status};
 use crate::connector::driver::*;
+use crate::connector::drivers::{DriverFactory, DriverFactoryError};
 use crate::connector::exchange::*;
 use crate::connector::stdlib::*;
-use crate::connectors::{DriverFactory, DriverFactoryError};
 use crate::envelope::{Data, Envelope, Namespace, Value};
 use crate::node;
 use crate::plan::ValidatedExecutionPlan;
@@ -788,8 +788,8 @@ mod tests {
     #[test]
     fn an_immediate_frame_cannot_overtake_the_session_opened_event() {
         let compiled = crate::compiler::compile(
-            &[include_str!("../../../../../examples/echo.rkg")],
-            &crate::contract::ContractCatalog::try_m0().unwrap(),
+            &[include_str!("../../../../../../examples/echo.rkg")],
+            &crate::connector::contract::ContractCatalog::try_m0().unwrap(),
         )
         .unwrap();
         let reference = SessionId::new(crate::envelope::Id::from_bytes([7; 16]));
@@ -839,8 +839,8 @@ mod tests {
     fn host_teardown_waits_for_retired_cleanup_without_blocking_session_release() {
         use std::sync::atomic::AtomicBool;
         let compiled = crate::compiler::compile(
-            &[include_str!("../../../../../examples/echo.rkg")],
-            &crate::contract::ContractCatalog::try_m0().unwrap(),
+            &[include_str!("../../../../../../examples/echo.rkg")],
+            &crate::connector::contract::ContractCatalog::try_m0().unwrap(),
         )
         .unwrap();
         let done = Arc::new(AtomicBool::new(false));

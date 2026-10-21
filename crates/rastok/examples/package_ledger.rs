@@ -5,7 +5,7 @@
 use rastok::{
     canonical_cbor::{self, Value as Cbor},
     compiler,
-    contract::ContractCatalog,
+    connector::contract::ContractCatalog,
     plan,
 };
 use std::path::Path;

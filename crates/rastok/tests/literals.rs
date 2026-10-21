@@ -6,7 +6,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use rastok::compiler::compile;
-use rastok::contract::ContractCatalog;
+use rastok::connector::contract::ContractCatalog;
 
 fn emitted(body: &str) -> rastok::envelope::Data {
     use rastok::connector::exchange::EnvelopeDraft;

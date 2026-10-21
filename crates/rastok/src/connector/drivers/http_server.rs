@@ -33,7 +33,7 @@ use crate::plan::{AttrSetting, NodeKind};
 use crate::value::Value;
 
 #[cfg(feature = "hosted-http12")]
-pub use crate::connectors::network::http_server::{HttpServerConfig, HttpServerFactory};
+pub use crate::connector::drivers::network::http_server::{HttpServerConfig, HttpServerFactory};
 
 #[cfg(feature = "hosted-http12")]
 use super::http_shared::HttpVersion;
@@ -428,12 +428,12 @@ pub(crate) fn lab_factory(
 #[cfg(test)]
 mod lab_tests {
     use super::*;
+    use crate::connector::drivers::{DriverRegistry, RuntimeDrivers};
     use crate::connector::exchange::EnvelopeDraft;
     use crate::connector::exchange::IngressAdmission;
     use crate::connector::exchange::IngressProvenance;
     use crate::connector::exchange::IngressRejection;
     use crate::connector::exchange::IngressSequence;
-    use crate::connectors::{DriverRegistry, RuntimeDrivers};
     use crate::envelope::{Data, Value};
     use crate::journal::{Journal, MemJournal, Record};
     use crate::plan::GraphVersion;
@@ -454,8 +454,8 @@ mod lab_tests {
 
     fn compile_source() -> crate::compiler::Compilation {
         crate::compiler::compile(
-            &[include_str!("../../tests/fixtures/lab-http-source.rkg")],
-            &crate::contract::ContractCatalog::try_m0().unwrap(),
+            &[include_str!("../../../tests/fixtures/lab-http-source.rkg")],
+            &crate::connector::contract::ContractCatalog::try_m0().unwrap(),
         )
         .unwrap()
     }

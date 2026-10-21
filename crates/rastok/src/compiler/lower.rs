@@ -2158,7 +2158,7 @@ impl Writer<'_> {
 mod tests {
     use super::DataType;
     use crate::compiler::compile;
-    use crate::contract::ContractCatalog;
+    use crate::connector::contract::ContractCatalog;
     use crate::diagnostics::{Bag, SourceId};
     use crate::node;
     use crate::plan::{AttrSetting, DispatchStep, EmitValue, GraphVersion, Manifest};

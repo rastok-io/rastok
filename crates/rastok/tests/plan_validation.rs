@@ -9,7 +9,7 @@
 
 use rastok::canonical_cbor::MAX_NESTING;
 use rastok::compiler::compile;
-use rastok::contract::ContractCatalog;
+use rastok::connector::contract::ContractCatalog;
 use rastok::datatype::{DataType, StructType, TaggedCase, TaggedUnionType};
 use rastok::expr;
 use rastok::instance;

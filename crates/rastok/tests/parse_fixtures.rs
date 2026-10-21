@@ -9,7 +9,7 @@
 //! goldens after an intentional change, then review the diff.
 
 use rastok::compiler::parser::parse;
-use rastok::contract::ContractCatalog;
+use rastok::connector::contract::ContractCatalog;
 use rastok::diagnostics::{Bag, SourceId};
 use std::fmt::Write as _;
 use std::fs;

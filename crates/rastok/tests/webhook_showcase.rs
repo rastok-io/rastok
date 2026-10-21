@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use rastok::accounting::{ExactDecimal, accounting_observations};
 use rastok::compiler::compile;
-use rastok::contract::ContractCatalog;
+use rastok::connector::contract::ContractCatalog;
 use rastok::deployment::{
     BootBindings, DeploymentProfile, EnvironmentName, PolicyName, PrivacyDeclaration,
     PrivacyDeclarationName, PrivacyRetention, RecipientPolicy, SecretBinding, SecretMaterial,

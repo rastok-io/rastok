@@ -1,5 +1,11 @@
 use crate::connector::driver::InboundCall;
 use crate::connector::driver::Ingress;
+use crate::connector::drivers::http_server::{HttpServerMode, bind_routes};
+use crate::connector::drivers::http_shared::{HttpVersion, decode_body};
+use crate::connector::drivers::network::pump::{
+    EngineInput, EngineLimits, EventPoll, EventReservation, EventSender, HostedNetworkEngine,
+    NetworkRuntime, ReserveError, SubmitError,
+};
 use crate::connector::exchange::AdmittedIngress;
 use crate::connector::exchange::EnvelopeDraft;
 use crate::connector::exchange::InboundCallObservation;
@@ -15,12 +21,6 @@ use crate::connector::exchange::IngressRejection;
 use crate::connector::exchange::IngressSequence;
 use crate::connector::exchange::PendingIngress;
 use crate::connector::stdlib::HttpServerExit;
-use crate::connectors::http_server::{HttpServerMode, bind_routes};
-use crate::connectors::http_shared::{HttpVersion, decode_body};
-use crate::connectors::network::pump::{
-    EngineInput, EngineLimits, EventPoll, EventReservation, EventSender, HostedNetworkEngine,
-    NetworkRuntime, ReserveError, SubmitError,
-};
 use crate::envelope::{MetaValue, Namespace, Scalar};
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
@@ -143,7 +143,7 @@ impl HttpServerFactory {
     }
 }
 
-impl crate::connectors::DriverFactory for HttpServerFactory {
+impl crate::connector::drivers::DriverFactory for HttpServerFactory {
     fn contract_id(&self) -> &crate::connector::ContractId {
         &self.id
     }
@@ -158,11 +158,11 @@ impl crate::connectors::DriverFactory for HttpServerFactory {
         nodes: &[crate::node::Path],
     ) -> Result<
         Box<dyn crate::connector::driver::Driver + 'plan>,
-        crate::connectors::DriverFactoryError,
+        crate::connector::drivers::DriverFactoryError,
     > {
         HttpServer::try_bind(plan, nodes, self.config)
             .map(|driver| Box::new(driver) as Box<dyn crate::connector::driver::Driver + 'plan>)
-            .map_err(crate::connectors::DriverFactoryError::new)
+            .map_err(crate::connector::drivers::DriverFactoryError::new)
     }
 }
 
@@ -1762,9 +1762,9 @@ fn response_with_headers(status: StatusCode, headers: &http::HeaderMap) -> Respo
 mod tests {
     use super::*;
     use crate::compiler::compile;
+    use crate::connector::contract::ContractCatalog;
     use crate::connector::exchange::InboundExchangeId;
     use crate::connector::exchange::IngressAdmission;
-    use crate::contract::ContractCatalog;
     use crate::journal::{Journal, MemJournal};
     use crate::plan::GraphVersion;
     use crate::runtime::execution::Execution;
@@ -2270,13 +2270,13 @@ graph api : App {
         };
         server.notify_admission(proposal.handle, Ok(accepted));
 
-        let registry = crate::connectors::DriverRegistry::default()
+        let registry = crate::connector::drivers::DriverRegistry::default()
             .try_with(Box::new(
                 HttpServerFactory::try_new(HttpServerConfig::default())
                     .expect("the standard server id is valid"),
             ))
             .expect("one hosted family registers");
-        let mut bindings = crate::connectors::RuntimeDrivers::prepare(&plan, &registry)
+        let mut bindings = crate::connector::drivers::RuntimeDrivers::prepare(&plan, &registry)
             .expect("the validated server plan binds");
         vm.advance_to(&mut journal, &mut bindings, 1_000_000_000)
             .expect("the request deadline advances deterministically");
@@ -2327,12 +2327,13 @@ graph api : App {
                 .enable_all()
                 .build()
                 .expect("the HTTP/3 client runtime builds");
-            let result =
-                runtime.block_on(crate::connectors::network::http_client::probe_http3_server(
+            let result = runtime.block_on(
+                crate::connector::drivers::network::http_client::probe_http3_server(
                     format!("https://localhost:{}/hook", address.port()),
                     b"request",
                     CA,
-                ));
+                ),
+            );
             let _ = sent.send(result);
         });
         let proposal = wait_for_proposal(&mut server);

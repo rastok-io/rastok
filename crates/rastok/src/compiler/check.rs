@@ -33,7 +33,7 @@ use crate::compiler::syntax::{
     StructBody, StructEntry, SyntaxTree, TopDecl, Trigger as SynTrigger, TypeRef, ValDecl,
     Value as SynValue, VarDecl,
 };
-use crate::contract;
+use crate::connector::contract;
 use crate::datatype::{
     DataType, DateUnit, DecimalType, EnumType, MapType, StructType, TaggedCase, TaggedUnionType,
     TemporalType, TimeUnit, TypeError, TypeField,

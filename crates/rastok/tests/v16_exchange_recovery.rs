@@ -3,6 +3,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use rastok::compiler;
+use rastok::connector::contract::ContractCatalog;
 use rastok::connector::exchange::Completion;
 use rastok::connector::exchange::EnvelopeDraft;
 use rastok::connector::exchange::InboundCallObservation;
@@ -14,7 +15,6 @@ use rastok::connector::exchange::IngressProvenance;
 use rastok::connector::exchange::IngressSequence;
 use rastok::connector::exchange::PendingIngress;
 use rastok::connector::stdlib::HttpServerExit;
-use rastok::contract::ContractCatalog;
 use rastok::envelope::{Data, Namespace, Value};
 use rastok::journal::MemJournal;
 use rastok::node;

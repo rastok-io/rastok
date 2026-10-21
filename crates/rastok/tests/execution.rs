@@ -35,6 +35,7 @@ use rastok::plan::{AttrSetting, EvaluationSite, GraphVersion, OwnerValue, Valida
 use rastok::runtime::execution::{Execution, ExecutionFault};
 
 use rastok::compiler::compile;
+use rastok::connector::contract::ContractCatalog;
 use rastok::connector::exchange::CallResponse;
 use rastok::connector::exchange::Completion;
 use rastok::connector::exchange::EnvelopeDraft;
@@ -43,7 +44,6 @@ use rastok::connector::exchange::IngressSequence;
 use rastok::connector::exchange::RequestPreparation;
 use rastok::connector::exchange::SchedulerCompletion;
 use rastok::connector::stdlib::ProcessExit;
-use rastok::contract::ContractCatalog;
 use rastok::envelope::{Encoding, Namespace, Value};
 use rastok::journal::loop_protocol::{Fact as LoopFact, LoopView as LoopFold, Phase as LoopPhase};
 use rastok::journal::{CallStatus, CloseVerdict, EgressRecord, MemJournal, Record};
@@ -1553,7 +1553,7 @@ graph dynamic_binding : App {
         .expect("the Graph value and Process setting close at instance entry");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut vm = Execution::new(&plan, GraphVersion(1));
-    let mut process = rastok::connectors::Process::try_new(&plan)
+    let mut process = rastok::connector::drivers::Process::try_new(&plan)
         .expect("the Driver accepts a validated instance-bound sheet");
     vm.accept_input(&mut journal, text_submission("salut"))
         .unwrap();

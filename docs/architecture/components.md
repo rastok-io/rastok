@@ -115,7 +115,7 @@ crates/rastok/src/            # the std layer — re-exports the kernel
 ├── golden.rs         # Trace, Divergence — projection, seal, named diff
 ├── recording/        # bounded diagnostic files, exact-record codec and read-only
 │                     # recovery/UI; not the M2 durable deployment Journal
-├── connectors/       # registry/global binder plus one module per Connector contract
+├── connector/drivers/       # registry/global binder plus one module per Connector contract
 │   ├── registry.rs   # exact-id factories and role-aware RuntimeDrivers
 │   ├── manifest.rs   # pre-load data-only Connector id/role capabilities
 │   ├── process/      # Process: bind effective settings, then async Driver
@@ -124,7 +124,7 @@ crates/rastok/src/            # the std layer — re-exports the kernel
 │   ├── websocket_client.rs, websocket_server.rs
 │   ├── websocket_protocol.rs # shared RFC 6455 message responsibility
 │   └── network/      # private sockets/TLS/pumps/protocol codecs
-├── conformance.rs    # Driver contract harness over the production seam
+├── connector/drivers/conformance.rs    # Driver contract harness over the production seam
 ├── lab.rs            # run → ScenarioRun { report, records } ; mock Drivers
 ├── worker.rs         # one Execution + journal + Drivers; run, run_until_idle, step
 ├── deployment_config.rs # hosted profile JSON and provider resolution
@@ -417,7 +417,7 @@ save, diff rendering) is driven by `lab` and `main`.
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **`contract::ConnectorContract` / `ContractCatalog`** | the compiler-facing contract sheet: canonical `ContractId`, required roles, one `PortContract` table, common attributes, optional profile selector, and effective presence/default/domain/evaluation-site rules. The catalogue is keyed by id while source symbols remain a checker concern; two symbols cannot alias one id | resolved by the checker into self-contained plan rows; **never depends on Driver code and never travels as a catalogue** | [stdlib.md §1–3](../spec/stdlib.md); [instances.md §3](../spec/instances.md); D-2026-08-22-1 | M1.5 C1 |
+| **`connector::contract::ConnectorContract` / `ContractCatalog`** | the compiler-facing contract sheet: canonical `ContractId`, required roles, one `PortContract` table, common attributes, optional profile selector, and effective presence/default/domain/evaluation-site rules. The catalogue is keyed by id while source symbols remain a checker concern; two symbols cannot alias one id | resolved by the checker into self-contained plan rows; **never depends on Driver code and never travels as a catalogue** | [stdlib.md §1–3](../spec/stdlib.md); [instances.md §3](../spec/instances.md); D-2026-08-22-1 | M1.5 C1 |
 | **`contract::FrontendContract`** | an ordinary source name plus its registered framing/reader policy. Built-in JSON/text/base64 execute; guest/data names retain a specific framing contract and named deferral until their compiler lands | consumed by parser and checker; never serialized by itself | [expressions.md](../spec/expressions.md); [stdlib.md §5](../spec/stdlib.md); [identity.md §1](../spec/identity.md) | M1.3 B4 |
 
 This module answers "how does the compiler know what `Process` is
@@ -428,7 +428,7 @@ alone.
 ### 3.8 Connectors and guest engines (`connectors`, `guest_engines`)
 
 The effectful and the pure halves of extension, on mirrored seams: a
-`connectors/*` implementation satisfies one or both boundary Driver roles; a future
+`connector/drivers/*` implementation satisfies one or both boundary Driver roles; a future
 `guest_engines/*` engine implements `runtime::GuestRunner` and will
 pair with a compiler frontend registered only when the first real guest
 implementation lands. No placeholder `GuestFrontend` type exists in the
@@ -437,20 +437,20 @@ whatever its execution format.
 
 | Component | Owns | Spec | Status |
 |---|---|---|---|
-| **`connectors::DriverRegistry`** | exact `ContractId` → implementation factory mapping and role-availability checks; duplicate ids refuse | [decisions.md D-2026-08-22-1](../spec/decisions.md) | M1.5 C1 |
-| **`connectors::DriverManifest`** | data-only, canonically ordered stable id/role claims readable before implementation code loads; no factory, artifact locator, ABI or trust policy | [decisions.md D-2026-08-22-1](../spec/decisions.md); [connector-drivers.md](connector-drivers.md) | M1.5 C6 |
-| **`connectors::RuntimeDrivers`** | the pre-Execution association of every runnable inbound and callable outbound Connector with one bound Driver object; exact role-view proof; Node-path and Call routing without concrete contract matching | [decisions.md D-2026-08-22-1](../spec/decisions.md) | M1.5 C2 |
-| **`connectors::ProcessFactory` / `Process`** | the explicit `std/process@4` factory and real job-mode Outbound Driver: pre-binds every effective setting before the Execution/journal exists, spawns asynchronously, captures under one aggregate budget, and supports `lines` / `jsonl` / `bytes` | [stdlib.md §3.3](../spec/stdlib.md) | M1.2 behavior; contract-specific module C0; registry binding C2 |
-| **`connectors::ProcessServiceFactory`** | `std/process@5`, one resident Session per exact instance; framed streaming, bounded writes, Unix supervision, no application RPC | [stdlib.md §3.3](../spec/stdlib.md) | [Resident qualification](process-service.md); pure Lab substitution and no package move |
+| **`connector::drivers::DriverRegistry`** | exact `ContractId` → implementation factory mapping and role-availability checks; duplicate ids refuse | [decisions.md D-2026-08-22-1](../spec/decisions.md) | M1.5 C1 |
+| **`connector::drivers::DriverManifest`** | data-only, canonically ordered stable id/role claims readable before implementation code loads; no factory, artifact locator, ABI or trust policy | [decisions.md D-2026-08-22-1](../spec/decisions.md); [connector-drivers.md](connector-drivers.md) | M1.5 C6 |
+| **`connector::drivers::RuntimeDrivers`** | the pre-Execution association of every runnable inbound and callable outbound Connector with one bound Driver object; exact role-view proof; Node-path and Call routing without concrete contract matching | [decisions.md D-2026-08-22-1](../spec/decisions.md) | M1.5 C2 |
+| **`connector::drivers::ProcessFactory` / `Process`** | the explicit `std/process@4` factory and real job-mode Outbound Driver: pre-binds every effective setting before the Execution/journal exists, spawns asynchronously, captures under one aggregate budget, and supports `lines` / `jsonl` / `bytes` | [stdlib.md §3.3](../spec/stdlib.md) | M1.2 behavior; contract-specific module C0; registry binding C2 |
+| **`connector::drivers::ProcessServiceFactory`** | `std/process@5`, one resident Session per exact instance; framed streaming, bounded writes, Unix supervision, no application RPC | [stdlib.md §3.3](../spec/stdlib.md) | [Resident qualification](process-service.md); pure Lab substitution and no package move |
 | **`stdlib::FILE` contract** | shared compiler and Registry-free validation definition for `std/file@3`: `read`/`replace`, exact pins and `FileExit`, invocation-bound path, read budget | [stdlib.md §3.7](../spec/stdlib.md); D-2026-08-22-1 | M1.5 C3 |
-| **`connectors::FileFactory` / `File`** | explicit physical-root binding and real one-file Outbound Driver: seals mode/path/budget-or-payload before open; performs complete bounded reads or native atomic replace after open; cooperates with generic cancel/close-once/replay rules | [stdlib.md §3.7](../spec/stdlib.md); D-2026-08-22-1 C4 checkpoint | M1.5 C4 |
+| **`connector::drivers::FileFactory` / `File`** | explicit physical-root binding and real one-file Outbound Driver: seals mode/path/budget-or-payload before open; performs complete bounded reads or native atomic replace after open; cooperates with generic cancel/close-once/replay rules | [stdlib.md §3.7](../spec/stdlib.md); D-2026-08-22-1 C4 checkpoint | M1.5 C4 |
 | **Network contract sheets** | exact `std/http-client@3`, `std/http-server@3`, `std/websocket-client@3`, and `std/websocket-server@3` roles/exchanges, codec-selected ports, phased settings, lossless HTTP metadata and portable terminal unions; the same portable definitions reject forged rows without consulting the hosted catalogue | [stdlib.md §3.1–3.2, §3.8–3.9](../spec/stdlib.md); D-2026-08-25-2 | M1.6 H2 |
 | **flat HTTP/WebSocket Connector modules** | `http_client`, `http_server`, `websocket_client` and `websocket_server` own contract-specific binding; `websocket_protocol` alone owns shared message framing. Every Contract resolves complete settings before external work and exposes only generic Call/Session views to the registry. | [M1.6 backlog](m1.6-http-websocket-backlog.md) | M1.6 H2–H7 complete |
-| **private `connectors::network` seam** | feature-selected bounded synchronous/async pump; Hyper/Rustls H1-H2, quiche/BoringSSL H3, shared trust bytes and bounded Tungstenite message machine; all runtime/library types stop below the Driver boundary | [connector-drivers.md](connector-drivers.md); D-2026-08-26-1; [M1.6 exit](m1.6-exit-report.md) | M1.6 H3 engine through H6 live client/server/Session execution |
-| **`connectors::http_client` / hosted HttpClient** | exact pre-open HTTP request descriptor; typed standard/custom request headers; bounded `CallStart` admission; H1 origin-form, pooled H2 and verified quiche H3; visibility-safe fallback; codec/body/header gates; lossless and typed response metadata plus portable exits | [stdlib.md §3.2](../spec/stdlib.md); D-2026-08-26-2/-3 | M1.6 H4/H4.1 |
-| **`connectors::http_server` / hosted HttpServer** | pre-bound ack/respond routes; bounded H1 connections, H2/H3 streams, retained byte reservations, commit-before-accept proposal decisions, correlation, deadline and close-once terminal observations | [stdlib.md §3.1](../spec/stdlib.md); D-2026-08-26-6 through D-2026-08-27-1 | M1.6 H5 complete |
+| **private `connector::drivers::network` seam** | feature-selected bounded synchronous/async pump; Hyper/Rustls H1-H2, quiche/BoringSSL H3, shared trust bytes and bounded Tungstenite message machine; all runtime/library types stop below the Driver boundary | [connector-drivers.md](connector-drivers.md); D-2026-08-26-1; [M1.6 exit](m1.6-exit-report.md) | M1.6 H3 engine through H6 live client/server/Session execution |
+| **`connector::drivers::http_client` / hosted HttpClient** | exact pre-open HTTP request descriptor; typed standard/custom request headers; bounded `CallStart` admission; H1 origin-form, pooled H2 and verified quiche H3; visibility-safe fallback; codec/body/header gates; lossless and typed response metadata plus portable exits | [stdlib.md §3.2](../spec/stdlib.md); D-2026-08-26-2/-3 | M1.6 H4/H4.1 |
+| **`connector::drivers::http_server` / hosted HttpServer** | pre-bound ack/respond routes; bounded H1 connections, H2/H3 streams, retained byte reservations, commit-before-accept proposal decisions, correlation, deadline and close-once terminal observations | [stdlib.md §3.1](../spec/stdlib.md); D-2026-08-26-6 through D-2026-08-27-1 | M1.6 H5 complete |
 | **hosted WebSocket Client/Server** | one logical Session over H1 Upgrade or H2/H3 Extended CONNECT; bounded complete-message admission and writes, portable terminal exit, server multi-session correlation and client one-session-per-instance | [stdlib.md §3.8–3.9](../spec/stdlib.md); D-2026-08-27-2 | M1.6 H6 complete |
-| **`connectors::assembly::hosted_registry`** | deterministic feature-selected registration of Process, optional File and linked network Contracts; manifest projection; no listener or effect during assembly | [connector-drivers.md](connector-drivers.md); D-2026-08-27-3 | M1.6 H7 complete |
+| **`connector::drivers::assembly::hosted_registry`** | deterministic feature-selected registration of Process, optional File and linked network Contracts; manifest projection; no listener or effect during assembly | [connector-drivers.md](connector-drivers.md); D-2026-08-27-3 | M1.6 H7 complete |
 | **Connector conformance profiles** | one role-aware battery over `DriverRegistry`/`RuntimeDrivers`; exact resolved terminal union, silence, typed completion coverage, correlation, journal-before-effect, close-once and explicit untestable cases | [stdlib.md §1](../spec/stdlib.md); D-2026-08-22-1 C5 checkpoint | M1.5 C5 (Process + File) |
 | **Catalogue remainder** (`Timer`, `Calendar`, `Memory`) | names declared so source refuses explicitly; contract sheets and Drivers land by slice | [stdlib.md §3](../spec/stdlib.md) | guarded |
 | **Future jq/sql engines** | pure guest engines under the six-clause contract; no `guest_engines` module exists yet | [stdlib.md §5](../spec/stdlib.md) | guarded |
@@ -568,7 +568,7 @@ The slice stages of [`m0-slice.md`](m0-slice.md), in module terms:
 | Check | `compiler` (assemble, desugar, check vs `stdlib` contracts), `expr` (compile) |
 | Plan | `compiler` (canonicalize, lower), `plan::Manifest` |
 | Step | `runtime` (Scheduler, Mailboxes, TransactionPreparer, EmissionBuffer, error routing) |
-| Handle | `runtime::execution::driver_polling::DriverPoller` + `connector::driver::Outbound` behind `CompletionCheck`; `connectors::Process` (App) or the Lab mock (Lab) |
+| Handle | `runtime::execution::driver_polling::DriverPoller` + `connector::driver::Outbound` behind `CompletionCheck`; `connector::drivers::Process` (App) or the Lab mock (Lab) |
 | Record | `journal` (semantic operations, id derivation) |
 | Compare | `golden` projection, seal, and diff; `lab`-returned records; `main --compare/--save` |
 

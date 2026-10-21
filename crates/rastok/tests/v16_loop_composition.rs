@@ -3,11 +3,11 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use rastok::compiler;
+use rastok::connector::contract::ContractCatalog;
 use rastok::connector::exchange::EnvelopeDraft;
 use rastok::connector::exchange::IngressProposal;
 use rastok::connector::exchange::IngressProvenance;
 use rastok::connector::exchange::IngressSequence;
-use rastok::contract::ContractCatalog;
 use rastok::envelope::{Data, Namespace, Value};
 use rastok::journal::{
     MemJournal,
@@ -272,9 +272,9 @@ graph app : App {{
                         })
                         .min()
                     {
-                        let mut bindings = rastok::connectors::RuntimeDrivers::prepare(
+                        let mut bindings = rastok::connector::drivers::RuntimeDrivers::prepare(
                             &plan,
-                            &rastok::connectors::DriverRegistry::default(),
+                            &rastok::connector::drivers::DriverRegistry::default(),
                         )
                         .unwrap();
                         vm.advance_to(&mut journal, &mut bindings, due).unwrap();

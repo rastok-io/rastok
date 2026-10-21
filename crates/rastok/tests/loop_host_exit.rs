@@ -2,7 +2,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use rastok::{compiler, contract::ContractCatalog, plan};
+use rastok::{compiler, connector::contract::ContractCatalog, plan};
 
 const OPERATOR: &str = r#"
 graph app : App {

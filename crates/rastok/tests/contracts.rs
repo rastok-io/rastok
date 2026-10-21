@@ -11,9 +11,8 @@ use rastok::connector::contract::{
     AttributeSpec, ConnectorContract, ContractMode, DefaultValue, EvaluationSite, ModeSelector,
     ModeSupport, PortContract, PortDataType, PortTypeChoice, PortTypeRule, Presence, ValueDomain,
 };
-use rastok::contract::{
-    ContractCatalog, ContractValidationError, FrontendContract, FrontendFraming, FrontendReader,
-};
+use rastok::connector::contract::{ContractCatalog, ContractValidationError};
+use rastok::contract::{FrontendContract, FrontendFraming, FrontendReader};
 use rastok::node::PortDirection;
 
 fn compile_one(source: &str) -> Result<rastok::compiler::Compilation, rastok::diagnostics::Bag> {
@@ -720,7 +719,7 @@ fn same_as_and_profile_selected_ports_resolve_without_a_second_type_authority() 
         .expect("the parametric sheet is sound");
     assert!(matches!(
         registry.connector("Parametric"),
-        rastok::contract::Availability::Available(_)
+        rastok::connector::contract::Availability::Available(_)
     ));
     let ports = SHEET
         .resolve_ports(&std::collections::BTreeMap::from([(
@@ -887,7 +886,7 @@ fn process_codec_choices_resolve_the_current_execution_pins() {
                     Some(codec),
                     Some(err_codec),
                 )
-                .expect("the core mirror recognizes every sheet row");
+                .expect("the shared definition resolves every declared port");
                 assert_eq!(sheet, core, "{codec}/{err_codec} on {}", port.port);
             }
         }
@@ -895,7 +894,7 @@ fn process_codec_choices_resolve_the_current_execution_pins() {
 }
 
 #[test]
-fn file_profiles_resolve_the_same_rows_in_the_sheet_and_core_mirror() {
+fn file_modes_resolve_ports_from_the_shared_definition() {
     let id = rastok::connector::ContractId::parse(rastok::connector::stdlib::FILE_CONNECTOR_ID)
         .expect("the standard File id");
     for mode in ["read", "replace"] {
@@ -1367,7 +1366,7 @@ fn bytes_framing_is_contract_valid_and_binds_in_b7() {
     ] {
         let compilation = compile_one(&process_graph(&body))
             .unwrap_or_else(|bag| panic!("`{attribute} = bytes` is on the sheet: {bag:?}"));
-        rastok::connectors::Process::try_new(&compilation.plan)
+        rastok::connector::drivers::Process::try_new(&compilation.plan)
             .unwrap_or_else(|error| panic!("`{attribute} = bytes` binds in B7: {error}"));
     }
 }
@@ -1615,8 +1614,8 @@ fn the_global_binder_requires_callable_connectors_but_skips_pure_outbound_source
     }
     let callable = rastok::plan::ValidatedExecutionPlan::try_from(plan.clone())
         .expect("the foreign connector is structurally typed");
-    let registry = rastok::connectors::DriverRegistry::default();
-    let message = rastok::connectors::RuntimeDrivers::prepare(&callable, &registry)
+    let registry = rastok::connector::drivers::DriverRegistry::default();
+    let message = rastok::connector::drivers::RuntimeDrivers::prepare(&callable, &registry)
         .expect_err("the callable foreign connector refuses")
         .to_string();
     assert!(
@@ -1647,7 +1646,7 @@ fn the_global_binder_requires_callable_connectors_but_skips_pure_outbound_source
     let validated = rastok::plan::ValidatedExecutionPlan::try_from(plan)
         .expect("the foreign pure source remains structurally valid");
     assert!(
-        rastok::connectors::RuntimeDrivers::prepare(&validated, &registry).is_ok(),
+        rastok::connector::drivers::RuntimeDrivers::prepare(&validated, &registry).is_ok(),
         "a pure outbound source requires no binding"
     );
     // An unknown codec cannot even reach the binding: the plan
@@ -1935,7 +1934,7 @@ fn process_declares_the_phase_ceiling_of_every_setting() {
 }
 
 #[test]
-fn the_core_phase_mirror_recognizes_every_process_sheet_row() {
+fn process_attribute_sites_come_from_the_shared_definition() {
     use rastok::connector::stdlib::PROCESS;
 
     for spec in PROCESS.common {

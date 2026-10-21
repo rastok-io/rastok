@@ -1,7 +1,7 @@
 //! File-level constants share one lexical unit with the App and its Lab.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use rastok::{compiler::compile, contract::ContractCatalog, plan};
+use rastok::{compiler::compile, connector::contract::ContractCatalog, plan};
 
 const GRAPH: &str = r#"
 graph constants : App {

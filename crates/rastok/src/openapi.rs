@@ -266,11 +266,12 @@ pub fn resolve_project(root: &Path, mode: ResolveMode) -> Result<ResolveReport, 
     collect_files(&root, &mut files)?;
     files.sort();
 
-    let catalogue =
-        crate::contract::ContractCatalog::try_m0().map_err(|error| ResolveError::Source {
+    let catalogue = crate::connector::contract::ContractCatalog::try_m0().map_err(|error| {
+        ResolveError::Source {
             path: root.clone(),
             detail: format!("the standard contract catalogue is invalid: {error}"),
-        })?;
+        }
+    })?;
     let mut endpoints = BTreeSet::new();
     let mut authored_types = BTreeMap::new();
     for (index, path) in files
@@ -944,7 +945,8 @@ components:
             generated
                 .contains("type Payment = struct { amount: number, content_type: media_type }")
         );
-        let catalogue = crate::contract::ContractCatalog::try_m0().expect("catalogue holds");
+        let catalogue =
+            crate::connector::contract::ContractCatalog::try_m0().expect("catalogue holds");
         let mut bag = Bag::new();
         let _ = crate::compiler::parser::parse(SourceId::new(0), &generated, &catalogue, &mut bag);
         assert!(

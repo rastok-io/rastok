@@ -2,6 +2,7 @@
 use super::*;
 use crate::connector::driver::Ingress;
 use crate::connector::driver::Session;
+use crate::connector::drivers::ProcessRequestSettings;
 use crate::connector::exchange::AdmittedIngress;
 use crate::connector::exchange::InboundSession;
 use crate::connector::exchange::IngressProposalHandle;
@@ -12,7 +13,6 @@ use crate::connector::exchange::SessionObservation;
 use crate::connector::exchange::SessionOpen;
 use crate::connector::exchange::SessionStart;
 use crate::connector::exchange::SessionWrite;
-use crate::connectors::ProcessRequestSettings;
 use std::collections::VecDeque;
 
 pub(super) struct Factory {

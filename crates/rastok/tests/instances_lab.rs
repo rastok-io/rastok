@@ -5,7 +5,7 @@
 
 use rastok::canonical_cbor::{Value as Cbor, decode, encode};
 use rastok::compiler::compile;
-use rastok::contract::ContractCatalog;
+use rastok::connector::contract::ContractCatalog;
 use rastok::golden::{Trace, project};
 use rastok::journal::Record;
 use rastok::node;

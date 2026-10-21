@@ -11,7 +11,7 @@ use rastok::journal::{MemJournal, Record};
 use rastok::runtime::execution::Execution;
 use rastok::{
     compiler,
-    contract::ContractCatalog,
+    connector::contract::ContractCatalog,
     datatype::DataType,
     diagnostics::{Bag, SourceId},
     expr, plan,

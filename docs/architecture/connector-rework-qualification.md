@@ -5,8 +5,9 @@ T5/T9 implementation checks; it does not approve the separate Process
 Contract identity proposal. Package format 21, Process `std/process@4`
 (job) and `std/process@5` (service) remain current at this checkpoint.
 
-**Status: the A-T5-2 portable-core split is qualified. The hosted module
-move and subsequent actions remain separate work.**
+**Status: the A-T5-2 portable-core split and hosted module move are
+qualified. Routing consolidation and subsequent actions remain separate
+work.**
 
 ## Reference after A-T5-1
 
@@ -130,4 +131,60 @@ stopped. RustRover, security settings and unrelated processes were left
 alone. No push, tag or publication occurred.
 
 The final protected-artifact audit still matches all 73 reference digests.
-The hosted module move has not yet been applied at this checkpoint.
+The hosted module move was not yet applied at that checkpoint.
+
+## A-T5-2 / T9 — hosted Driver organization
+
+Physical implementations now live under `connector::drivers`, together
+with the conformance harness. `drivers::registry` describes available
+factories; `drivers::runtime` holds plan association and exchange ownership.
+Connector catalogue validation is under `connector::contract`; standard
+Connector access is under `connector::stdlib`. The non-Connector frontend,
+annotation and media-type definitions stay in the original language modules.
+The old `connectors` module and root conformance module are removed, without
+compatibility aliases.
+
+The physical network and Process implementations change only their imports,
+module paths and relative test-fixture paths. Their protocol behavior is
+unchanged. `CallProtocol` remains separate from `OutboundCall`: its pure
+shared rules borrow immutably and its scheduler projection has no Node-path
+argument, unlike the physical Driver interface. No extra adapter is added
+to force the two signatures together.
+
+The three shared-definition tests now say what they verify rather than
+describing a second core mirror. Their assertions are unchanged. The
+separate Session routing trait and global single-Call-Driver routing
+implementation remain for the next action, not as compatibility interfaces.
+
+### Checks and measurements
+
+The sequential CLI gate completed successfully:
+
+- Formatting and strict Clippy, all workspace targets and features: passed.
+- Workspace tests, all features and `--no-fail-fast`: **1,598 passed in 61
+  groups, zero failed, zero ignored**, including both doctest groups.
+- Rustdoc with `-D warnings`: passed, zero warnings.
+- Separate default-feature `site_content` run: 12/12.
+- Browser tests: 35/35, zero failed, skipped or cancelled.
+- All three no_std targets listed above: passed.
+- Rustdoc-link lint: 235 Rust files, zero relative Markdown links.
+- Echo and Retry-with-recovery on Cortex-M33: both `SPIKE_OK`.
+
+The exact embedded commands are the ones above. The hosted move changes
+neither embedded measurement:
+
+| Workload | Decode peak heap | Total peak heap | `.text` | `.rodata` | Code total | Heap margin | Code margin |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Echo | 36,160 B | 111,404 B | 897,820 B | 74,048 B | 971,868 B | 19,668 B | 76,708 B |
+| Retry and recovery | 30,684 B | 129,188 B | 958,948 B | 84,816 B | 1,043,764 B | 1,884 B | 4,812 B |
+
+Retry again records 17 facts for one operation and three Calls, with 16
+frames per channel and four bytes per frame. Its recovered peak equals its
+live peak. All **73 protected artifacts remain byte-identical**. No fixture,
+example, golden, package or trace was regenerated. Old `boundary` and
+`connectors` module references are absent from Rust sources in both crates
+and the spikes. The full contributor-guide rewrite and live documentation
+sweep remain A-T5-6; the path references affected by this move are updated.
+
+Host executable startup delays persisted, but this gate had no failed check
+and used unchanged timeouts. No push, tag or publication occurred.

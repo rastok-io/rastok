@@ -21,7 +21,7 @@ use rastok::runtime::{DeliveryRoutes, Fault, Mailboxes, State, TransactionPrepar
 use std::collections::BTreeMap;
 
 use rastok::compiler::compile;
-use rastok::contract::ContractCatalog;
+use rastok::connector::contract::ContractCatalog;
 use rastok::envelope::Encoding;
 
 const M0_PROBE: &str = r#"

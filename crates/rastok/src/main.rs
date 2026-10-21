@@ -12,17 +12,17 @@
 //! deterministic generated source without rewriting authored project files.
 
 use rastok::compiler::Compilation;
+use rastok::connector::contract::ContractCatalog;
 use rastok::connector::exchange::EnvelopeDraft;
 use rastok::connector::exchange::IngressProposal;
 use rastok::connector::exchange::IngressProvenance;
 use rastok::connector::exchange::IngressSequence;
-use rastok::contract::ContractCatalog;
 use rastok::envelope::{Data, Namespace, Value};
 use rastok::journal::MemJournal;
 use rastok::plan::GraphVersion;
 use rastok::render::{Sources, render_all};
 use rastok::runtime::execution::Execution;
-use rastok::{connectors, lab, node};
+use rastok::{connector, lab, node};
 use std::io::{BufRead, Write as _};
 use std::process::ExitCode;
 
@@ -492,7 +492,7 @@ fn run(
             return ExitCode::FAILURE;
         }
     };
-    let registry = match connectors::hosted_registry(file_root) {
+    let registry = match connector::drivers::hosted_registry(file_root) {
         Ok(registry) => registry,
         Err(error) => {
             eprintln!("error: {error}");
@@ -500,10 +500,12 @@ fn run(
         }
     };
     let bindings = match boot {
-        Some(boot) => {
-            connectors::RuntimeDrivers::prepare_with_boot(&compilation.plan, &registry, boot)
-        }
-        None => connectors::RuntimeDrivers::prepare(&compilation.plan, &registry),
+        Some(boot) => connector::drivers::RuntimeDrivers::prepare_with_boot(
+            &compilation.plan,
+            &registry,
+            boot,
+        ),
+        None => connector::drivers::RuntimeDrivers::prepare(&compilation.plan, &registry),
     };
     let world = match bindings {
         Ok(bindings) => bindings,

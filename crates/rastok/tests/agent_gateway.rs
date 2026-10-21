@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use rastok::journal::{EgressRecord, Record, SessionStatus};
-use rastok::{compiler::compile, contract::ContractCatalog, plan::GraphVersion};
+use rastok::{compiler::compile, connector::contract::ContractCatalog, plan::GraphVersion};
 
 const GATEWAY: &str = include_str!("../../../examples/agent-gateway.rkg");
 

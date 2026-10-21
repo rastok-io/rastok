@@ -4,7 +4,7 @@
 
 use rastok::{
     compiler,
-    contract::ContractCatalog,
+    connector::contract::ContractCatalog,
     diagnostics::{Bag, SourceId},
     plan,
 };

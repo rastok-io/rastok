@@ -16,6 +16,12 @@ use crate::connector::ContractId;
 use crate::connector::driver::Driver;
 use crate::connector::driver::Outbound;
 use crate::connector::driver::OutboundCall;
+#[cfg(test)]
+use crate::connector::drivers::ProcessRequestSettings;
+use crate::connector::drivers::{
+    CallProtocol, DriverFactory, DriverFactoryError, DriverRegistry, HttpServerLabInput,
+    RuntimeDrivers, ScriptedProtocolBinder, inbound_lab_factories, scripted_protocol_binders,
+};
 use crate::connector::exchange::CallOpen;
 use crate::connector::exchange::CallResponse;
 use crate::connector::exchange::CallStart;
@@ -26,12 +32,6 @@ use crate::connector::exchange::IngressProvenance;
 use crate::connector::exchange::IngressSequence;
 use crate::connector::exchange::RequestPreparation;
 use crate::connector::exchange::SchedulerCompletion;
-#[cfg(test)]
-use crate::connectors::ProcessRequestSettings;
-use crate::connectors::{
-    CallProtocol, DriverFactory, DriverFactoryError, DriverRegistry, HttpServerLabInput,
-    RuntimeDrivers, ScriptedProtocolBinder, inbound_lab_factories, scripted_protocol_binders,
-};
 use crate::envelope::{Data, Envelope, Namespace, Value, WriteTarget};
 use crate::journal::{MemJournal, Record};
 use crate::plan::{GraphVersion, SemanticHash, ValidatedExecutionPlan};
@@ -1492,7 +1492,7 @@ impl Driver for MockOutboundConnectorDriver<'_> {
 mod tests {
     use super::*;
     use crate::compiler::compile;
-    use crate::contract::ContractCatalog;
+    use crate::connector::contract::ContractCatalog;
 
     /// Drives the scripted driver directly with an OPAQUE request:
     /// the branch and statement structure decides the demand, so a

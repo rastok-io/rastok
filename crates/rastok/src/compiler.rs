@@ -21,7 +21,7 @@ pub use check::Unit;
 pub use hir::Hir;
 pub use syntax::SyntaxTree;
 
-use crate::contract;
+use crate::connector::contract;
 use crate::diagnostics::{Bag, Code, Diagnostic, Phase, SourceId};
 use crate::node;
 use crate::plan::{PlanValidationError, SemanticHash, SymbolTable, ValidatedExecutionPlan};
@@ -752,7 +752,7 @@ mod tests {
     fn scenario_definitions_preserve_authored_dsl_without_affecting_the_plan() {
         let graph = "graph demo : App { input in: int; output out: int; in -> out }";
         let lab = "lab demo {\n simulation test on app {\n scenario simple {\n // entrée\n app.in = 3\n expect app.out count == 1\n }\n }\n}";
-        let registry = crate::contract::ContractCatalog::try_m0().expect("catalogue");
+        let registry = crate::connector::contract::ContractCatalog::try_m0().expect("catalogue");
         let plain = super::compile(&[graph], &registry).expect("graph");
         let compiled = super::compile(&[graph, lab], &registry).expect("graph and lab");
         assert_eq!(plain.plan, compiled.plan);
@@ -814,7 +814,8 @@ graph inspected : App {
 "#;
         let compilation = compile(
             &[source],
-            &crate::contract::ContractCatalog::try_m0().expect("the standard catalogue holds"),
+            &crate::connector::contract::ContractCatalog::try_m0()
+                .expect("the standard catalogue holds"),
         )
         .expect("the inspection fixture compiles");
 
@@ -860,7 +861,8 @@ graph inferred_instance : App {
 "#;
         let compilation = compile(
             &[source],
-            &crate::contract::ContractCatalog::try_m0().expect("the standard catalogue holds"),
+            &crate::connector::contract::ContractCatalog::try_m0()
+                .expect("the standard catalogue holds"),
         )
         .expect("the graph supplies the omitted node-port type");
         assert_eq!(
@@ -896,7 +898,8 @@ graph g : App {
 "#;
         let bag = compile(
             &[source],
-            &crate::contract::ContractCatalog::try_m0().expect("the standard catalogue holds"),
+            &crate::connector::contract::ContractCatalog::try_m0()
+                .expect("the standard catalogue holds"),
         )
         .expect_err("idle cannot invent a drain or cancellation policy");
         assert!(bag.diagnostics().iter().any(|diagnostic| {
@@ -920,7 +923,8 @@ graph inferred_composite : App {
 "#;
         let compilation = compile(
             &[source],
-            &crate::contract::ContractCatalog::try_m0().expect("the standard catalogue holds"),
+            &crate::connector::contract::ContractCatalog::try_m0()
+                .expect("the standard catalogue holds"),
         )
         .expect("the resolved input closes every composite-key leaf");
         let key = compilation
@@ -946,7 +950,8 @@ graph keyed_graph : App {
 "#;
         compile(
             &[keyed_graph],
-            &crate::contract::ContractCatalog::try_m0().expect("the standard catalogue holds"),
+            &crate::connector::contract::ContractCatalog::try_m0()
+                .expect("the standard catalogue holds"),
         )
         .expect("R3 routes through the Graph-owned key before producer commit");
 
@@ -962,7 +967,8 @@ graph finite_singleton : App {
 "#;
         let compilation = compile(
             &[finite],
-            &crate::contract::ContractCatalog::try_m0().expect("the standard catalogue holds"),
+            &crate::connector::contract::ContractCatalog::try_m0()
+                .expect("the standard catalogue holds"),
         )
         .expect("R4 executes a fixed owner lifetime");
         assert_eq!(
@@ -990,7 +996,8 @@ graph dynamic_instance : App {
 "#;
         let bag = compile(
             &[source],
-            &crate::contract::ContractCatalog::try_m0().expect("the standard catalogue holds"),
+            &crate::connector::contract::ContractCatalog::try_m0()
+                .expect("the standard catalogue holds"),
         )
         .expect_err("a resolved dynamic value has no canonical instance identity");
         assert!(bag.diagnostics().iter().any(|diagnostic| {
@@ -1023,7 +1030,8 @@ graph conflicting_instance : App {
 "#;
         let bag = compile(
             &[source],
-            &crate::contract::ContractCatalog::try_m0().expect("the standard catalogue holds"),
+            &crate::connector::contract::ContractCatalog::try_m0()
+                .expect("the standard catalogue holds"),
         )
         .expect_err("one key expression cannot change logical type by input port");
         assert!(bag.diagnostics().iter().any(|diagnostic| {
@@ -1067,7 +1075,8 @@ graph app : App {{
             );
             let compilation = compile(
                 &[&source],
-                &crate::contract::ContractCatalog::try_m0().expect("the standard catalogue holds"),
+                &crate::connector::contract::ContractCatalog::try_m0()
+                    .expect("the standard catalogue holds"),
             )
             .expect("the finite countdown is a valid Loop");
             let plan = Box::leak(Box::new(compilation.plan));
@@ -1219,7 +1228,8 @@ graph app : App {
   countdown.err -> nothing
 }
 "#],
-            &crate::contract::ContractCatalog::try_m0().expect("the standard catalogue holds"),
+            &crate::connector::contract::ContractCatalog::try_m0()
+                .expect("the standard catalogue holds"),
         )
         .expect("the finite countdown is a valid Loop");
         let plan = Box::leak(Box::new(compilation.plan));
@@ -1332,7 +1342,8 @@ graph app : App {
   countdown.err -> nothing
 }
 "#],
-            &crate::contract::ContractCatalog::try_m0().expect("the standard catalogue holds"),
+            &crate::connector::contract::ContractCatalog::try_m0()
+                .expect("the standard catalogue holds"),
         )
         .expect("the finite countdown is a valid Loop");
         let plan = Box::leak(Box::new(compilation.plan));

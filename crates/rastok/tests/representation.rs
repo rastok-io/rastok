@@ -2,7 +2,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use rastok::compiler::compile;
-use rastok::contract::ContractCatalog;
+use rastok::connector::contract::ContractCatalog;
 use rastok::envelope::{Data, Delivery, Encoding, Envelope, Id, Meta, MetaSys, Value};
 use rastok::instance;
 use rastok::node::NodeIndex;

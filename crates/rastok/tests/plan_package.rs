@@ -12,7 +12,7 @@
 
 use rastok::canonical_cbor::{Value as Cbor, decode, encode};
 use rastok::compiler::compile;
-use rastok::contract::ContractCatalog;
+use rastok::connector::contract::ContractCatalog;
 use rastok::plan::{self, DecodeError};
 use std::path::PathBuf;
 
@@ -267,8 +267,8 @@ fn v16_retains_one_operator_loop_without_a_graph_handler_or_command_port() {
         rastok::value::Value::Text(String::from("go"))
     );
 
-    let registry = rastok::connectors::DriverRegistry::default();
-    let mut bindings = rastok::connectors::RuntimeDrivers::prepare(&decoded, &registry)
+    let registry = rastok::connector::drivers::DriverRegistry::default();
+    let mut bindings = rastok::connector::drivers::RuntimeDrivers::prepare(&decoded, &registry)
         .expect("a connector-free Loop needs no Driver");
     vm.poll_drivers(&mut journal, &mut bindings)
         .expect("a connector-free boundary pump remains inert");

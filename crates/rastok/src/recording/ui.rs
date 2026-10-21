@@ -94,7 +94,7 @@ mod tests {
     fn recorded_snapshots_offer_no_execution_or_scenario_command() {
         let compilation = crate::compiler::compile(
             &[include_str!("../../../../examples/echo.rkg")],
-            &crate::contract::ContractCatalog::try_m0().unwrap(),
+            &crate::connector::contract::ContractCatalog::try_m0().unwrap(),
         )
         .unwrap();
         let run = crate::lab::run(

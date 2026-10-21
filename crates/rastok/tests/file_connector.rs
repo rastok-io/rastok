@@ -5,12 +5,12 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use rastok::compiler::compile;
+use rastok::connector::contract::ContractCatalog;
+use rastok::connector::drivers::{DriverRegistry, FileFactory, RuntimeDrivers};
 use rastok::connector::exchange::EnvelopeDraft;
 use rastok::connector::exchange::IngressProposal;
 use rastok::connector::exchange::IngressProvenance;
 use rastok::connector::exchange::IngressSequence;
-use rastok::connectors::{DriverRegistry, FileFactory, RuntimeDrivers};
-use rastok::contract::ContractCatalog;
 use rastok::envelope::{Data, Namespace, Value};
 use rastok::journal::{Journal, MemJournal, Record};
 use rastok::node;

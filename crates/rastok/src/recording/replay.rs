@@ -1,7 +1,7 @@
 use super::Error;
 use crate::connector::driver::*;
+use crate::connector::drivers::{CallProtocol, scripted_protocol_binders};
 use crate::connector::exchange::*;
-use crate::connectors::{CallProtocol, scripted_protocol_binders};
 use crate::deployment::BootBindings;
 use crate::envelope::{Data, Envelope};
 use crate::node;

@@ -202,11 +202,11 @@ full local queue or byte semaphore into a domain result such as
 Static features select physical code only: `hosted-http12` supplies
 Hyper/Rustls, `hosted-http3` supplies quiche/BoringSSL,
 `hosted-websocket` supplies Tungstenite plus its H1/H2 transport, and
-`hosted-network` combines them. `connectors::assembly::hosted_registry` is the
+`hosted-network` combines them. `connector::drivers::assembly::hosted_registry` is the
 one shipped composition function: Process is always present, File requires an
 explicit physical root, and each network Contract follows those linked
 capabilities. A missing Contract refuses during global binding before VM or
-journal construction. No library type leaves `connectors/network`, enters a
+journal construction. No library type leaves `connector/drivers/network`, enters a
 plan, or enters `rastok-core`. HTTP/1.1 Upgrade and HTTP/2–3 Extended CONNECT
 are separately proved physical adapters over the same Session protocol; the
 shared message codec alone is never transport evidence.
@@ -216,11 +216,11 @@ origin-form requests, a pooled multiplexed H2 sender and verified quiche H3
 while preserving one semantic request descriptor and one Call completion
 shape. Request/response bodies and headers are finite, and the selected wire
 version appears only in `meta.ext.http_version`. The flat contract-specific module
-`connectors::http_client` owns semantic request binding; the private
-`connectors::network::http_client` owns sockets and protocol engines.
+`connector::drivers::http_client` owns semantic request binding; the private
+`connector::drivers::network::http_client` owns sockets and protocol engines.
 
 H5.1 is the first live inbound consumer. The flat
-`connectors::http_server` module resolves the complete ack-mode listener and
+`connector::drivers::http_server` module resolves the complete ack-mode listener and
 route contract before a socket opens; private `network::http_server` owns Hyper,
 Rustls, connection/stream permits and byte reservations. HTTP/1.1 and HTTP/2
 both retain the request until the VM answers the same proposal. Only an
@@ -297,7 +297,7 @@ than to Driver code or graph identity.
 
 ### 2. Separate pure exchange protocol from the effect
 
-Put the Connector implementation under `crates/rastok/src/connectors/<connector>/`. Binding resolves
+Put the Connector implementation under `crates/rastok/src/connector/drivers/<connector>/`. Binding resolves
 and validates every plan/boot/instance fact before external work. Call-time
 settings arrive as typed values (the plan names this evaluation site
 `Invocation`). Pure request preparation produces the exact

@@ -10,6 +10,7 @@
 //! docs/architecture/human-review-v20-identity.md.
 
 use rastok::compiler::compile;
+use rastok::connector::contract::ContractCatalog;
 use rastok::connector::driver::OutboundCall;
 use rastok::connector::exchange::CallOpen;
 use rastok::connector::exchange::CallResponse;
@@ -22,7 +23,6 @@ use rastok::connector::exchange::IngressSequence;
 use rastok::connector::exchange::RequestPreparation;
 use rastok::connector::exchange::SchedulerCompletion;
 use rastok::connector::stdlib::ProcessExit;
-use rastok::contract::ContractCatalog;
 use rastok::envelope::{Data, Encoding, Envelope, Namespace, Value};
 use rastok::golden::{Trace, diff, project};
 use rastok::journal::{MemJournal, Record};
@@ -328,7 +328,8 @@ fn the_lab_scenario_matches_its_stored_golden() {
     let source = std::fs::read_to_string(example()).expect("the example reads");
     let compilation = rastok::compiler::compile(
         &[source.as_str()],
-        &rastok::contract::ContractCatalog::try_m0().expect("the standard catalogue holds"),
+        &rastok::connector::contract::ContractCatalog::try_m0()
+            .expect("the standard catalogue holds"),
     )
     .expect("a valid unit");
     let runs = rastok::lab::run(

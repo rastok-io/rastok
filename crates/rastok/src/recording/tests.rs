@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 use super::*;
-use crate::{compiler, contract::ContractCatalog, golden, lab};
+use crate::{compiler, connector::contract::ContractCatalog, golden, lab};
 
 fn compile(source: &str) -> Compilation {
     compiler::compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap()

@@ -19,7 +19,7 @@ use crate::value::Value;
 use std::collections::BTreeMap;
 
 #[cfg(any(feature = "hosted-http12", feature = "hosted-http3"))]
-pub use crate::connectors::network::http_client::{HttpClientConfig, HttpClientFactory};
+pub use crate::connector::drivers::network::http_client::{HttpClientConfig, HttpClientFactory};
 
 #[cfg(any(feature = "hosted-http12", feature = "hosted-http3"))]
 use super::http_shared::HttpVersion;

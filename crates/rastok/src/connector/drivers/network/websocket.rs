@@ -7,6 +7,14 @@
 use crate::connector::driver::Ingress;
 use crate::connector::driver::Outbound;
 use crate::connector::driver::Session;
+use crate::connector::drivers::network::pump::{
+    EngineInput, EngineLimits, EventPoll, EventReservation, EventSender, HostedNetworkEngine,
+    NetworkRuntime, ReserveError, SubmitError,
+};
+use crate::connector::drivers::websocket_protocol::{
+    WebSocketClientOpening, WebSocketLabDriver, WebSocketMessage, WebSocketPlanBinding,
+    WebSocketServerBinding, bind_server_routes, decode_client_open, decode_message,
+};
 use crate::connector::exchange::AdmittedIngress;
 use crate::connector::exchange::EnvelopeDraft;
 use crate::connector::exchange::InboundExchangeId;
@@ -25,14 +33,6 @@ use crate::connector::exchange::SessionOpen;
 use crate::connector::exchange::SessionStart;
 use crate::connector::exchange::SessionWrite;
 use crate::connector::stdlib::WebSocketExit;
-use crate::connectors::network::pump::{
-    EngineInput, EngineLimits, EventPoll, EventReservation, EventSender, HostedNetworkEngine,
-    NetworkRuntime, ReserveError, SubmitError,
-};
-use crate::connectors::websocket_protocol::{
-    WebSocketClientOpening, WebSocketLabDriver, WebSocketMessage, WebSocketPlanBinding,
-    WebSocketServerBinding, bind_server_routes, decode_client_open, decode_message,
-};
 use crate::envelope::{Data, MetaValue, Namespace, Scalar};
 use crate::value::Value;
 use futures_util::{SinkExt, StreamExt};
@@ -169,7 +169,7 @@ impl WebSocketServerFactory {
     }
 }
 
-impl crate::connectors::DriverFactory for WebSocketClientFactory {
+impl crate::connector::drivers::DriverFactory for WebSocketClientFactory {
     fn contract_id(&self) -> &crate::connector::ContractId {
         &self.id
     }
@@ -184,15 +184,15 @@ impl crate::connectors::DriverFactory for WebSocketClientFactory {
         nodes: &[crate::node::Path],
     ) -> Result<
         Box<dyn crate::connector::driver::Driver + 'plan>,
-        crate::connectors::DriverFactoryError,
+        crate::connector::drivers::DriverFactoryError,
     > {
         HostedWebSocket::try_bind_client(plan, nodes, self.config)
             .map(|driver| Box::new(driver) as Box<dyn crate::connector::driver::Driver + 'plan>)
-            .map_err(crate::connectors::DriverFactoryError::new)
+            .map_err(crate::connector::drivers::DriverFactoryError::new)
     }
 }
 
-impl crate::connectors::DriverFactory for WebSocketServerFactory {
+impl crate::connector::drivers::DriverFactory for WebSocketServerFactory {
     fn contract_id(&self) -> &crate::connector::ContractId {
         &self.id
     }
@@ -207,11 +207,11 @@ impl crate::connectors::DriverFactory for WebSocketServerFactory {
         nodes: &[crate::node::Path],
     ) -> Result<
         Box<dyn crate::connector::driver::Driver + 'plan>,
-        crate::connectors::DriverFactoryError,
+        crate::connector::drivers::DriverFactoryError,
     > {
         HostedWebSocket::try_bind_server(plan, nodes, self.config)
             .map(|driver| Box::new(driver) as Box<dyn crate::connector::driver::Driver + 'plan>)
-            .map_err(crate::connectors::DriverFactoryError::new)
+            .map_err(crate::connector::drivers::DriverFactoryError::new)
     }
 }
 
@@ -650,7 +650,7 @@ fn verify_binding(
             "the WebSocket node `{node}` offers no HTTP version compiled into this Driver"
         ));
     }
-    crate::connectors::network::websocket_codec::bounded_config(max_message)
+    crate::connector::drivers::network::websocket_codec::bounded_config(max_message)
         .map_err(|error| format!("the WebSocket node `{node}` has invalid limits: {error}"))?;
     Ok(())
 }
@@ -990,7 +990,7 @@ async fn connect_client_h1(
             request.headers_mut().append(name, value);
         }
     }
-    let config = crate::connectors::network::websocket_codec::bounded_config(
+    let config = crate::connector::drivers::network::websocket_codec::bounded_config(
         usize::try_from(binding.max_message).map_err(|_| WebSocketExit::ProtocolFailed)?,
     )
     .map_err(|_| WebSocketExit::ProtocolFailed)?;
@@ -1093,7 +1093,7 @@ async fn connect_client_h2(
         commands,
     )
     .await?;
-    let config = crate::connectors::network::websocket_codec::bounded_config(
+    let config = crate::connector::drivers::network::websocket_codec::bounded_config(
         usize::try_from(binding.max_message).map_err(|_| WebSocketExit::ProtocolFailed)?,
     )
     .map_err(|_| WebSocketExit::ProtocolFailed)?;
@@ -1397,7 +1397,7 @@ async fn run_h3_client_socket(
     mut h3: quiche::h3::Connection,
     stream: u64,
 ) -> Result<(WebSocketExit, Namespace), WebSocketExit> {
-    let config = crate::connectors::network::websocket_codec::bounded_config(
+    let config = crate::connector::drivers::network::websocket_codec::bounded_config(
         usize::try_from(max_message).map_err(|_| WebSocketExit::ProtocolFailed)?,
     )
     .map_err(|_| WebSocketExit::ProtocolFailed)?;
@@ -1752,7 +1752,8 @@ fn outbound_message(codec: &str, bytes: Vec<u8>) -> Result<Message, WebSocketExi
 }
 
 fn decode_inbound(codec: &str, bytes: Vec<u8>) -> Result<Data, WebSocketExit> {
-    crate::connectors::http_shared::decode_body(codec, bytes).ok_or(WebSocketExit::DecodeFailed)
+    crate::connector::drivers::http_shared::decode_body(codec, bytes)
+        .ok_or(WebSocketExit::DecodeFailed)
 }
 
 fn socket_error(error: tungstenite::Error, max_message: u64) -> WebSocketExit {
@@ -2316,7 +2317,7 @@ async fn progress_h3_handshakes(
                     Err(_) => return Err(()),
                 }
                 let pending = peer.pending.remove(&stream).ok_or(())?;
-                let config = crate::connectors::network::websocket_codec::bounded_config(
+                let config = crate::connector::drivers::network::websocket_codec::bounded_config(
                     usize::try_from(pending.route.max_message).map_err(|_| ())?,
                 )
                 .map_err(|_| ())?;
@@ -2892,37 +2893,39 @@ async fn serve_handshake(
     let response = upgrade_response(&request, &route, selected.as_deref());
     tokio::spawn(async move {
         let exit = match upgraded.await {
-            Ok(upgraded) => match crate::connectors::network::websocket_codec::bounded_config(
-                usize::try_from(max_message).unwrap_or(0),
-            ) {
-                Ok(config) => {
-                    let socket = WebSocketStream::from_raw_socket(
-                        TokioIo::new(upgraded),
-                        Role::Server,
-                        Some(config),
-                    )
-                    .await;
-                    match run_socket(
-                        socket,
-                        SocketSession {
-                            role: Role::Server,
-                            connector: &connector,
-                            session,
-                            codec: &codec,
-                            max_message,
-                            initial_message: &[],
-                            ext: ext.clone(),
-                        },
-                        &mut receiver,
-                        &mut actor_events,
-                    )
-                    .await
-                    {
-                        Ok((exit, _)) | Err(exit) => exit,
+            Ok(upgraded) => {
+                match crate::connector::drivers::network::websocket_codec::bounded_config(
+                    usize::try_from(max_message).unwrap_or(0),
+                ) {
+                    Ok(config) => {
+                        let socket = WebSocketStream::from_raw_socket(
+                            TokioIo::new(upgraded),
+                            Role::Server,
+                            Some(config),
+                        )
+                        .await;
+                        match run_socket(
+                            socket,
+                            SocketSession {
+                                role: Role::Server,
+                                connector: &connector,
+                                session,
+                                codec: &codec,
+                                max_message,
+                                initial_message: &[],
+                                ext: ext.clone(),
+                            },
+                            &mut receiver,
+                            &mut actor_events,
+                        )
+                        .await
+                        {
+                            Ok((exit, _)) | Err(exit) => exit,
+                        }
                     }
+                    Err(_) => WebSocketExit::ProtocolFailed,
                 }
-                Err(_) => WebSocketExit::ProtocolFailed,
-            },
+            }
             Err(_) => WebSocketExit::TransportLost,
         };
         forget_active_session(&table, session).await;
@@ -3187,7 +3190,7 @@ fn server_metadata(
 mod tests {
     use super::*;
     use crate::compiler::compile;
-    use crate::contract::ContractCatalog;
+    use crate::connector::contract::ContractCatalog;
     use crate::envelope::Id;
     use std::sync::mpsc::{Receiver, TryRecvError};
     use std::time::{Duration, Instant};
@@ -4053,7 +4056,10 @@ graph websocket : App {
 
     #[test]
     fn the_physical_message_bound_refuses_zero_and_overflow() {
-        assert!(crate::connectors::network::websocket_codec::bounded_config(0).is_err());
-        assert!(crate::connectors::network::websocket_codec::bounded_config(usize::MAX).is_err());
+        assert!(crate::connector::drivers::network::websocket_codec::bounded_config(0).is_err());
+        assert!(
+            crate::connector::drivers::network::websocket_codec::bounded_config(usize::MAX)
+                .is_err()
+        );
     }
 }

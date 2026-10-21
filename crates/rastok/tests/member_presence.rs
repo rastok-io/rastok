@@ -1,7 +1,7 @@
 //! Optional JSON members are inspected by the pure expression consumer.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use rastok::{compiler::compile, contract::ContractCatalog, expr, plan};
+use rastok::{compiler::compile, connector::contract::ContractCatalog, expr, plan};
 
 const SOURCE: &str = r#"
 graph presence : App {

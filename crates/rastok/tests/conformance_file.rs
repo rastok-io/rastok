@@ -7,13 +7,13 @@
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
 #![allow(clippy::expect_used)]
 
-use rastok::conformance::{
+use rastok::connector::contract::ContractCatalog;
+use rastok::connector::drivers::conformance::{
     DriverTestFixture, ExitCaseTest, InterleaveExpectation, InterleaveProbe, assert_conformant,
     verify,
 };
+use rastok::connector::drivers::{DriverRegistry, FileFactory};
 use rastok::connector::stdlib::FILE;
-use rastok::connectors::{DriverRegistry, FileFactory};
-use rastok::contract::ContractCatalog;
 use rastok::envelope::{Data, Encoding};
 use rastok::node;
 use std::path::{Path, PathBuf};

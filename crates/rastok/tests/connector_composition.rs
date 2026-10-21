@@ -4,8 +4,8 @@
 #![allow(clippy::expect_used, clippy::panic)]
 
 use rastok::compiler::compile;
-use rastok::connectors::{DriverRegistry, FileFactory, ProcessFactory, RuntimeDrivers};
-use rastok::contract::ContractCatalog;
+use rastok::connector::contract::ContractCatalog;
+use rastok::connector::drivers::{DriverRegistry, FileFactory, ProcessFactory, RuntimeDrivers};
 use rastok::journal::{CallStatus, EgressRecord, Record};
 use rastok::plan::GraphVersion;
 use std::collections::{BTreeMap, BTreeSet};

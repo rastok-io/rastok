@@ -1640,7 +1640,7 @@ mod tests {
     fn retry_inspection_agrees_in_steps_batch_and_every_recorded_prefix() {
         let compilation = crate::compiler::compile(
             &[include_str!("../../tests/fixtures/ui-retry.rkg")],
-            &crate::contract::ContractCatalog::try_m0().unwrap(),
+            &crate::connector::contract::ContractCatalog::try_m0().unwrap(),
         )
         .unwrap();
         let version = crate::plan::GraphVersion(1);
@@ -1825,7 +1825,7 @@ mod tests {
     fn snapshots_do_not_compute_a_measurement_report() {
         let compilation = crate::compiler::compile(
             &["graph app : App { input in: int; output out: int; in -> out }"],
-            &crate::contract::ContractCatalog::try_m0().expect("catalogue"),
+            &crate::connector::contract::ContractCatalog::try_m0().expect("catalogue"),
         )
         .expect("minimal graph");
         let version = crate::plan::GraphVersion(1);
@@ -1867,7 +1867,7 @@ lab demo {{ simulation test on app {{ scenario classified {{
             );
             let compilation = crate::compiler::compile(
                 &[&source],
-                &crate::contract::ContractCatalog::try_m0().expect("catalogue"),
+                &crate::connector::contract::ContractCatalog::try_m0().expect("catalogue"),
             )
             .expect("classified scenario checks before deployment");
             let value = super::scenario_definition_json(&compilation, "test", "classified");
@@ -1902,7 +1902,8 @@ graph inspected : App {
 "#;
         let compilation = crate::compiler::compile(
             &[source],
-            &crate::contract::ContractCatalog::try_m0().expect("the standard catalogue holds"),
+            &crate::connector::contract::ContractCatalog::try_m0()
+                .expect("the standard catalogue holds"),
         )
         .expect("the inspection fixture compiles");
         let journal = MemJournal::new(crate::plan::GraphVersion(1));
@@ -1982,7 +1983,7 @@ graph inspected : App {
           }"#;
         let compilation = crate::compiler::compile(
             &[source],
-            &crate::contract::ContractCatalog::try_m0().unwrap(),
+            &crate::connector::contract::ContractCatalog::try_m0().unwrap(),
         )
         .unwrap();
         let journal = MemJournal::new(crate::plan::GraphVersion(1));
@@ -2009,7 +2010,7 @@ graph inspected : App {
         let source = include_str!("../../tests/fixtures/ui-two-retries.rkg");
         let compilation = crate::compiler::compile(
             &[source],
-            &crate::contract::ContractCatalog::try_m0().unwrap(),
+            &crate::connector::contract::ContractCatalog::try_m0().unwrap(),
         )
         .unwrap();
         let simulation = &compilation.labs[0].simulations[0];
@@ -2198,7 +2199,7 @@ graph inspected : App {
     fn a_pending_injection_is_a_read_only_projection_of_the_authored_scenario() {
         let compilation = crate::compiler::compile(
             &["graph app : App { input in: text; output out: text; in -> out }"],
-            &crate::contract::ContractCatalog::try_m0().unwrap(),
+            &crate::connector::contract::ContractCatalog::try_m0().unwrap(),
         )
         .unwrap();
         let ty = crate::datatype::DataType::Struct(
@@ -2247,7 +2248,7 @@ graph inspected : App {
     fn a_classified_pending_scenario_value_is_redacted() {
         let compilation = crate::compiler::compile(
             &["graph app : App { input in: text; output out: text; in -> out }"],
-            &crate::contract::ContractCatalog::try_m0().unwrap(),
+            &crate::connector::contract::ContractCatalog::try_m0().unwrap(),
         )
         .unwrap();
         let annotations = AnnotationTable::new(vec![(
@@ -2303,7 +2304,7 @@ lab webhook { simulation requests on app { scenario classified {
 "#;
         let compilation = crate::compiler::compile(
             &[source],
-            &crate::contract::ContractCatalog::try_m0().unwrap(),
+            &crate::connector::contract::ContractCatalog::try_m0().unwrap(),
         )
         .unwrap();
         let simulation = &compilation.labs[0].simulations[0];

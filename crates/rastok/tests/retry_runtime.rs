@@ -4,8 +4,8 @@
 
 use rastok::{
     compiler,
+    connector::contract::ContractCatalog,
     connector::{driver::*, exchange::*, stdlib::*},
-    contract::ContractCatalog,
     envelope::{Data, Namespace, Value},
     journal::retry_protocol::Fact,
     journal::{EgressRecord, MemJournal, Record},

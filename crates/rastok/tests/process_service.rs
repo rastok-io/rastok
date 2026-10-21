@@ -1,5 +1,5 @@
 //! Resident Process contract, Lab and physical Driver conformance.
-use rastok::{compiler::compile, contract::ContractCatalog};
+use rastok::{compiler::compile, connector::contract::ContractCatalog};
 
 const SERVICE: &str = r#"
 type ChildExit = union {
@@ -172,10 +172,7 @@ fn session_mock_frames_need_no_terminal_but_nothing_may_follow_one() {
 
 #[test]
 fn the_service_profile_cannot_alias_a_job_or_another_catalogue_entry() {
-    use rastok::{
-        connector::{contract::*, stdlib::*, *},
-        contract::*,
-    };
+    use rastok::connector::{contract::*, stdlib::*, *};
     let mut alias = rastok::connector::stdlib::PROCESS;
     alias.name = "Alias";
     alias.id = PROCESS_SERVICE_CONNECTOR_ID;
@@ -235,8 +232,8 @@ fn independent_core_validation_rejects_forged_service_profiles() {
 mod real {
     use super::*;
     use rastok::{
+        connector::drivers::{RuntimeDrivers, hosted_registry},
         connector::exchange::*,
-        connectors::{RuntimeDrivers, hosted_registry},
         envelope::*,
         journal::{EgressRecord, MemJournal, Record, SessionStatus},
         plan::GraphVersion,

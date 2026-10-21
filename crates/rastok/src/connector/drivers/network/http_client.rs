@@ -1,5 +1,12 @@
 use crate::connector::driver::Outbound;
 use crate::connector::driver::OutboundCall;
+use crate::connector::drivers::http_client::{
+    HttpBearer, HttpClientPlanBinding, HttpClientRequestSettings, HttpRequest, decode_request,
+};
+use crate::connector::drivers::http_shared::{HttpVersion, decode_body};
+use crate::connector::drivers::network::pump::{
+    EngineInput, EngineLimits, HostedNetworkEngine, NetworkRuntime, SubmitError,
+};
 use crate::connector::exchange::CallId;
 use crate::connector::exchange::CallOpen;
 use crate::connector::exchange::CallResponse;
@@ -8,13 +15,6 @@ use crate::connector::exchange::Completion;
 use crate::connector::exchange::RequestPreparation;
 use crate::connector::exchange::SchedulerCompletion;
 use crate::connector::stdlib::HttpClientExit;
-use crate::connectors::http_client::{
-    HttpBearer, HttpClientPlanBinding, HttpClientRequestSettings, HttpRequest, decode_request,
-};
-use crate::connectors::http_shared::{HttpVersion, decode_body};
-use crate::connectors::network::pump::{
-    EngineInput, EngineLimits, HostedNetworkEngine, NetworkRuntime, SubmitError,
-};
 use crate::envelope::{Data, Envelope, MetaValue, Namespace, Scalar};
 use crate::value::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -139,7 +139,7 @@ impl HttpClientFactory {
     }
 }
 
-impl crate::connectors::DriverFactory for HttpClientFactory {
+impl crate::connector::drivers::DriverFactory for HttpClientFactory {
     fn contract_id(&self) -> &crate::connector::ContractId {
         &self.id
     }
@@ -154,11 +154,11 @@ impl crate::connectors::DriverFactory for HttpClientFactory {
         nodes: &[crate::node::Path],
     ) -> Result<
         Box<dyn crate::connector::driver::Driver + 'plan>,
-        crate::connectors::DriverFactoryError,
+        crate::connector::drivers::DriverFactoryError,
     > {
         HttpClient::try_bind(plan, nodes, self.config)
             .map(|driver| Box::new(driver) as Box<dyn crate::connector::driver::Driver + 'plan>)
-            .map_err(crate::connectors::DriverFactoryError::new)
+            .map_err(crate::connector::drivers::DriverFactoryError::new)
     }
 
     fn create_with_boot<'plan>(
@@ -168,11 +168,11 @@ impl crate::connectors::DriverFactory for HttpClientFactory {
         boot: &crate::deployment::BootBindings,
     ) -> Result<
         Box<dyn crate::connector::driver::Driver + 'plan>,
-        crate::connectors::DriverFactoryError,
+        crate::connector::drivers::DriverFactoryError,
     > {
         HttpClient::try_bind_with_boot(plan, nodes, self.config, boot)
             .map(|driver| Box::new(driver) as Box<dyn crate::connector::driver::Driver + 'plan>)
-            .map_err(crate::connectors::DriverFactoryError::new)
+            .map_err(crate::connector::drivers::DriverFactoryError::new)
     }
 }
 
@@ -184,8 +184,8 @@ struct TlsMaterial {
 }
 
 impl TlsMaterial {
-    fn identity(&self) -> Option<crate::connectors::network::tls::TlsIdentity<'_>> {
-        Some(crate::connectors::network::tls::TlsIdentity {
+    fn identity(&self) -> Option<crate::connector::drivers::network::tls::TlsIdentity<'_>> {
+        Some(crate::connector::drivers::network::tls::TlsIdentity {
             certificate_chain: self.certificate.as_deref()?,
             private_key: self.private_key.as_deref()?,
         })
@@ -909,7 +909,7 @@ async fn transport(
     version: HttpVersion,
 ) -> Result<Box<dyn AsyncTransport>, AttemptFailure> {
     let tls_config = if uri.scheme_str() == Some("https") {
-        let mut config = crate::connectors::network::tls::rustls_client(
+        let mut config = crate::connector::drivers::network::tls::rustls_client(
             work.tls.ca.as_deref(),
             work.tls.identity(),
         )
@@ -1188,7 +1188,7 @@ async fn execute_h3(
     }
     // Trust and identity parsing precede DNS and socket creation. A malformed
     // deployment value can therefore never weaken or partially start TLS.
-    let mut config = crate::connectors::network::tls::quiche_client(
+    let mut config = crate::connector::drivers::network::tls::quiche_client(
         work.tls.ca.as_deref(),
         work.tls.identity(),
         limits,
@@ -1784,7 +1784,7 @@ graph bounded_request : App {
         .replace("VERSION", version);
         let compilation = crate::compiler::compile(
             &[source.as_str()],
-            &crate::contract::ContractCatalog::try_m0().expect("the catalogue holds"),
+            &crate::connector::contract::ContractCatalog::try_m0().expect("the catalogue holds"),
         )
         .expect("the bounded client compiles");
         let path = crate::node::Path::new(["client"]).expect("the path is canonical");
@@ -2022,7 +2022,7 @@ graph app : App {
   model.exit -> nothing
 }
 "#;
-        let catalogue = crate::contract::ContractCatalog::try_m0().unwrap();
+        let catalogue = crate::connector::contract::ContractCatalog::try_m0().unwrap();
         let typed = crate::compiler::compile(&[source], &catalogue).unwrap();
         let projected = crate::compiler::compile(
             &[&source.replace("codec = json", "codec = json; json_profile = projected")],
@@ -2095,7 +2095,7 @@ graph app : App {
   model.exit -> nothing
 }
 "#;
-        let catalogue = crate::contract::ContractCatalog::try_m0().unwrap();
+        let catalogue = crate::connector::contract::ContractCatalog::try_m0().unwrap();
         let compilation = crate::compiler::compile(&[source], &catalogue).unwrap();
         let path = crate::node::Path::new(["model"]).unwrap();
         let bindings = HttpClientRequestSettings::try_bind_with_boot(
@@ -2298,12 +2298,13 @@ graph app : App {
             let address = listener.local_addr().expect("the listener has an address");
             let accepted = Arc::new(AtomicUsize::new(0));
             let observed = Arc::clone(&accepted);
-            let identity = crate::connectors::network::tls::TlsIdentity {
+            let identity = crate::connector::drivers::network::tls::TlsIdentity {
                 certificate_chain: CERTIFICATE,
                 private_key: PRIVATE_KEY,
             };
-            let mut server_config = crate::connectors::network::tls::rustls_server(identity)
-                .expect("the fixture identity is valid");
+            let mut server_config =
+                crate::connector::drivers::network::tls::rustls_server(identity)
+                    .expect("the fixture identity is valid");
             server_config.alpn_protocols = vec![b"h2".to_vec()];
             let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(server_config));
             let server = tokio::spawn(async move {
@@ -2418,11 +2419,11 @@ graph app : App {
                 .await
                 .expect("the fallback listener binds");
             let address = listener.local_addr().expect("the listener has an address");
-            let identity = crate::connectors::network::tls::TlsIdentity {
+            let identity = crate::connector::drivers::network::tls::TlsIdentity {
                 certificate_chain: CERTIFICATE,
                 private_key: PRIVATE_KEY,
             };
-            let mut config = crate::connectors::network::tls::rustls_server(identity)
+            let mut config = crate::connector::drivers::network::tls::rustls_server(identity)
                 .expect("the fixture identity is valid");
             config.alpn_protocols = vec![b"http/1.1".to_vec()];
             let acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(config));
@@ -2559,14 +2560,15 @@ graph app : App {
                 .expect("the HTTP/3 server socket binds");
             let address = socket.local_addr().expect("the server has an address");
             let server = tokio::spawn(async move {
-                let identity = crate::connectors::network::tls::TlsIdentity {
+                let identity = crate::connector::drivers::network::tls::TlsIdentity {
                     certificate_chain: CERTIFICATE,
                     private_key: PRIVATE_KEY,
                 };
                 let limits = EngineLimits::new(8, 2, 8, 64 * 1024)
                     .expect("the HTTP/3 test bounds are valid");
-                let mut config = crate::connectors::network::tls::quiche_server(identity, limits)
-                    .expect("the fixture identity configures quiche");
+                let mut config =
+                    crate::connector::drivers::network::tls::quiche_server(identity, limits)
+                        .expect("the fixture identity configures quiche");
                 let mut packet = vec![0u8; 65_535];
                 let (length, peer) = socket
                     .recv_from(&mut packet)

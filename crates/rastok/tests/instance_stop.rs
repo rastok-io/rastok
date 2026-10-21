@@ -3,7 +3,7 @@
 
 use rastok::diagnostics::{Bag, SourceId};
 use rastok::node;
-use rastok::{compiler, contract::ContractCatalog, plan};
+use rastok::{compiler, connector::contract::ContractCatalog, plan};
 
 fn compile(source: &str) -> Result<compiler::Compilation, rastok::diagnostics::Bag> {
     compiler::compile(&[source], &ContractCatalog::try_m0().unwrap())

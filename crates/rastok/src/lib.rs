@@ -6,18 +6,15 @@
 //! `docs/architecture/build-order.md`; the spec under `docs/spec/` is
 //! normative.
 
-// The kernel's modules re-export here so every existing path —
-// `rastok::envelope`, `rastok::runtime::execution` — keeps resolving; the
-// crate boundary is real, the surface is unchanged.
+// The hosted crate uses the core's domain types directly. Its Connector
+// module adds hosted definitions and Drivers without duplicating core types.
 pub use rastok_core::{
-    accounting, canonical, canonical_cbor, connector, data_policy, datatype, deployment, envelope,
-    expr, instance, journal, loop_proof, node, observation, plan, runtime, schema_annotation,
-    value,
+    accounting, canonical, canonical_cbor, data_policy, datatype, deployment, envelope, expr,
+    instance, journal, loop_proof, node, observation, plan, runtime, schema_annotation, value,
 };
 
 pub mod compiler;
-pub mod conformance;
-pub mod connectors;
+pub mod connector;
 pub mod contract;
 pub mod deployment_config;
 pub mod diagnostics;

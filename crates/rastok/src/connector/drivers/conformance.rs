@@ -21,8 +21,10 @@
 
 use crate::compiler::compile;
 use crate::connector::contract::ConnectorContract;
+use crate::connector::contract::ContractCatalog;
 use crate::connector::driver::OutboundDrivers;
 use crate::connector::driver::SessionConnectorBindings;
+use crate::connector::drivers::{DriverRegistry, RuntimeDrivers};
 use crate::connector::exchange::EnvelopeDraft;
 use crate::connector::exchange::IngressAdmission;
 use crate::connector::exchange::IngressProposal;
@@ -32,8 +34,6 @@ use crate::connector::exchange::RequestPreparation;
 use crate::connector::exchange::SessionObservation;
 use crate::connector::exchange::SessionOpen;
 use crate::connector::exchange::SessionWrite;
-use crate::connectors::{DriverRegistry, RuntimeDrivers};
-use crate::contract::ContractCatalog;
 use crate::datatype::DataType;
 use crate::envelope::{Data, Namespace, Value};
 use crate::journal::{

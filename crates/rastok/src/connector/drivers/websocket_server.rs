@@ -4,7 +4,7 @@
 //! the exact server contract through the shared WebSocket protocol machine.
 
 #[cfg(feature = "hosted-websocket")]
-pub use crate::connectors::network::websocket::{
+pub use crate::connector::drivers::network::websocket::{
     WebSocketConfig, WebSocketConfigError, WebSocketServerFactory,
 };
 

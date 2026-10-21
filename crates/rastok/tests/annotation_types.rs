@@ -5,7 +5,7 @@
 use rastok::compiler::parser::parse;
 use rastok::compiler::syntax::{BaseType, TopDecl};
 use rastok::compiler::{Compilation, compile};
-use rastok::contract::ContractCatalog;
+use rastok::connector::contract::ContractCatalog;
 use rastok::diagnostics::{Bag, SourceId};
 use rastok::plan;
 

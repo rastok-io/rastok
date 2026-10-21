@@ -6,11 +6,11 @@ use rastok::accounting::{
     ExactDecimal, PriceBook, PriceBookName, UnitPrice, accounting_observations,
 };
 use rastok::compiler::{Compilation, compile};
+use rastok::connector::contract::ContractCatalog;
 use rastok::connector::exchange::EnvelopeDraft;
 use rastok::connector::exchange::IngressProposal;
 use rastok::connector::exchange::IngressProvenance;
 use rastok::connector::exchange::IngressSequence;
-use rastok::contract::ContractCatalog;
 use rastok::envelope::{Data, Namespace, Value};
 use rastok::journal::MemJournal;
 use rastok::plan::{self, GraphVersion};

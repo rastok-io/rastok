@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use rastok::accounting::accounting_observations;
 use rastok::compiler::{Compilation, compile};
-use rastok::contract::ContractCatalog;
+use rastok::connector::contract::ContractCatalog;
 use rastok::deployment::{
     BootBindings, DeploymentProfile, EnvironmentName, SecretBinding, SecretMaterial, SecretName,
     SecretProvider, SecretProviderError, SecretProviderId, SecretVersion,

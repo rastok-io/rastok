@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use rastok::journal::{EgressRecord, Record, SessionStatus};
-use rastok::{compiler, contract::ContractCatalog, plan::GraphVersion};
+use rastok::{compiler, connector::contract::ContractCatalog, plan::GraphVersion};
 
 const CHAT: &str = include_str!("../../../examples/agent-chat.rkg");
 const HTML: &str = include_str!("../../../examples/agent-chat.html");

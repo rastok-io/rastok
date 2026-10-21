@@ -721,7 +721,7 @@ mod tests {
     fn decisions_use_consumed_envelopes_and_the_selected_prefix() {
         let compilation = crate::compiler::compile(
             &[include_str!("../../../tests/fixtures/ui-two-retries.rkg")],
-            &crate::contract::ContractCatalog::try_m0().unwrap(),
+            &crate::connector::contract::ContractCatalog::try_m0().unwrap(),
         )
         .unwrap();
         let simulation = &compilation.labs[0].simulations[0];
@@ -815,7 +815,7 @@ mod tests {
     fn open_match_explains_only_evaluated_predicates_using_prestate() {
         let compilation = crate::compiler::compile(
             &[include_str!("../../../tests/fixtures/ui-explanation.rkg")],
-            &crate::contract::ContractCatalog::try_m0().unwrap(),
+            &crate::connector::contract::ContractCatalog::try_m0().unwrap(),
         )
         .unwrap();
         let simulation = &compilation.labs[0].simulations[0];
@@ -895,7 +895,7 @@ lab joined {
 "#;
         let compilation = crate::compiler::compile(
             &[source],
-            &crate::contract::ContractCatalog::try_m0().unwrap(),
+            &crate::connector::contract::ContractCatalog::try_m0().unwrap(),
         )
         .unwrap();
         let simulation = &compilation.labs[0].simulations[0];

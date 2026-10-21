@@ -2,7 +2,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use rastok::{compiler, contract::ContractCatalog, plan};
+use rastok::{compiler, connector::contract::ContractCatalog, plan};
 
 fn compile(source: &str) -> Result<compiler::Compilation, rastok::diagnostics::Bag> {
     compiler::compile(&[source], &ContractCatalog::try_m0().unwrap())

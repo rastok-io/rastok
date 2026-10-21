@@ -3,7 +3,7 @@
 #![allow(clippy::disallowed_methods, clippy::expect_used, clippy::panic)]
 
 use rastok::compiler::compile;
-use rastok::contract::ContractCatalog;
+use rastok::connector::contract::ContractCatalog;
 use rastok::journal::Record;
 use rastok::plan::GraphVersion;
 

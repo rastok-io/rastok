@@ -3,7 +3,7 @@
 #![allow(clippy::expect_used, clippy::panic)]
 
 use rastok::compiler::{Compilation, compile};
-use rastok::contract::ContractCatalog;
+use rastok::connector::contract::ContractCatalog;
 use rastok::diagnostics::Bag;
 use rastok::plan;
 use rastok::schema_annotation::{DataAnnotation, SchemaPath};

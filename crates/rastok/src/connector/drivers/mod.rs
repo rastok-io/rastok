@@ -1,10 +1,10 @@
-//! Runtime implementations of Connector contracts.
+//! Hosted Connector Drivers, their factories, runtime association and conformance tests.
 //!
-//! Each family owns its binding and Driver implementation below this module.
-//! The public re-export keeps the pre-M1.5 `connectors::Process` path stable
-//! while the catalogue grows without returning to one monolithic file.
+//! Physical protocol implementations live here; portable Contract rules and Driver
+//! interfaces are shared with `rastok-core` through the parent module.
 
 mod assembly;
+pub mod conformance;
 mod file;
 mod http_client;
 mod http_server;
@@ -18,7 +18,8 @@ mod manifest;
 ))]
 mod network;
 mod process;
-mod registry;
+pub mod registry;
+pub mod runtime;
 mod websocket_client;
 mod websocket_protocol;
 mod websocket_server;
@@ -37,18 +38,18 @@ pub use process::{
 };
 pub use registry::{
     DriverBindingError, DriverFactory, DriverFactoryError, DriverRegistrationError, DriverRegistry,
-    InboundPollError, RuntimeDrivers,
 };
+pub use runtime::{InboundPollError, RuntimeDrivers};
 #[cfg(feature = "hosted-websocket")]
 pub use websocket_client::WebSocketClientFactory;
 #[cfg(feature = "hosted-websocket")]
 pub use websocket_server::{WebSocketConfig, WebSocketConfigError, WebSocketServerFactory};
 
-/// The family-owned, effectless half of a scripted Driver.
+/// Request preparation and scheduler completions shared by a physical Call Driver
+/// and its Lab substitute.
 ///
-/// Real and Lab Drivers share request framing and scheduler projections; only
-/// observation of the external world is replaced. Three shipped families make
-/// this a real substitution seam rather than a decorative trait.
+/// These operations do not observe the external world. Process, File and HttpClient
+/// each provide the same implementation to their physical Driver and scripted model.
 pub(crate) trait CallProtocol {
     fn prepare_request(
         &self,
@@ -70,7 +71,7 @@ pub(crate) type ScriptedProtocolBinder =
         &crate::deployment::BootBindings,
     ) -> Result<Box<dyn CallProtocol>, registry::DriverFactoryError>;
 
-/// Every built-in family's scripted twin, declared beside its real module.
+/// Standard Call protocols available to the Lab, declared beside their physical Drivers.
 pub(crate) fn scripted_protocol_binders() -> [(&'static str, ScriptedProtocolBinder); 3] {
     [
         (

@@ -11,10 +11,10 @@
 //! remain in `rastok-core`; presentation and recording remain with the caller.
 
 use crate::connector::driver::DriverRouteError;
+use crate::connector::drivers::{InboundPollError, RuntimeDrivers};
 use crate::connector::exchange::IngressAdmission;
 use crate::connector::exchange::IngressProposal;
 use crate::connector::exchange::IngressRejection;
-use crate::connectors::{InboundPollError, RuntimeDrivers};
 use crate::deployment::BootBindings;
 use crate::envelope::Id;
 use crate::journal::MemJournal;
@@ -475,10 +475,10 @@ impl<'plan> Worker<'plan> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::connector::drivers::DriverRegistry;
     use crate::connector::exchange::EnvelopeDraft;
     use crate::connector::exchange::IngressProvenance;
     use crate::connector::exchange::IngressSequence;
-    use crate::connectors::DriverRegistry;
     use crate::envelope::{Data, Namespace, Value};
     use crate::node;
     use std::collections::VecDeque;
@@ -536,7 +536,7 @@ mod tests {
               }
               in -> count -> out
             }"#],
-            &crate::contract::ContractCatalog::try_m0().unwrap(),
+            &crate::connector::contract::ContractCatalog::try_m0().unwrap(),
         )
         .unwrap();
         let plan = &compilation.plan;
@@ -598,7 +598,7 @@ mod tests {
     /// execution alone decides when its explicit timeout becomes due.
     struct SilentProcess(crate::connector::ContractId);
 
-    impl crate::connectors::DriverFactory for SilentProcess {
+    impl crate::connector::drivers::DriverFactory for SilentProcess {
         fn contract_id(&self) -> &crate::connector::ContractId {
             &self.0
         }
@@ -613,7 +613,7 @@ mod tests {
             _: &[node::Path],
         ) -> Result<
             Box<dyn crate::connector::driver::Driver + 'plan>,
-            crate::connectors::DriverFactoryError,
+            crate::connector::drivers::DriverFactoryError,
         > {
             Ok(Box::new(Self(self.0.clone())))
         }
@@ -676,7 +676,7 @@ mod tests {
               in -> call
               call.out -> nothing; call.err -> nothing; call.exit -> exit
             }"#],
-            &crate::contract::ContractCatalog::try_m0().unwrap(),
+            &crate::connector::contract::ContractCatalog::try_m0().unwrap(),
         )
         .unwrap();
         let registry = DriverRegistry::default()
@@ -733,7 +733,7 @@ mod tests {
     fn pending_host_input_is_not_end_of_input() {
         let compilation = crate::compiler::compile(
             &["graph app : App { input in: int; output out: int; in -> out }"],
-            &crate::contract::ContractCatalog::try_m0().unwrap(),
+            &crate::connector::contract::ContractCatalog::try_m0().unwrap(),
         )
         .unwrap();
         let bindings =
@@ -785,7 +785,7 @@ mod tests {
               }
               in -> divide -> out
             }"#],
-            &crate::contract::ContractCatalog::try_m0().unwrap(),
+            &crate::connector::contract::ContractCatalog::try_m0().unwrap(),
         )
         .unwrap();
         for (input, recording_fails) in [(0, false), (1, true)] {
@@ -848,7 +848,7 @@ mod tests {
               }
               in -> divide -> out
             }"#],
-            &crate::contract::ContractCatalog::try_m0().unwrap(),
+            &crate::connector::contract::ContractCatalog::try_m0().unwrap(),
         )
         .unwrap();
         let bindings =

@@ -10,7 +10,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use rastok::compiler::compile;
-use rastok::contract::ContractCatalog;
+use rastok::connector::contract::ContractCatalog;
 
 /// One input fanning to two named outputs through named node ports.
 const SORTER: &str = r#"
@@ -1271,10 +1271,10 @@ lab g {
 
 #[test]
 fn a_defective_sheet_is_held_at_the_door() {
+    use rastok::connector::contract::ContractValidationError;
     use rastok::connector::contract::{
         ConnectorContract, PortContract, PortDataType, PortTypeRule,
     };
-    use rastok::contract::ContractValidationError;
     use rastok::node::PortDirection;
     const MISDIRECTED: ConnectorContract = ConnectorContract {
         id: "org.rastok.test/bad@1",

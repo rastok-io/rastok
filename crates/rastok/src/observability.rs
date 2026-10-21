@@ -341,7 +341,8 @@ mod tests {
 
     #[test]
     fn exchange_logs_use_id_keys_without_reference_aliases() {
-        let catalogue = crate::contract::ContractCatalog::try_m0().expect("valid contracts");
+        let catalogue =
+            crate::connector::contract::ContractCatalog::try_m0().expect("valid contracts");
         let mut seen = [false; 4];
         for source in [
             include_str!("../../../examples/echo.rkg"),

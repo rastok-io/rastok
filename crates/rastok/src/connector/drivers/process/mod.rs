@@ -1174,11 +1174,11 @@ impl OutboundCall for Process<'_> {
 mod tests {
     use super::*;
     use crate::compiler::compile;
+    use crate::connector::contract::ContractCatalog;
     use crate::connector::exchange::EnvelopeDraft;
     use crate::connector::exchange::IngressProposal;
     use crate::connector::exchange::IngressProvenance;
     use crate::connector::exchange::IngressSequence;
-    use crate::contract::ContractCatalog;
     use crate::envelope::Namespace;
     use crate::journal::{CallStatus, MemJournal, Record};
     use crate::plan::GraphVersion;

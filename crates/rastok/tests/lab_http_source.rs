@@ -2,7 +2,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use rastok::compiler::compile;
-use rastok::contract::ContractCatalog;
+use rastok::connector::contract::ContractCatalog;
 use rastok::journal::Record;
 use rastok::lab::{self, Simulator};
 use rastok::plan::GraphVersion;
@@ -79,9 +79,9 @@ fn decoded_requests_use_the_source_contract_without_a_physical_driver_or_app_inp
         "the Lab invents no transport metadata"
     );
     assert!(
-        rastok::connectors::RuntimeDrivers::prepare(
+        rastok::connector::drivers::RuntimeDrivers::prepare(
             &compilation.plan,
-            &rastok::connectors::DriverRegistry::default(),
+            &rastok::connector::drivers::DriverRegistry::default(),
         )
         .is_err(),
         "real execution still needs its Driver binding"

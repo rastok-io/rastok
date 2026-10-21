@@ -350,7 +350,7 @@ fn whitepaper_retry_example_checks_with_its_real_contract() {
     );
     rastok::compiler::compile(
         &[&source],
-        &rastok::contract::ContractCatalog::try_m0().unwrap(),
+        &rastok::connector::contract::ContractCatalog::try_m0().unwrap(),
     )
     .unwrap();
 }

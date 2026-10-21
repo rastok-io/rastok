@@ -2,7 +2,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use rastok::{compiler, contract::ContractCatalog, plan};
+use rastok::{compiler, connector::contract::ContractCatalog, plan};
 
 #[test]
 fn recovered_graph_outputs_and_expiry_are_redacted_before_logging() {

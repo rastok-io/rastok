@@ -6,11 +6,11 @@ use rastok::accounting::{
     ExactDecimal, PriceBook, PriceBookName, UnitPrice, accounting_observations,
 };
 use rastok::compiler::compile;
+use rastok::connector::contract::ContractCatalog;
 use rastok::connector::exchange::EnvelopeDraft;
 use rastok::connector::exchange::IngressProposal;
 use rastok::connector::exchange::IngressProvenance;
 use rastok::connector::exchange::IngressSequence;
-use rastok::contract::ContractCatalog;
 use rastok::deployment::{
     BootBindings, DeploymentProfile, SecretBinding, SecretMaterial, SecretProvider,
     SecretProviderError,
@@ -214,7 +214,8 @@ graph priced_call : App {
     let version = GraphVersion(1);
     let mut journal = MemJournal::new_with_deployment(version, boot.attestation().clone());
     let mut vm = Execution::new_with_deployment(&compilation.plan, version, &boot);
-    let mut world = rastok::connectors::Process::try_new(&compilation.plan).expect("Process binds");
+    let mut world =
+        rastok::connector::drivers::Process::try_new(&compilation.plan).expect("Process binds");
     vm.accept_input(
         &mut journal,
         IngressProposal {

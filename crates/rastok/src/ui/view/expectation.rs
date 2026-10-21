@@ -110,7 +110,7 @@ mod tests {
     fn failure_explanation_uses_the_exact_assertion_window_and_field() {
         let compilation = crate::compiler::compile(
             &[include_str!("../../../tests/fixtures/ui-explanation.rkg")],
-            &crate::contract::ContractCatalog::try_m0().unwrap(),
+            &crate::connector::contract::ContractCatalog::try_m0().unwrap(),
         )
         .unwrap();
         let simulation = &compilation.labs[0].simulations[0];
@@ -173,7 +173,7 @@ lab hidden { simulation inspect on app { scenario private {
 "#;
         let compilation = crate::compiler::compile(
             &[source],
-            &crate::contract::ContractCatalog::try_m0().unwrap(),
+            &crate::connector::contract::ContractCatalog::try_m0().unwrap(),
         )
         .unwrap();
         let simulation = &compilation.labs[0].simulations[0];
