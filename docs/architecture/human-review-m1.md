@@ -1358,6 +1358,22 @@ recorded it**, actions A-T5-2 to A-T5-6 with their gates and order; Fable's
 complements are implementation notes for Astra, the view fusion and the
 re-ordering are not taken.
 
+**Review pause and the T9 scope — 21 October, afternoon (Yoann).** The
+human review is paused until the Connector rework lands; Yoann resumes his
+reading on the reorganized tree. The rework covers T9 as well as T5: the
+hosted Drivers implement the renamed interfaces, move under
+`connector/drivers/`, and the File Driver becomes the worked example of the
+rewritten guide; the network Drivers are moved and renamed, not reworked
+inside. Astra runs the series without intermediate validation except one
+hard stop, the A-T5-4 identity inventory and specification amendment, which
+Yoann validates before any Contract movement; the byte-moving commit is
+isolated at the end of the code series, and the series stands without it.
+The documentation (README, WHITEPAPER, living architecture documents,
+specification, diagrams, contributor guide) lands in the same series, with
+the dated reports left intact. Fable's brief to Astra is dated 21 October.
+Fable replays the four checks, the full suite, the witness identity and the
+`no_std` and QEMU gates on each landing and records the result here.
+
 ## Realignment on the Node ontology — decided 2026-10-11
 
 Astra's 11 October proposal, verified by Fable against the code, and
