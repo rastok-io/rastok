@@ -31,7 +31,9 @@ pub use http_client::{HttpClientConfig, HttpClientFactory};
 pub(crate) use http_server::HttpServerLabInput;
 #[cfg(feature = "hosted-http12")]
 pub use http_server::{HttpServerConfig, HttpServerFactory};
-pub use manifest::{DriverManifest, DriverManifestEntry, DriverManifestError};
+pub use manifest::{
+    DriverManifest, DriverManifestEntry, DriverManifestError, DriverName, DriverNameError,
+};
 pub(crate) use process::ProcessRequestSettings;
 pub use process::{
     Process, ProcessBindError, ProcessFactory, ProcessServiceFactory, ProcessSettingsError,

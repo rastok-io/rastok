@@ -2,6 +2,9 @@
 //!
 //! Registration describes capabilities; it does not choose a Driver by insertion order.
 
+use super::{
+    DriverManifest, DriverManifestEntry, DriverManifestError, DriverName, DriverNameError,
+};
 use crate::connector::driver::Driver;
 use crate::connector::{ConnectorDirection, ContractId, ExchangeKind};
 use crate::{node, plan::ValidatedExecutionPlan};
@@ -9,6 +12,23 @@ use std::collections::BTreeMap;
 
 /// Creates one plan-bound Driver object for a stable Connector contract.
 pub trait DriverFactory {
+    /// Deployment implementation name, independent of the semantic Contract id.
+    fn name(&self) -> &str;
+
+    /// Exchange protocol implemented by objects returned by this factory.
+    fn exchange(&self) -> ExchangeKind;
+
+    /// Exact supported mode words. Empty means a Contract without a mode selector.
+    fn modes(&self) -> &[&str];
+
+    /// Contract attribute selecting a mode. Standard Contracts derive it from
+    /// their shared definition; nonstandard Contracts override it when needed.
+    fn mode_attribute(&self) -> Option<&str> {
+        crate::connector::stdlib::contract(self.contract_id())
+            .and_then(|definition| definition.selector.as_ref())
+            .map(|selector| selector.attribute)
+    }
+
     /// Stable contract identity implemented by this factory.
     fn contract_id(&self) -> &ContractId;
 
@@ -106,7 +126,7 @@ impl std::error::Error for DriverFactoryError {}
 /// Runtime factories explicitly linked or loaded into one build.
 #[derive(Default)]
 pub struct DriverRegistry {
-    factories: BTreeMap<ContractId, Box<dyn DriverFactory>>,
+    factories: BTreeMap<(ContractId, DriverName), Box<dyn DriverFactory>>,
 }
 
 impl core::fmt::Debug for DriverRegistry {
@@ -120,132 +140,299 @@ impl core::fmt::Debug for DriverRegistry {
 }
 
 impl DriverRegistry {
-    /// Adds one factory. Repeated ids refuse; registration order never wins.
+    /// Registers an implementation by exact Contract and deployment name.
+    /// Registration order is never a selection rule.
     ///
     /// # Errors
-    ///
-    /// Returns [`DriverRegistrationError::Duplicate`] when the exact stable
-    /// id already has an implementation.
+    /// Invalid implementation metadata and duplicate names refuse registration.
     pub fn try_with(
         mut self,
         factory: Box<dyn DriverFactory>,
     ) -> Result<Self, DriverRegistrationError> {
+        let name = DriverName::new(factory.name()).map_err(DriverRegistrationError::InvalidName)?;
         let id = factory.contract_id().clone();
-        if self.factories.contains_key(&id) {
-            return Err(DriverRegistrationError::Duplicate(id));
+        let key = (id.clone(), name.clone());
+        if self.factories.contains_key(&key) {
+            return Err(DriverRegistrationError::Duplicate { id, name });
         }
-        self.factories.insert(id, factory);
+        if let Some(definition) = crate::connector::stdlib::contract(&id)
+            && definition
+                .selector
+                .as_ref()
+                .map(|selector| selector.attribute)
+                != factory.mode_attribute()
+        {
+            return Err(DriverRegistrationError::ModeAttribute { id });
+        }
+        if self.factories.iter().any(|((contract, _), registered)| {
+            contract == &id && registered.mode_attribute() != factory.mode_attribute()
+        }) {
+            return Err(DriverRegistrationError::ModeAttribute { id });
+        }
+        DriverManifest::try_new([DriverManifestEntry::new(
+            name,
+            id,
+            factory.roles(),
+            factory.exchange(),
+            factory.mode_attribute().map(String::from),
+            factory.modes().iter().map(|mode| String::from(*mode)),
+        )])
+        .map_err(DriverRegistrationError::Manifest)?;
+        self.factories.insert(key, factory);
         Ok(self)
     }
 
-    /// Projects the exact linked capabilities without loading or executing a
-    /// second implementation path.
+    /// Describes registered capabilities without constructing any Driver object.
     ///
     /// # Errors
-    ///
-    /// Returns an error only if the registry's unique-id invariant is ever
-    /// contradicted internally.
-    pub fn manifest(&self) -> Result<super::DriverManifest, super::DriverManifestError> {
-        super::DriverManifest::try_new(
-            self.factories
-                .iter()
-                .map(|(id, factory)| super::DriverManifestEntry::new(id.clone(), factory.roles())),
-        )
+    /// Refuses contradictory capability declarations.
+    pub fn manifest(&self) -> Result<DriverManifest, DriverManifestError> {
+        DriverManifest::try_new(self.factories.iter().map(|((id, name), factory)| {
+            DriverManifestEntry::new(
+                name.clone(),
+                id.clone(),
+                factory.roles(),
+                factory.exchange(),
+                factory.mode_attribute().map(String::from),
+                factory.modes().iter().map(|mode| String::from(*mode)),
+            )
+        }))
     }
 
-    /// Resolves one exact id and proves that all required roles exist.
+    // Registration proves that every implementation of one Contract agrees on
+    // its selector. The lookup does not select an implementation by order.
+    pub(crate) fn mode_attribute(&self, id: &ContractId) -> Option<&str> {
+        self.factories
+            .iter()
+            .find(|((contract, _), _)| contract == id)
+            .and_then(|(_, factory)| factory.mode_attribute())
+    }
+
+    /// Selects the requested implementation, or the sole compatible implementation.
+    /// Mode, direction and exchange must all match before a factory is called.
     ///
     /// # Errors
-    ///
-    /// Missing implementations and incomplete role sets remain distinct typed
-    /// binding failures.
+    /// Absence, ambiguity and incompatible mode/protocol capabilities remain distinct.
     pub fn require(
         &self,
         id: &ContractId,
         required: ConnectorDirection,
-    ) -> Result<&dyn DriverFactory, DriverBindingError> {
-        let Some(factory) = self.factories.get(id) else {
+        exchange: ExchangeKind,
+        mode: Option<&str>,
+        selected: Option<&DriverName>,
+    ) -> Result<(&DriverName, &dyn DriverFactory), DriverBindingError> {
+        let candidates: Vec<_> = self
+            .factories
+            .iter()
+            .filter(|((contract, _), _)| contract == id)
+            .collect();
+        if candidates.is_empty() {
             return Err(DriverBindingError::Missing { id: id.clone() });
-        };
-        let available = factory.roles();
-        if !available.includes(required) {
-            return Err(DriverBindingError::MissingRoles {
-                id: id.clone(),
-                required,
-                available,
-            });
         }
-        Ok(factory.as_ref())
+        let candidates: Vec<_> = candidates
+            .into_iter()
+            .filter(|((_, name), _)| selected.is_none_or(|selected| selected == name))
+            .collect();
+        if candidates.is_empty() {
+            return match selected {
+                Some(name) => Err(DriverBindingError::UnknownImplementation {
+                    id: id.clone(),
+                    name: name.clone(),
+                }),
+                None => Err(DriverBindingError::Missing { id: id.clone() }),
+            };
+        }
+        let mode_matches = |factory: &dyn DriverFactory| match mode {
+            Some(word) => factory.modes().contains(&word),
+            None => factory.modes().is_empty(),
+        };
+        let compatible: Vec<_> = candidates
+            .iter()
+            .copied()
+            .filter(|(_, factory)| {
+                factory.roles().includes(required)
+                    && factory.exchange() == exchange
+                    && mode_matches(factory.as_ref())
+            })
+            .collect();
+        match compatible.as_slice() {
+            [candidate] => {
+                let ((_, name), factory) = *candidate;
+                Ok((name, factory.as_ref()))
+            }
+            [] => match candidates.as_slice() {
+                [(_, factory)] if !factory.roles().includes(required) => {
+                    Err(DriverBindingError::MissingRoles {
+                        id: id.clone(),
+                        required,
+                        available: factory.roles(),
+                    })
+                }
+                [((_, name), factory)] if factory.exchange() != exchange => {
+                    Err(DriverBindingError::IncompatibleExchange {
+                        id: id.clone(),
+                        name: name.clone(),
+                        required: exchange,
+                        available: factory.exchange(),
+                    })
+                }
+                [((_, name), _)] => Err(DriverBindingError::UnsupportedMode {
+                    id: id.clone(),
+                    name: name.clone(),
+                    mode: mode.map(String::from),
+                }),
+                _ => Err(DriverBindingError::NoCompatibleImplementation {
+                    id: id.clone(),
+                    required,
+                    exchange,
+                    mode: mode.map(String::from),
+                }),
+            },
+            _ => Err(DriverBindingError::Ambiguous {
+                id: id.clone(),
+                implementations: compatible
+                    .iter()
+                    .map(|((_, name), _)| name.clone())
+                    .collect(),
+            }),
+        }
     }
 }
 
-/// Why one factory cannot enter a deterministic Driver registry.
+/// Why one implementation cannot enter the deterministic registry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DriverRegistrationError {
-    /// The id already has a factory; first-registration-wins is forbidden.
-    Duplicate(ContractId),
+    /// The same implementation name already serves this exact Contract.
+    Duplicate {
+        /// Semantic Contract served by the repeated implementation.
+        id: ContractId,
+        /// Repeated deployment implementation name.
+        name: DriverName,
+    },
+    /// The implementation name cannot be used in deployment configuration.
+    InvalidName(DriverNameError),
+    /// Implementations of one Contract disagree on its declared mode selector.
+    ModeAttribute {
+        /// Contract whose selector metadata is contradictory.
+        id: ContractId,
+    },
+    /// Advertised modes are contradictory or invalid.
+    Manifest(DriverManifestError),
 }
 
 impl core::fmt::Display for DriverRegistrationError {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Duplicate(id) => write!(
-                formatter,
-                "Driver `{id}` is registered more than once; selection is ambiguous"
+            Self::Duplicate { id, name } => {
+                write!(f, "Driver `{name}` for `{id}` is registered more than once")
+            }
+            Self::InvalidName(error) => error.fmt(f),
+            Self::ModeAttribute { id } => write!(
+                f,
+                "Drivers for `{id}` disagree on the Contract's mode selector"
             ),
+            Self::Manifest(error) => error.fmt(f),
         }
     }
 }
 
 impl std::error::Error for DriverRegistrationError {}
 
-/// Why a validated Connector requirement has no unique physical Driver.
+/// Why a validated Connector requirement has no unique compatible implementation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DriverBindingError {
-    /// No implementation of the exact stable contract id is registered.
+    /// No implementation of the exact Contract is registered.
     Missing {
-        /// Required contract.
+        /// Required semantic Contract.
         id: ContractId,
     },
-    /// An implementation exists but omits at least one required role.
+    /// The only selected candidate omits a required direction.
     MissingRoles {
-        /// Required contract.
+        /// Required semantic Contract.
         id: ContractId,
-        /// Roles transported by the plan.
+        /// Directions carried by the validated Node.
         required: ConnectorDirection,
-        /// Roles advertised by the factory.
+        /// Directions advertised by the candidate.
         available: ConnectorDirection,
     },
-    /// The factory refused its selected plan Nodes before execution began.
-    Factory {
-        /// Stable contract id.
+    /// Configuration names no Connector in this plan.
+    UnknownConnector(node::Path),
+    /// The validated mode is not a static word.
+    InvalidMode(node::Path),
+    /// The selected name does not implement this Contract.
+    UnknownImplementation {
+        /// Required semantic Contract.
         id: ContractId,
-        /// Factory-specific typed-boundary explanation.
+        /// Deployment implementation selection.
+        name: DriverName,
+    },
+    /// The selected object implements a different exchange protocol.
+    IncompatibleExchange {
+        /// Required semantic Contract.
+        id: ContractId,
+        /// Deployment implementation selection.
+        name: DriverName,
+        /// Protocol carried by the validated Node.
+        required: ExchangeKind,
+        /// Protocol advertised by the candidate.
+        available: ExchangeKind,
+    },
+    /// The selected implementation does not serve the resolved mode.
+    UnsupportedMode {
+        /// Required semantic Contract.
+        id: ContractId,
+        /// Deployment implementation selection.
+        name: DriverName,
+        /// Effective mode word, absent for a mode-less Contract.
+        mode: Option<String>,
+    },
+    /// Implementations exist, but none satisfies all required capabilities.
+    NoCompatibleImplementation {
+        /// Required semantic Contract.
+        id: ContractId,
+        /// Directions carried by the validated Node.
+        required: ConnectorDirection,
+        /// Protocol carried by the validated Node.
+        exchange: ExchangeKind,
+        /// Effective mode word, absent for a mode-less Contract.
+        mode: Option<String>,
+    },
+    /// More than one compatible implementation requires explicit selection.
+    Ambiguous {
+        /// Required semantic Contract.
+        id: ContractId,
+        /// Compatible candidates in deterministic name order.
+        implementations: Vec<DriverName>,
+    },
+    /// The selected factory refused its planned Nodes before execution.
+    Factory {
+        /// Required semantic Contract.
+        id: ContractId,
+        /// Implementation which refused construction.
+        name: DriverName,
+        /// Factory-specific boundary explanation.
         detail: String,
     },
-    /// The object returned by a factory contradicts its advertised roles.
+    /// The created object contradicts its declared directions.
     BoundRolesMismatch {
-        /// Stable contract id.
+        /// Required semantic Contract.
         id: ContractId,
-        /// Factory claim used for deterministic selection.
+        /// Implementation whose object contradicted its metadata.
+        name: DriverName,
+        /// Advertised directions used for selection.
         advertised: ConnectorDirection,
-        /// Role views actually exposed; `None` means neither.
+        /// Directions exposed by the object; absent means neither.
         actual: Option<ConnectorDirection>,
     },
-    /// One stable contract id was assigned contradictory exchange facts by a
-    /// forged plan.
-    ConflictingExchange {
-        /// Ambiguous semantic contract id.
-        id: ContractId,
-    },
-    /// The bound outbound role exposes the wrong or an ambiguous exchange
-    /// protocol view.
+    /// The created object exposes a missing, wrong or ambiguous exchange view.
     BoundExchangeMismatch {
-        /// Contract being bound.
+        /// Required semantic Contract.
         id: ContractId,
-        /// Exchange carried by the validated plan.
+        /// Implementation whose object contradicted its metadata.
+        name: DriverName,
+        /// Protocol carried by the validated Node.
         required: ExchangeKind,
-        /// Sole exchange view actually exposed, if any.
+        /// Sole protocol exposed by the object, if any.
         actual: Option<ExchangeKind>,
     },
 }
@@ -260,41 +447,86 @@ impl core::fmt::Display for DriverBindingError {
                 available,
             } => write!(
                 formatter,
-                "Driver `{id}` exposes {available}, but the plan requires {required}"
+                "Driver for `{id}` exposes {available}, but the plan requires {required}"
             ),
-            Self::Factory { id, detail } => {
-                write!(formatter, "Driver `{id}` refused binding: {detail}")
+            Self::UnknownConnector(path) => write!(
+                formatter,
+                "Driver selection names no planned Connector `{path}`"
+            ),
+            Self::InvalidMode(path) => {
+                write!(formatter, "Connector `{path}` has no static mode word")
             }
+            Self::UnknownImplementation { id, name } => {
+                write!(formatter, "Driver `{name}` is not registered for `{id}`")
+            }
+            Self::IncompatibleExchange {
+                id,
+                name,
+                required,
+                available,
+            } => write!(
+                formatter,
+                "Driver `{name}` for `{id}` implements {available}, but the plan requires {required}"
+            ),
+            Self::UnsupportedMode { id, name, mode } => write!(
+                formatter,
+                "Driver `{name}` for `{id}` does not serve mode {}",
+                mode.as_deref().unwrap_or("<none>")
+            ),
+            Self::NoCompatibleImplementation {
+                id,
+                required,
+                exchange,
+                mode,
+            } => write!(
+                formatter,
+                "no Driver for `{id}` serves {required} {exchange}, mode {}",
+                mode.as_deref().unwrap_or("<none>")
+            ),
+            Self::Ambiguous {
+                id,
+                implementations,
+            } => write!(
+                formatter,
+                "multiple Drivers serve `{id}` ({}); select an implementation for this Connector",
+                implementations
+                    .iter()
+                    .map(DriverName::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            Self::Factory { id, name, detail } => write!(
+                formatter,
+                "Driver `{name}` for `{id}` refused preparation: {detail}"
+            ),
             Self::BoundRolesMismatch {
                 id,
+                name,
                 advertised,
                 actual,
             } => match actual {
                 Some(actual) => write!(
                     formatter,
-                    "Driver `{id}` advertises {advertised}, but its bound object exposes {actual}"
+                    "Driver `{name}` for `{id}` advertises {advertised}, but its object exposes {actual}"
                 ),
                 None => write!(
                     formatter,
-                    "Driver `{id}` advertises {advertised}, but its bound object exposes no role"
+                    "Driver `{name}` for `{id}` advertises {advertised}, but its object exposes no direction"
                 ),
             },
-            Self::ConflictingExchange { id } => write!(
-                formatter,
-                "Connector contract `{id}` carries more than one exchange lifecycle"
-            ),
             Self::BoundExchangeMismatch {
                 id,
+                name,
                 required,
                 actual,
             } => match actual {
                 Some(actual) => write!(
                     formatter,
-                    "Driver `{id}` exposes the {actual} exchange, but the plan requires {required}"
+                    "Driver `{name}` for `{id}` exposes {actual}, but the plan requires {required}"
                 ),
                 None => write!(
                     formatter,
-                    "Driver `{id}` does not expose exactly one {required} exchange view"
+                    "Driver `{name}` for `{id}` exposes no unique {required} exchange view"
                 ),
             },
         }

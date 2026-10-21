@@ -50,6 +50,16 @@ struct FakeFactory {
 }
 
 impl DriverFactory for FakeFactory {
+    fn name(&self) -> &str {
+        "test"
+    }
+    fn exchange(&self) -> crate::connector::ExchangeKind {
+        crate::connector::ExchangeKind::Call
+    }
+    fn modes(&self) -> &[&str] {
+        &[]
+    }
+
     fn contract_id(&self) -> &ContractId {
         &self.id
     }
@@ -83,13 +93,28 @@ fn registration_is_exact_role_aware_and_never_first_wins() {
 
     assert_eq!(
         registry
-            .require(&id, ConnectorDirection::Inbound)
+            .require(
+                &id,
+                ConnectorDirection::Inbound,
+                ExchangeKind::Call,
+                None,
+                None
+            )
             .unwrap()
+            .1
             .contract_id(),
         &id
     );
     assert_eq!(
-        registry.require(&id, ConnectorDirection::Outbound).err(),
+        registry
+            .require(
+                &id,
+                ConnectorDirection::Outbound,
+                ExchangeKind::Call,
+                None,
+                None
+            )
+            .err(),
         Some(DriverBindingError::MissingRoles {
             id: id.clone(),
             required: ConnectorDirection::Outbound,
@@ -101,6 +126,9 @@ fn registration_is_exact_role_aware_and_never_first_wins() {
             .require(
                 &ContractId::parse("org.rastok.test/missing@1").unwrap(),
                 ConnectorDirection::Outbound,
+                ExchangeKind::Call,
+                None,
+                None,
             )
             .err(),
         Some(DriverBindingError::Missing {
@@ -111,7 +139,10 @@ fn registration_is_exact_role_aware_and_never_first_wins() {
         registry
             .try_with(fake(id.as_str(), ConnectorDirection::InboundAndOutbound))
             .unwrap_err(),
-        DriverRegistrationError::Duplicate(id),
+        DriverRegistrationError::Duplicate {
+            id,
+            name: super::DriverName::new("test").unwrap()
+        },
     );
 }
 
@@ -209,6 +240,19 @@ struct RoutingFactory {
 }
 
 impl DriverFactory for RoutingFactory {
+    fn name(&self) -> &str {
+        "test-routing"
+    }
+    fn exchange(&self) -> crate::connector::ExchangeKind {
+        crate::connector::ExchangeKind::Call
+    }
+    fn modes(&self) -> &[&str] {
+        &["job"]
+    }
+    fn mode_attribute(&self) -> Option<&str> {
+        Some("mode")
+    }
+
     fn contract_id(&self) -> &ContractId {
         &self.id
     }
@@ -448,6 +492,19 @@ struct DuplexFactory {
 }
 
 impl DriverFactory for DuplexFactory {
+    fn name(&self) -> &str {
+        "test-routing"
+    }
+    fn exchange(&self) -> crate::connector::ExchangeKind {
+        crate::connector::ExchangeKind::Call
+    }
+    fn modes(&self) -> &[&str] {
+        &["job"]
+    }
+    fn mode_attribute(&self) -> Option<&str> {
+        Some("mode")
+    }
+
     fn contract_id(&self) -> &ContractId {
         &self.id
     }
@@ -659,6 +716,19 @@ struct SessionDuplexFactory {
 }
 
 impl DriverFactory for SessionDuplexFactory {
+    fn name(&self) -> &str {
+        "test-routing"
+    }
+    fn exchange(&self) -> crate::connector::ExchangeKind {
+        crate::connector::ExchangeKind::Session
+    }
+    fn modes(&self) -> &[&str] {
+        &["job"]
+    }
+    fn mode_attribute(&self) -> Option<&str> {
+        Some("mode")
+    }
+
     fn contract_id(&self) -> &ContractId {
         &self.id
     }
@@ -1020,6 +1090,19 @@ struct RetainedCallFactory {
 }
 
 impl DriverFactory for RetainedCallFactory {
+    fn name(&self) -> &str {
+        "test-inbound-call"
+    }
+    fn exchange(&self) -> crate::connector::ExchangeKind {
+        crate::connector::ExchangeKind::Call
+    }
+    fn modes(&self) -> &[&str] {
+        &["ack", "respond"]
+    }
+    fn mode_attribute(&self) -> Option<&str> {
+        Some("mode")
+    }
+
     fn contract_id(&self) -> &ContractId {
         &self.id
     }
@@ -1040,6 +1123,27 @@ impl DriverFactory for RetainedCallFactory {
 }
 
 impl DriverFactory for RetainedInboundFactory {
+    fn name(&self) -> &str {
+        "test-inbound"
+    }
+    fn exchange(&self) -> ExchangeKind {
+        if self.id.as_str() == crate::connector::stdlib::HTTP_SERVER_CONNECTOR_ID {
+            ExchangeKind::Call
+        } else {
+            ExchangeKind::Event
+        }
+    }
+    fn modes(&self) -> &[&str] {
+        if self.id.as_str() == crate::connector::stdlib::HTTP_SERVER_CONNECTOR_ID {
+            &["ack", "respond"]
+        } else {
+            &["job"]
+        }
+    }
+    fn mode_attribute(&self) -> Option<&str> {
+        Some("mode")
+    }
+
     fn contract_id(&self) -> &ContractId {
         &self.id
     }
@@ -1815,3 +1919,5 @@ fn binding_refuses_missing_wrong_and_extra_roles_before_execution() {
         "no Driver effect started"
     );
 }
+
+mod selection;

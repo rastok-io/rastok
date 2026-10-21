@@ -36,15 +36,18 @@ use crate::runtime::execution::{Execution, ExecutionFault, InboundCallPollReport
 use crate::{connector::exchange::IngressAdmission, journal::Journal};
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::registry::{DriverBindingError, DriverRegistry};
+use super::DriverName;
+use super::registry::{DriverBindingError, DriverFactory, DriverRegistry};
 
-#[derive(Debug)]
-struct FamilyRequirement {
-    nodes: Vec<(node::Path, ConnectorDirection, ExchangeKind)>,
+struct DriverRequirement<'registry> {
+    factory: &'registry dyn DriverFactory,
+    nodes: Vec<(node::Path, ConnectorDirection)>,
     required: ConnectorDirection,
 }
 
-struct BoundFamily<'plan> {
+struct BoundDriver<'plan> {
+    contract: ContractId,
+    name: DriverName,
     driver: Box<dyn Driver + 'plan>,
     uses_inbound: bool,
     inbound_paths: BTreeSet<node::Path>,
@@ -54,9 +57,10 @@ struct BoundFamily<'plan> {
     session_path: Option<node::Path>,
 }
 
-/// One retained proposal paired with the exact Driver family that owns it.
+/// One retained proposal paired with the exact Driver object that owns it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RoutedInboundProposal {
+    owner: usize,
     connector: ContractId,
     proposal: PendingIngress,
 }
@@ -82,7 +86,7 @@ pub struct InboundCallResponsePollReport {
 }
 
 /// One bounded pass transferring scheduler-owned inbound request expiries to
-/// their exact Driver family.
+/// their exact Driver object.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct InboundCallTimeoutPollReport {
     /// Timeout attempts whose protocol action is now Driver-owned.
@@ -103,7 +107,7 @@ impl core::fmt::Display for InboundPollError {
 impl std::error::Error for InboundPollError {}
 
 impl RoutedInboundProposal {
-    /// Stable family that must receive the eventual decision callback.
+    /// Contract of the proposing implementation; callback ownership is held separately.
     #[must_use]
     pub fn connector(&self) -> &ContractId {
         &self.connector
@@ -123,22 +127,28 @@ impl RoutedInboundProposal {
 /// exact Node path and role; no concrete contract name or registration order
 /// participates in execution.
 pub struct RuntimeDrivers<'plan> {
-    families: BTreeMap<ContractId, BoundFamily<'plan>>,
-    /// Last inbound family polled. Cycling from this key prevents one
-    /// backpressured transport from blocking an unrelated family.
-    inbound_cursor: Option<ContractId>,
-    outbound: BTreeMap<node::Path, ContractId>,
-    calls: BTreeMap<CallId, ContractId>,
-    inbound_calls: BTreeMap<crate::connector::exchange::InboundCallId, ContractId>,
-    session_outbound: BTreeMap<node::Path, ContractId>,
-    sessions: BTreeMap<SessionId, ContractId>,
+    drivers: Vec<BoundDriver<'plan>>,
+    // Last object polled; rotating from it preserves fairness under backpressure.
+    inbound_cursor: Option<usize>,
+    outbound: BTreeMap<node::Path, usize>,
+    calls: BTreeMap<CallId, usize>,
+    inbound_calls: BTreeMap<crate::connector::exchange::InboundCallId, usize>,
+    session_outbound: BTreeMap<node::Path, usize>,
+    sessions: BTreeMap<SessionId, usize>,
 }
 
 impl core::fmt::Debug for RuntimeDrivers<'_> {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("RuntimeDrivers")
-            .field("families", &self.families.keys().collect::<Vec<_>>())
+            .field(
+                "drivers",
+                &self
+                    .drivers
+                    .iter()
+                    .map(|bound| (&bound.contract, &bound.name))
+                    .collect::<Vec<_>>(),
+            )
             .field("inbound_cursor", &self.inbound_cursor)
             .field("outbound", &self.outbound)
             .field("calls", &self.calls)
@@ -153,7 +163,7 @@ impl<'plan> RuntimeDrivers<'plan> {
     /// Whether this statically bound image contains at least one external
     /// source that must be polled even when no CLI submission is pending.
     pub fn has_runnable_inbound(&self) -> bool {
-        self.families.values().any(|family| family.uses_inbound)
+        self.drivers.iter().any(|bound| bound.uses_inbound)
     }
 
     /// Binds every runnable inbound Connector and every callable outbound
@@ -182,59 +192,90 @@ impl<'plan> RuntimeDrivers<'plan> {
         registry: &DriverRegistry,
         boot: &crate::deployment::BootBindings,
     ) -> Result<Self, DriverBindingError> {
-        let mut requirements: BTreeMap<ContractId, FamilyRequirement> = BTreeMap::new();
+        Self::prepare_with_selection(plan, registry, boot, &BTreeMap::new())
+    }
+
+    /// Resolves every Node's implementation before constructing any Driver.
+    /// Selection affects deployment only; no implementation name enters the plan.
+    pub fn prepare_with_selection(
+        plan: &'plan ValidatedExecutionPlan,
+        registry: &DriverRegistry,
+        boot: &crate::deployment::BootBindings,
+        selection: &BTreeMap<node::Path, DriverName>,
+    ) -> Result<Self, DriverBindingError> {
+        for path in selection.keys() {
+            if !plan.plan().nodes.iter().any(|planned| {
+                planned.executor_path() == Some(path) && planned.connector().is_some()
+            }) {
+                return Err(DriverBindingError::UnknownConnector(path.clone()));
+            }
+        }
+
+        let mut requirements: BTreeMap<(ContractId, DriverName), DriverRequirement<'_>> =
+            BTreeMap::new();
         for (index, planned) in plan.plan().nodes.iter().enumerate() {
             let Some(spec) = planned.connector() else {
+                continue;
+            };
+            let Some(path) = planned.executor_path() else {
                 continue;
             };
             let callable = plan.plan().edges().iter().any(|edge| {
                 edge.to
                     .as_ref()
-                    .map(|endpoint| endpoint.node)
-                    .is_some_and(|slot| slot.index() == index)
+                    .is_some_and(|endpoint| endpoint.node.index() == index)
             });
-            if !spec.roles.has_inbound() && !(spec.roles.has_outbound() && callable) {
+            let runnable = spec.roles.has_inbound() || (spec.roles.has_outbound() && callable);
+            if !runnable && !selection.contains_key(path) {
                 continue;
             }
-            let Some(path) = planned.executor_path() else {
-                continue;
+
+            let mode = match registry.mode_attribute(&spec.contract) {
+                Some(attribute) => match spec.attribute(attribute) {
+                    Some(crate::plan::AttrSetting::Word(word)) => Some(word.as_str()),
+                    _ => return Err(DriverBindingError::InvalidMode(path.clone())),
+                },
+                None => None,
             };
+            let (name, factory) = registry.require(
+                &spec.contract,
+                spec.roles,
+                spec.exchange,
+                mode,
+                selection.get(path),
+            )?;
+            if !runnable {
+                continue;
+            }
             requirements
-                .entry(spec.contract.clone())
+                .entry((spec.contract.clone(), name.clone()))
                 .and_modify(|requirement| {
                     requirement.required = union_roles(requirement.required, spec.roles);
-                    requirement
-                        .nodes
-                        .push((path.clone(), spec.roles, spec.exchange));
+                    requirement.nodes.push((path.clone(), spec.roles));
                 })
-                .or_insert_with(|| FamilyRequirement {
-                    nodes: vec![(path.clone(), spec.roles, spec.exchange)],
+                .or_insert_with(|| DriverRequirement {
+                    factory,
+                    nodes: vec![(path.clone(), spec.roles)],
                     required: spec.roles,
                 });
         }
 
-        let mut families = BTreeMap::new();
+        let mut drivers = Vec::new();
         let mut outbound = BTreeMap::new();
         let mut session_outbound = BTreeMap::new();
-        for (id, requirement) in requirements {
-            let factory = registry.require(&id, requirement.required)?;
+        for ((id, name), requirement) in requirements {
             let paths: Vec<_> = requirement
                 .nodes
                 .iter()
-                .map(|(path, _, _)| path.clone())
+                .map(|(path, _)| path.clone())
                 .collect();
-            let exchange = requirement.nodes[0].2;
-            if requirement
-                .nodes
-                .iter()
-                .any(|(_, _, candidate)| *candidate != exchange)
-            {
-                return Err(DriverBindingError::ConflictingExchange { id });
-            }
+            let factory = requirement.factory;
+            let exchange = factory.exchange();
             let mut driver = factory
                 .create_with_boot(plan, &paths, boot)
                 .map_err(|error| DriverBindingError::Factory {
                     id: id.clone(),
+                    name: name.clone(),
                     detail: error.detail().to_string(),
                 })?;
             let actual = roles_of(driver.as_mut());
@@ -242,128 +283,128 @@ impl<'plan> RuntimeDrivers<'plan> {
             if actual != Some(advertised) {
                 return Err(DriverBindingError::BoundRolesMismatch {
                     id,
+                    name,
                     advertised,
                     actual,
                 });
             }
             if requirement.required.has_outbound() {
-                let actual_exchange = outbound_exchange_of(driver.as_mut());
-                if actual_exchange != Some(exchange) {
+                let actual = outbound_exchange_of(driver.as_mut());
+                if actual != Some(exchange) {
                     return Err(DriverBindingError::BoundExchangeMismatch {
                         id,
+                        name,
                         required: exchange,
-                        actual: actual_exchange,
+                        actual,
                     });
                 }
             }
-            if requirement.required.has_inbound() && exchange == ExchangeKind::Call {
-                let has_call_view = driver.inbound().and_then(Ingress::call).is_some();
-                if !has_call_view {
-                    return Err(DriverBindingError::BoundExchangeMismatch {
-                        id,
-                        required: ExchangeKind::Call,
-                        actual: None,
-                    });
-                }
+            if requirement.required.has_inbound()
+                && exchange == ExchangeKind::Call
+                && driver.inbound().and_then(Ingress::call).is_none()
+            {
+                return Err(DriverBindingError::BoundExchangeMismatch {
+                    id,
+                    name,
+                    required: exchange,
+                    actual: None,
+                });
             }
 
+            let owner = drivers.len();
             let uses_inbound = requirement.required.has_inbound();
             let inbound_paths = requirement
                 .nodes
                 .iter()
-                .filter_map(|(path, roles, _)| roles.has_inbound().then_some(path.clone()))
+                .filter_map(|(path, roles)| roles.has_inbound().then_some(path.clone()))
                 .collect();
             let mut outbound_path = None;
             let mut session_path = None;
-            for (path, roles, _) in requirement.nodes {
+            for (path, roles) in requirement.nodes {
                 if roles.has_outbound() && exchange == ExchangeKind::Call {
                     outbound_path.get_or_insert_with(|| path.clone());
-                    outbound.insert(path, id.clone());
+                    outbound.insert(path, owner);
                 } else if roles.has_outbound() && exchange == ExchangeKind::Session {
                     session_path.get_or_insert_with(|| path.clone());
-                    session_outbound.insert(path, id.clone());
+                    session_outbound.insert(path, owner);
                 }
             }
-            families.insert(
-                id,
-                BoundFamily {
-                    driver,
-                    uses_inbound,
-                    inbound_paths,
-                    exchange,
-                    pending_inbound: None,
-                    outbound_path,
-                    session_path,
-                },
-            );
+            drivers.push(BoundDriver {
+                contract: id,
+                name,
+                driver,
+                uses_inbound,
+                inbound_paths,
+                exchange,
+                pending_inbound: None,
+                outbound_path,
+                session_path,
+            });
         }
         Ok(Self {
-            families,
+            drivers,
             inbound_cursor: None,
             outbound,
+            session_outbound,
             calls: BTreeMap::new(),
             inbound_calls: BTreeMap::new(),
-            session_outbound,
             sessions: BTreeMap::new(),
         })
     }
 
-    /// Polls runnable inbound families in stable Connector-id order.
+    /// Polls runnable inbound families in deterministic Contract/name order.
     ///
     /// # Errors
     ///
     /// A role view proven during binding disappeared.
     pub fn next_inbound(&mut self) -> Result<Option<RoutedInboundProposal>, DriverRouteError> {
-        let ids: Vec<_> = self
-            .families
-            .iter()
-            .filter_map(|(id, family)| family.uses_inbound.then_some(id.clone()))
-            .collect();
+        let count = self.drivers.len();
         let start = self
             .inbound_cursor
-            .as_ref()
-            .and_then(|cursor| ids.iter().position(|id| id == cursor))
-            .map_or(0, |position| position.saturating_add(1) % ids.len().max(1));
-        for offset in 0..ids.len() {
-            let id = &ids[(start + offset) % ids.len()];
-            let Some(family) = self.families.get_mut(id) else {
-                // `ids` was derived from this map without mutating it. Keep
-                // the public boundary total even if that local invariant is
-                // accidentally broken later.
+            .map_or(0, |owner| (owner + 1) % count.max(1));
+        for offset in 0..count {
+            let owner = (start + offset) % count;
+            let Some(bound) = self.drivers.get_mut(owner) else {
                 continue;
             };
-            if let Some(proposal) = &family.pending_inbound {
-                self.inbound_cursor = Some(id.clone());
+            if !bound.uses_inbound {
+                continue;
+            }
+            if let Some(proposal) = &bound.pending_inbound {
+                self.inbound_cursor = Some(owner);
                 return Ok(Some(RoutedInboundProposal {
-                    connector: id.clone(),
+                    owner,
+                    connector: bound.contract.clone(),
                     proposal: proposal.clone(),
                 }));
             }
-            let Some(driver) = family.driver.inbound() else {
-                return Err(DriverRouteError::UnavailableInbound(id.clone()));
-            };
+            let driver = bound
+                .driver
+                .inbound()
+                .ok_or_else(|| DriverRouteError::UnavailableInbound(bound.contract.clone()))?;
             if let Some(proposal) = driver.poll_proposal() {
                 let source = proposal.proposal.provenance.connector_path();
-                if !family.inbound_paths.contains(source) {
+                if !bound.inbound_paths.contains(source) {
                     return Err(DriverRouteError::InboundSourceMismatch {
-                        connector: id.clone(),
+                        connector: bound.contract.clone(),
                         source: source.clone(),
                     });
                 }
-                let framing_matches = match family.exchange {
+                let framing_matches = match bound.exchange {
                     ExchangeKind::Event | ExchangeKind::Call => proposal.proposal.session.is_none(),
                     ExchangeKind::Session => proposal.proposal.session.is_some(),
                 };
                 if !framing_matches {
                     return Err(DriverRouteError::InboundExchangeMismatch {
-                        connector: id.clone(),
-                        exchange: family.exchange,
+                        connector: bound.contract.clone(),
+                        exchange: bound.exchange,
                     });
                 }
-                family.pending_inbound = Some(proposal.clone());
-                self.inbound_cursor = Some(id.clone());
+                bound.pending_inbound = Some(proposal.clone());
+                self.inbound_cursor = Some(owner);
                 return Ok(Some(RoutedInboundProposal {
-                    connector: id.clone(),
+                    owner,
+                    connector: bound.contract.clone(),
                     proposal,
                 }));
             }
@@ -376,66 +417,67 @@ impl<'plan> RuntimeDrivers<'plan> {
     ///
     /// # Errors
     ///
-    /// Refuses a stale, crossed-family, or otherwise unknown proposal.
+    /// Refuses a stale, crossed-object, or otherwise unknown proposal.
     pub fn decide_inbound(
         &mut self,
         routed: &RoutedInboundProposal,
         decision: Result<AdmittedIngress, IngressRejection>,
     ) -> Result<(), DriverRouteError> {
-        let Some(family) = self.families.get_mut(&routed.connector) else {
-            return Err(DriverRouteError::UnknownIngressProposal {
-                connector: routed.connector.clone(),
-                reference: routed.proposal.handle,
-            });
+        let unknown = || DriverRouteError::UnknownIngressProposal {
+            connector: routed.connector.clone(),
+            reference: routed.proposal.handle,
         };
-        let Some(pending) = &family.pending_inbound else {
-            return Err(DriverRouteError::UnknownIngressProposal {
-                connector: routed.connector.clone(),
-                reference: routed.proposal.handle,
-            });
-        };
-        if pending != &routed.proposal {
-            return Err(DriverRouteError::UnknownIngressProposal {
-                connector: routed.connector.clone(),
-                reference: routed.proposal.handle,
-            });
+        let bound = self.drivers.get(routed.owner).ok_or_else(unknown)?;
+        if bound.contract != routed.connector
+            || bound.pending_inbound.as_ref() != Some(&routed.proposal)
+        {
+            return Err(unknown());
         }
         if let Ok(accepted) = decision {
             match accepted.exchange {
                 Some(InboundExchangeId::Call(call_id)) => {
-                    if let Some(expected) = self.inbound_calls.get(&call_id)
-                        && expected != &routed.connector
+                    if let Some(&expected) = self.inbound_calls.get(&call_id)
+                        && expected != routed.owner
                     {
-                        return Err(DriverRouteError::CrossFamilyInboundCall {
+                        return Err(DriverRouteError::InboundCallOwnerMismatch {
                             call_id,
-                            expected: expected.clone(),
-                            actual: routed.connector.clone(),
+                            expected: self.owner_description(expected),
+                            actual: self.owner_description(routed.owner),
                         });
                     }
-                    self.inbound_calls.insert(call_id, routed.connector.clone());
                 }
                 Some(InboundExchangeId::Session(session)) => {
-                    if let Some(expected) = self.sessions.get(&session)
-                        && expected != &routed.connector
+                    if let Some(&expected) = self.sessions.get(&session)
+                        && expected != routed.owner
                     {
-                        return Err(DriverRouteError::CrossFamilySession {
+                        return Err(DriverRouteError::SessionOwnerMismatch {
                             session,
-                            expected: expected.clone(),
-                            actual: routed.connector.clone(),
+                            expected: self.owner_description(expected),
+                            actual: self.owner_description(routed.owner),
                         });
                     }
-                    self.sessions.insert(session, routed.connector.clone());
                 }
                 None => {}
             }
         }
-        let Some(driver) = family.driver.inbound() else {
-            return Err(DriverRouteError::UnavailableInbound(
-                routed.connector.clone(),
-            ));
-        };
+        let bound = self.drivers.get_mut(routed.owner).ok_or_else(unknown)?;
+        let driver = bound
+            .driver
+            .inbound()
+            .ok_or_else(|| DriverRouteError::UnavailableInbound(routed.connector.clone()))?;
+        if let Ok(accepted) = decision {
+            match accepted.exchange {
+                Some(InboundExchangeId::Call(call)) => {
+                    self.inbound_calls.insert(call, routed.owner);
+                }
+                Some(InboundExchangeId::Session(session)) => {
+                    self.sessions.insert(session, routed.owner);
+                }
+                None => {}
+            }
+        }
         driver.notify_admission(routed.proposal.handle, decision);
-        family.pending_inbound = None;
+        bound.pending_inbound = None;
         Ok(())
     }
 
@@ -472,13 +514,13 @@ impl<'plan> RuntimeDrivers<'plan> {
         Ok(Some(admission))
     }
 
-    /// Offers every ready graph response to the Driver family that admitted
+    /// Offers every ready graph response to the Driver object that admitted
     /// its inbound Call. The response stays retained and its Connector
     /// mailbox stays claimed while a bounded Driver reports `Pending`.
     ///
     /// # Errors
     ///
-    /// A missing/crossed family or a Call view that disappeared after
+    /// A missing/crossed ownership or a Call view that disappeared after
     /// binding is an integrity fault.
     pub fn poll_inbound_call_responses(
         &mut self,
@@ -486,24 +528,24 @@ impl<'plan> RuntimeDrivers<'plan> {
     ) -> Result<InboundCallResponsePollReport, DriverRouteError> {
         let mut report = InboundCallResponsePollReport::default();
         for response in vm.ready_inbound_call_responses() {
-            let Some(id) = self.inbound_calls.get(&response.call_id).cloned() else {
+            let Some(id) = self.inbound_calls.get(&response.call_id).copied() else {
                 return Err(DriverRouteError::UncorrelatedInboundCall(response.call_id));
             };
-            let Some(family) = self.families.get_mut(&id) else {
+            let Some(family) = self.drivers.get_mut(id) else {
                 return Err(DriverRouteError::UncorrelatedInboundCall(response.call_id));
             };
             if !family.inbound_paths.contains(&response.connector_path) {
                 return Err(DriverRouteError::InboundSourceMismatch {
-                    connector: id,
+                    connector: family.contract.clone(),
                     source: response.connector_path,
                 });
             }
             let driver = family
                 .driver
                 .inbound()
-                .ok_or_else(|| DriverRouteError::UnavailableInbound(id.clone()))?
+                .ok_or_else(|| DriverRouteError::UnavailableInbound(family.contract.clone()))?
                 .call()
-                .ok_or_else(|| DriverRouteError::UnavailableInboundCall(id.clone()))?;
+                .ok_or_else(|| DriverRouteError::UnavailableInboundCall(family.contract.clone()))?;
             match driver.start_response(&response) {
                 InboundCallResponseStart::Started => {
                     if !vm.mark_inbound_call_response_started(&response) {
@@ -519,37 +561,37 @@ impl<'plan> RuntimeDrivers<'plan> {
         Ok(report)
     }
 
-    /// Offers every due inbound request deadline to the Driver family that
+    /// Offers every due inbound request deadline to the Driver object that
     /// admitted the Call. A `Pending` attempt remains scheduler-owned and is
     /// offered again without creating another queue or terminal fact.
     ///
     /// # Errors
     ///
-    /// Missing or crossed family ownership is a binding-integrity fault.
+    /// Missing or crossed ownership is a binding-integrity fault.
     pub fn poll_inbound_call_timeouts(
         &mut self,
         vm: &mut Execution<'plan>,
     ) -> Result<InboundCallTimeoutPollReport, DriverRouteError> {
         let mut report = InboundCallTimeoutPollReport::default();
         for timeout in vm.ready_inbound_call_timeouts() {
-            let Some(id) = self.inbound_calls.get(&timeout.call_id).cloned() else {
+            let Some(id) = self.inbound_calls.get(&timeout.call_id).copied() else {
                 return Err(DriverRouteError::UncorrelatedInboundCall(timeout.call_id));
             };
-            let Some(family) = self.families.get_mut(&id) else {
+            let Some(family) = self.drivers.get_mut(id) else {
                 return Err(DriverRouteError::UncorrelatedInboundCall(timeout.call_id));
             };
             if !family.inbound_paths.contains(&timeout.connector_path) {
                 return Err(DriverRouteError::InboundSourceMismatch {
-                    connector: id,
+                    connector: family.contract.clone(),
                     source: timeout.connector_path,
                 });
             }
             let driver = family
                 .driver
                 .inbound()
-                .ok_or_else(|| DriverRouteError::UnavailableInbound(id.clone()))?
+                .ok_or_else(|| DriverRouteError::UnavailableInbound(family.contract.clone()))?
                 .call()
-                .ok_or_else(|| DriverRouteError::UnavailableInboundCall(id.clone()))?;
+                .ok_or_else(|| DriverRouteError::UnavailableInboundCall(family.contract.clone()))?;
             match driver.start_timeout(&timeout) {
                 InboundCallTimeoutStart::Started => {
                     if !vm.mark_inbound_call_timeout_started(&timeout) {
@@ -565,49 +607,47 @@ impl<'plan> RuntimeDrivers<'plan> {
         Ok(report)
     }
 
-    /// Drains terminal observations from every inbound Call family and
-    /// offers them to the Execution's typed, close-once queue. Family correlation is
+    /// Drains terminal observations from every inbound Call Driver and
+    /// offers them to the Execution's typed, close-once queue. Object ownership is
     /// checked before the Execution sees an event; invalid facts remain non-causal.
     ///
     /// # Errors
     ///
-    /// A bound Call view disappeared or a family reported another family's
+    /// A bound Call view disappeared or a Driver reported another object's
     /// Call reference.
     pub fn poll_inbound_call_events(
         &mut self,
         vm: &mut Execution<'plan>,
     ) -> Result<InboundCallPollReport, DriverRouteError> {
-        let ids: Vec<_> = self
-            .families
-            .iter()
-            .filter_map(|(id, family)| {
-                (family.uses_inbound && family.exchange == ExchangeKind::Call).then_some(id.clone())
-            })
-            .collect();
         let mut report = InboundCallPollReport::default();
-        for id in ids {
+        for owner in 0..self.drivers.len() {
             let events = {
-                let Some(family) = self.families.get_mut(&id) else {
+                let Some(bound) = self.drivers.get_mut(owner) else {
                     continue;
                 };
-                let driver = family
+                if !bound.uses_inbound || bound.exchange != ExchangeKind::Call {
+                    continue;
+                }
+                let driver = bound
                     .driver
                     .inbound()
-                    .ok_or_else(|| DriverRouteError::UnavailableInbound(id.clone()))?
+                    .ok_or_else(|| DriverRouteError::UnavailableInbound(bound.contract.clone()))?
                     .call()
-                    .ok_or_else(|| DriverRouteError::UnavailableInboundCall(id.clone()))?;
+                    .ok_or_else(|| {
+                        DriverRouteError::UnavailableInboundCall(bound.contract.clone())
+                    })?;
                 driver.poll_completions()
             };
             for event in events {
-                let Some(expected) = self.inbound_calls.get(&event.call_id).cloned() else {
+                let Some(expected) = self.inbound_calls.get(&event.call_id).copied() else {
                     report.uncorrelated.push(event);
                     continue;
                 };
-                if expected != id {
-                    return Err(DriverRouteError::CrossFamilyInboundCall {
+                if expected != owner {
+                    return Err(DriverRouteError::InboundCallOwnerMismatch {
                         call_id: event.call_id,
-                        expected,
-                        actual: id,
+                        expected: self.owner_description(expected),
+                        actual: self.owner_description(owner),
                     });
                 }
                 let call_id = event.call_id;
@@ -624,6 +664,13 @@ impl<'plan> RuntimeDrivers<'plan> {
         Ok(report)
     }
 
+    fn owner_description(&self, owner: usize) -> String {
+        self.drivers.get(owner).map_or_else(
+            || String::from("unbound Driver"),
+            |bound| format!("{} ({})", bound.name, bound.contract),
+        )
+    }
+
     fn outbound_driver(
         &mut self,
         connector: &node::Path,
@@ -631,7 +678,7 @@ impl<'plan> RuntimeDrivers<'plan> {
         let Some(id) = self.outbound.get(connector) else {
             return Err(DriverRouteError::UnboundOutbound(connector.clone()));
         };
-        let Some(family) = self.families.get_mut(id) else {
+        let Some(family) = self.drivers.get_mut(*id) else {
             return Err(DriverRouteError::UnboundOutbound(connector.clone()));
         };
         let outbound = family
@@ -646,9 +693,9 @@ impl<'plan> RuntimeDrivers<'plan> {
     fn session_driver(
         &mut self,
         connector: &node::Path,
-    ) -> Result<(ContractId, &mut dyn Session), DriverRouteError> {
-        let id = self.session_family(connector)?;
-        let Some(family) = self.families.get_mut(&id) else {
+    ) -> Result<(usize, &mut dyn Session), DriverRouteError> {
+        let id = self.session_owner(connector)?;
+        let Some(family) = self.drivers.get_mut(id) else {
             return Err(DriverRouteError::UnboundSession(connector.clone()));
         };
         let outbound = family
@@ -661,10 +708,10 @@ impl<'plan> RuntimeDrivers<'plan> {
         Ok((id, driver))
     }
 
-    fn session_family(&self, connector: &node::Path) -> Result<ContractId, DriverRouteError> {
+    fn session_owner(&self, connector: &node::Path) -> Result<usize, DriverRouteError> {
         self.session_outbound
             .get(connector)
-            .cloned()
+            .copied()
             .ok_or_else(|| DriverRouteError::UnboundSession(connector.clone()))
     }
 }
@@ -692,6 +739,20 @@ impl OutboundDrivers for RuntimeDrivers<'_> {
     }
 
     fn cancel(&mut self, connector: &node::Path, call_id: &CallId) -> Result<(), DriverRouteError> {
+        let actual = self
+            .outbound
+            .get(connector)
+            .copied()
+            .ok_or_else(|| DriverRouteError::UnboundOutbound(connector.clone()))?;
+        if let Some(&expected) = self.calls.get(call_id)
+            && expected != actual
+        {
+            return Err(DriverRouteError::CallOwnerMismatch {
+                call_id: *call_id,
+                expected: self.owner_description(expected),
+                actual: self.owner_description(actual),
+            });
+        }
         self.outbound_driver(connector)?.cancel(call_id);
         self.calls.remove(call_id);
         Ok(())
@@ -703,9 +764,18 @@ impl OutboundDrivers for RuntimeDrivers<'_> {
         request: &Envelope,
     ) -> Result<CallStart, DriverRouteError> {
         let connector = &intent.connector_path;
-        let Some(id) = self.outbound.get(connector).cloned() else {
+        let Some(id) = self.outbound.get(connector).copied() else {
             return Err(DriverRouteError::UnboundOutbound(connector.clone()));
         };
+        if let Some(&expected) = self.calls.get(&intent.call_id)
+            && expected != id
+        {
+            return Err(DriverRouteError::CallOwnerMismatch {
+                call_id: intent.call_id,
+                expected: self.owner_description(expected),
+                actual: self.owner_description(id),
+            });
+        }
         let start = self.outbound_driver(connector)?.start(intent, request);
         if start == CallStart::Started {
             self.calls.insert(intent.call_id, id);
@@ -715,24 +785,30 @@ impl OutboundDrivers for RuntimeDrivers<'_> {
 
     fn poll_responses(&mut self) -> Result<Vec<CallResponse>, DriverRouteError> {
         let mut responses = Vec::new();
-        for (id, family) in &mut self.families {
-            let Some(path) = &family.outbound_path else {
-                continue;
+        for owner in 0..self.drivers.len() {
+            let batch = {
+                let Some(bound) = self.drivers.get_mut(owner) else {
+                    continue;
+                };
+                let Some(path) = &bound.outbound_path else {
+                    continue;
+                };
+                let driver = bound
+                    .driver
+                    .outbound()
+                    .ok_or_else(|| DriverRouteError::UnavailableOutbound(path.clone()))?
+                    .call()
+                    .ok_or_else(|| DriverRouteError::UnavailableCall(path.clone()))?;
+                driver.poll_responses()
             };
-            let Some(driver) = family.driver.outbound() else {
-                return Err(DriverRouteError::UnavailableOutbound(path.clone()));
-            };
-            let Some(driver) = driver.call() else {
-                return Err(DriverRouteError::UnavailableCall(path.clone()));
-            };
-            for response in driver.poll_responses() {
-                if let Some(expected) = self.calls.get(&response.call_id)
-                    && expected != id
+            for response in batch {
+                if let Some(&expected) = self.calls.get(&response.call_id)
+                    && expected != owner
                 {
-                    return Err(DriverRouteError::CrossFamilyResponse {
+                    return Err(DriverRouteError::CallOwnerMismatch {
                         call_id: response.call_id,
-                        expected: expected.clone(),
-                        actual: id.clone(),
+                        expected: self.owner_description(expected),
+                        actual: self.owner_description(owner),
                     });
                 }
                 self.calls.remove(&response.call_id);
@@ -760,6 +836,16 @@ impl OutboundDrivers for RuntimeDrivers<'_> {
         intent: &SessionOpen,
         request: &Envelope,
     ) -> Result<crate::connector::exchange::SessionStart, DriverRouteError> {
+        let actual = self.session_owner(&intent.connector_path)?;
+        if let Some(&expected) = self.sessions.get(&intent.session_id)
+            && expected != actual
+        {
+            return Err(DriverRouteError::SessionOwnerMismatch {
+                session: intent.session_id,
+                expected: self.owner_description(expected),
+                actual: self.owner_description(actual),
+            });
+        }
         let (id, driver) = self.session_driver(&intent.connector_path)?;
         let start = driver.open_session(intent, request);
         // Ownership follows the journaled intent, even while local capacity
@@ -787,14 +873,14 @@ impl OutboundDrivers for RuntimeDrivers<'_> {
         data: &Data,
         resolved_settings: &BTreeMap<String, crate::value::Value>,
     ) -> Result<RequestPreparation, DriverRouteError> {
-        let actual = self.session_family(connector)?;
+        let actual = self.session_owner(connector)?;
         if let Some(expected) = self.sessions.get(&session)
             && expected != &actual
         {
-            return Err(DriverRouteError::CrossFamilySession {
+            return Err(DriverRouteError::SessionOwnerMismatch {
                 session,
-                expected: expected.clone(),
-                actual,
+                expected: self.owner_description(*expected),
+                actual: self.owner_description(actual),
             });
         }
         let (_, driver) = self.session_driver(connector)?;
@@ -806,15 +892,15 @@ impl OutboundDrivers for RuntimeDrivers<'_> {
         intent: &SessionWrite,
         message: &Envelope,
     ) -> Result<crate::connector::exchange::SessionStart, DriverRouteError> {
-        let actual = self.session_family(&intent.connector_path)?;
+        let actual = self.session_owner(&intent.connector_path)?;
         let Some(expected) = self.sessions.get(&intent.session_id) else {
             return Err(DriverRouteError::UncorrelatedSession(intent.session_id));
         };
         if expected != &actual {
-            return Err(DriverRouteError::CrossFamilySession {
+            return Err(DriverRouteError::SessionOwnerMismatch {
                 session: intent.session_id,
-                expected: expected.clone(),
-                actual,
+                expected: self.owner_description(*expected),
+                actual: self.owner_description(actual),
             });
         }
         let (_, driver) = self.session_driver(&intent.connector_path)?;
@@ -826,15 +912,15 @@ impl OutboundDrivers for RuntimeDrivers<'_> {
         connector: &node::Path,
         session: SessionId,
     ) -> Result<crate::connector::exchange::SessionStart, DriverRouteError> {
-        let actual = self.session_family(connector)?;
+        let actual = self.session_owner(connector)?;
         let Some(expected) = self.sessions.get(&session) else {
             return Err(DriverRouteError::UncorrelatedSession(session));
         };
         if expected != &actual {
-            return Err(DriverRouteError::CrossFamilySession {
+            return Err(DriverRouteError::SessionOwnerMismatch {
                 session,
-                expected: expected.clone(),
-                actual,
+                expected: self.owner_description(*expected),
+                actual: self.owner_description(actual),
             });
         }
         let (_, driver) = self.session_driver(connector)?;
@@ -846,15 +932,15 @@ impl OutboundDrivers for RuntimeDrivers<'_> {
         connector: &node::Path,
         session: SessionId,
     ) -> Result<(), DriverRouteError> {
-        let actual = self.session_family(connector)?;
+        let actual = self.session_owner(connector)?;
         let Some(expected) = self.sessions.get(&session) else {
             return Err(DriverRouteError::UncorrelatedSession(session));
         };
         if expected != &actual {
-            return Err(DriverRouteError::CrossFamilySession {
+            return Err(DriverRouteError::SessionOwnerMismatch {
                 session,
-                expected: expected.clone(),
-                actual,
+                expected: self.owner_description(*expected),
+                actual: self.owner_description(actual),
             });
         }
         let (_, driver) = self.session_driver(connector)?;
@@ -864,30 +950,36 @@ impl OutboundDrivers for RuntimeDrivers<'_> {
 
     fn poll_observations(&mut self) -> Result<Vec<SessionObservation>, DriverRouteError> {
         let mut events = Vec::new();
-        for (id, family) in &mut self.families {
-            let Some(path) = &family.session_path else {
-                continue;
+        for owner in 0..self.drivers.len() {
+            let batch = {
+                let Some(bound) = self.drivers.get_mut(owner) else {
+                    continue;
+                };
+                let Some(path) = &bound.session_path else {
+                    continue;
+                };
+                let driver = bound
+                    .driver
+                    .outbound()
+                    .ok_or_else(|| DriverRouteError::UnavailableOutbound(path.clone()))?
+                    .session()
+                    .ok_or_else(|| DriverRouteError::UnavailableSession(path.clone()))?;
+                driver.poll_observations()
             };
-            let Some(outbound) = family.driver.outbound() else {
-                return Err(DriverRouteError::UnavailableOutbound(path.clone()));
-            };
-            let Some(driver) = outbound.session() else {
-                return Err(DriverRouteError::UnavailableSession(path.clone()));
-            };
-            for event in driver.poll_observations() {
+            for event in batch {
                 let session = match &event {
                     SessionObservation::Opened(session)
                     | SessionObservation::WriteSettled { session, .. }
                     | SessionObservation::Exited { session, .. } => *session,
                 };
-                let Some(expected) = self.sessions.get(&session) else {
+                let Some(&expected) = self.sessions.get(&session) else {
                     return Err(DriverRouteError::UncorrelatedSession(session));
                 };
-                if expected != id {
-                    return Err(DriverRouteError::CrossFamilySession {
+                if expected != owner {
+                    return Err(DriverRouteError::SessionOwnerMismatch {
                         session,
-                        expected: expected.clone(),
-                        actual: id.clone(),
+                        expected: self.owner_description(expected),
+                        actual: self.owner_description(owner),
                     });
                 }
                 events.push(event);
@@ -901,8 +993,8 @@ impl OutboundDrivers for RuntimeDrivers<'_> {
             return Ok(());
         };
         let family = self
-            .families
-            .get_mut(id)
+            .drivers
+            .get_mut(*id)
             .ok_or(DriverRouteError::UncorrelatedSession(session))?;
         let path = family
             .session_path
@@ -916,6 +1008,216 @@ impl OutboundDrivers for RuntimeDrivers<'_> {
             .ok_or_else(|| DriverRouteError::UnavailableSession(path.clone()))?;
         driver.release_session(session);
         self.sessions.remove(&session);
+        Ok(())
+    }
+}
+
+/// Ownership reconstruction failed without replacing any routing state.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DriverRecoveryError {
+    /// The receiving association already owns work or a pending ingress proposal.
+    Active,
+    /// The journal could not provide the complete prefix.
+    Journal(crate::journal::Error),
+    /// An exchange record omits its Connector source.
+    MissingSource,
+    /// The selected object cannot serve this Connector's exchange.
+    UnboundConnector {
+        /// Exact planned Connector path.
+        connector: node::Path,
+        /// Exchange required by the recorded obligation.
+        exchange: ExchangeKind,
+    },
+    /// Two facts assign one logical exchange to different objects.
+    Ownership,
+}
+
+impl core::fmt::Display for DriverRecoveryError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Active => {
+                formatter.write_str("Driver ownership can only be restored before active work")
+            }
+            Self::Journal(error) => error.fmt(formatter),
+            Self::MissingSource => {
+                formatter.write_str("a recorded ingress exchange has no Connector source")
+            }
+            Self::UnboundConnector {
+                connector,
+                exchange,
+            } => write!(
+                formatter,
+                "no selected Driver serves the recorded {exchange} at `{connector}`"
+            ),
+            Self::Ownership => {
+                formatter.write_str("the recorded exchange crosses selected Driver ownership")
+            }
+        }
+    }
+}
+
+impl std::error::Error for DriverRecoveryError {}
+
+impl RuntimeDrivers<'_> {
+    /// Restores exchange routing from a successfully recovered journal prefix.
+    ///
+    /// Call this after `Execution::recover_with_bindings`, with the same prefix
+    /// and deployment selection, on a newly prepared association. It neither
+    /// validates execution semantics nor restores sockets or processes. No
+    /// Driver method is called; existing no-recall recovery rules still apply.
+    /// Implementation names cannot be recovered from the journal: they are
+    /// deployment configuration and must be supplied unchanged by the caller.
+    ///
+    /// # Errors
+    /// Active ownership, a journal read failure, or a recorded exchange which
+    /// cannot be associated with the selected objects. All maps remain unchanged.
+    pub fn restore_ownership(&mut self, journal: &dyn Journal) -> Result<(), DriverRecoveryError> {
+        use crate::journal::{
+            CallStatus, EgressRecord, InboundExchangeExitRecord, InboundExchangeRecord, Record,
+            SessionIngressRecord, SessionStatus,
+        };
+
+        if !self.calls.is_empty()
+            || !self.inbound_calls.is_empty()
+            || !self.sessions.is_empty()
+            || self
+                .drivers
+                .iter()
+                .any(|driver| driver.pending_inbound.is_some())
+        {
+            return Err(DriverRecoveryError::Active);
+        }
+        let mut calls = BTreeMap::new();
+        let mut inbound_calls = BTreeMap::new();
+        let mut sessions = BTreeMap::new();
+        let mut result = Ok(());
+        journal
+            .visit_records(&mut |record| {
+                if result.is_err() {
+                    return;
+                }
+                result = (|| {
+                    match record {
+                        Record::Ingress(record) => {
+                            let Some(exchange) = record.exchange.as_deref() else {
+                                return Ok(());
+                            };
+                            let source = record
+                                .connector_path
+                                .as_ref()
+                                .ok_or(DriverRecoveryError::MissingSource)?;
+                            let kind = match exchange {
+                                InboundExchangeRecord::Call(_) => ExchangeKind::Call,
+                                InboundExchangeRecord::Session(_) => ExchangeKind::Session,
+                            };
+                            let owner = self
+                                .drivers
+                                .iter()
+                                .position(|driver| {
+                                    driver.exchange == kind && driver.inbound_paths.contains(source)
+                                })
+                                .ok_or_else(|| DriverRecoveryError::UnboundConnector {
+                                    connector: source.clone(),
+                                    exchange: kind,
+                                })?;
+                            match exchange {
+                                InboundExchangeRecord::Call(call) => {
+                                    if inbound_calls
+                                        .insert(call.reference, owner)
+                                        .is_some_and(|old| old != owner)
+                                    {
+                                        return Err(DriverRecoveryError::Ownership);
+                                    }
+                                }
+                                InboundExchangeRecord::Session(SessionIngressRecord::Open(
+                                    session,
+                                )) => {
+                                    if sessions
+                                        .insert(*session, owner)
+                                        .is_some_and(|old| old != owner)
+                                    {
+                                        return Err(DriverRecoveryError::Ownership);
+                                    }
+                                }
+                                InboundExchangeRecord::Session(SessionIngressRecord::Message(
+                                    session,
+                                )) => {
+                                    if sessions.get(session) != Some(&owner) {
+                                        return Err(DriverRecoveryError::Ownership);
+                                    }
+                                }
+                            }
+                        }
+                        Record::Egress(EgressRecord::Call(record)) => {
+                            let owner = self
+                                .outbound
+                                .get(&record.intent.connector_path)
+                                .copied()
+                                .ok_or_else(|| DriverRecoveryError::UnboundConnector {
+                                connector: record.intent.connector_path.clone(),
+                                exchange: ExchangeKind::Call,
+                            })?;
+                            if calls
+                                .get(&record.intent.call_id)
+                                .is_some_and(|old| *old != owner)
+                            {
+                                return Err(DriverRecoveryError::Ownership);
+                            }
+                            match record.status {
+                                CallStatus::Open => {
+                                    calls.insert(record.intent.call_id, owner);
+                                }
+                                CallStatus::Closed(_) | CallStatus::Abandoned => {
+                                    calls.remove(&record.intent.call_id);
+                                }
+                            }
+                        }
+                        Record::Egress(EgressRecord::Session(record)) => {
+                            let owner = self
+                                .session_outbound
+                                .get(&record.connector_path)
+                                .copied()
+                                .ok_or_else(|| DriverRecoveryError::UnboundConnector {
+                                    connector: record.connector_path.clone(),
+                                    exchange: ExchangeKind::Session,
+                                })?;
+                            match &record.status {
+                                SessionStatus::Opening(_) => {
+                                    if sessions
+                                        .insert(record.session_id, owner)
+                                        .is_some_and(|old| old != owner)
+                                    {
+                                        return Err(DriverRecoveryError::Ownership);
+                                    }
+                                }
+                                SessionStatus::Opened
+                                | SessionStatus::WriteOpen(_)
+                                | SessionStatus::WriteSettled(_)
+                                | SessionStatus::WriteAbandoned(_) => {
+                                    if sessions.get(&record.session_id) != Some(&owner) {
+                                        return Err(DriverRecoveryError::Ownership);
+                                    }
+                                }
+                            }
+                        }
+                        Record::Transaction(record) => match record.exchange_exit.as_deref() {
+                            Some(InboundExchangeExitRecord::Call(call)) => {
+                                inbound_calls.remove(call);
+                            }
+                            Some(InboundExchangeExitRecord::Session(session)) => {
+                                sessions.remove(session);
+                            }
+                            None => {}
+                        },
+                    }
+                    Ok(())
+                })();
+            })
+            .map_err(DriverRecoveryError::Journal)?;
+        result?;
+        self.calls = calls;
+        self.inbound_calls = inbound_calls;
+        self.sessions = sessions;
         Ok(())
     }
 }

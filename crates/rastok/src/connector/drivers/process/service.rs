@@ -154,6 +154,16 @@ impl ProcessServiceFactory {
 }
 
 impl DriverFactory for ProcessServiceFactory {
+    fn name(&self) -> &str {
+        "process-service"
+    }
+    fn exchange(&self) -> crate::connector::ExchangeKind {
+        crate::connector::ExchangeKind::Session
+    }
+    fn modes(&self) -> &[&str] {
+        &["service"]
+    }
+
     fn contract_id(&self) -> &crate::connector::ContractId {
         &self.id
     }

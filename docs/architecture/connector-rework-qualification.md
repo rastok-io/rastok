@@ -5,9 +5,9 @@ T5/T9 implementation checks; it does not approve the separate Process
 Contract identity proposal. Package format 21, Process `std/process@4`
 (job) and `std/process@5` (service) remain current at this checkpoint.
 
-**Status: A-T5-1, A-T5-2 and A-T5-3 are qualified. The Process identity
-proposal, multi-implementation selection and final catalogue/documentation
-remain separate actions.**
+**Status: A-T5-1, A-T5-2, A-T5-3 and A-T5-5 are qualified. The separate
+Process identity proposal awaits Yoann's approval; the final catalogue and
+documentation are the next action.**
 
 ## Reference after A-T5-1
 
@@ -228,3 +228,60 @@ in the crates or spikes. Host startup pauses persisted before several test
 executables produced their first output; this gate nevertheless completed
 without a failed check. No security setting changed, and no push, tag or
 publication occurred.
+
+## A-T5-5 — named implementations and exact exchange ownership
+
+The hosted registry accepts several named implementations of the same Contract.
+Deployment configuration selects by Connector Node path, independently of boot
+attestation and program identity. Without an explicit name, exactly one
+implementation must satisfy the resolved Contract, mode, direction and exchange.
+All selections are checked before any factory is called; insertion order is
+never a selection policy. Factories expose the same per-object Driver views.
+
+Private implementation indexes own Calls, inbound Calls, Sessions and pending
+ingress callbacks. Equal proposal handles from different objects cannot alias.
+Known responses, writes, cancellation and closure cannot cross object ownership,
+even when the objects share one Contract. Runtime recovery reconstructs routing
+from the accepted journal prefix under the same deployment selection, without
+calling a Driver or replaying an external operation. This restores ownership,
+not a socket or process; the selection itself is not recoverable from the journal.
+No new public execution-index type, plugin loader or provider fallback is added.
+
+Local two-implementation tests exercise interleaved Calls and instance generations,
+Session openings/messages/writes/closure, wrong-object observations, equal ingress
+handles, and recovery without external calls. Negative tests cover missing,
+ambiguous and incompatible selection, unknown Nodes and names, contradictory
+mode metadata, and malformed deployment configuration.
+
+### Checks and measurements
+
+The final CLI gate, launched from the RustRover terminal, passed formatting,
+strict all-target/all-feature Clippy, **1,613 tests in 61 groups, zero failures and zero ignored
+tests**, and rustdoc with `-D warnings`. The separate site suite passed 12/12;
+the browser suite passed 35/35. All three no_std targets and the rustdoc-link
+lint passed. No test deadline or assertion was relaxed.
+
+The first full attempt was stopped after two chat-simulation failures: new
+capability metadata incorrectly excluded a silent HttpServer `respond` Node
+from Lab binding. The declaration now preserves the existing passive binding;
+an added regression proves that source injection still refuses outside `ack`.
+This does not implement graph-response simulation. A second full attempt was
+stopped after the CLI WebSocket test encountered an already-used loopback port;
+the listener's preparation error named that conflict. The final complete suite
+runs with `--test-threads=1`, without another Rust build, and includes the
+unchanged chat/WebSocket tests and the new focused regression. No test is
+omitted and no deadline is relaxed.
+
+Both Cortex-M33 workloads reached `SPIKE_OK` using the commands, release
+profile and Retry parameters documented above:
+
+| Workload | Decode peak heap | Total peak heap | `.text` | `.rodata` | Code total | Heap margin | Code margin |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Echo | 36,160 B | 111,404 B | 897,668 B | 74,048 B | 971,716 B | 19,668 B | 76,860 B |
+| Retry and recovery | 30,684 B | 129,188 B | 958,892 B | 84,824 B | 1,043,716 B | 1,884 B | 4,860 B |
+
+All **73 protected artifacts remain byte-identical**. No example, fixture,
+golden, package, trace or recording was regenerated. Process ids and package
+format remain unchanged. Several local executables again paused before their
+first output; the qualified run uses the original tests and deadlines. No
+security setting was changed and no public operation was performed.

@@ -340,6 +340,16 @@ impl Driver for Liar {
 struct LiarFactory(ContractId);
 
 impl DriverFactory for LiarFactory {
+    fn name(&self) -> &str {
+        "test-liar"
+    }
+    fn exchange(&self) -> rastok::connector::ExchangeKind {
+        rastok::connector::ExchangeKind::Call
+    }
+    fn modes(&self) -> &[&str] {
+        &["job"]
+    }
+
     fn contract_id(&self) -> &ContractId {
         &self.0
     }
@@ -461,6 +471,16 @@ impl Driver for Swapper {
 struct SwapperFactory(ContractId);
 
 impl DriverFactory for SwapperFactory {
+    fn name(&self) -> &str {
+        "test-swapper"
+    }
+    fn exchange(&self) -> rastok::connector::ExchangeKind {
+        rastok::connector::ExchangeKind::Call
+    }
+    fn modes(&self) -> &[&str] {
+        &["job"]
+    }
+
     fn contract_id(&self) -> &ContractId {
         &self.0
     }

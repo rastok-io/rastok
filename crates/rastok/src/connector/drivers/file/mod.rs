@@ -302,6 +302,16 @@ impl FileFactory {
 }
 
 impl super::DriverFactory for FileFactory {
+    fn name(&self) -> &str {
+        "file"
+    }
+    fn exchange(&self) -> crate::connector::ExchangeKind {
+        crate::connector::ExchangeKind::Call
+    }
+    fn modes(&self) -> &[&str] {
+        &["read", "replace"]
+    }
+
     fn contract_id(&self) -> &crate::connector::ContractId {
         &self.id
     }

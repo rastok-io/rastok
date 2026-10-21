@@ -31,6 +31,16 @@ impl Factory {
     }
 }
 impl DriverFactory for Factory {
+    fn name(&self) -> &str {
+        "lab-process-service"
+    }
+    fn exchange(&self) -> crate::connector::ExchangeKind {
+        crate::connector::ExchangeKind::Session
+    }
+    fn modes(&self) -> &[&str] {
+        &["service"]
+    }
+
     fn contract_id(&self) -> &ContractId {
         &self.id
     }

@@ -371,6 +371,19 @@ struct HttpServerLabFactory {
 }
 
 impl super::DriverFactory for HttpServerLabFactory {
+    fn name(&self) -> &str {
+        "lab-http-server"
+    }
+    fn exchange(&self) -> crate::connector::ExchangeKind {
+        crate::connector::ExchangeKind::Call
+    }
+    fn modes(&self) -> &[&str] {
+        // Both modes may be present in a simulated graph, including a silent
+        // response route beside the exercised flow. The Lab injection gate
+        // admits only ack requests; binding respond does not simulate a reply.
+        &["ack", "respond"]
+    }
+
     fn contract_id(&self) -> &ContractId {
         &self.id
     }

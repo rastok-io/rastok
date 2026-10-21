@@ -237,7 +237,13 @@ fn main() -> ExitCode {
                     return ExitCode::from(2);
                 }
             };
-            simulate(&files, golden.as_ref(), boot.as_ref(), ui)
+            simulate(
+                &files,
+                golden.as_ref(),
+                boot.as_ref()
+                    .map(rastok::deployment_config::DeploymentConfig::boot),
+                ui,
+            )
         }
         _ => {
             eprintln!("{USAGE}");
@@ -475,13 +481,14 @@ impl rastok::worker::Host for CliHost<'_> {
 fn run(
     paths: &[String],
     file_root: Option<&std::path::Path>,
-    boot: Option<&rastok::deployment::BootBindings>,
+    configuration: Option<&rastok::deployment_config::DeploymentConfig>,
     json_logs: bool,
     record: Option<&std::path::Path>,
 ) -> ExitCode {
     let Ok((compilation, _)) = load(paths) else {
         return ExitCode::FAILURE;
     };
+    let boot = configuration.map(rastok::deployment_config::DeploymentConfig::boot);
     let mut recorder = match record
         .map(|path| rastok::recording::Recorder::create(path, &compilation, GraphVersion(1), boot))
         .transpose()
@@ -499,11 +506,12 @@ fn run(
             return ExitCode::FAILURE;
         }
     };
-    let bindings = match boot {
-        Some(boot) => connector::drivers::RuntimeDrivers::prepare_with_boot(
+    let bindings = match configuration {
+        Some(configuration) => connector::drivers::RuntimeDrivers::prepare_with_selection(
             &compilation.plan,
             &registry,
-            boot,
+            configuration.boot(),
+            configuration.drivers(),
         ),
         None => connector::drivers::RuntimeDrivers::prepare(&compilation.plan, &registry),
     };

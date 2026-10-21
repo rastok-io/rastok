@@ -144,6 +144,16 @@ impl HttpServerFactory {
 }
 
 impl crate::connector::drivers::DriverFactory for HttpServerFactory {
+    fn name(&self) -> &str {
+        "http-server"
+    }
+    fn exchange(&self) -> crate::connector::ExchangeKind {
+        crate::connector::ExchangeKind::Call
+    }
+    fn modes(&self) -> &[&str] {
+        &["ack", "respond"]
+    }
+
     fn contract_id(&self) -> &crate::connector::ContractId {
         &self.id
     }

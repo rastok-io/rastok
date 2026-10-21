@@ -71,35 +71,35 @@ pub enum DriverRouteError {
         /// Proposed Connector node.
         source: node::Path,
     },
-    /// One Driver answered a call started through another Connector family.
-    CrossFamilyResponse {
+    /// One Driver answered a Call owned by another implementation object.
+    CallOwnerMismatch {
         /// Correlated call.
         call_id: CallId,
-        /// Family that started it.
-        expected: crate::connector::ContractId,
-        /// Family that answered it.
-        actual: crate::connector::ContractId,
+        /// Description of the Driver object that started it.
+        expected: String,
+        /// Description of the Driver object that answered it.
+        actual: String,
     },
     /// One Driver reported a terminal fact for an inbound Call admitted by
-    /// another Connector family.
-    CrossFamilyInboundCall {
+    /// another implementation object.
+    InboundCallOwnerMismatch {
         /// Correlated inbound Call.
         call_id: InboundCallId,
-        /// Family that admitted it.
-        expected: crate::connector::ContractId,
-        /// Family that reported the observation.
-        actual: crate::connector::ContractId,
+        /// Description of the Driver object that admitted it.
+        expected: String,
+        /// Description of the Driver object that reported the observation.
+        actual: String,
     },
     /// A Driver reported a terminal fact for no admitted inbound Call.
     UncorrelatedInboundCall(InboundCallId),
-    /// One Driver reported an event for a session owned by another family.
-    CrossFamilySession {
+    /// One Driver reported a Session observation owned by another object.
+    SessionOwnerMismatch {
         /// Correlated logical session.
         session: SessionId,
-        /// Family that admitted or opened it.
-        expected: crate::connector::ContractId,
-        /// Family that reported the observation.
-        actual: crate::connector::ContractId,
+        /// Description of the Driver object that admitted or opened it.
+        expected: String,
+        /// Description of the Driver object that reported the observation.
+        actual: String,
     },
     /// A Driver reported an observation for no admitted/opened session.
     UncorrelatedSession(SessionId),
@@ -153,7 +153,7 @@ impl fmt::Display for DriverRouteError {
                 formatter,
                 "Driver `{connector}` proposed an inbound root from unbound source `{source}`"
             ),
-            Self::CrossFamilyResponse {
+            Self::CallOwnerMismatch {
                 call_id,
                 expected,
                 actual,
@@ -161,7 +161,7 @@ impl fmt::Display for DriverRouteError {
                 formatter,
                 "Driver `{actual}` answered call {call_id} started by `{expected}`"
             ),
-            Self::CrossFamilyInboundCall {
+            Self::InboundCallOwnerMismatch {
                 call_id,
                 expected,
                 actual,
@@ -172,7 +172,7 @@ impl fmt::Display for DriverRouteError {
             Self::UncorrelatedInboundCall(call_id) => {
                 write!(formatter, "no bound Driver owns inbound call {call_id}")
             }
-            Self::CrossFamilySession {
+            Self::SessionOwnerMismatch {
                 session,
                 expected,
                 actual,

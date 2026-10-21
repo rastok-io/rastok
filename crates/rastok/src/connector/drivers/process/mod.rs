@@ -700,6 +700,16 @@ impl ProcessFactory {
 }
 
 impl super::DriverFactory for ProcessFactory {
+    fn name(&self) -> &str {
+        "process-job"
+    }
+    fn exchange(&self) -> crate::connector::ExchangeKind {
+        crate::connector::ExchangeKind::Call
+    }
+    fn modes(&self) -> &[&str] {
+        &["job"]
+    }
+
     fn contract_id(&self) -> &crate::connector::ContractId {
         &self.id
     }

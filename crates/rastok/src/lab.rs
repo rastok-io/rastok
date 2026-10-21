@@ -1066,6 +1066,7 @@ fn draft(port: &node::Port, value: &EmitValue) -> Result<EnvelopeDraft, String> 
 
 struct MockConnectorFactory {
     id: ContractId,
+    modes: Vec<&'static str>,
     bind_protocol: ScriptedProtocolBinder,
     mocks: SharedMocks,
     faults: MockFaults,
@@ -1081,6 +1082,16 @@ impl core::fmt::Debug for MockConnectorFactory {
 }
 
 impl DriverFactory for MockConnectorFactory {
+    fn name(&self) -> &str {
+        "lab-call"
+    }
+    fn exchange(&self) -> crate::connector::ExchangeKind {
+        crate::connector::ExchangeKind::Call
+    }
+    fn modes(&self) -> &[&str] {
+        &self.modes
+    }
+
     fn contract_id(&self) -> &ContractId {
         &self.id
     }
@@ -1133,6 +1144,26 @@ fn mock_bindings<'plan>(
         let id = ContractId::parse(spelling).map_err(|error| error.to_string())?;
         registry = registry
             .try_with(Box::new(MockConnectorFactory {
+                modes: crate::connector::stdlib::contract(&id)
+                    .into_iter()
+                    .flat_map(|definition| {
+                        definition.selector.iter().flat_map(move |selector| {
+                            selector
+                                .profiles
+                                .iter()
+                                .filter(move |mode| {
+                                    matches!(
+                                        mode.support,
+                                        crate::connector::contract::ModeSupport::Available
+                                    ) && mode
+                                        .protocol
+                                        .map_or(definition.exchange, |protocol| protocol.exchange)
+                                        == crate::connector::ExchangeKind::Call
+                                })
+                                .map(|mode| mode.word)
+                        })
+                    })
+                    .collect(),
                 id,
                 bind_protocol,
                 mocks: Rc::clone(&mocks),
@@ -1959,6 +1990,42 @@ graph websocket_server_source : App {
             )
             .unwrap_or_else(|error| panic!("the family-owned Lab twin must bind: {error}"));
         }
+    }
+
+    #[test]
+    fn a_silent_http_response_route_binds_without_enabling_source_injection() {
+        let compilation = compile(
+            &[r#"
+graph passive_server : App {
+  connector server : HttpServer {
+    listen = "127.0.0.1:8080"
+    mode = respond
+    codec = text
+    timeout = duration("1s")
+  }
+  server -> out
+  server.exit -> nothing
+}
+"#],
+            &ContractCatalog::try_m0().unwrap(),
+        )
+        .unwrap();
+        mock_bindings(
+            &compilation.plan,
+            BTreeMap::new(),
+            &crate::deployment::BootBindings::empty(),
+            Rc::new(RefCell::new(HttpServerLabInput::default())),
+        )
+        .expect("a silent response route remains bindable beside another simulated flow");
+        let target = InjectionTarget::Connector {
+            path: node::Path::new(["server"]).unwrap(),
+            port: node::Port::new("out").unwrap(),
+        };
+        assert!(
+            injection_port(&compilation.plan, &target)
+                .unwrap_err()
+                .contains("requires the HttpServer ack Lab ingress model")
+        );
     }
 
     #[test]

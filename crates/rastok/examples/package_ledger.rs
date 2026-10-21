@@ -145,7 +145,8 @@ fn gallery(manifest: &Path) -> Result<(), String> {
                 compiled.hash,
                 plan::GraphVersion(1),
                 lab,
-                boot.as_ref(),
+                boot.as_ref()
+                    .map(rastok::deployment_config::DeploymentConfig::boot),
             ) {
                 if !run.report.passed() {
                     return Err(format!("{name}: {:?}", run.report));

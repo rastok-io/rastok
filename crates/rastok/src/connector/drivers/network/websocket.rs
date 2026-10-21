@@ -170,6 +170,16 @@ impl WebSocketServerFactory {
 }
 
 impl crate::connector::drivers::DriverFactory for WebSocketClientFactory {
+    fn name(&self) -> &str {
+        "websocket-client"
+    }
+    fn exchange(&self) -> crate::connector::ExchangeKind {
+        crate::connector::ExchangeKind::Session
+    }
+    fn modes(&self) -> &[&str] {
+        &[]
+    }
+
     fn contract_id(&self) -> &crate::connector::ContractId {
         &self.id
     }
@@ -193,6 +203,16 @@ impl crate::connector::drivers::DriverFactory for WebSocketClientFactory {
 }
 
 impl crate::connector::drivers::DriverFactory for WebSocketServerFactory {
+    fn name(&self) -> &str {
+        "websocket-server"
+    }
+    fn exchange(&self) -> crate::connector::ExchangeKind {
+        crate::connector::ExchangeKind::Session
+    }
+    fn modes(&self) -> &[&str] {
+        &[]
+    }
+
     fn contract_id(&self) -> &crate::connector::ContractId {
         &self.id
     }

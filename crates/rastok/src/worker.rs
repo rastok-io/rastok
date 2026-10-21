@@ -599,6 +599,16 @@ mod tests {
     struct SilentProcess(crate::connector::ContractId);
 
     impl crate::connector::drivers::DriverFactory for SilentProcess {
+        fn name(&self) -> &str {
+            "silent-process"
+        }
+        fn exchange(&self) -> crate::connector::ExchangeKind {
+            crate::connector::ExchangeKind::Call
+        }
+        fn modes(&self) -> &[&str] {
+            &["job"]
+        }
+
         fn contract_id(&self) -> &crate::connector::ContractId {
             &self.0
         }

@@ -10,6 +10,7 @@
 //! one process-environment coordinate and its separately attested version.
 
 use crate::accounting::{ExactDecimal, PriceBook, PriceBookName, UnitPrice};
+use crate::connector::drivers::{DriverName, DriverNameError};
 use crate::deployment::{
     BootBindings, DeploymentError, DeploymentProfile, EnvironmentName, PolicyName,
     PrivacyDeclaration, PrivacyDeclarationName, PrivacyRetention, RecipientPolicy, SecretBinding,
@@ -26,6 +27,28 @@ use std::path::Path;
 
 const ENV_SECRET_PROVIDER: &str = "std/env@1";
 
+/// Resolved boot inputs and physical implementation selections.
+/// Driver names apply only to real execution; simulation keeps Lab substitution.
+#[derive(Debug)]
+pub struct DeploymentConfig {
+    boot: BootBindings,
+    drivers: BTreeMap<node::Path, DriverName>,
+}
+
+impl DeploymentConfig {
+    /// Typed boot inputs, including resolved secrets with their existing redaction rules.
+    #[must_use]
+    pub fn boot(&self) -> &BootBindings {
+        &self.boot
+    }
+
+    /// Explicit implementation names by planned Connector path.
+    #[must_use]
+    pub fn drivers(&self) -> &BTreeMap<node::Path, DriverName> {
+        &self.drivers
+    }
+}
+
 /// Reads, validates and atomically resolves one hosted deployment profile.
 ///
 /// Secret entries name an environment variable; the companion
@@ -36,15 +59,28 @@ const ENV_SECRET_PROVIDER: &str = "std/env@1";
 ///
 /// I/O, JSON shape, duplicate logical bindings, policy construction and
 /// secret-provider failures remain distinct safe messages.
-pub fn load(path: &Path) -> Result<BootBindings, DeploymentConfigError> {
+pub fn load(path: &Path) -> Result<DeploymentConfig, DeploymentConfigError> {
     let text = std::fs::read_to_string(path).map_err(DeploymentConfigError::Read)?;
-    let profile = parse(&text)?;
-    BootBindings::resolve(profile, &EnvironmentSecretProvider)
-        .map_err(DeploymentConfigError::Secret)
+    let (profile, drivers) = parse(&text)?;
+    let boot = BootBindings::resolve(profile, &EnvironmentSecretProvider)
+        .map_err(DeploymentConfigError::Secret)?;
+    Ok(DeploymentConfig { boot, drivers })
 }
 
-fn parse(text: &str) -> Result<DeploymentProfile, DeploymentConfigError> {
+pub(crate) fn parse(
+    text: &str,
+) -> Result<(DeploymentProfile, BTreeMap<node::Path, DriverName>), DeploymentConfigError> {
     let raw: RawDeployment = serde_json::from_str(text).map_err(DeploymentConfigError::Json)?;
+    let mut drivers = BTreeMap::new();
+    for entry in raw.drivers {
+        let path = node::Path::new(entry.connector.split('.').map(String::from))
+            .map_err(|_| DeploymentConfigError::InvalidConnectorPath(entry.connector.clone()))?;
+        let name =
+            DriverName::new(entry.implementation).map_err(DeploymentConfigError::DriverName)?;
+        if drivers.insert(path.clone(), name).is_some() {
+            return Err(DeploymentConfigError::DuplicateDriver(path));
+        }
+    }
     let mut environment = BTreeMap::new();
     for entry in raw.environment {
         let name = EnvironmentName::new(entry.name).map_err(DeploymentConfigError::Profile)?;
@@ -81,10 +117,11 @@ fn parse(text: &str) -> Result<DeploymentProfile, DeploymentConfigError> {
     let cost_profile = raw.cost_profile.map(cost_profile).transpose()?;
     let profile = DeploymentProfile::new(environment, secrets, privacy)
         .map_err(DeploymentConfigError::Profile)?;
-    Ok(match cost_profile {
+    let profile = match cost_profile {
         Some(cost_profile) => profile.with_price_book(cost_profile),
         None => profile,
-    })
+    };
+    Ok((profile, drivers))
 }
 
 fn cost_profile(raw: RawPriceBook) -> Result<PriceBook, DeploymentConfigError> {
@@ -217,11 +254,20 @@ impl SecretProvider for EnvironmentSecretProvider {
 #[serde(deny_unknown_fields)]
 struct RawDeployment {
     #[serde(default)]
+    drivers: Vec<RawDriverSelection>,
+    #[serde(default)]
     environment: Vec<RawEnvironment>,
     #[serde(default)]
     secrets: Vec<RawSecret>,
     privacy: Option<RawPrivacy>,
     cost_profile: Option<RawPriceBook>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawDriverSelection {
+    connector: String,
+    implementation: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -293,7 +339,11 @@ pub enum DeploymentConfigError {
     Accounting(crate::accounting::AccountingError),
     /// Measure or currency spelling is outside the closed registry.
     Annotation(crate::schema_annotation::SchemaAnnotationError),
-    /// A price names no canonical Node path.
+    /// One Connector has more than one explicit implementation selection.
+    DuplicateDriver(node::Path),
+    /// An implementation name is empty or contains whitespace/control characters.
+    DriverName(DriverNameError),
+    /// A price or Driver selection names no canonical Node path.
     InvalidConnectorPath(String),
     /// A price amount is not a plain exact decimal.
     InvalidDecimal(String),
@@ -323,8 +373,13 @@ impl fmt::Display for DeploymentConfigError {
             ),
             Self::Accounting(error) => error.fmt(formatter),
             Self::Annotation(error) => error.fmt(formatter),
+            Self::DuplicateDriver(path) => write!(
+                formatter,
+                "Driver selection for `{path}` is declared more than once"
+            ),
+            Self::DriverName(error) => error.fmt(formatter),
             Self::InvalidConnectorPath(path) => {
-                write!(formatter, "invalid cost-profile Connector path `{path}`")
+                write!(formatter, "invalid deployment Connector path `{path}`")
             }
             Self::InvalidDecimal(amount) => {
                 write!(formatter, "invalid exact price amount `{amount}`")
@@ -352,7 +407,7 @@ mod tests {
 
     #[test]
     fn hosted_json_contains_coordinates_and_policy_but_never_secret_material() {
-        let profile = parse(
+        let (profile, _) = parse(
             r#"{
   "environment": [{"name":"SERVICE_URL","value":"https://example.test"}],
   "secrets": [{
@@ -403,7 +458,7 @@ mod tests {
 
     #[test]
     fn an_exact_price_book_is_typed_and_attested_outside_graph_identity() {
-        let profile = parse(
+        let (profile, _) = parse(
             r#"{
   "environment": [],
   "secrets": [],
@@ -438,5 +493,53 @@ mod tests {
         assert_eq!(attested.digest, *cost.digest());
         assert_eq!(cost.rules()[0].price_money().amount().unscaled(), 25);
         assert_eq!(cost.rules()[0].price_money().amount().scale(), 1);
+    }
+    #[test]
+    fn driver_selection_is_hosted_metadata_separate_from_boot_attestation() {
+        let (profile, drivers) = parse(
+            r#"{"drivers":[
+            {"connector":"sessions.model","implementation":"local-model"},
+            {"connector":"audit","implementation":"file"}
+        ]}"#,
+        )
+        .expect("explicit hosted selection");
+        assert_eq!(drivers.len(), 2);
+        assert_eq!(
+            drivers[&node::Path::new(["sessions", "model"]).unwrap()].as_str(),
+            "local-model"
+        );
+        let boot = BootBindings::resolve(profile, &FixedProvider).expect("no secret lookup");
+        assert_eq!(boot.attestation(), BootBindings::empty().attestation());
+    }
+
+    #[test]
+    fn driver_selection_rejects_duplicate_paths_invalid_names_and_open_entries() {
+        assert!(matches!(
+            parse(
+                r#"{"drivers":[
+            {"connector":"model","implementation":"same"},
+            {"connector":"model","implementation":"same"}
+        ]}"#
+            ),
+            Err(DeploymentConfigError::DuplicateDriver(_))
+        ));
+        assert!(matches!(
+            parse(r#"{"drivers":[{"connector":"model","implementation":"two names"}]}"#),
+            Err(DeploymentConfigError::DriverName(_))
+        ));
+        assert!(matches!(
+            parse(r#"{"drivers":[{"connector":"","implementation":"a"}]}"#),
+            Err(DeploymentConfigError::InvalidConnectorPath(_))
+        ));
+        assert!(matches!(
+            parse(r#"{"drivers":[{"connector":"model","implementation":"a","fallback":"b"}]}"#),
+            Err(DeploymentConfigError::Json(_))
+        ));
+        assert!(
+            parse("{}")
+                .expect("no physical selection required")
+                .1
+                .is_empty()
+        );
     }
 }
