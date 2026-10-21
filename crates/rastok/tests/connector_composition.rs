@@ -254,6 +254,6 @@ graph websocket_only : App {
     };
     assert!(
         error.to_string().contains("std/websocket-client@3"),
-        "the omitted semantic capability is named before any VM exists: {error}"
+        "the omitted semantic capability is named before any Execution exists: {error}"
     );
 }

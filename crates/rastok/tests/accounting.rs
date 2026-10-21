@@ -1,4 +1,4 @@
-//! End-to-end M1.8 accounting evidence through the real compiler and VM.
+//! End-to-end M1.8 accounting evidence through the real compiler and Execution.
 
 #![allow(clippy::disallowed_methods, clippy::unwrap_used, clippy::expect_used)]
 

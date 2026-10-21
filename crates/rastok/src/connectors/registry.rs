@@ -51,7 +51,7 @@ pub trait ConnectorDriverFactory {
     ///
     /// # Errors
     ///
-    /// Returns a factory-specific refusal before a VM or journal exists.
+    /// Returns a factory-specific refusal before an Execution or journal exists.
     /// Binding may validate plan facts, allocate local state, and fail while
     /// reserving passive host resources. A reservation must remain bounded
     /// and externally unacknowledged until the runtime admits its input.
@@ -229,12 +229,12 @@ pub struct RoutedInboundProposal {
     proposal: RetainedProposal,
 }
 
-/// Failure of one inbound Driver/VM boundary round.
+/// Failure of one inbound Driver/Execution boundary round.
 #[derive(Debug, Clone, PartialEq)]
 pub enum InboundPollError {
     /// The bound Driver registry contradicted its retained routing state.
     Driver(DriverRouteError),
-    /// The VM or journal raised a fail-stop integrity fault.
+    /// The Execution or journal raised a fail-stop integrity fault.
     Machine(ExecutionFault),
 }
 
@@ -244,7 +244,7 @@ pub enum InboundPollError {
 pub struct InboundCallResponsePollReport {
     /// Responses whose protocol write is now Driver-owned.
     pub started: usize,
-    /// Responses retained by the VM because the Driver's finite capacity is
+    /// Responses retained by the Execution because the Driver's finite capacity is
     /// currently full.
     pub pending: usize,
 }
@@ -255,7 +255,7 @@ pub struct InboundCallResponsePollReport {
 pub struct InboundCallTimeoutPollReport {
     /// Timeout attempts whose protocol action is now Driver-owned.
     pub started: usize,
-    /// Timeout attempts retained by the VM under finite Driver pressure.
+    /// Timeout attempts retained by the Execution under finite Driver pressure.
     pub pending: usize,
 }
 
@@ -277,7 +277,7 @@ impl RoutedInboundProposal {
         &self.connector
     }
 
-    /// Retained proposal presented for atomic VM admission.
+    /// Retained proposal presented for atomic Execution admission.
     #[must_use]
     pub fn proposal(&self) -> &RetainedProposal {
         &self.proposal
@@ -287,7 +287,7 @@ impl RoutedInboundProposal {
 /// Complete runtime association between active plan Connectors and physical
 /// Drivers.
 ///
-/// Construction is the only registry lookup. Thereafter the VM routes by
+/// Construction is the only registry lookup. Thereafter the Execution routes by
 /// exact Node path and role; no concrete contract name or registration order
 /// participates in execution.
 pub struct RuntimeBindings<'plan> {
@@ -325,7 +325,7 @@ impl<'plan> RuntimeBindings<'plan> {
     }
 
     /// Binds every runnable inbound Connector and every callable outbound
-    /// Connector before a VM or journal exists.
+    /// Connector before an Execution or journal exists.
     ///
     /// An outbound-only Node with no incoming edge cannot open a call and is
     /// deliberately skipped. An inbound-capable Node is runnable by role and
@@ -342,7 +342,7 @@ impl<'plan> RuntimeBindings<'plan> {
         Self::try_new_with_boot(plan, registry, &crate::deployment::BootBindings::empty())
     }
 
-    /// Binds with one complete deployment input set before a VM or journal
+    /// Binds with one complete deployment input set before an Execution or journal
     /// exists. Secret material can cross only a factory override that owns a
     /// contract-declared secret-compatible setting.
     pub fn try_new_with_boot(
@@ -612,7 +612,7 @@ impl<'plan> RuntimeBindings<'plan> {
         Ok(())
     }
 
-    /// Runs one bounded inbound proposal through VM admission.
+    /// Runs one bounded inbound proposal through Execution admission.
     ///
     /// Acceptance reaches the Driver only after the journal commit. Pending
     /// admission retains both the proposal and Driver-side transport unit;
@@ -620,7 +620,7 @@ impl<'plan> RuntimeBindings<'plan> {
     ///
     /// # Errors
     ///
-    /// Driver routing contradictions and fail-stop VM/journal faults remain
+    /// Driver routing contradictions and fail-stop Execution/journal faults remain
     /// distinct.
     pub fn poll_inbound(
         &mut self,
@@ -739,8 +739,8 @@ impl<'plan> RuntimeBindings<'plan> {
     }
 
     /// Drains terminal observations from every inbound Call family and
-    /// offers them to the VM's typed, close-once queue. Family correlation is
-    /// checked before the VM sees an event; invalid facts remain non-causal.
+    /// offers them to the Execution's typed, close-once queue. Family correlation is
+    /// checked before the Execution sees an event; invalid facts remain non-causal.
     ///
     /// # Errors
     ///

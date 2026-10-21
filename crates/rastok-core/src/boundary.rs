@@ -5,7 +5,7 @@
 //! same traits, and the journal keeps its world-half either way. The
 //! [`DriverPoller`] is the loop between the journal and the outbound drivers:
 //! it drives open outbound calls and settles their closures; only a
-//! won closure ever becomes a VM input.
+//! won closure ever becomes an Execution input.
 //!
 //! [`delivery-semantics.md`]: https://github.com/rastok-io/rastok/blob/main/docs/spec/delivery-semantics.md
 
@@ -1078,7 +1078,7 @@ pub fn network_payload_bytes(codec: &str, data: &envelope::Data) -> Result<Vec<u
 /// Frames one Process request or returns its exact typed pre-call refusal.
 ///
 /// This helper is shared by the real Driver and scripted Process worlds; it
-/// is not a VM fallback. The selected Driver binding calls it explicitly.
+/// is not an Execution fallback. The selected Driver binding calls it explicitly.
 #[must_use]
 pub fn prepare_process_request(codec: RequestCodec, data: &envelope::Data) -> RequestPreparation {
     match prepare_request(codec, data) {
@@ -1095,7 +1095,7 @@ pub fn prepare_process_request(codec: RequestCodec, data: &envelope::Data) -> Re
 /// Projects a machine-decided terminal fact into the Process contract.
 ///
 /// Like [`prepare_process_request`], this is selected by a bound Process
-/// Driver and is never concrete-name dispatch in the VM.
+/// Driver and is never concrete-name dispatch in the Execution.
 #[must_use]
 pub fn process_scheduler_completion(completion: SchedulerCompletion) -> Completion {
     Completion::process_exit(match completion {
@@ -1239,7 +1239,7 @@ pub struct CallOpen {
     /// request preparation. Drivers consume them but never choose defaults or
     /// evaluate expressions.
     pub resolved_settings: alloc::collections::BTreeMap<String, crate::value::Value>,
-    /// Logical instant fixed by the VM for the causing transaction. This is
+    /// Logical instant fixed by the Execution for the causing transaction. This is
     /// execution context for scripted Drivers, not an EGRESS identity field
     /// and never an invitation for a Driver to read the host clock.
     pub logical_time: i64,
@@ -1315,7 +1315,7 @@ pub struct EnvelopeDraft {
     pub data: envelope::Data,
     /// External metadata supplied with this draft.
     ///
-    /// For a Connector completion, the VM validates and overlays these fields
+    /// For a Connector completion, the Execution validates and overlays these fields
     /// after ordinary request-zone inheritance. Drivers never assign `meta.sys`
     /// or write `meta.app`.
     pub ext: envelope::Namespace,
@@ -1336,7 +1336,7 @@ impl Completion {
     /// Refuses a missing, repeated, or non-terminal `exit` output.
     pub fn try_new(outputs: Vec<EnvelopeDraft>) -> Result<Self, CompletionError> {
         // `exit` is the boundary protocol's conventional terminal port, not a
-        // VM routing shortcut. The resolved port table owns its type and the
+        // Execution routing shortcut. The resolved port table owns its type and the
         // graph still routes it like every other named output.
         let exit_count = outputs
             .iter()
@@ -1362,7 +1362,7 @@ impl Completion {
         &self.outputs
     }
 
-    /// Gives the ordered drafts to the VM after the close race is won.
+    /// Gives the ordered drafts to the Execution after the close race is won.
     #[must_use]
     pub fn into_outputs(self) -> Vec<EnvelopeDraft> {
         self.outputs
@@ -1546,7 +1546,7 @@ pub enum SchedulerCompletion {
 /// A route through an already-verified binding became impossible.
 ///
 /// These errors are machine-integrity faults, not domain outcomes. The global
-/// binder proves every route before the VM and journal exist; retaining a
+/// binder proves every route before the Execution and journal exist; retaining a
 /// typed belt here prevents a forged or internally inconsistent caller from
 /// becoming a silent no-op.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1733,7 +1733,7 @@ impl CompletionCheck for AcceptAnyCompletion {
 /// A settled outbound Call completion awaiting its Connector transaction.
 ///
 /// The Call closure is already journaled; this carrier adds no record or
-/// envelope. The VM builds and commits the output emissions.
+/// envelope. The Execution builds and commits the output emissions.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BoundaryObservation {
     /// The settled call.
@@ -2038,7 +2038,7 @@ pub struct InboundCallResponse {
 
 /// One scheduler-owned expiry request for an admitted inbound Call.
 ///
-/// The VM decides that the request budget elapsed; the Driver owns only the
+/// The Execution decides that the request budget elapsed; the Driver owns only the
 /// protocol action (normally a 504 response) and reports which terminal fact
 /// the peer-visible race actually produced.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2331,13 +2331,13 @@ pub trait SessionConnectorBindings {
     fn forget_session(&mut self, session: SessionId) -> Result<(), DriverRouteError>;
 }
 
-/// The verified outbound routing table consumed by the core VM.
+/// The verified outbound routing table consumed by the core Execution.
 ///
 /// A single Driver implements this automatically. The application-level
 /// `RuntimeBindings` implementation selects among several contract families
-/// and returns a typed error if its pre-VM proof is ever contradicted. The VM
+/// and returns a typed error if its pre-execution proof is ever contradicted. The Execution
 /// therefore never matches `Process`, `File`, or another concrete contract.
-/// VM entry points borrow this object-safe boundary dynamically: the scheduler
+/// Execution entry points borrow this object-safe boundary dynamically: the scheduler
 /// and recovery code are shared across Driver bindings rather than duplicated
 /// for each binding implementation in an embedded image.
 pub trait OutboundConnectorBindings {
@@ -2536,11 +2536,11 @@ pub trait Supervisor {
 }
 
 /// Result of one Call polling round. Accepted closures are ready for the
-/// VM's Connector transactions; other responses remain observations for
+/// Execution's Connector transactions; other responses remain observations for
 /// the host, not graph deliveries.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct PollBatch {
-    /// The won closures, routable to the VM.
+    /// The won closures, routable to the Execution.
     pub events: Vec<BoundaryObservation>,
     /// Answers to Calls whose closure was already committed.
     pub discarded: Vec<Response>,
@@ -2589,7 +2589,7 @@ impl core::error::Error for PollFault {}
 ///    through the journal's close-once rule into [`BoundaryObservation`]s.
 ///
 /// A refused settlement keeps its batch for a later round; another batch is
-/// not polled until that one is complete. The VM builds the output envelopes
+/// not polled until that one is complete. The Execution builds the output envelopes
 /// and commits the Connector transaction. The poller never creates an envelope.
 /// Mocks replace Drivers, never this bookkeeping.
 ///
@@ -2605,7 +2605,7 @@ pub struct DriverPoller {
 }
 
 /// One handed-off Driver batch, including closures already committed before
-/// a later refusal. Do not poll another batch until this one reaches the VM.
+/// a later refusal. Do not poll another batch until this one reaches the Execution.
 #[derive(Debug)]
 struct PendingSettlement {
     responses: VecDeque<Response>,
@@ -3117,7 +3117,11 @@ mod tests {
         let batch = poller
             .poll_drivers(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
             .unwrap();
-        assert_eq!(batch.events.len(), 1, "only the won closure feeds the VM");
+        assert_eq!(
+            batch.events.len(),
+            1,
+            "only the won closure feeds the Execution"
+        );
         assert_eq!(batch.discarded.len(), 1, "the loser stays visible");
         assert!(batch.uncorrelated.is_empty());
         let event = &batch.events[0];

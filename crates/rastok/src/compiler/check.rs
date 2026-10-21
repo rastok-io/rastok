@@ -5971,7 +5971,7 @@ impl Checker<'_, '_> {
     /// a written text literal is sealed as a canonical `media_type`, and an
     /// unwrapped value selects the unique branch of a destination structural
     /// union. Dynamic media-type conversion remains explicit; union selection
-    /// is recorded in HIR as `As`, so the VM never guesses or repairs either.
+    /// is recorded in HIR as `As`, so the Execution never guesses or repairs either.
     fn contextualize_tree(
         &mut self,
         tree: expr::Tree,

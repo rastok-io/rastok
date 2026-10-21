@@ -51,7 +51,7 @@ pub enum UiCommand {
     Resume,
     /// Request the next safe pause.
     Pause,
-    /// Execute one atomic VM transaction.
+    /// Execute one atomic Execution transaction.
     Step,
     /// Retry the still-reserved faulting transaction.
     RetryStep,

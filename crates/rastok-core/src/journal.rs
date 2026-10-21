@@ -1426,7 +1426,7 @@ pub trait Journal {
 /// logical boundaries a durable implementation needs — typed records,
 /// per-provenance sequences, append-only closure — with no claim about files.
 ///
-/// `find_call`, `find_envelope`, and `statuses_of` scan records in O(n); the VM
+/// `find_call`, `find_envelope`, and `statuses_of` scan records in O(n); the Execution
 /// also performs full scans. This is acceptable for in-memory runs of a few
 /// hundred records. M2 must maintain indexes atomically with the records,
 /// following the existing lifecycle and Session folds, without making an
@@ -1522,7 +1522,7 @@ impl MemJournal {
 
     /// Rebuilds a retained prefix through the journal's accepting operations.
     /// No producer or Driver executes. The caller must separately validate
-    /// the prefix against its plan with VM recovery before exposing it.
+    /// the prefix against its plan with Execution recovery before exposing it.
     ///
     /// # Errors
     /// Invalid roots, sequences, lifecycle, exchange or Loop transitions.

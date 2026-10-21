@@ -60,7 +60,7 @@ An Operator is pure with respect to the external world, but its evaluation can
 still refuse (for example, a dynamic narrowing has no match or encoded data
 cannot be materialized). Such a `Fault` is a supervision fact, not a graph
 value: the transaction commits neither its input cursor, state nor emissions,
-and the VM returns the fault to its caller. The conventional output name
+and the Execution returns the fault to its caller. The conventional output name
 `err` is never selected automatically. When rejection is expected domain
 behavior, the Dispatch expresses it explicitly and emits a value on a declared
 output — conventionally `err`, giving the simple shape `I -> Result<R,E>`.
@@ -215,7 +215,7 @@ distinguishes two successive parents at the same logical address. The journal
 refuses a start under an inactive parent and a parent stop with an active
 child. The close request itself is a durable transaction carrying the root
 instance reference of the scope. The journal therefore enforces the same
-parent/child and generation rules on replay; Closing is not VM-only
+parent/child and generation rules on replay; Closing is not execution-only
 choreography.
 
 ### 2.1 Bounded Closing sequence
@@ -315,7 +315,7 @@ canonical rather than semantic.
 The semantic core never reads an operating-system clock. The hosted
 **observation/supervision plane** maps one civil-time origin plus monotonic
 elapsed time onto an explicit logical timeline; the Lab supplies that timeline
-directly. The VM uses it for dated obligations and fixes one instant for every
+directly. The Execution uses it for dated obligations and fixes one instant for every
 transaction. A handler may observe that instant through `now()`, in which case
 the transaction seals it as an input fact. Everything else the supervision
 plane decides enters the graph as a **journaled event**:

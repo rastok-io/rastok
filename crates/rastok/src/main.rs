@@ -382,8 +382,8 @@ fn check(paths: &[String]) -> ExitCode {
 }
 
 /// Hosted mapping from one wall-clock observation plus monotonic elapsed time
-/// to the VM's explicit logical timeline. Nothing below this boundary reads
-/// the OS clock, and wall-clock adjustments cannot move a running VM back.
+/// to the Execution's explicit logical timeline. Nothing below this boundary reads
+/// the OS clock, and wall-clock adjustments cannot move a running Execution back.
 struct HostedTimeSource {
     origin: i64,
     started: std::time::Instant,

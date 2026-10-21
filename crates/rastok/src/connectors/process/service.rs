@@ -453,7 +453,7 @@ impl Drop for Service {
         for resource in self.resources.values() {
             resource.control.store(RELEASED, Ordering::Release);
         }
-        // This is host teardown, outside VM transactions and Session callbacks.
+        // This is host teardown, outside Execution transactions and Session callbacks.
         // Merely setting the flag lets main exit before the workers kill/reap.
         for (_, resource) in std::mem::take(&mut self.resources) {
             let _ = resource.worker.join();

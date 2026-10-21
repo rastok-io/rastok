@@ -1571,7 +1571,7 @@ fn schema_well_formed(
 }
 
 /// Every `Expr::Asset` index must sit inside the asset table — the
-/// VM dereferences without checking.
+/// Execution dereferences without checking.
 fn asset_indexes_bound(plan: &ExecutionPlan, expr: &expr::Expr) -> Result<(), PlanValidationError> {
     match expr {
         expr::Expr::Asset(index) => {

@@ -72,14 +72,14 @@ pub struct ScenarioRun {
     pub records: Vec<Record>,
 }
 
-/// Authored action kind exposed separately from VM transactions.
+/// Authored action kind exposed separately from Execution transactions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScenarioActionKind {
     /// One root envelope is admitted.
     Inject,
     /// Virtual time advances to the authored target.
     Advance,
-    /// One expectation is evaluated without becoming a VM transaction.
+    /// One expectation is evaluated without becoming an Execution transaction.
     Expect,
 }
 
@@ -97,7 +97,7 @@ pub struct ExpectationInspection<'a> {
 /// Failure while interactively advancing one scenario transaction.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScenarioStepError {
-    /// The VM transaction refused before commit and remains reserved.
+    /// The Execution transaction refused before commit and remains reserved.
     Transaction(String),
     /// The scripted Driver boundary failed; an earlier transaction may have
     /// committed and must not be replayed as though it had not.
@@ -125,7 +125,7 @@ pub struct ScenarioInjectionDraft {
 }
 
 impl ScenarioStepError {
-    /// Whether retrying the same reserved VM transaction is safe.
+    /// Whether retrying the same reserved Execution transaction is safe.
     #[must_use]
     pub const fn retryable(&self) -> bool {
         matches!(self, Self::Transaction(_))
@@ -164,7 +164,7 @@ pub struct Simulator<'plan, 'scenario> {
 }
 
 impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
-    /// Creates a fresh VM, journal, virtual clock and scripted Driver world.
+    /// Creates a fresh Execution, journal, virtual clock and scripted Driver world.
     ///
     /// # Errors
     ///
@@ -344,7 +344,7 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
         })
     }
 
-    /// Whether ready VM work from the current action has reached a boundary.
+    /// Whether ready Execution work from the current action has reached a boundary.
     #[must_use]
     pub const fn is_quiescent(&self) -> bool {
         self.quiescent
@@ -463,7 +463,7 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
         self.advance.is_some()
     }
 
-    /// Applies one authored action without draining subsequent VM work.
+    /// Applies one authored action without draining subsequent Execution work.
     ///
     /// # Errors
     ///
@@ -476,7 +476,7 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
         }
         if !self.quiescent {
             return Err(String::from(
-                "the current scenario action still has ready VM transactions",
+                "the current scenario action still has ready Execution transactions",
             ));
         }
         let Some(step) = self.scenario.steps.get(self.next_action) else {
@@ -561,7 +561,7 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
         Ok(Some(kind))
     }
 
-    /// Executes at most one ready VM transaction, then polls the scripted
+    /// Executes at most one ready Execution transaction, then polls the scripted
     /// world only after ready work drains, as the batch Lab does. Driver
     /// polling itself is not a graph transaction.
     ///
@@ -703,7 +703,7 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
             && self.source_input.borrow().is_pending()
         {
             return Err(String::from(
-                "the source injection remains pending under mailbox pressure; no VM work is ready",
+                "the source injection remains pending under mailbox pressure; no execution work is ready",
             ));
         }
         Ok(progressed)

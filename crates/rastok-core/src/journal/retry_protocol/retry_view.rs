@@ -90,7 +90,7 @@ pub struct Settlement<'a> {
     pub intent: &'a CallOpen,
     /// Terminal re-derived from the validated completion/timeout/abandonment.
     pub case: &'a str,
-    /// Explicit VM logical instant accepted with this winning closure.
+    /// Explicit Execution logical instant accepted with this winning closure.
     pub closed_at: i64,
     /// Exact original unsealed deadline, or absence for a final/non-delayed attempt.
     pub schedule: Option<&'a Deadlines>,

@@ -328,7 +328,7 @@ impl Recording {
     /// timestamp for the selected record's commit.
     ///
     /// # Errors
-    /// A prefix outside the retained run or a failed journal/VM validation.
+    /// A prefix outside the retained run or a failed journal/Execution validation.
     pub fn inspect(&self, through: usize) -> Result<(MemJournal, Execution<'_>), Error> {
         let prefix = self
             .records

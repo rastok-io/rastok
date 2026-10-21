@@ -2,7 +2,7 @@
 //!
 //! This module is deliberately private: protocol-library and async-runtime
 //! types stop here. The synchronous Driver boundary exchanges only Rastok
-//! facts with the VM.
+//! facts with the Execution.
 
 // H3 lands the physical seam, H4 attaches HttpClient and H5.1 attaches
 // HttpServer ack over H1-H2. Keeping the remaining H5-H6 session machinery

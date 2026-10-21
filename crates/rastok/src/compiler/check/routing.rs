@@ -220,7 +220,7 @@ impl Checker<'_, '_> {
 
     /// Every boundary convention actually used by an edge becomes an
     /// ordinary table row. Syntax may still abbreviate `.`, but the plan and
-    /// VM never infer a port from that spelling.
+    /// Execution never infer a port from that spelling.
     pub(super) fn materialize_boundary_ports(&mut self, graph: &mut Graph) {
         let mut used = Vec::new();
         for edge in &graph.edges {

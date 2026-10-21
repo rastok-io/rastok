@@ -50,7 +50,7 @@ Capability and ownership enter no graph, journal, diagnostic or accounting fact.
 
 Every selection starts paused at B0, before admission. Controls are:
 
-- **Next transition**: exactly the next authored action or ready VM transition,
+- **Next transition**: exactly the next authored action or ready Execution transition,
   not both (`advance one recorded transition`).
 - **Next action**: one authored action to its effect, available when the
   previous action is quiescent (`run one authored action to its effect`).
@@ -63,7 +63,7 @@ Every selection starts paused at B0, before admission. Controls are:
   per second; Pause stops buffered playback even after the engine completes.
 - **Finish**: run to completion without pedagogical pacing.
 - **Retry**: available only when a refusal still owns retryable reserved work.
-- **Reset**: fresh VM, mock world, journal and clock for the selected scenario.
+- **Reset**: fresh Execution, mock world, journal and clock for the selected scenario.
   Reloading the browser only reconnects to the recorded session; it is not Reset.
 
 At B0 the status reads `Paused before admission · Next transition advances
@@ -100,14 +100,14 @@ An already paused simulation does not poll its scripted world spontaneously.
 An in-progress logical-time advance can pause between its real transitions,
 including while a scripted Call is open. Continuing resumes the same time
 sweep; viewing the pause does not poll or advance it.
-Discovering that no VM work is ready is not an extra user step: the same Step
+Discovering that no execution work is ready is not an extra user step: the same Step
 request advances to the next authored action without publishing an empty frame.
-Its status says `no VM work ready · advanced to A4` (using the actual action).
+Its status says `no execution work ready · advanced to A4` (using the actual action).
 
 ## 3. Read-only time navigation
 
 Back, the transition slider and history rows select an immutable recorded frame.
-They do not rerun a producer, change the live VM, fork a journal or edit DATA.
+They do not rerun a producer, change the live Execution, fork a journal or edit DATA.
 Forward playback can revisit recorded frames. Return to live names the current
 session/head. Mutating controls are disabled in history with a reason.
 
@@ -236,7 +236,7 @@ The App input pin is topology, not an Inject button.
 For a source-Connector fixture, the inspector names `listener.out`, not
 `App.out`, and uses that source's resolved type and policy. Once admitted,
 the root is inspected from INGRESS (`history.sources`), without pretending it
-was another VM delivery or emission transaction. Tests: the pending-injection
+was another Execution delivery or emission transaction. Tests: the pending-injection
 projection test and the HttpServer source case in `browser.test.cjs`.
 If the plan contains classified data, the raw source DATA is withheld in both
 views: a generic Contract pin may precede the first classified schema. This is

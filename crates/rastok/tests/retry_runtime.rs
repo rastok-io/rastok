@@ -802,7 +802,7 @@ graph app : App {
     );
     assert!(
         restored.outputs().is_empty(),
-        "refused recovery must leave the VM unchanged"
+        "refused recovery must leave the Execution unchanged"
     );
 }
 

@@ -163,7 +163,7 @@ compare them to the bridge-generated scenario's.
 - **Observation anywhere** : `expect` may target any port, read-only.
 - **Steps run sequentially, each drains to a stable state**
   (execution-model §8) — an expectation never reads an in-between.
-  Interactive stepping preserves the batch world's order: drain ready VM
+  Interactive stepping preserves the batch world's order: drain ready Execution
   transactions, retain outbound acknowledgements, then offer the next scripted
   ingress. A Session with a just-retained opening or frame is not yet at rest
   just because no Operator is ready; confirm a no-progress world poll before
@@ -178,7 +178,7 @@ needed. The fixture may supply `meta.ext` explicitly; absent HTTP metadata is
 not invented. `meta.app` and `meta.sys` remain forbidden fixture writes.
 
 The source path and sequence enter the ordinary `IngressProposal`.
-`RuntimeBindings` proves ownership; VM admission reserves every destination
+`RuntimeBindings` proves ownership; Execution admission reserves every destination
 and commits INGRESS before the Lab receives the `InboundCallId`. The Lab
 then reports `Completed { status: 202 }`; the core commits the ordinary
 correlated `l:reply` transaction and `exit`. `expect listener.out` reads the
@@ -350,7 +350,7 @@ expect "charged exactly once" ledger.in count == 1 …       // optional label, 
   narrowing. Pinning the port type gives the predicate that precise type.
   This is a check-time ergonomics rule, never a runtime fallback from an
   unresolved validated-plan port (the latter is categorically forbidden).
-- **Supervision is not a port observation.** A VM fault currently fails the
+- **Supervision is not a port observation.** An Execution fault currently fails the
   scenario; the scenario language has no positive `expect fault` form yet.
   A future supervision slice may add one explicitly, but it must not recreate
   a synthetic `err` producer or graph envelope.

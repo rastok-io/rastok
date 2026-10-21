@@ -5,7 +5,7 @@
 //!   [`Generation`] fences successive lifetimes at that same identity.
 //! - [`crate::runtime::State`] holds private `var` cells per generation.
 //!   Its plan-checked accessors remain in the runtime, not in this module.
-//! - `LiveInstance` is the crate-private runtime state reconstructed by the VM.
+//! - `LiveInstance` is the crate-private runtime state reconstructed by the Execution.
 //! - [`crate::journal::instance_stop`] records exact-generation closure.
 //!
 //! ```text
@@ -468,7 +468,7 @@ pub enum Lifetime {
 
 /// Runtime state for one selected instance generation. Its instance-scoped
 /// values and resolved settings are immutable; activity, residual deliveries
-/// and lifecycle phase change as the VM processes committed records.
+/// and lifecycle phase change as the Execution processes committed records.
 #[derive(Debug, Clone)]
 pub(crate) struct LiveInstance {
     pub(crate) owner: node::NodeIndex,

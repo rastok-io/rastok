@@ -122,7 +122,7 @@ attested in the run header before use. An unused named alias may describe
 `@secret` data, but attaching it to any source-executable schema site refuses
 at check with `E-CHECK-DEFERRED`. A later externalization protocol may replace
 clear input with a reference before the causal commit and thereby open that
-gate. VM boot retains the same refusal for foreign or forged packages; it is
+gate. Execution initialization retains the same refusal for foreign or forged packages; it is
 defense in depth, not a delayed source-language judgement.
 
 ### 3.3 `@personal`
@@ -237,7 +237,7 @@ those tariffs.
 | codec round-trip | preserve only through a policy-compatible boundary | preserve only with exact logical meaning |
 
 The hosted checker derives the output table. Categorical validation derives it
-again from canonical operations and requires equality. The VM never repairs,
+again from canonical operations and requires equality. The Execution never repairs,
 guesses or reinterprets an annotation name.
 
 A3 covers boundary and Node ports, nested-Graph boundaries, owner `val`s,
@@ -260,8 +260,8 @@ security-taint rule and discard accounting meaning before admission.
 
 If the raw plan has no annotation declaration, validation returns the ordinary
 resolved table without walking operation trees. Annotated plans pay the fixed
-derivation once at validation; transactions do no policy reconstruction. VM
-boot caches whether a raw clear-secret site remains in a decoded or forged
+derivation once at validation; transactions do no policy reconstruction. Execution
+initialization caches whether a raw clear-secret site remains in a decoded or forged
 plan and refuses it with `UnsupportedDataPolicy` before journal or state
 mutation. The source checker has already refused that executable use; named
 aliases which are never used remain harmless structural vocabulary. A personal-data site
@@ -333,7 +333,7 @@ a URL.
 
 The same immutable header stores each non-secret boot binding as
 `(EnvironmentName, canonical tagged-value digest)` and each secret binding as
-logical reference/provider coordinate/version. A VM with an absent or
+logical reference/provider coordinate/version. An Execution with an absent or
 type-incompatible binding, or a journal carrying another header, refuses
 before mutation even through the low-level Rust API.
 
@@ -413,7 +413,7 @@ becomes causal. Observation-only cost can never drive a branch.
 The structural observation of a committed record carries correlation already
 owned by causal history: `origin_id`, owner/instance, Connector and a typed
 inbound/outbound Call or Session/write reference. Stream order associates it
-with record order; no second ordinal or placement fact is invented. The VM's
+with record order; no second ordinal or placement fact is invented. The Execution's
 payload-bearing `EnvelopeView` delivery log is a distinct Lab/debugger surface,
 not this retained accounting plane.
 
@@ -433,7 +433,7 @@ typed drop counter, without delaying or failing a transaction. Redaction runs
 before formatting; payload content is omitted by default.
 
 The hosted runner exposes structural logs through `--json-logs` on a
-separate thread. Its terminal I/O never runs in the VM producer. Event names
+separate thread. Its terminal I/O never runs in the Execution producer. Event names
 remain `rastok.ingress.committed`, `rastok.transaction.committed`,
 `rastok.call.*` and `rastok.session.*`. The later OpenTelemetry exporter
 still requires exact unsealed timing evidence; it cannot invent span times.
@@ -515,7 +515,7 @@ silently become a monotonic counter. The numerical conversion policy must
 make loss of exact decimal precision explicit; journal values remain exact.
 
 The handoff is bounded and never blocks the semantic producer. Export runs
-outside the VM, with bounded buffering/retries, observable loss and a qualified
+outside the Execution, with bounded buffering/retries, observable loss and a qualified
 shutdown policy. Re-export/restart cursor behavior must be defined before
 shipping, not advertised as exactly-once delivery. Diagnostic replay must not
 silently add old measurements to live production series.

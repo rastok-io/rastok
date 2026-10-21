@@ -1503,7 +1503,7 @@ lab g {
 fn a_connector_reply_holds_the_destination_pin() {
     // Process(lines).out is text. An int destination is impossible
     // independently of any driver outcome, so B2 rejects the edge
-    // before a VM or journal exists.
+    // before an Execution or journal exists.
     let source = r#"
 graph g : App {
   input in: variant

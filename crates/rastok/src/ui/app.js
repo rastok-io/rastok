@@ -116,7 +116,7 @@ async function refreshSnapshot() {
     setCommandStatus(commandOrigin?.command === "next-scenario-action"
       ? `${transitions} transition${transitions === 1 ? "" : "s"} · authored action reached its effect`
       : commandOrigin?.command === "step" && commandOrigin.quiescent && advancedAction
-        ? `no VM work ready · advanced to A${action}` : "");
+        ? `no execution work ready · advanced to A${action}` : "");
     commandOrigin = null;
   }
   if (!currentSnapshot) {

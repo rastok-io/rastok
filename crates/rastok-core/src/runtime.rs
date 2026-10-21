@@ -3,7 +3,7 @@
 //! Under [`execution-model.md`], each instance executes one transaction at a
 //! time. This module provides bounded mailboxes and evaluates handlers against
 //! a private working copy of their state. Preparation returns a record containing
-//! consumed positions, state changes and emissions in authored order. The VM
+//! consumed positions, state changes and emissions in authored order. The Execution
 //! commits that record before applying its state changes or delivering outputs.
 //!
 //! [`execution-model.md`]: https://github.com/rastok-io/rastok/blob/main/docs/spec/execution-model.md
@@ -48,7 +48,7 @@ pub trait GuestRunner {
 }
 
 /// A runtime fault of one transaction. Atomicity holds: a faulted
-/// transaction changed nothing. This is supervision output from the VM,
+/// transaction changed nothing. This is supervision output from the Execution,
 /// never a payload emitted on an Operator port.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Fault {
@@ -383,7 +383,7 @@ impl Mailboxes {
 
     /// The next canonically ordered unclaimed mailbox identity after
     /// `after`, when its instance is runnable. Returning one key at a time
-    /// lets the VM skip an incomplete join without allocating a snapshot of
+    /// lets the Execution skip an incomplete join without allocating a snapshot of
     /// every mailbox on the ordinary one-delivery hot path.
     pub(crate) fn next_runnable_key(
         &self,
@@ -706,7 +706,7 @@ impl<'plan> TransactionPreparer<'plan> {
         }
     }
 
-    /// A transaction preparer at one explicit logical instant. The VM supplies this from
+    /// A transaction preparer at one explicit logical instant. The Execution supplies this from
     /// its deterministic scheduler; the evaluator never reads an ambient
     /// clock. Every expression in one firing therefore sees the same value.
     #[must_use]
@@ -745,7 +745,7 @@ impl<'plan> TransactionPreparer<'plan> {
     }
 
     /// Fires with the immutable bindings carried by the selected instance
-    /// bundle. The VM uses this path; the public four-argument form remains a
+    /// bundle. The Execution uses this path; the public four-argument form remains a
     /// useful low-level probe for plans without instance values.
     pub(crate) fn fire_with_bindings(
         &self,
@@ -2845,7 +2845,7 @@ fn from_meta_value(value: &MetaValue) -> Value {
 }
 
 /// The ONE conformance rule between a metadata value and a schema
-/// type (D-2026-08-10-1) — used at runtime zone writes, at the VM
+/// type (D-2026-08-10-1) — used at runtime zone writes, at the Execution
 /// ingress, and mirrored by the checker's static list. `variant` admits
 /// every representable leaf.
 #[must_use]

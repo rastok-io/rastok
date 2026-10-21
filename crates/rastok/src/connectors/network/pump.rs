@@ -328,7 +328,7 @@ impl<W, C, E> NetworkRuntime<W, C, E> {
     }
 }
 
-/// Synchronous VM-facing handle for one client or server network pump.
+/// Synchronous execution-facing handle for one client or server network pump.
 pub(super) struct HostedNetworkEngine<W, C, E> {
     work: Option<mpsc::Sender<Budgeted<W>>>,
     control: Option<mpsc::Sender<C>>,

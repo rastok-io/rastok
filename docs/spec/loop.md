@@ -246,7 +246,7 @@ An Operator/Graph must declare that output with a tagged union accepting
 `LoopExpired { last_state: EntryType }`. No output is synthesized. A Call's
 existing terminal pin is extended by the checker; its base Driver Contract
 still cannot produce the manager-only case. The plan carries the resolved
-target and complete type, independently validated; the VM never tests a port
+target and complete type, independently validated; the Execution never tests a port
 spelling. Ordinary output disposition applies:
 
 ```rastok

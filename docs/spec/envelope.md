@@ -610,7 +610,7 @@ Three principles drove every inclusion and every removal :
 2. **No hidden clock in the envelope or evaluator.** A readable `created_at`
    on every envelope was a per-message ambient clock leak, so it was removed
    (its regulatory purpose moved to the journal's `committed_at`). A handler
-   may instead call `now()`: the VM supplies one explicit logical timestamp
+   may instead call `now()`: the Execution supplies one explicit logical timestamp
    for the whole firing and seals it in that transaction when observable. The
    evaluator never reads the host clock, and the instant is not copied into
    `meta.sys`. A `Timer` produces ordinary one-shot or periodic timestamp

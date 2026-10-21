@@ -516,7 +516,7 @@ cannot diverge on bytes for the same journal :
   - `status = 2 closed`, `closure = response` → `[1, outputs]` (a
     2-element array). `outputs` is an ordered array of
     `[port_text, data_form]` drafts. It contains exactly one `exit`, last;
-    no draft has an envelope id yet because the VM constructs every envelope in
+    no draft has an envelope id yet because the Execution constructs every envelope in
     the following atomic connector TRANSACTION.
   - `status = 2 closed`, `closure = timeout` → `[2]` (a **1-element**
     array — no second element, never `[2, null]` ; `l:timeout` emits

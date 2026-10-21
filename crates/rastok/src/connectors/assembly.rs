@@ -40,7 +40,7 @@ fn add(
 /// root is supplied. Network families follow Cargo capabilities:
 /// `hosted-http12`, `hosted-http3`, `hosted-websocket`, or their
 /// `hosted-network` union. A plan requiring an omitted family is rejected by
-/// [`super::RuntimeBindings`] before VM construction.
+/// [`super::RuntimeBindings`] before Execution construction.
 ///
 /// # Errors
 ///

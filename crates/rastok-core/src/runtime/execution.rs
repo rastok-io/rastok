@@ -90,10 +90,10 @@ pub enum ExecutionFault {
         location: String,
     },
     /// The journal run header does not carry the exact deployment facts with
-    /// which this VM was booted. No causal mutation may cross that split.
+    /// which this Execution was booted. No causal mutation may cross that split.
     DeploymentAttestationMismatch,
     /// One categorical boot reference has no compatible resolved binding.
-    /// The VM cannot defer this failure until a later Driver effect.
+    /// The Execution cannot defer this failure until a later Driver effect.
     MissingDeploymentBinding {
         /// Exact Connector setting that requires the binding.
         location: String,
@@ -374,7 +374,7 @@ pub struct InboundCallPollReport {
     pub queued: usize,
     /// Duplicate terminal events observed after one was already retained.
     pub discarded: Vec<InboundCallObservation>,
-    /// Events matching no admitted Call in this VM.
+    /// Events matching no admitted Call in this Execution.
     pub uncorrelated: Vec<InboundCallObservation>,
     /// Events refused by the resolved Connector output table. The Call stays
     /// open so the Driver or a later timeout may still terminate it.
@@ -4155,7 +4155,7 @@ impl<'plan> Execution<'plan> {
         // An Operator's declared `err` is an ordinary domain-result port,
         // close to the E in `I -> Result<R, E>`. Engine/evaluation faults are
         // outside that contract: the transaction stays uncommitted and the
-        // VM reports the fault to supervision.
+        // Execution reports the fault to supervision.
         let application = self.loop_application(instance, delivery);
         let mut outcome = match &application {
             None => executor.fire_with_bindings(slot, instance, delivery, &state, values),
@@ -6037,7 +6037,7 @@ impl<'plan> Execution<'plan> {
             };
             let selected = match target_site {
                 // Boot settings are consumed once by the bound Driver. They
-                // never become per-instance Values inside the semantic VM.
+                // never become per-instance Values inside the semantic Execution.
                 EvaluationSite::Instance => *site == EvaluationSite::Instance,
                 EvaluationSite::Invocation => *site == EvaluationSite::Invocation,
                 EvaluationSite::Plan | EvaluationSite::Boot => false,

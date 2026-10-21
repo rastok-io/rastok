@@ -4632,7 +4632,7 @@ on in {
     vm.accept_input(&mut journal, submission("salut")).unwrap();
     let error = vm
         .run_ready(&mut journal)
-        .expect_err("a failed narrowing is a VM fault, not a domain result");
+        .expect_err("a failed narrowing is an Execution fault, not a domain result");
     assert!(matches!(error, ExecutionFault::Fault(_)), "{error:?}");
     assert!(
         journal.records().iter().all(|record| !matches!(
@@ -5559,7 +5559,7 @@ graph app : App {
         let report = vm.poll_drivers(&mut journal, &mut world).unwrap();
         assert_eq!(
             report.settled, 2,
-            "both winners must reach the VM exactly once"
+            "both winners must reach the Execution exactly once"
         );
         assert!(report.discarded.is_empty());
         assert_eq!(

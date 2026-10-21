@@ -511,7 +511,7 @@ and non-Unix physical supervision are not claimed.
 | Instances | one source per declared Node instance; no implicit `system_clock` Node exists |
 | Journal / sim | firings = INGRESS records; in simulation, driven by `advance` |
 
-`Timer` is not the VM's clock and is not required for `now()`, timeouts,
+`Timer` is not the Execution's clock and is not required for `now()`, timeouts,
 lifetimes, join eviction or Loop delay. Those mechanisms consume the explicit
 logical timeline and generic dated-event queue directly. Declare a `Timer`
 only when the graph itself needs an event because time passed. An embedded

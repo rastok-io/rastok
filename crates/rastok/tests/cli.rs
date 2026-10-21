@@ -233,7 +233,7 @@ fn simulate_ui_starts_paused_and_retains_the_completed_run_until_close() {
     assert_eq!(
         transaction_observation_count(&after_action),
         transactions_before_action,
-        "the initial Step applies one authored action without also running a VM transaction"
+        "the initial Step applies one authored action without also running an Execution transaction"
     );
     assert_eq!(
         after_action["topology"]["activity"]["kind"],
@@ -275,7 +275,7 @@ fn simulate_ui_starts_paused_and_retains_the_completed_run_until_close() {
     assert_eq!(
         transaction_observation_count(&after_step),
         transactions_before + 1,
-        "one Next transaction command commits one VM transaction"
+        "one Next transaction command commits one Execution transaction"
     );
     assert_eq!(after_step["topology"]["activity"]["kind"], "lifecycle");
     assert_eq!(after_step["topology"]["activity"]["ordinal"], 2);
@@ -286,7 +286,7 @@ fn simulate_ui_starts_paused_and_retains_the_completed_run_until_close() {
     );
     assert_eq!(
         after_step["topology"]["activity"]["node"], "",
-        "the first VM transaction starts the root App instance"
+        "the first Execution transaction starts the root App instance"
     );
     let latest_record = after_step["history"]["records"]
         .as_array()
@@ -319,7 +319,7 @@ fn simulate_ui_starts_paused_and_retains_the_completed_run_until_close() {
         assert_eq!(
             transaction_observation_count(&after_step),
             prior_transactions + 1,
-            "each click still advances exactly one VM transaction"
+            "each click still advances exactly one Execution transaction"
         );
     }
     assert_eq!(after_step["topology"]["activity"]["node"], "relay");

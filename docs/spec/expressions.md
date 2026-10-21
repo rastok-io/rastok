@@ -111,7 +111,7 @@ on in {
 }
 ```
 
-Both calls above are equal. The VM fixes the value before guard selection and
+Both calls above are equal. The Execution fixes the value before guard selection and
 keeps it unchanged until the firing either commits or faults. A hosted runner
 maps one wall-clock origin plus monotonic elapsed time onto this logical
 timeline; a Lab controls the same value with its origin and `advance` steps.

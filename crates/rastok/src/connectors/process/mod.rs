@@ -45,7 +45,7 @@ struct ProcessSettings {
 /// The plan-side half of one Process binding. A fully static connector keeps
 /// its resolved settings directly. An instance-bound connector keeps the
 /// validated travelling sheet and resolves only the rows whose expressions
-/// the VM has already evaluated into the intent.
+/// the Execution has already evaluated into the intent.
 #[derive(Debug)]
 struct ProcessBinding {
     spec: rastok_core::plan::ConnectorSpec,
@@ -769,7 +769,7 @@ impl<'plan> Process<'plan> {
             }
             .into_completion());
         };
-        // The VM evaluates and type-checks instance rows before `l:start`.
+        // The Execution evaluates and type-checks instance rows before `l:start`.
         // This conversion is the Driver's typed belt: it never evaluates an
         // expression or supplies a default.
         let settings = binding

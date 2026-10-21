@@ -257,7 +257,7 @@ pub struct SnapshotInput<'a> {
 ///
 /// # Errors
 ///
-/// A JSON serialization failure refuses publication but never changes the VM
+/// A JSON serialization failure refuses publication but never changes the Execution
 /// or journal.
 pub fn snapshot(input: SnapshotInput<'_>) -> Result<UiSnapshot, serde_json::Error> {
     let SnapshotInput {

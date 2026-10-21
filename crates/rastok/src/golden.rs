@@ -926,7 +926,7 @@ fn record_tree(record: &Record) -> Cbor {
 }
 
 /// A completion is raw world material — no envelope identity exists yet.
-/// The VM later constructs every output in one TRANSACTION; this canonical form
+/// The Execution later constructs every output in one TRANSACTION; this canonical form
 /// seals only the ordered `(port, data)` drafts that won the close race.
 fn completion_form(completion: &crate::boundary::Completion) -> Cbor {
     Cbor::Array(

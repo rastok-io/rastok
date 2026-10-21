@@ -427,7 +427,7 @@ remote API complies. Invalid JSON or an incompatible actual body produces
 the existing `DecodeFailed` terminal, with no partial response or fabricated
 measurement. A valid decoded 500–599 still produces its typed `out` and
 `ServerError`. Deserialization precedes the retained completion and Retry disposition.
-The Lab supplies typed responses; the VM rejects malformed native completions
+The Lab supplies typed responses; the Execution rejects malformed native completions
 before journalization rather than repairing them. No general serializer,
 OpenAPI fetch at runtime or wire-schema negotiation is introduced.
 
@@ -470,7 +470,7 @@ field. A contextual write to a union performs its one legal wrapping at
 check/lowering time: for example, `out = 5` targeting `int32 | text` records
 the `int32` branch, and `signal = null` records the null branch of `int32?`.
 The checker refuses zero or several matching branches with `E-PORT-TYPE`.
-The VM and Connector Drivers never infer, repair or re-index a union
+The Execution and Connector Drivers never infer, repair or re-index a union
 discriminant; their final conformance gate only verifies the already wrapped
 value. An already wrapped structural union may cross an ordinary edge only
 when source and target have the identical resolved union type; conversion to
@@ -544,5 +544,5 @@ accounting policy without rewriting a derived verdict into source authority.
 A4 admits personal data only with an attested run-scoped privacy profile.
 Unused aliases may describe `@secret`, but every source-executable use refuses
 at check until field externalization exists; decoded or forged packages retain
-the VM refusal. `secret()` references at declared Driver settings are
+the Execution refusal. `secret()` references at declared Driver settings are
 deployment bindings, not classified payload values.

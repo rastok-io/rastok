@@ -4,8 +4,8 @@ use super::{
     ClosingDeadline, Execution, ExecutionFault, Journal, Obligation, OutboundConnectorBindings,
 };
 
-/// An in-progress advance on one VM. This is a caller-owned control cursor,
-/// not a journal fact or a second timer queue. Do not interleave other VM
+/// An in-progress advance on one Execution. This is a caller-owned control cursor,
+/// not a journal fact or a second timer queue. Do not interleave other Execution
 /// commands until it completes. Batch and interactive execution use this same
 /// sweep, including the settlement poll and same-instant expiry ordering.
 #[derive(Debug)]
@@ -45,7 +45,7 @@ impl TimeAdvance {
         }
     }
 
-    /// Whether the VM reached the target with all intervening work drained.
+    /// Whether the Execution reached the target with all intervening work drained.
     #[must_use]
     pub const fn is_complete(&self) -> bool {
         matches!(self.phase, Phase::Done)
@@ -53,7 +53,7 @@ impl TimeAdvance {
 
     /// Executes one ready transaction, one expiry, or one boundary poll.
     /// Returns false only when no advance work remains. The caller may inspect
-    /// the actual VM and journal after each successful step.
+    /// the actual Execution and journal after each successful step.
     ///
     /// # Errors
     /// The same transaction, expiry or binding refusals as [`Execution::advance_to`].
@@ -67,7 +67,7 @@ impl TimeAdvance {
         loop {
             match &self.phase {
                 Phase::Ready => {
-                    // A recovered VM can already be at an unsealed deadline.
+                    // A recovered Execution can already be at an unsealed deadline.
                     // Resolve that dated frontier before admitting ready
                     // recurrences, just as the uninterrupted sweep does.
                     // Lifecycle work queued by an expiry waits for the rest

@@ -446,11 +446,16 @@ test("transitions have explicit transport names, a first-contact hint and an hon
   await page.locator('[data-command="next-scenario-action"]').click();
   await page.waitForFunction(() => commandOrigin === null && currentSnapshot.scenario.current.quiescent && currentSnapshot.execution.state === 'paused');
   const transitions = Number(await page.locator('#timeline').inputValue());
-  assert.ok(transitions > 1, 'admission includes its intermediate VM transitions');
+  assert.ok(transitions > 1, 'admission includes its intermediate Execution transitions');
   assert.equal(await page.locator('#command-status').innerText(), `${transitions} transitions · authored action reached its effect`);
   await page.locator('[data-command="next-scenario-action"]').click();
   await page.waitForFunction(previous => Number(currentSnapshot.timeline.boundary) === previous + 1 && commandOrigin === null, transitions);
   assert.equal(await page.locator('#command-status').innerText(), '1 transition · authored action reached its effect');
+  const beforeStep = await page.evaluate(() => currentSnapshot.revision);
+  await page.locator('[data-command="step"]').click();
+  await page.waitForFunction(previous => currentSnapshot.revision > previous && commandOrigin === null, beforeStep);
+  const action = await page.evaluate(() => currentSnapshot.scenario.current.next_action_index);
+  assert.equal(await page.locator('#command-status').innerText(), `no execution work ready · advanced to A${action}`);
   await finish(page);
   for (const transition of await bothRunsWaiting(page)) {
     await page.locator('#timeline').fill(String(transition));
@@ -548,7 +553,7 @@ test('scenario actions select their recorded transition and all navigation is ke
   await page.keyboard.press('a');
   await page.waitForFunction(() => commandOrigin === null && currentSnapshot.scenario.current.quiescent && currentSnapshot.execution.state === 'paused');
   const actionHead = Number(await page.locator('#timeline').inputValue());
-  assert.ok(actionHead > 1, 'Next action retains its intermediate VM transitions');
+  assert.ok(actionHead > 1, 'Next action retains its intermediate Execution transitions');
   assert.equal(await page.locator('#command-status').innerText(), `${actionHead} transitions · authored action reached its effect`);
   await capture(page, 'fresh-shortcut-a');
   await page.keyboard.press('ArrowLeft');
