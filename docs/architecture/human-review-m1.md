@@ -1200,6 +1200,128 @@ blocks 2–7 are read on the realigned code, `runtime/execution.rs` and its
 the same evening and closed on 17 October with its applied rework: see
 *Block 4* above. Blocks 2, 3, 5, 6 and 7 remain.
 
+## T5 — The effect boundary and the Driver seam
+
+### `boundary.rs`, `connector.rs`, `connectors/registry.rs` — read from 2026-10-17
+
+**Decisions of 17 October (Yoann).** The lot placements of A-T4-6 and of
+the remainder of A-T4-8 are confirmed: v21, after the opening. The human
+review changes mode for what remains before the freeze: Yoann reads
+skeletons (headers, types, signatures) and judges names, placement of
+concerns and the contributor's path; the bodies are cross-checked by Fable
+and Astra and read line by line by the external Rust reviewer (26–30
+October); the remaining T4 blocks (2, 3, 5, 6, 7) follow that mode. The
+pre-freeze priority is T5 with one T9 Driver as the example, because a
+contributor who wants to add a Connector meets this seam first; the
+"first hour as a stranger" path (T10) follows.
+
+Fable's T5 brief laid out the seam: Contract as compiler data
+(`rastok/src/contract.rs`, the seven standard sheets in `stdlib.rs`),
+semantic ids in core (`connector.rs`: `ContractId`, `ConnectorDirection`,
+`ConnectorExchange`; `connector/call.rs`: `CallSemantics`), the seam itself
+in `boundary.rs` (identities, journaled intents, observations and
+admission, obligations, eleven traits, `DriverPoller`, and the
+standard-library mirror), assembly in the host (`connectors/registry.rs`:
+`ConnectorDriverFactory`, `BoundConnectorDriver`, `DriverRegistry`,
+`RuntimeBindings`), the Drivers of T9 and the Lab mocks, and the two
+consumers (`Execution::step_with_bindings` over
+`&mut dyn OutboundConnectorBindings`; `Worker`'s `Host::poll_input` fed by
+`RuntimeBindings::pump_inbound`). Four structure observations are left to
+confirm during the reading, none a defect: a contributed Connector touches
+the `no_std` core through the mirror the guide's step 1 documents ("the
+small Registry-free core mirror": fourteen functions, five `*Exit` enums,
+seven id constants), so adding a Contract today means a sheet in
+`stdlib.rs`, a mirror in `rastok-core`, a Driver under `connectors/` and a
+conformance profile; `OutboundConnectorBindings` and
+`SessionConnectorBindings` overlap, `RuntimeBindings` implementing both
+with the former delegating to the latter method by method, while a blanket
+impl makes any `CallConnectorDriver` an `OutboundConnectorBindings` for
+tests and replay; five words name one family (`*ConnectorDriver`,
+`*ConnectorBindings`, `BoundConnectorDriver`, `RuntimeBindings`,
+`ConnectorDriverFactory`); the guide's review checklist is the one a
+contributor must be able to tick alone.
+
+Yoann's first comments are names, recorded and verified in the
+[vocabulary ledger](human-review-vocabulary.md) as ⟂ 8a to 8d: `boundary`
+as a catch-all module, the repeated suffix `ConnectorDriver` as a missing
+`driver` module, `*Bindings` reopened against its 12 October settlement
+(Fable recommends keeping the specification's word and stating the sense
+in each trait's first doc line), and "VM" surviving in prose.
+
+**A-T5-1 — "VM" becomes `Execution` in prose, specification first (before
+the freeze, zero bytes).** 77 code comments and 29 specification sentences
+outside `decisions.md` still say "the VM" after lot 1 renamed the type.
+Rewrite the 29 specification sentences and the 77 comments together, with
+the sentence Yoann gave as the model: "consumed by the `Execution` of the
+`ValidatedExecutionPlan`". `decisions.md` is dated and stays. Owner: Astra.
+Lot: before the 23 October freeze, with the documentation touch.
+
+### Connector rework — requested before the freeze, 21 October
+
+**Status: recorded for implementation and review, not implemented.** Yoann
+asks that the complete Connector proposal discussed with Astra enter the
+pre-freeze rework, followed by Fable's review for possible simplifications.
+This scheduling supersedes the 17 October deferral of the **T5 layout**
+questions; it does not reopen the separate post-opening A-T4-6/A-T4-8 work.
+The detailed before/after tables are maintained once in the
+[vocabulary ledger](human-review-vocabulary.md#connector-rework--21-october-before-the-freeze).
+Owner: Astra. Review: Fable, then Yoann for unresolved choices. No calendar
+extension, implementation result or new format number is implied here.
+
+**Protected result.** A contributor can find the standard Connectors, their
+exact Contracts and supported modes, the interfaces their Driver must
+implement, the Lab substitute and the conformance tests without reading a
+mixed execution/Driver module. The DSL author sees a Contract, not the
+libraries or provider selected to implement it. The compiler, independent
+core validator, runtime and generated documentation must agree on the same
+resolved ports, attributes and exchange obligations.
+
+**Agreed direction.** Organize this code under `connector`: physical Drivers
+are under hosted `rastok::connector::drivers`, never top-level `drivers`;
+standard Connector definitions use `connector::stdlib`, not `standard` or
+Rust's `std` module name. The semantic namespace `std/…` is unchanged. Core
+exchange data, Driver interfaces and portable validation stay `no_std`;
+physical I/O, assembly and descriptive documentation stay hosted. One DSL
+Connector name should designate one versioned Contract with checked modes;
+several physical implementations may satisfy that Contract. The exact
+rename tables and implementation choices below remain reviewable before
+coding; no new normative rule is silently written by this ledger.
+
+| Action | Work to do before the freeze | Boundary and acceptance evidence |
+|---|---|---|
+| **A-T5-2 — coherent modules and names** | Split `boundary.rs` into Connector exchange data, Driver interfaces, standard Contract rules and execution-owned polling/obligations. Place hosted implementations under `connector/drivers/`. Apply the vocabulary table and align live prose with A-T5-1. | Mechanical portion: no changed behavior, identity, package, recording or causal reference. No compatibility aliases. Public API remains small and usable from both crates. |
+| **A-T5-3 — one runtime Driver association** | Use `RuntimeDrivers` for the prepared association; consolidate the duplicated outbound Session routing interface. An implementer supplies the relevant per-Driver interfaces, not the global routing table. | Preserve commit-before-effect, admission acknowledgements, backpressure, exact Call/Session ownership, shared duplex state, close-once and no-recall recovery. Prove equivalence before removing the duplicated trait. |
+| **A-T5-4 — one Contract per DSL name, checked modes** | Specify the replacement of Process's two exact ids by one Contract with statically resolved job/Call and service/Session modes. Remove the mode's ContractId override only after that specification is reviewed. | This is **not** a rename: `stdlib.md` §1.1/§3.3 currently require `std/process@4` and `std/process@5`. Inventory all identity/artifact consequences before assigning an id or saving any reference; independently validate the resolved mode and preserve its existing lifecycle and Loop/Retry restrictions. |
+| **A-T5-5 — several implementations of one Contract** | Separate Contract identity from implementation selection and exchange ownership; let the hosted registry select a compatible implementation from explicit configuration, independently for each planned Connector. | Selection is explicit or uniquely determined, never registration order. Qualify two implementations of one Contract in a local test, correlation and instance isolation, and refusal of absent, ambiguous or incompatible implementations before effects. No cloud Driver or plugin loader is part of this action. |
+| **A-T5-6 — documentation from checked definitions** | Expose a standard catalogue and resolved-mode descriptions for humans and LLMs, using the existing Contract/type metadata, concise explanations and executable Lab examples. Update the contributor guide to the new paths and contribution sequence. | Distinguish known Contract, executable mode, Lab support and physical Driver availability. Terminal cases come from resolved output types; generated views do not become a second schema or semantic authority. State the remaining core contribution required for a new Contract honestly. |
+
+**Execution order and review stops.** First review the tables and settle the
+remaining implementation questions in the vocabulary ledger. Then do
+A-T5-2 with A-T5-1, followed by the interface consolidation A-T5-3. Prepare
+and review A-T5-4's specification/identity inventory before implementing its
+Contract movement; A-T5-5 must also remove the current assumption that one
+ContractId implies one Driver object and one exchange kind. Finish A-T5-6
+against the actual qualified interfaces, rather than documenting a target
+as already available. Keep byte-neutral changes separate from any
+identity-bearing Contract change. If cost or evidence threatens the
+freeze, report the remaining action to Yoann; neither silently defer it
+nor weaken the gate.
+
+**Qualification required, not executed by this documentation entry.** Run
+the four AGENTS.md checks, the relevant Driver/Lab/recovery/conformance
+tests and the existing `no_std` and embedded qualification. Keep the
+128 KiB heap and 1 MiB code gates and measure before accepting core growth.
+For the mechanical changes, all current witnesses must remain identical.
+For A-T5-4, enumerate the actual semantic hash, package, recording and
+causal-trace consequences before any reference update; a contract-id
+change cannot be labelled byte-neutral. No test is ignored or weakened.
+
+**Explicit exclusions.** No S3/Azure/GCP implementation: ObjectStorage is
+the long-term substitutability example, not a newly admitted Contract.
+No dynamic plugin loader, native ABI, new parallelism, changes to
+Event/Call/Session semantics, automatic provider fallback or new Driver
+selection syntax is authorized by this entry. No push, tag or publication.
+
 ## Realignment on the Node ontology — decided 2026-10-11
 
 Astra's 11 October proposal, verified by Fable against the code, and

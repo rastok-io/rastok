@@ -8,6 +8,12 @@
 > [D-2026-10-11-1](../spec/decisions.md), before the opening**, together
 > with A-T4-4; the T4 second pass is suspended after its block 1 until then.
 
+**Follow-up status — 21 October.** The closure above describes the
+12 October rename lot. T5 has since reopened the Connector organization
+and its vocabulary. The [pre-freeze Connector rework](#connector-rework--21-october-before-the-freeze)
+below records Yoann's requested direction and Astra's complete proposal
+for Fable's review; it is not an implementation report.
+
 ## Why and how
 
 Yoann's remark (11 October): many terms overlap because they were coined
@@ -849,6 +855,314 @@ boundary rounds" became "execution did not become idle within 64 Driver
 polling passes", and "the boundary round faulted" became "Driver polling
 faulted", while `conformance.rs` keeps the former; no test pins either.
 Still to Yoann from 13 October: bless and the missed derivatives above.
+
+### T5 — 17 October (Yoann), the effect boundary and the Driver seam
+
+Read on the skeleton of `rastok-core/src/boundary.rs` (3 369 lines, flat,
+no section marker), `connector.rs`, `connector/call.rs` and
+`rastok/src/connectors/registry.rs`, from Fable's T5 brief. Names only at
+this stage; the layout questions are recorded for v21.
+
+**⟂ 8a. `boundary` is a catch-all module name.** The file holds six
+concerns: the exchange identities (`CallId`, `InboundCallId`, `SessionId`,
+`SessionWriteId`, `IngressProvenance`), the journaled intents (`CallOpen`,
+`SessionOpen`, `SessionWrite`, `EnvelopeDraft`), the world's observations
+and their admission (`IngressProposal` to `IngressAdmission`, `Response`,
+`Completion`, `SessionObservation`), the scheduler's `Obligation` and
+deadlines, the eleven Driver traits with the `DriverPoller`, and the
+standard-library mirror (fourteen `process_`/`file_`/`network_`/`http_`/
+`websocket_` functions and five `*Exit` enums read by `plan/validation.rs`).
+Yoann's reading: a Connector module should hold the Connector interfaces,
+but `connector` is taken by `ContractId` and versioning. Fable's
+verification: the specification uses *boundary* 247 times in 21 files (the
+effect boundary, the App boundary, "the boundary"), *Driver* 208 times,
+*Connector* as one of the two Executor forms; `driver` is free as a module
+name in both crates. **Proposed:** `boundary` keeps the specification's
+word for the boundary vocabulary (identities, intents, observations,
+admission, obligations); the Driver traits go under a `driver` module (⟂ 8b);
+the standard-library mirror leaves `boundary.rs` — its destination is the
+structure question of the T5 brief, not a name. Layout: v21.
+
+**⟂ 8b. The repeated suffix `ConnectorDriver` names a missing module.**
+`InboundConnectorDriver`, `InboundCallConnectorDriver`,
+`OutboundConnectorDriver`, `CallConnectorDriver`, `SessionConnectorDriver`
+in core; `ConnectorDriverFactory`, `BoundConnectorDriver` in the host
+registry. Rule 6, the existing word first: *Driver* is the specification's
+word (decisions.md: "A **Driver** is one runtime implementation of that
+contract"). **Proposed:** `driver::Inbound`, `driver::InboundCall`,
+`driver::Outbound`, `driver::Call`, `driver::Session` in core;
+`driver::Factory` and `driver::Bound` (or the registry keeps them with the
+short names) in the host. Zero bytes; the host imports the seam through
+twenty-six `use crate::boundary::…` lines that move with it.
+
+**⟂ 8c. `*Bindings`, reopened by the reading.** Settled on 12 October under
+collision 3: `OutboundConnectorBindings`, `SessionConnectorBindings` and
+`RuntimeBindings` stay, in the specification's second sense — decisions.md:
+"A **Binding** is the verified association between a plan Connector and the
+Driver instance that will serve it". Yoann's 17 October reading: the word
+suggests name-to-value bindings, which these are not; the trait reads as
+"the interface for a Driver's outbound calls". Fable's verification: it is
+not one Driver's interface but the routing façade over every bound Driver,
+by exact Node path, for the outbound direction — the type `Execution`
+consumes (`&mut dyn OutboundConnectorBindings`); `RuntimeBindings` is the
+host's complete association. The name says what the thing is (the bound
+Drivers), not what `Execution` does with it. **Fable's recommendation:**
+keep the settled word, specification-grounded, and have the first doc line
+of each trait state the sense ("the Drivers bound to this plan, outbound
+face"); if Yoann reopens, the candidates are `OutboundDrivers`,
+`SessionDrivers`, `BoundDrivers`. The overlap between the two traits
+(`OutboundConnectorBindings` already carries the Session methods that
+`SessionConnectorBindings` repeats, `RuntimeBindings` implementing both and
+delegating one to the other) is a structure question in the T5 brief, not
+a name. **To Yoann.**
+
+**⟂ 8d. "VM" survives in prose after `Vm` → `Execution`.** Settled by
+Yoann on 17 October: comments say `Execution` from now on — "consumed by
+the `Execution` of the `ValidatedExecutionPlan`". Count: 77 mentions of
+"VM" in code comments (18 in `boundary.rs`, 13 in `connectors/registry.rs`,
+10 in `lab.rs`, 6 in `runtime.rs`, 5 each in `execution.rs` and
+`execution/advance.rs`), and 29 in the specification outside
+`decisions.md` (`observability.md` 7, `ui.md` 6, `execution-model.md`,
+`simulation-semantics.md` and `types.md` 3 each, six files once).
+Fable's note: the specification is the semantic authority, so its 29 move
+first or together, else the code's word diverges from the specification's;
+`decisions.md` is dated and stays. Recorded as A-T5-1 in the review ledger.
+
+### Connector rework — 21 October, before the freeze
+
+Yoann requested that this proposal enter the human-review work to do
+**before the freeze**, and that Fable review it for further simplification.
+The actions and qualification order are
+[A-T5-2 through A-T5-6](human-review-m1.md#connector-rework--requested-before-the-freeze-21-october).
+The preceding T5 notes remain the dated record of the discussion; this
+entry replaces their proposed layout and scheduling, including the choice
+to retain `boundary` and the Driver-association `*Bindings` names.
+
+**Status.** The direction and the placement `connector/drivers` and
+`connector/stdlib` are agreed with Yoann. The tables below record the
+requested refactor target, still open to improvements from Fable before
+implementation. They do not claim that the current specification already
+defines one Contract for all Process modes, or that the current registry
+can select several implementations of one Contract. No code, normative
+specification or witness changes in this documentation commit.
+
+#### 1. The model a contributor should read
+
+| Current organization | Target | What stays distinct |
+|---|---|---|
+| One DSL name can select different exact ContractIds: Process job `std/process@4`, service `std/process@5`. | One DSL name designates one versioned Contract; attributes statically select a declared mode. | Job remains an outbound Call; service remains a resident Session. A mode changes the resolved interface/lifecycle, not which unnamed contract the author selected. |
+| `DriverRegistry` admits one factory per ContractId. | Several physical implementations may satisfy a Contract, with checked selection per Connector Node. | Contract identity describes semantics; implementation selection describes the physical service used. |
+| `RuntimeBindings` groups Drivers and correlates Calls/Sessions by ContractId. | `RuntimeDrivers` associates each Node and open exchange with the selected implementation. | Two implementations of the same Contract must never receive each other's responses, writes or closures. |
+| Contract definitions, core rules, Driver implementations and contributor documentation have different entry points. | A standard catalogue links the checked Contract, its modes, available Drivers, Lab behavior and conformance fixture. | Knowing a Contract does not imply that a real Driver is installed or needed for simulation. |
+
+The resolved Contract declares direction separately from exchange kind:
+Event, Call or Session. An Event has no per-event terminal obligation; an
+inbound Call does. The response to an outbound Call closes that existing
+Call, not a new ingress root. A Session carries many messages and one
+terminal lifecycle, not one Call per message. Semantic Connector state is
+journal-owned; process/socket/pool state belongs to the Driver.
+
+ObjectStorage is the motivating **future** example: an S3, Azure Blob or
+GCP implementation could implement the same Contract only if each meets
+its actual guarantees. Provider-specific operations cannot be silently
+accepted or weakened. Provider/resource/credential selection may be
+deployment configuration; a requirement that affects semantics belongs to
+the Contract and checked program. Sharing a Contract does not make
+different providers' data, outcomes or traces equal. No ObjectStorage
+Contract or cloud implementation is added by this work.
+
+#### 2. Module responsibilities
+
+Paths in this table are relative to each crate's `src/`. They group
+responsibilities, not one file per type. Existing cohesive modules stay
+together where the split buys nothing.
+
+| Current location / responsibility | Target location | Reason |
+|---|---|---|
+| Core `boundary.rs`: exchange identities, requests, completions, ingress proposals and observations | Core `connector/exchange.rs` | Data exchanged between the Driver and execution, without polling or scheduling policy. |
+| Core `boundary.rs`: per-Driver traits and the execution-facing Driver routing interface | Core `connector/driver.rs` | The interfaces a Driver implements and the interface execution consumes, documented separately. |
+| Core `boundary.rs`: Process/File/HTTP/WebSocket type and completion rules; standard ids in `connector.rs` | Core `connector/stdlib/` | Portable standard Contract rules used by Registry-free validation. The semantic namespace remains `std/…`. |
+| Core `boundary.rs`: `DriverPoller`, `PollBatch`, `PollFault` | Core `runtime/execution/driver_polling.rs` | Execution orchestration: send committed requests, collect responses, settle journal facts. Not a physical Driver implementation. |
+| Core `boundary.rs`: `Obligation`, `ClosingDeadline`, `InstanceDeadline` | Existing core `runtime/execution/timing.rs` | Scheduler-owned obligations live with execution timing, not the contributor's Driver data catalogue. |
+| Hosted `connectors/`: physical implementations, assembly, manifest and private network support | Hosted `connector/drivers/` | These are Connector Drivers, not general-purpose system drivers. No top-level `rastok::drivers`. |
+| Hosted `connectors/registry.rs`: factory registry and runtime association mixed in one file | Hosted `connector/drivers/registry.rs` and `connector/drivers/runtime.rs` | Registry = available implementations; runtime association = the selected objects and exchange ownership for a plan. |
+| Connector definitions within hosted `contract.rs` and `stdlib.rs` | Hosted `connector/contract.rs` and `connector/stdlib/` | Descriptive Contract definitions/catalogue, selectors, attributes and checked standard entries are discoverable under Connector. |
+| Hosted `conformance.rs` | Hosted `connector/drivers/conformance.rs` | A Driver implementer finds the verification harness beside the implementation interfaces and factories. |
+
+Use **`stdlib`**, not `standard` or `std`, for these module names: it
+identifies the standard library without conflicting with Rust's `std`,
+particularly in the `no_std` crate. Do not move the non-Connector parts of
+`contract.rs`/`stdlib.rs` (frontends, annotations and other language
+definitions) just to make the directory tree uniform.
+
+The hosted `connector` module exposes the shared core types and adds
+hosted definitions/implementations; it does not duplicate the types.
+These deliberate cross-crate exports are not aliases preserving the old
+`boundary` or `connectors` paths. The core never depends on hosted I/O,
+the compiler catalogue or generated documentation. Its independent
+Contract checks and the catalogue parity tests remain required.
+
+`Supervisor` and `LifecycleObservation` currently have no caller in the
+Rust crate/spike sources inspected for this proposal. Review their removal
+separately instead of relocating an unused public abstraction by default;
+this is not authorization to add a supervision system.
+
+#### 3. Contract vocabulary
+
+| Before | Proposed after | Meaning |
+|---|---|---|
+| `ConnectorIdError` | `ContractIdError` | Invalid versioned Contract identifier. |
+| `ConnectorExchange` | `ExchangeKind` | Event, Call or Session; not direction. |
+| `contract::Profile` | `ContractMode` | A named, statically selected mode of a Contract. |
+| `ProfileSelector` | `ModeSelector` | The attribute and default selecting that mode. |
+| `ProfileSupport` | `ModeSupport` | Checker/execution support for a declared mode, not availability of a physical Driver. |
+| `SheetDefect` | `ContractValidationError` | A malformed Contract definition. |
+| `ProfileProtocol` with an overriding `id` | Direction and exchange facts of the selected mode, without another ContractId | **Model change**, only after the Process Contract specification and identity inventory are reviewed. The final data layout still needs review. |
+
+Keep `ContractId`, `ConnectorContract`, `ContractCatalog`,
+`ConnectorDirection`, `PortContract`, `AttributeSpec`, `PortTypeRule` and
+`CallSemantics`. Do not rename deployment profiles or JSON policies when
+renaming the Contract's modes. The new words describe the same rules,
+except for the explicitly identified ContractId consolidation.
+
+#### 4. Driver interfaces
+
+Here `driver::` means core `connector::driver`, exposed by the hosted
+crate as well; `drivers::` means hosted `connector::drivers`.
+
+| Before | Proposed after | Implemented or used by |
+|---|---|---|
+| `InboundConnectorDriver` | `driver::Ingress` | Driver proposing incoming Events, Calls or Session messages. It is not an Event-only trait. |
+| `InboundCallConnectorDriver` | `driver::InboundCall` | Driver returning responses or timeouts for inbound Calls. |
+| `CallConnectorDriver` | `driver::OutboundCall` | Driver executing outbound Calls. |
+| `SessionConnectorDriver` | `driver::Session` | Driver opening, writing, closing and observing Sessions. |
+| `OutboundConnectorDriver` | `driver::Outbound` | The outbound Call/Session interfaces exposed by one Driver object. |
+| `BoundConnectorDriver` | `driver::Driver` | One implementation object exposing its supported ingress/outbound interfaces over shared physical state. Moving this generic trait into core must introduce no hosted dependency. |
+| `ConnectorDriverFactory` | `drivers::DriverFactory` | Hosted construction of a checked implementation object. |
+| `OutboundConnectorBindings` | `driver::OutboundDrivers` | Execution's routing interface to all selected outbound Drivers, not a trait each individual Driver must implement. |
+| `SessionConnectorBindings` | Remove after consolidation into `driver::OutboundDrivers` | The existing outbound routing trait already repeats its Session methods. Do not rename two redundant interfaces and keep both. |
+| `RuntimeBindings` | `drivers::RuntimeDrivers` | Plan-to-Driver associations and exact exchange ownership. |
+
+Keep `DriverRegistry`, `DriverManifest` and the concrete Driver names.
+Keep `expr::Bindings` and `BootBindings`: those really are name-to-value
+bindings. The semantic association called a Driver binding may still be
+described as such in the specification; removing `Bindings` from these
+Rust type names does not remove the association.
+
+Implementers supply only the interfaces required by the resolved
+Contract. Do not replace them with one large trait full of optional
+methods. A bidirectional Driver exposes views over the **same object**;
+it must not accidentally construct two unrelated Session states. The
+runtime association's responsibility remains routing, correlation and
+ownership, not protocol implementation.
+
+#### 5. Exchange data and method names
+
+| Before | Proposed after | Exact meaning |
+|---|---|---|
+| `Response` | `CallResponse` | A response correlated with an outbound CallId. |
+| `BoundaryObservation` | `ClosedCall` | A Call closure already accepted by the journal, awaiting the Connector transaction; not an arbitrary unvalidated Driver response. |
+| `RetainedProposal` | `PendingIngress` | A Driver-local handle with an ingress proposal awaiting an admission decision. |
+| Private `ScriptedConnectorProtocol` | Private `CallProtocol` | Pure request/completion rules shared by real Drivers and Lab implementations, not a script-only protocol. |
+| `InboundConnectorDriver::proposal` | `driver::Ingress::poll_proposal` | Poll for an incoming proposal. |
+| `InboundConnectorDriver::decide` | `driver::Ingress::notify_admission` | Tell the Driver execution's admission result; the Driver does not decide admission. |
+| `CallConnectorDriver::events` | `driver::OutboundCall::poll_responses` | Poll outgoing-Call responses. |
+| `InboundCallConnectorDriver::events` | `driver::InboundCall::poll_completions` | Poll inbound-Call response/timeout completion observations. |
+| `SessionConnectorDriver::session_events` | `driver::Session::poll_observations` | Poll Session observations. |
+| `CompletionCheck::admit` | `CompletionCheck::check` | Validate a completion, without admitting or committing it. |
+| `ConnectorDriverFactory::connector_id` | `drivers::DriverFactory::contract_id` | Name the implemented Contract, not a Connector Node. |
+| `ConnectorDriverFactory::bind` / `bind_with_boot` | `drivers::DriverFactory::create` / `create_with_boot` | Construct prepared Driver objects under the existing no-effect-before-admission constraints. |
+| `RuntimeBindings::try_new` | `drivers::RuntimeDrivers::prepare` | Resolve and check plan associations before execution/effects. |
+
+Keep `IngressProposal`, `IngressSequence`, `IngressProvenance`,
+`AdmittedIngress`, `IngressRejection`, `EnvelopeDraft`, `PreparedRequest`,
+`Completion`, `CallId`, `SessionId`, `CallOpen`, `SessionOpen`,
+`SessionWrite`, `DriverPoller`, `PollBatch` and `PollFault`.
+`close_session`, `abort_session` and `release_session` also stay distinct:
+orderly closure, cancellation and physical-resource release are different
+operations. Review derived names and doc comments with their main type;
+do not leave a renamed API explained using the removed name.
+
+The private `FamilyRequirement`/`BoundFamily` names and `CrossFamily*`
+routing errors need a site-by-site pass during registry restructuring:
+an incompatible Contract and the wrong owning implementation are no
+longer interchangeable. Do not mechanically replace both by the same
+word or introduce Family as a new semantic category.
+
+#### 6. Several implementations, without another semantic identity
+
+| Current constraint | Target rule | Evidence needed |
+|---|---|---|
+| Factory uniqueness is keyed by ContractId. | The registry can describe several implementations of the same Contract and the modes each supports. `DriverName` is the proposed hosted configuration name, not a journal-derived id. | Selection refuses absence, incompatibility and ambiguity before effects. Registration order is not a fallback. |
+| One Contract group has one exchange kind. | Selection also checks the resolved mode/direction/exchange for each Node. | Process job and service can coexist under one Contract without erasing their distinct lifecycles. |
+| Call/Session ownership maps point to a ContractId. | Every open exchange routes back to its exact selected implementation. | Interleave two implementations of the same Contract; no response, Session write, cancellation or close crosses ownership. |
+| All Nodes of a Contract share its bound group. | Associate by planned Node and permit intentional sharing of a Driver object/pool where valid. | Neither a new object per Node nor one object per Contract is imposed universally. Preserve per-instance isolation. |
+| Manifest describes ContractId and roles. | Describe implementation identity and the Contract modes/capabilities it actually satisfies. | The advertised support and the object's exposed interfaces agree before execution. |
+
+The exact selection configuration, manifest representation and private
+storage layout remain to be reviewed. No new DSL attribute is invented
+here. Semantic requirements are checked against the Contract; deployment
+may choose among equivalent implementations. Physical selection must not
+enter causal identity, and cannot weaken the Contract or change the
+deterministic admission/polling order of an existing deployment. Recovery
+must restore correct ownership without repeating an external operation.
+No dynamic loader, stable native ABI or public execution-slot vocabulary
+is needed to demonstrate this with two local test implementations.
+
+#### 7. Self-documentation and the implementer's path
+
+| Information to expose | Source of truth |
+|---|---|
+| DSL name, exact ContractId, declared modes | Contract definition and mode selector. |
+| Effective ports, types, direction, exchange kind and cardinality | The same checked definitions used by compilation and independent core validation. |
+| Required/defaulted attributes, domains and evaluation phase | Existing attribute declarations, not a second JSON schema system. |
+| Terminal cases and whether execution or the Driver produces them | Resolved output types and Contract completion rules; no parallel error-set catalogue. |
+| Meaning, limits and a small scenario per mode | Concise descriptions beside definitions and executable, tested Lab examples. |
+| Check support, Lab support and installed real implementations | Distinct checks over mode support, Lab availability and the Driver registry/manifest. |
+| Conformance evidence and named untested cases | The existing Driver test fixtures and results, not an assertion that every known case was exercised. |
+
+Produce human-readable and machine-readable views from this material;
+the exact CLI/export presentation is not frozen by this entry. An LLM
+writing a scenario must be able to distinguish a declared-only mode from
+one that actually simulates, and simulation must not require an absent
+physical Driver. Documentation does not become a second type system or
+runtime authority.
+
+The contributor path is: read the standard catalogue → choose an existing
+Contract or specify a new one → implement only its required interfaces →
+register the implementation → supply its Lab and conformance fixtures →
+run the documented checks. For an existing Contract, a new physical
+implementation should not require a new DSL name or editing `Execution`.
+For a **new Contract**, current M1 still requires portable core rules and
+Registry-free validation: the new guide must show that work, not imply
+that a hosted descriptor dynamically teaches the core new semantics.
+
+#### 8. Review before implementation
+
+Fable is asked to check the proposal against the actual Contract, Driver,
+registry and Lab code, with particular attention to fewer concepts and
+smaller public interfaces. Concrete remaining questions:
+
+1. Is the per-Driver / all-Drivers distinction clear, particularly
+   `driver::Driver` versus `driver::OutboundDrivers`, and is any proposed
+   wrapper or split unnecessary?
+2. What is the smallest checked mode representation that unifies Process
+   identity without weakening Call/Session, Closing, Loop or Retry rules?
+3. Which metadata is necessary to select and correlate two implementations
+   of the same Contract, and which can remain private instead of becoming
+   another public type?
+4. Can the catalogue and core rules stay consistent without copying
+   semantic definitions or putting hosted descriptions into embedded
+   packages?
+5. Which changes are strictly byte-neutral and which need an explicit
+   specification/identity inventory? Name each affected witness before
+   changing it, not after a failing test.
+
+This entry requests review, not automatic invocation of another model.
+There is no implementation or qualification claim yet. The semantic
+specification remains authoritative until a reviewed amendment lands;
+the mechanical phase cannot silently perform the Process Contract
+movement. The action ledger owns the pre-freeze sequence and its gates.
 
 ## What validation produces
 
