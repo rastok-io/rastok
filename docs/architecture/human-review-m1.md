@@ -1474,13 +1474,19 @@ selectable implementation. The registry file of 3 112 lines became
 
 **Findings, none blocking.**
 
-- A-T5-7 (proposed, zero bytes): derived names of the retired `Profile` word
-  survive: `ProfileProtocol` (kept with `roles` and `exchange`, `id`
-  removed) and the `ContractMode` accessors `profile`, `owning_profile` and
-  their `profile` parameters, 27 sites in nine files. The vocabulary ledger
-  asked that no renamed API be explained with the removed name. Proposed:
-  `ModeProtocol`, `mode`, `owning_mode`. Owner: Astra; lot: Yoann decides
-  whether before the freeze or v21.
+- A-T5-7 (zero bytes, owner Astra): the words derived from the renamed
+  types were not renamed with them. Yoann asked for one complete pass on
+  22 October; its result is the
+  [residue sweep](human-review-vocabulary.md#residue-sweep--22-october-fable-the-finishing-lot-for-astra)
+  in the vocabulary ledger: `vm` naming `Execution` values (1 678 lines,
+  210 in `src`), `bindings` naming `RuntimeDrivers` values (349 lines) and
+  the `*_with_bindings` methods (240 call lines), `NoOutboundBindings`,
+  the two `bind` helpers, `ProfileProtocol` and the `profile` accessors and
+  locals (about 200 lines), `profile` naming test fixtures in
+  `conformance.rs` (56), `decide_inbound`, `MockOutboundConnectorDriver`,
+  one `connector_id` parameter; plus a dozen specification and living-document
+  sentences. Gate: the four checks, the suite, witnesses identical, the
+  sweep at zero. Lot: Yoann decides whether before the freeze or v21.
 - Four public names are outside the vocabulary tables and are recorded there:
   `RuntimeDrivers::prepare_with_selection`, `RuntimeDrivers::restore_ownership`,
   `OutboundDrivers::forget_session`, `DriverRecoveryError`. The names are

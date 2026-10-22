@@ -1235,6 +1235,85 @@ The appendix inventory of public types is still anchored on `fedada7` and
 predates the rename lot, the realignment and this rework; re-anchoring it is
 Fable's debt.
 
+### Residue sweep — 22 October (Fable), the finishing lot for Astra
+
+Yoann asked for one complete pass over every retired term, in code,
+comments and documents, after the Connector rework landed. Method: every
+"before" word of the three rename sources (the 12 October lot, the
+realignment and the Connector rework tables) was searched on `4c912eb` with
+word boundaries over the two crates, the spike sources, the UI scripts,
+the specification, the living documents and the dated documents; each hit
+was read for its sense. Dated reports and `decisions.md` keep their names by
+rule and are not counted below; the two review registers are excluded. The
+scripted sweep is reproducible from the terms listed here.
+
+The pattern is the same each time: the types were renamed, the words derived
+from them (locals, fields, parameters, helper names, prose) were not. Nothing
+below moves a byte; every item is a `cargo test` away from proof.
+
+**To finish, in code (A-T5-7, owner Astra, zero bytes).**
+
+| Derived residue | Sites, approximate | Proposed |
+|---|---:|---|
+| `vm` as the name of `Execution` values (locals, fields, parameters), from the realignment's `Vm` → `Execution` | 1 678 lines, of which 210 in `src` (`ui/view.rs`, `conformance.rs`, `network/http_server.rs`, `drivers/process`, `runtime/execution/advance.rs`, `compiler.rs`, `main.rs`, `recording`) and the rest in integration tests (`execution.rs` 659, `retry_runtime.rs` 201, `v16_loop.rs` 150, `v16_recovery.rs` 90, `multiport.rs` 70) | `execution` |
+| `bindings` as the name of `RuntimeDrivers` / `OutboundDrivers` values, from `RuntimeBindings` → `RuntimeDrivers` | 349 code lines in the Driver, execution and poller files (`runtime/execution.rs` 78, `drivers/runtime/tests.rs` 53, `worker.rs` 31, `conformance.rs` 30, `http_server.rs` 21, `driver_polling.rs` 19) plus 38 comments | `drivers` |
+| `Execution::step_with_bindings`, `run_ready_with_bindings`, `recover_with_bindings`; `lab::mock_bindings` | 240 call lines, mostly tests (`execution.rs` 87, `retry_runtime.rs` 60, `v16_recovery.rs` 25) | `step_with_drivers`, `run_ready_with_drivers`, `recover_with_drivers`, `mock_drivers`. `Dispatch::fire_with_bindings` stays: those are expression bindings. |
+| `NoOutboundBindings` (the empty routing table in `execution.rs`) | 5 | `NoOutboundDrivers` |
+| `conformance::bind` and `recording::replay::Contracts::bind`, from `ConnectorDriverFactory::bind` → `create` and `RuntimeBindings::try_new` → `prepare` | 8 call sites | `prepare` |
+| `ProfileProtocol`; `ContractMode::profile`, `owning_profile`; `ModeSelector::profiles`; locals and parameters named `profile` in the Contract-mode sense (`connector/contract.rs` both crates, `connector/stdlib`, `compiler/check.rs`, `compiler/lower.rs`, `connector/call.rs` and its tests, `tests/contracts.rs`, `conformance_process.rs`, `process_service.rs`) | about 200 lines | `ModeProtocol`, `mode`, `owning_mode`, `modes`, locals `mode` |
+| `profile` as the name of `DriverTestFixture` values in `conformance.rs`, from the 12 October `conformance::Profile` → `DriverTestFixture` | 56 lines | `fixture` |
+| `RuntimeDrivers::decide_inbound`, from `InboundConnectorDriver::decide` → `notify_admission` | 6 | `notify_inbound_admission` |
+| `MockOutboundConnectorDriver` in `lab.rs`, the retired `ConnectorDriver` suffix | 8 | `MockOutboundDriver` |
+| `connector_id` parameter of the WebSocket binder in `drivers/websocket_protocol.rs` | 3 | `contract_id` |
+
+**To align, in the specification and the living documents (same lot).**
+
+| Where | Sentence | Note |
+|---|---|---|
+| `stdlib.md` §3.3 and §3.3's service paragraphs | "required for both profiles", "The resident Session profile", "`correlate` is not part of this profile", "The profile uses D-2026-08-25-1's generic Session exchange", "A profile…" (A4 boot references); §3.7 "both profiles consume exactly one `in`" | the Contract-mode sense becomes "mode". "Application profile", "idempotence profiles", "inbound/event profile", "Retry profile" are specification concepts and stay. |
+| `grammar.md` | "Unsupported profiles still refuse by name" (status block); the grammar comment "`profile`, `behavior` and `idempotent` are ordinary Contract attribute names" | the first becomes "modes"; the second is to check against the example it annotates, since the selector attribute is `mode`. |
+| `loop.md` | "Process service profile" (table), "resident-service profiles refuse" | "mode". "resolved application profile" and "host profile" stay. |
+| `errata.md` E-2026-09-14-2 | "Where: `runtime/vm.rs`" | dated entry; add "(now `runtime/execution.rs`)" rather than rewriting. |
+| `components.md` §4 item 5 | "boundary/Driver bindings" | "Driver interfaces and the runtime Driver association". |
+| `components.md` §3.4 | `recover_with_bindings` | follows the method rename. |
+| `parallelism-notes.md` | "the existing one-Worker VM" | "Execution". |
+| `simulation-debugger-explanations.md` | "The VM …", "several VM transactions" | "Execution". |
+| `spec-to-code.md` | the historical M1.x rows keep `VM`, `boundary::`, `connectors::`, `RuntimeBindings` | add one sentence to "Keeping the map honest": historical rows keep the names of their time; the current table uses current names. No row rewrite. |
+
+**Kept, read and not residues.** `Obligation::LoopDelay` and `RetryDelay`
+(two obligations, decided 12 October); the hosted network `pump` and its
+prose in `stdlib.md`, `delivery-semantics.md`, README and WHITEPAPER (the
+M1.6 engine, distinct from the retired `Vm::pump`); `mint_capability` and
+"minted" for the debugger's authorization token (not envelope identity);
+`openai-responses-hydration.md` as a file name and the `hydration` anchors
+in `annotations.md` and `decisions.md` (stable link targets); `std/process@4`
+and `@5` in the refusal tests of `process_service.rs` and `plan_package.rs`
+and in the identity inventory; "application profile", "deployment profile",
+"experiment `profile =`", `json_profile`, "privacy profile" and "cost
+profile" in prose (specification concepts; the renamed types are
+`PrivacyDeclaration` and `PriceBook`); `BootBindings`, `expr::Bindings`,
+`LazyBindings`, `LocalBindings`, `PlanValueBindings` and
+`fire_with_bindings` (name-to-value bindings); "Driver binding" in seven
+code comments and two specification sentences (the association, allowed by
+the 12 October rule); `Fold` as a verb in two comments; "Packet algebra" in
+`loop.md`; `DataSlot`; `hir::EndpointOwner`, `hir::RouteDestination` and
+the other HIR names (kept in block); `Draft` as a user type in `loop.md`'s
+example; `TcpListener::bind` and `UdpSocket::bind`; `try_new` on types other
+than the Driver association. The following retired names have **zero**
+occurrences anywhere outside dated documents: every "before" name of the
+Connector rework tables except `ProfileProtocol`; `IngressSubmission`,
+`BoundaryEvent`, `CompletionGate`, `Dispatcher`, `PumpBatch`,
+`ConnectorRoles`, `*RequestBindings`, `HandlerExecutor`, `PlanEmission`,
+`DatedPayload`, `AccountingObservation`, `CostProfileName`, `Provocation`,
+`unprovable`, `ScenarioSession`, `LoopExpiry`, `LoopTermination`,
+`install_target`, `admit_ingress`, `inject_submission`, `VM`, `Vm`,
+"virtual machine".
+
+**Gate for the lot.** The four checks, the full suite, `site_content` 12/12,
+the three `no_std` targets; every package, trace, recording and spike witness
+byte-identical; the counts above at zero on re-run of the sweep. Fable
+replays and records "applied" here.
+
 ## What validation produces
 
 For each **⟂**: keep / rename / merge, with the chosen word. The answers
