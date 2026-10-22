@@ -232,7 +232,7 @@ fn a_file_mock_cannot_bypass_its_typed_output_contract() {
 }
 
 #[test]
-fn a_reduced_image_refuses_an_omitted_network_family_before_vm_creation() {
+fn a_reduced_image_refuses_an_omitted_network_family_before_execution_creation() {
     let source = r#"
 graph websocket_only : App {
   input in: text

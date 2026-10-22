@@ -1943,7 +1943,7 @@ graph api : App {
 
     fn admit_and_close(
         server: &mut HttpServer<'_>,
-        vm: &mut Execution<'_>,
+        execution: &mut Execution<'_>,
         journal: &mut MemJournal,
         response: &Receiver<Result<ObservedResponse, String>>,
         expected_version: Version,
@@ -1984,7 +1984,7 @@ graph api : App {
             Err(TryRecvError::Empty),
             "the peer cannot observe 202 before causal admission"
         );
-        let IngressAdmission::Accepted(accepted) = vm
+        let IngressAdmission::Accepted(accepted) = execution
             .accept_connector_output(journal, &proposal)
             .expect("the request reaches atomic admission")
         else {
@@ -2007,12 +2007,13 @@ graph api : App {
 
         let terminal = wait_for_terminal(server);
         assert_eq!(terminal.call_id, call_id);
-        let report = vm.queue_inbound_call_events([terminal]);
+        let report = execution.queue_inbound_call_events([terminal]);
         assert_eq!(report.queued, 1);
         assert!(report.discarded.is_empty());
         assert!(report.uncorrelated.is_empty());
         assert!(report.rejected.is_empty());
-        vm.run_ready(journal)
+        execution
+            .run_ready(journal)
             .expect("the request and its terminal exit commit");
         assert!(journal.open_inbound_calls().is_empty());
         assert_eq!(
@@ -2179,13 +2180,13 @@ graph api : App {
         let mut server = HttpServer::try_bind(&plan, &[node], HttpServerConfig::default())
             .expect("the hosted server binds before execution");
         let address = server.local_addresses()[0];
-        let mut vm = Execution::new(&plan, GraphVersion(1));
+        let mut execution = Execution::new(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
 
         let http1 = spawn_http1(address, "one");
         admit_and_close(
             &mut server,
-            &mut vm,
+            &mut execution,
             &mut journal,
             &http1,
             Version::HTTP_11,
@@ -2195,7 +2196,7 @@ graph api : App {
         let http2 = spawn_http2(address, "two");
         admit_and_close(
             &mut server,
-            &mut vm,
+            &mut execution,
             &mut journal,
             &http2,
             Version::HTTP_2,
@@ -2211,9 +2212,9 @@ graph api : App {
             .expect("the respond server binds before execution");
         let response = spawn_http1_with_body(server.local_addresses()[0], "request");
         let proposal = wait_for_proposal(&mut server);
-        let mut vm = Execution::new(&plan, GraphVersion(1));
+        let mut execution = Execution::new(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
-        let IngressAdmission::Accepted(accepted) = vm
+        let IngressAdmission::Accepted(accepted) = execution
             .accept_connector_output(&mut journal, &proposal)
             .expect("the request reaches causal admission")
         else {
@@ -2225,9 +2226,10 @@ graph api : App {
         server.notify_admission(proposal.handle, Ok(accepted));
         assert_eq!(response.try_recv(), Err(TryRecvError::Empty));
 
-        vm.run_ready(&mut journal)
+        execution
+            .run_ready(&mut journal)
             .expect("the graph produces its response");
-        let ready = vm.ready_inbound_call_responses();
+        let ready = execution.ready_inbound_call_responses();
         let [ready] = ready.as_slice() else {
             panic!("one response must be retained")
         };
@@ -2236,7 +2238,7 @@ graph api : App {
             server.start_response(&ready),
             InboundCallResponseStart::Started
         );
-        assert!(vm.mark_inbound_call_response_started(&ready));
+        assert!(execution.mark_inbound_call_response_started(&ready));
         assert_eq!(
             response
                 .recv_timeout(Duration::from_secs(3))
@@ -2249,8 +2251,9 @@ graph api : App {
         );
         let terminal = wait_for_terminal(&mut server);
         assert_eq!(terminal.call_id, call_id);
-        assert_eq!(vm.queue_inbound_call_events([terminal]).queued, 1);
-        vm.run_ready(&mut journal)
+        assert_eq!(execution.queue_inbound_call_events([terminal]).queued, 1);
+        execution
+            .run_ready(&mut journal)
             .expect("the one response cursor and Call terminal commit");
         assert!(journal.open_inbound_calls().is_empty());
     }
@@ -2267,9 +2270,9 @@ graph api : App {
         .expect("the respond server binds before execution");
         let response = spawn_http1_with_body(server.local_addresses()[0], "request");
         let proposal = wait_for_proposal(&mut server);
-        let mut vm = Execution::new(&plan, GraphVersion(1));
+        let mut execution = Execution::new(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
-        let IngressAdmission::Accepted(accepted) = vm
+        let IngressAdmission::Accepted(accepted) = execution
             .accept_connector_output(&mut journal, &proposal)
             .expect("the request reaches causal admission")
         else {
@@ -2286,12 +2289,13 @@ graph api : App {
                     .expect("the standard server id is valid"),
             ))
             .expect("one hosted family registers");
-        let mut bindings = crate::connector::drivers::RuntimeDrivers::prepare(&plan, &registry)
+        let mut drivers = crate::connector::drivers::RuntimeDrivers::prepare(&plan, &registry)
             .expect("the validated server plan binds");
-        vm.advance_to(&mut journal, &mut bindings, 1_000_000_000)
+        execution
+            .advance_to(&mut journal, &mut drivers, 1_000_000_000)
             .expect("the request deadline advances deterministically");
-        assert!(vm.ready_inbound_call_responses().is_empty());
-        let timeouts = vm.ready_inbound_call_timeouts();
+        assert!(execution.ready_inbound_call_responses().is_empty());
+        let timeouts = execution.ready_inbound_call_timeouts();
         let [timeout] = timeouts.as_slice() else {
             panic!("exactly one request deadline must be due")
         };
@@ -2300,7 +2304,7 @@ graph api : App {
             server.start_timeout(timeout),
             InboundCallTimeoutStart::Started
         );
-        assert!(vm.mark_inbound_call_timeout_started(timeout));
+        assert!(execution.mark_inbound_call_timeout_started(timeout));
         assert_eq!(
             response
                 .recv_timeout(Duration::from_secs(3))
@@ -2313,8 +2317,9 @@ graph api : App {
         );
         let terminal = wait_for_terminal(&mut server);
         assert_eq!(terminal.call_id, call_id);
-        assert_eq!(vm.queue_inbound_call_events([terminal]).queued, 1);
-        vm.run_ready(&mut journal)
+        assert_eq!(execution.queue_inbound_call_events([terminal]).queued, 1);
+        execution
+            .run_ready(&mut journal)
             .expect("the timeout closes the retained response cursor once");
         assert!(journal.open_inbound_calls().is_empty());
     }
@@ -2347,18 +2352,19 @@ graph api : App {
             let _ = sent.send(result);
         });
         let proposal = wait_for_proposal(&mut server);
-        let mut vm = Execution::new(&plan, GraphVersion(1));
+        let mut execution = Execution::new(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
-        let IngressAdmission::Accepted(accepted) = vm
+        let IngressAdmission::Accepted(accepted) = execution
             .accept_connector_output(&mut journal, &proposal)
             .expect("the HTTP/3 request reaches causal admission")
         else {
             panic!("the HTTP/3 request must be admitted")
         };
         server.notify_admission(proposal.handle, Ok(accepted));
-        vm.run_ready(&mut journal)
+        execution
+            .run_ready(&mut journal)
             .expect("the graph produces the HTTP/3 response");
-        let ready = vm.ready_inbound_call_responses();
+        let ready = execution.ready_inbound_call_responses();
         let [ready] = ready.as_slice() else {
             panic!("one HTTP/3 graph response must be retained")
         };
@@ -2367,7 +2373,7 @@ graph api : App {
             server.start_response(&ready),
             InboundCallResponseStart::Started
         );
-        assert!(vm.mark_inbound_call_response_started(&ready));
+        assert!(execution.mark_inbound_call_response_started(&ready));
         assert_eq!(
             received
                 .recv_timeout(Duration::from_secs(5))
@@ -2376,8 +2382,9 @@ graph api : App {
             (200, b"response".to_vec()),
         );
         let terminal = wait_for_terminal(&mut server);
-        assert_eq!(vm.queue_inbound_call_events([terminal]).queued, 1);
-        vm.run_ready(&mut journal)
+        assert_eq!(execution.queue_inbound_call_events([terminal]).queued, 1);
+        execution
+            .run_ready(&mut journal)
             .expect("the HTTP/3 Call closes exactly once");
         assert!(journal.open_inbound_calls().is_empty());
     }
@@ -2430,7 +2437,7 @@ graph api : App {
         let mut server =
             HttpServer::try_bind(&plan, &[node], config).expect("the bounded server binds");
         let address = server.local_addresses()[0];
-        let mut vm = Execution::new(&plan, GraphVersion(1));
+        let mut execution = Execution::new(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
 
         let first = spawn_http1(address, "one");
@@ -2439,7 +2446,7 @@ graph api : App {
         assert_eq!(first.try_recv(), Err(TryRecvError::Empty));
         assert_eq!(second.try_recv(), Err(TryRecvError::Empty));
 
-        let IngressAdmission::Accepted(accepted) = vm
+        let IngressAdmission::Accepted(accepted) = execution
             .accept_connector_output(&mut journal, &first_proposal)
             .expect("the first request reaches admission")
         else {
@@ -2455,12 +2462,17 @@ graph api : App {
             202
         );
         let first_terminal = wait_for_terminal(&mut server);
-        assert_eq!(vm.queue_inbound_call_events([first_terminal]).queued, 1);
-        vm.run_ready(&mut journal).expect("the first Call settles");
+        assert_eq!(
+            execution.queue_inbound_call_events([first_terminal]).queued,
+            1
+        );
+        execution
+            .run_ready(&mut journal)
+            .expect("the first Call settles");
 
         admit_and_close(
             &mut server,
-            &mut vm,
+            &mut execution,
             &mut journal,
             &second,
             Version::HTTP_11,
@@ -2506,9 +2518,9 @@ graph api : App {
         } else {
             (&second, &first)
         };
-        let mut vm = Execution::new(&plan, GraphVersion(1));
+        let mut execution = Execution::new(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
-        let IngressAdmission::Accepted(accepted) = vm
+        let IngressAdmission::Accepted(accepted) = execution
             .accept_connector_output(&mut journal, &proposal)
             .expect("the first retained request reaches admission")
         else {
@@ -2530,8 +2542,10 @@ graph api : App {
             1,
             "the second proposal remains retained"
         );
-        assert_eq!(vm.queue_inbound_call_events([terminal]).queued, 1);
-        vm.run_ready(&mut journal).expect("the first Call settles");
+        assert_eq!(execution.queue_inbound_call_events([terminal]).queued, 1);
+        execution
+            .run_ready(&mut journal)
+            .expect("the first Call settles");
 
         let second_reference = server
             .pending

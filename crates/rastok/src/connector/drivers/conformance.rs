@@ -3,7 +3,7 @@
 // the same reason they stop at the Driver layer.
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
 //! Connector conformance tests for the ten contract cases of `stdlib.md` §1,
-//! using registered Drivers and the ordinary runtime bindings.
+//! using registered Drivers and the ordinary runtime Driver association.
 //!
 //! A fixture is prepared test material. Here it contains a small graph, inputs
 //! and expected results for a Driver; in the Lab, it supplies the data for a
@@ -154,7 +154,7 @@ pub struct SessionTestFixture<'plan> {
     pub contract: &'static ConnectorContract,
     /// Validated probe containing the bound Session Connector.
     pub plan: &'plan ValidatedExecutionPlan,
-    /// Exact Connector node exercised by the profile.
+    /// Exact Connector node exercised by the fixture.
     pub connector: node::Path,
     /// Two distinct opening payloads; concurrency is the point of the probe.
     pub openings: [Data; 2],
@@ -217,16 +217,16 @@ impl Report {
 /// Runs the whole battery over one Driver.
 #[must_use]
 pub fn verify(
-    profile: &DriverTestFixture,
+    fixture: &DriverTestFixture,
     registry: &ContractCatalog,
-    drivers: &DriverRegistry,
+    driver_registry: &DriverRegistry,
 ) -> Report {
     let mut report = Report::default();
-    sheet_completeness(profile.contract, &mut report);
+    sheet_completeness(fixture.contract, &mut report);
 
     // The probe must compile against the registry carrying the sheet
     // — the config surface of case 6 is exercised by compilation.
-    let compilation = match compile(&[profile.source.as_str()], registry) {
+    let compilation = match compile(&[fixture.source.as_str()], registry) {
         Ok(compilation) => compilation,
         Err(bag) => {
             report.violations.push(format!(
@@ -236,7 +236,7 @@ pub fn verify(
             return report;
         }
     };
-    let exit_cases = match resolved_exit_cases(profile.contract, &compilation.plan) {
+    let exit_cases = match resolved_exit_cases(fixture.contract, &compilation.plan) {
         Ok(cases) => cases,
         Err(violation) => {
             report.violations.push(violation);
@@ -248,9 +248,9 @@ pub fn verify(
     // has nothing to say. An event out of nowhere is an invented
     // correlation.
     {
-        match bind(&compilation.plan, drivers) {
+        match prepare(&compilation.plan, driver_registry) {
             Err(violation) => report.violations.push(violation),
-            Ok(mut bindings) => match bindings.poll_responses() {
+            Ok(mut drivers) => match drivers.poll_responses() {
                 Err(error) => report
                     .violations
                     .push(format!("the unstarted Driver could not be polled: {error}")),
@@ -271,28 +271,28 @@ pub fn verify(
     // reference can settle.
     {
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
-        let mut bindings = match bind(&compilation.plan, drivers) {
-            Ok(bindings) => bindings,
+        let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
+        let mut drivers = match prepare(&compilation.plan, driver_registry) {
+            Ok(drivers) => drivers,
             Err(violation) => {
                 report.violations.push(violation);
                 return report;
             }
         };
-        match drive(&mut vm, &mut journal, &mut bindings, profile.input) {
+        match drive(&mut execution, &mut journal, &mut drivers, fixture.input) {
             Err(violation) => report.violations.push(violation),
             Ok(()) => {
                 audit_journal(&journal, &mut report);
-                match source_exit_case(&vm).as_deref() {
+                match source_exit_case(&execution).as_deref() {
                     Some(case)
-                        if case == profile.happy_exit_case
+                        if case == fixture.happy_exit_case
                             && exit_cases.iter().any(|known| known == case) =>
                     {
-                        report.proven_cases.push(profile.happy_exit_case);
+                        report.proven_cases.push(fixture.happy_exit_case);
                     }
                     Some(case) => report.violations.push(format!(
                         "the happy path terminated as `{case}`, expected `{}`",
-                        profile.happy_exit_case
+                        fixture.happy_exit_case
                     )),
                     None => report
                         .violations
@@ -304,8 +304,8 @@ pub fn verify(
 
     // Case 8, the provable half: every provocation must produce its
     // declared terminal case at the root sink.
-    for provocation in &profile.provocations {
-        match run_provocation(provocation, registry, drivers) {
+    for provocation in &fixture.provocations {
+        match run_provocation(provocation, registry, driver_registry) {
             Ok(()) => {
                 if !report.proven_cases.contains(&provocation.exit_case) {
                     report.proven_cases.push(provocation.exit_case);
@@ -317,8 +317,8 @@ pub fn verify(
 
     // The timeout and cancel disciplines: only the runtime constructs a
     // timeout, and a cancelled call gains no late causal fact.
-    if let Some(mute_source) = &profile.mute_source {
-        match mute_battery(mute_source, registry, drivers) {
+    if let Some(mute_source) = &fixture.mute_source {
+        match mute_battery(mute_source, registry, driver_registry) {
             Ok(()) => {
                 if exit_cases.iter().any(|case| case == "TimeoutExpired")
                     && !report.proven_cases.contains(&"TimeoutExpired")
@@ -332,15 +332,15 @@ pub fn verify(
 
     // Case 7, the correlation half: two calls in flight, distinct
     // request bytes; every closure must answer its OWN request.
-    if let Some(probe) = &profile.interleave
-        && let Err(violation) = interleave_battery(probe, registry, drivers)
+    if let Some(probe) = &fixture.interleave
+        && let Err(violation) = interleave_battery(probe, registry, driver_registry)
     {
         report.violations.push(violation);
     }
 
     // No silent gap: declared terminal cases are proven or stated
     // untestable.
-    for (kind, reason) in &profile.untestable {
+    for (kind, reason) in &fixture.untestable {
         if !report.unproven_cases.iter().any(|(known, _)| known == kind)
             && !report.proven_cases.contains(kind)
         {
@@ -365,25 +365,25 @@ pub fn verify(
 /// Runs the Event-shaped battery: retained proposal, commit-before-decision,
 /// ordinary bounded routing, and no fabricated call/session fact.
 #[must_use]
-pub fn verify_event(profile: &EventTestFixture<'_>, drivers: &DriverRegistry) -> Report {
+pub fn verify_event(fixture: &EventTestFixture<'_>, driver_registry: &DriverRegistry) -> Report {
     let mut report = Report::default();
-    sheet_completeness(profile.contract, &mut report);
-    if profile.contract.exchange != crate::connector::ExchangeKind::Event {
+    sheet_completeness(fixture.contract, &mut report);
+    if fixture.contract.exchange != crate::connector::ExchangeKind::Event {
         report
             .violations
-            .push("the Event profile names a non-Event contract".into());
+            .push("the Event fixture names a non-Event contract".into());
         return report;
     }
-    let mut bindings = match bind(profile.plan, drivers) {
-        Ok(bindings) => bindings,
+    let mut drivers = match prepare(fixture.plan, driver_registry) {
+        Ok(drivers) => drivers,
         Err(violation) => {
             report.violations.push(violation);
             return report;
         }
     };
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::new(profile.plan, GraphVersion(1));
-    let admission = match bindings.poll_inbound(&mut vm, &mut journal) {
+    let mut execution = Execution::new(fixture.plan, GraphVersion(1));
+    let admission = match drivers.poll_inbound(&mut execution, &mut journal) {
         Ok(Some(admission)) => admission,
         Ok(None) => {
             report
@@ -414,20 +414,20 @@ pub fn verify_event(profile: &EventTestFixture<'_>, drivers: &DriverRegistry) ->
             .violations
             .push("the Driver was accepted before its envelope became journal-visible".into());
     }
-    if let Err(error) = vm.run_ready_with_bindings(&mut journal, &mut bindings) {
+    if let Err(error) = execution.run_ready_with_drivers(&mut journal, &mut drivers) {
         report
             .violations
             .push(format!("the admitted Event could not drain: {error}"));
     }
-    let outputs: Vec<_> = vm
+    let outputs: Vec<_> = execution
         .outputs()
         .iter()
         .map(|observed| observed.envelope.data().clone())
         .collect();
-    if outputs != profile.expected_outputs {
+    if outputs != fixture.expected_outputs {
         report.violations.push(format!(
             "the Event outputs differ: expected {:?}, got {outputs:?}",
-            profile.expected_outputs
+            fixture.expected_outputs
         ));
     }
     if journal
@@ -449,40 +449,43 @@ pub fn verify_event(profile: &EventTestFixture<'_>, drivers: &DriverRegistry) ->
 /// two concurrent opens, crossed observations, one write per session,
 /// write-ambiguity abandonment, terminal correlation, and post-exit silence.
 #[must_use]
-pub fn verify_session(profile: &SessionTestFixture<'_>, drivers: &DriverRegistry) -> Report {
+pub fn verify_session(
+    fixture: &SessionTestFixture<'_>,
+    driver_registry: &DriverRegistry,
+) -> Report {
     let mut report = Report::default();
-    sheet_completeness(profile.contract, &mut report);
-    if profile.contract.exchange != crate::connector::ExchangeKind::Session {
+    sheet_completeness(fixture.contract, &mut report);
+    if fixture.contract.exchange != crate::connector::ExchangeKind::Session {
         report
             .violations
-            .push("the Session profile names a non-Session contract".into());
+            .push("the Session fixture names a non-Session contract".into());
         return report;
     }
-    let Some((slot, planned)) = profile
+    let Some((slot, planned)) = fixture
         .plan
         .nodes
         .iter()
         .enumerate()
-        .find(|(_, planned)| planned.path == profile.connector)
+        .find(|(_, planned)| planned.path == fixture.connector)
     else {
         report.violations.push(format!(
             "the Session probe has no `{}` node",
-            profile.connector
+            fixture.connector
         ));
         return report;
     };
     let Some(spec) = planned.connector() else {
         report
             .violations
-            .push(format!("`{}` is not a Connector", profile.connector));
+            .push(format!("`{}` is not a Connector", fixture.connector));
         return report;
     };
     if spec.exchange != crate::connector::ExchangeKind::Session
-        || spec.contract.as_str() != profile.contract.id
+        || spec.contract.as_str() != fixture.contract.id
     {
         report.violations.push(format!(
-            "`{}` does not carry the profile's Session contract",
-            profile.connector
+            "`{}` does not carry the fixture's Session contract",
+            fixture.connector
         ));
         return report;
     }
@@ -495,7 +498,7 @@ pub fn verify_session(profile: &SessionTestFixture<'_>, drivers: &DriverRegistry
             return report;
         }
     };
-    let Some(exit_type) = profile.plan.resolved_ports().node(slot).and_then(|ports| {
+    let Some(exit_type) = fixture.plan.resolved_ports().node(slot).and_then(|ports| {
         ports
             .iter()
             .find(|port| port.port().name() == "exit")
@@ -506,8 +509,8 @@ pub fn verify_session(profile: &SessionTestFixture<'_>, drivers: &DriverRegistry
             .push("the Session probe has no resolved `exit` type".into());
         return report;
     };
-    let mut bindings = match bind(profile.plan, drivers) {
-        Ok(bindings) => bindings,
+    let mut drivers = match prepare(fixture.plan, driver_registry) {
+        Ok(drivers) => drivers,
         Err(violation) => {
             report.violations.push(violation);
             return report;
@@ -525,12 +528,12 @@ pub fn verify_session(profile: &SessionTestFixture<'_>, drivers: &DriverRegistry
     };
 
     let mut sessions = Vec::new();
-    for (index, data) in profile.openings.iter().enumerate() {
+    for (index, data) in fixture.openings.iter().enumerate() {
         let preparation = match OutboundDrivers::prepare_session_open(
-            &mut bindings,
-            &profile.connector,
+            &mut drivers,
+            &fixture.connector,
             data,
-            &profile.resolved_settings,
+            &fixture.resolved_settings,
         ) {
             Ok(preparation) => preparation,
             Err(error) => {
@@ -551,12 +554,12 @@ pub fn verify_session(profile: &SessionTestFixture<'_>, drivers: &DriverRegistry
         let emitting_id = crate::envelope::Id::from_bytes([(index as u8).saturating_add(1); 16]);
         let intent = SessionOpen {
             session_id: journal::ids::outbound_session_id(
-                &profile.connector,
+                &fixture.connector,
                 emitting_id,
                 prepared.digest(),
             ),
             emitting_id,
-            connector_path: profile.connector.clone(),
+            connector_path: fixture.connector.clone(),
             prepared,
         };
         if let Err(error) = journal.open_outbound_session(intent.clone()) {
@@ -566,7 +569,7 @@ pub fn verify_session(profile: &SessionTestFixture<'_>, drivers: &DriverRegistry
             ));
             return report;
         }
-        match OutboundDrivers::open_session(&mut bindings, &intent, &seed) {
+        match OutboundDrivers::open_session(&mut drivers, &intent, &seed) {
             Ok(crate::connector::exchange::SessionStart::Started) => {}
             Ok(crate::connector::exchange::SessionStart::Pending) => {
                 report.violations.push(format!(
@@ -585,7 +588,7 @@ pub fn verify_session(profile: &SessionTestFixture<'_>, drivers: &DriverRegistry
         }
         sessions.push(intent.session_id);
     }
-    let opening_events = match OutboundDrivers::poll_observations(&mut bindings) {
+    let opening_events = match OutboundDrivers::poll_observations(&mut drivers) {
         Ok(events) => events,
         Err(error) => {
             report
@@ -619,13 +622,13 @@ pub fn verify_session(profile: &SessionTestFixture<'_>, drivers: &DriverRegistry
     }
 
     let mut expected_writes = BTreeSet::new();
-    for (index, (session, data)) in sessions.iter().zip(&profile.writes).enumerate() {
+    for (index, (session, data)) in sessions.iter().zip(&fixture.writes).enumerate() {
         let preparation = match OutboundDrivers::prepare_session_write(
-            &mut bindings,
-            &profile.connector,
+            &mut drivers,
+            &fixture.connector,
             *session,
             data,
-            &profile.resolved_settings,
+            &fixture.resolved_settings,
         ) {
             Ok(preparation) => preparation,
             Err(error) => {
@@ -647,7 +650,7 @@ pub fn verify_session(profile: &SessionTestFixture<'_>, drivers: &DriverRegistry
             write_ref: journal::ids::session_write_id(*session, emitting_id, prepared.digest()),
             session_id: *session,
             emitting_id,
-            connector_path: profile.connector.clone(),
+            connector_path: fixture.connector.clone(),
             prepared,
         };
         if let Err(error) = journal.open_session_write(intent.clone()) {
@@ -657,7 +660,7 @@ pub fn verify_session(profile: &SessionTestFixture<'_>, drivers: &DriverRegistry
             ));
             return report;
         }
-        match OutboundDrivers::write_session(&mut bindings, &intent, &seed) {
+        match OutboundDrivers::write_session(&mut drivers, &intent, &seed) {
             Ok(crate::connector::exchange::SessionStart::Started) => {}
             Ok(crate::connector::exchange::SessionStart::Pending) => {
                 report.violations.push(format!(
@@ -676,7 +679,7 @@ pub fn verify_session(profile: &SessionTestFixture<'_>, drivers: &DriverRegistry
         }
         expected_writes.insert((*session, intent.write_ref));
     }
-    let write_events = match OutboundDrivers::poll_observations(&mut bindings) {
+    let write_events = match OutboundDrivers::poll_observations(&mut drivers) {
         Ok(events) => events,
         Err(error) => {
             report
@@ -708,13 +711,13 @@ pub fn verify_session(profile: &SessionTestFixture<'_>, drivers: &DriverRegistry
     }
 
     // Crash ambiguity is a journal fact, never permission to replay bytes.
-    let ambiguous_data = &profile.writes[0];
+    let ambiguous_data = &fixture.writes[0];
     let preparation = OutboundDrivers::prepare_session_write(
-        &mut bindings,
-        &profile.connector,
+        &mut drivers,
+        &fixture.connector,
         sessions[0],
         ambiguous_data,
-        &profile.resolved_settings,
+        &fixture.resolved_settings,
     );
     if let Ok(RequestPreparation::Prepared(prepared)) = preparation {
         let emitting_id = crate::envelope::Id::from_bytes([21; 16]);
@@ -722,7 +725,7 @@ pub fn verify_session(profile: &SessionTestFixture<'_>, drivers: &DriverRegistry
             write_ref: journal::ids::session_write_id(sessions[0], emitting_id, prepared.digest()),
             session_id: sessions[0],
             emitting_id,
-            connector_path: profile.connector.clone(),
+            connector_path: fixture.connector.clone(),
             prepared,
         };
         if journal.open_session_write(intent.clone()).is_err()
@@ -741,7 +744,7 @@ pub fn verify_session(profile: &SessionTestFixture<'_>, drivers: &DriverRegistry
     }
 
     for session in &sessions {
-        match OutboundDrivers::close_session(&mut bindings, &profile.connector, *session) {
+        match OutboundDrivers::close_session(&mut drivers, &fixture.connector, *session) {
             Ok(crate::connector::exchange::SessionStart::Started) => {}
             Ok(crate::connector::exchange::SessionStart::Pending) => {
                 report.violations.push(format!(
@@ -757,7 +760,7 @@ pub fn verify_session(profile: &SessionTestFixture<'_>, drivers: &DriverRegistry
             }
         }
     }
-    let exits = match OutboundDrivers::poll_observations(&mut bindings) {
+    let exits = match OutboundDrivers::poll_observations(&mut drivers) {
         Ok(events) => events,
         Err(error) => {
             report
@@ -779,7 +782,7 @@ pub fn verify_session(profile: &SessionTestFixture<'_>, drivers: &DriverRegistry
                 "Session {session} produced a crossed or repeated exit"
             ));
         }
-        if exit.port.name() != "exit" || exit.data != profile.terminal {
+        if exit.port.name() != "exit" || exit.data != fixture.terminal {
             report.violations.push(format!(
                 "Session {session} produced the wrong terminal payload: {exit:?}"
             ));
@@ -801,7 +804,7 @@ pub fn verify_session(profile: &SessionTestFixture<'_>, drivers: &DriverRegistry
             sessions.len()
         ));
     }
-    match OutboundDrivers::poll_observations(&mut bindings) {
+    match OutboundDrivers::poll_observations(&mut drivers) {
         Ok(events) if events.is_empty() => {}
         Ok(events) => report
             .violations
@@ -887,8 +890,8 @@ fn sheet_completeness(contract: &ConnectorContract, report: &mut Report) {
         }
     }
     // Duplicates are judged BY SCOPE: within the common sheet,
-    // within one profile, and between common and a profile — never
-    // between two sibling profiles (the selected profile
+    // within one mode, and between common and a mode — never
+    // between two sibling modes (the selected mode
     // disambiguates them).
     let mut common = BTreeSet::new();
     for attribute in contract.common {
@@ -899,17 +902,17 @@ fn sheet_completeness(contract: &ConnectorContract, report: &mut Report) {
             ));
         }
     }
-    for profile in contract
+    for mode in contract
         .selector
         .iter()
-        .flat_map(|selector| selector.profiles.iter())
+        .flat_map(|selector| selector.modes.iter())
     {
         let mut scope = common.clone();
-        for attribute in profile.attributes {
+        for attribute in mode.attributes {
             if !scope.insert(attribute.name) {
                 report.violations.push(format!(
                     "the sheet declares attribute `{}` twice in `{}`'s scope",
-                    attribute.name, profile.word
+                    attribute.name, mode.word
                 ));
             }
         }
@@ -952,11 +955,11 @@ fn resolved_exit_cases(
         .collect())
 }
 
-fn bind<'plan>(
+fn prepare<'plan>(
     plan: &'plan ValidatedExecutionPlan,
-    drivers: &DriverRegistry,
+    driver_registry: &DriverRegistry,
 ) -> Result<RuntimeDrivers<'plan>, String> {
-    RuntimeDrivers::prepare(plan, drivers)
+    RuntimeDrivers::prepare(plan, driver_registry)
         .map_err(|error| format!("the conformance composition cannot bind: {error}"))
 }
 
@@ -983,18 +986,20 @@ fn submission(text: &str) -> IngressProposal {
 /// real. Any gate rejection is a violation: the Driver answered outside its
 /// resolved completion contract.
 fn drive(
-    vm: &mut Execution<'_>,
+    execution: &mut Execution<'_>,
     journal: &mut MemJournal,
     driver: &mut dyn OutboundDrivers,
     input: &str,
 ) -> Result<(), String> {
-    vm.accept_input(journal, submission(input))
+    execution
+        .accept_input(journal, submission(input))
         .map_err(|error| format!("the submission was refused: {error}"))?;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     loop {
-        vm.run_ready_with_bindings(journal, driver)
+        execution
+            .run_ready_with_drivers(journal, driver)
             .map_err(|error| format!("a step faulted: {error}"))?;
-        let report = vm
+        let report = execution
             .poll_drivers(journal, driver)
             .map_err(|error| format!("Driver polling faulted: {error}"))?;
         if let Some((_, reason)) = report.rejected.first() {
@@ -1003,9 +1008,10 @@ fn drive(
                  produced a completion outside its declared contract"
             ));
         }
-        vm.run_ready_with_bindings(journal, driver)
+        execution
+            .run_ready_with_drivers(journal, driver)
             .map_err(|error| format!("a step faulted: {error}"))?;
-        if vm.is_stable() {
+        if execution.is_stable() {
             return Ok(());
         }
         if report.settled == 0 {
@@ -1013,7 +1019,8 @@ fn drive(
                 return Err("the run wedged: neither settled nor expired".into());
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
-            vm.advance_to(journal, driver, vm.logical_time() + 10_000_000)
+            execution
+                .advance_to(journal, driver, execution.logical_time() + 10_000_000)
                 .map_err(|error| format!("the advance faulted: {error}"))?;
         }
     }
@@ -1065,7 +1072,7 @@ fn audit_journal(journal: &MemJournal, report: &mut Report) {
 fn run_provocation(
     provocation: &ExitCaseTest,
     registry: &ContractCatalog,
-    drivers: &DriverRegistry,
+    driver_registry: &DriverRegistry,
 ) -> Result<(), String> {
     let compilation = compile(&[provocation.source.as_str()], registry).map_err(|bag| {
         format!(
@@ -1075,11 +1082,16 @@ fn run_provocation(
         )
     })?;
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
-    let mut bindings = bind(&compilation.plan, drivers)?;
-    drive(&mut vm, &mut journal, &mut bindings, provocation.input)
-        .map_err(|violation| format!("the `{}` provocation: {violation}", provocation.exit_case))?;
-    match source_exit_case(&vm) {
+    let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
+    let mut drivers = prepare(&compilation.plan, driver_registry)?;
+    drive(
+        &mut execution,
+        &mut journal,
+        &mut drivers,
+        provocation.input,
+    )
+    .map_err(|violation| format!("the `{}` provocation: {violation}", provocation.exit_case))?;
+    match source_exit_case(&execution) {
         Some(case) if case == provocation.exit_case => Ok(()),
         Some(case) => Err(format!(
             "the `{}` provocation terminated as `{case}`",
@@ -1092,8 +1104,8 @@ fn run_provocation(
     }
 }
 
-fn source_exit_case(vm: &Execution<'_>) -> Option<String> {
-    let mut cases = vm.envelope_views().iter().filter_map(|observed| {
+fn source_exit_case(execution: &Execution<'_>) -> Option<String> {
+    let mut cases = execution.envelope_views().iter().filter_map(|observed| {
         if observed.node.is_none() || observed.port.name() != "exit" {
             return None;
         }
@@ -1116,14 +1128,14 @@ fn source_exit_case(vm: &Execution<'_>) -> Option<String> {
 fn mute_battery(
     source: &str,
     registry: &ContractCatalog,
-    drivers: &DriverRegistry,
+    driver_registry: &DriverRegistry,
 ) -> Result<(), String> {
     let compilation = compile(&[source], registry)
         .map_err(|bag| format!("the mute probe does not compile: {:?}", bag.diagnostics()))?;
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
-    let mut bindings = bind(&compilation.plan, drivers)?;
-    drive(&mut vm, &mut journal, &mut bindings, "conformance")
+    let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
+    let mut drivers = prepare(&compilation.plan, driver_registry)?;
+    drive(&mut execution, &mut journal, &mut drivers, "conformance")
         .map_err(|violation| format!("the mute battery: {violation}"))?;
     let timed_out = journal.records().iter().any(|record| {
         matches!(
@@ -1135,7 +1147,7 @@ fn mute_battery(
     if !timed_out {
         return Err("the mute call never closed with the machine's Timeout fact".into());
     }
-    if source_exit_case(&vm).as_deref() != Some("TimeoutExpired") {
+    if source_exit_case(&execution).as_deref() != Some("TimeoutExpired") {
         return Err("the scheduler did not publish `TimeoutExpired` on `exit`".into());
     }
     // The driver was cancelled at the closure; later rounds must
@@ -1143,8 +1155,8 @@ fn mute_battery(
     let sealed_records = journal.records().len();
     for _ in 0..3 {
         std::thread::sleep(std::time::Duration::from_millis(20));
-        let report = vm
-            .poll_drivers(&mut journal, &mut bindings)
+        let report = execution
+            .poll_drivers(&mut journal, &mut drivers)
             .map_err(|error| format!("a post-cancel round faulted: {error}"))?;
         if report.settled != 0 {
             return Err("a cancelled call settled again — a late causal fact".into());
@@ -1167,7 +1179,7 @@ fn mute_battery(
 fn interleave_battery(
     probe: &InterleaveProbe,
     registry: &ContractCatalog,
-    drivers: &DriverRegistry,
+    driver_registry: &DriverRegistry,
 ) -> Result<(), String> {
     let compilation = compile(&[probe.source.as_str()], registry).map_err(|bag| {
         format!(
@@ -1176,8 +1188,8 @@ fn interleave_battery(
         )
     })?;
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
-    let mut bindings = bind(&compilation.plan, drivers)?;
+    let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
+    let mut drivers = prepare(&compilation.plan, driver_registry)?;
     if probe.a == probe.b {
         return Err("the interleave payloads must differ, or a swap is invisible".into());
     }
@@ -1188,13 +1200,13 @@ fn interleave_battery(
             .is_some()
         {
             return Err(format!(
-                "the interleave profile expects `{}` more than once",
+                "the interleave fixture expects `{}` more than once",
                 expectation.connector
             ));
         }
     }
     if expected.len() < 2 {
-        return Err("the interleave profile must distinguish at least two connectors".into());
+        return Err("the interleave fixture must distinguish at least two connectors".into());
     }
     if probe
         .expected
@@ -1226,18 +1238,21 @@ fn interleave_battery(
         sequence: IngressSequence::Next,
         session: None,
     };
-    vm.accept_input(&mut journal, paired)
+    execution
+        .accept_input(&mut journal, paired)
         .map_err(|error| format!("the interleave submission was refused: {error}"))?;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     loop {
-        vm.run_ready_with_bindings(&mut journal, &mut bindings)
+        execution
+            .run_ready_with_drivers(&mut journal, &mut drivers)
             .map_err(|error| format!("a step faulted: {error}"))?;
-        let report = vm
-            .poll_drivers(&mut journal, &mut bindings)
+        let report = execution
+            .poll_drivers(&mut journal, &mut drivers)
             .map_err(|error| format!("Driver polling faulted: {error}"))?;
-        vm.run_ready_with_bindings(&mut journal, &mut bindings)
+        execution
+            .run_ready_with_drivers(&mut journal, &mut drivers)
             .map_err(|error| format!("a step faulted: {error}"))?;
-        if vm.is_stable() {
+        if execution.is_stable() {
             break;
         }
         if report.settled == 0 {
@@ -1245,7 +1260,12 @@ fn interleave_battery(
                 return Err("the interleave run wedged".into());
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
-            vm.advance_to(&mut journal, &mut bindings, vm.logical_time() + 10_000_000)
+            execution
+                .advance_to(
+                    &mut journal,
+                    &mut drivers,
+                    execution.logical_time() + 10_000_000,
+                )
                 .map_err(|error| format!("the advance faulted: {error}"))?;
         }
     }

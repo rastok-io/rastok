@@ -38,7 +38,7 @@ pub use crate::connector::drivers::network::http_server::{HttpServerConfig, Http
 #[cfg(feature = "hosted-http12")]
 use super::http_shared::HttpVersion;
 
-/// Protocol behavior selected by the semantic HttpServer profile.
+/// Protocol behavior selected by the semantic HttpServer mode.
 #[cfg(feature = "hosted-http12")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum HttpServerMode {
@@ -480,25 +480,31 @@ mod lab_tests {
         let registry = DriverRegistry::default()
             .try_with(lab_factory(Rc::clone(&input)).unwrap())
             .unwrap();
-        let mut bindings = RuntimeDrivers::prepare(&compilation.plan, &registry).unwrap();
-        let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
+        let mut drivers = RuntimeDrivers::prepare(&compilation.plan, &registry).unwrap();
+        let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
         input
             .borrow_mut()
             .offer(submission(Value::Int(17)), 0)
             .unwrap();
         assert_eq!(
-            bindings.poll_inbound_call_events(&mut vm).unwrap().queued,
+            drivers
+                .poll_inbound_call_events(&mut execution)
+                .unwrap()
+                .queued,
             0
         );
         assert_eq!(
-            bindings.poll_inbound(&mut vm, &mut journal).unwrap(),
+            drivers.poll_inbound(&mut execution, &mut journal).unwrap(),
             Some(IngressAdmission::Rejected(IngressRejection::InvalidPayload))
         );
         assert!(journal.records().is_empty());
         assert!(!input.borrow().is_pending());
         assert_eq!(
-            bindings.poll_inbound_call_events(&mut vm).unwrap().queued,
+            drivers
+                .poll_inbound_call_events(&mut execution)
+                .unwrap()
+                .queued,
             0
         );
 
@@ -506,18 +512,21 @@ mod lab_tests {
             .borrow_mut()
             .offer(submission(Value::Text("accepted".into())), 1)
             .unwrap();
-        let proposed = bindings.next_inbound().unwrap().unwrap();
+        let proposed = drivers.next_inbound().unwrap().unwrap();
         assert_eq!(
-            bindings.next_inbound().unwrap().unwrap().proposal(),
+            drivers.next_inbound().unwrap().unwrap().proposal(),
             proposed.proposal()
         );
         assert!(journal.records().is_empty());
         assert_eq!(
-            bindings.poll_inbound_call_events(&mut vm).unwrap().queued,
+            drivers
+                .poll_inbound_call_events(&mut execution)
+                .unwrap()
+                .queued,
             0
         );
         let Some(IngressAdmission::Accepted(accepted)) =
-            bindings.poll_inbound(&mut vm, &mut journal).unwrap()
+            drivers.poll_inbound(&mut execution, &mut journal).unwrap()
         else {
             panic!("accepted source")
         };
@@ -530,15 +539,22 @@ mod lab_tests {
                 .is_err()
         );
         assert_eq!(
-            bindings.poll_inbound_call_events(&mut vm).unwrap().queued,
+            drivers
+                .poll_inbound_call_events(&mut execution)
+                .unwrap()
+                .queued,
             1
         );
         assert_eq!(
-            bindings.poll_inbound_call_events(&mut vm).unwrap().queued,
+            drivers
+                .poll_inbound_call_events(&mut execution)
+                .unwrap()
+                .queued,
             0,
             "one ACK only"
         );
-        vm.run_ready_with_bindings(&mut journal, &mut bindings)
+        execution
+            .run_ready_with_drivers(&mut journal, &mut drivers)
             .unwrap();
         assert!(journal.open_inbound_calls().is_empty());
         assert!(input.borrow_mut().take_fault().is_none());
@@ -551,21 +567,24 @@ mod lab_tests {
         let registry = DriverRegistry::default()
             .try_with(lab_factory(Rc::clone(&input)).unwrap())
             .unwrap();
-        let mut bindings = RuntimeDrivers::prepare(&compilation.plan, &registry).unwrap();
-        let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
+        let mut drivers = RuntimeDrivers::prepare(&compilation.plan, &registry).unwrap();
+        let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
-        let capacity = vm.inspection().mailbox_capacity;
+        let capacity = execution.inspection().mailbox_capacity;
         for action in 0..capacity {
             input
                 .borrow_mut()
                 .offer(submission(Value::Text("queued".into())), action as u64)
                 .unwrap();
             assert!(matches!(
-                bindings.poll_inbound(&mut vm, &mut journal).unwrap(),
+                drivers.poll_inbound(&mut execution, &mut journal).unwrap(),
                 Some(IngressAdmission::Accepted(_))
             ));
             assert_eq!(
-                bindings.poll_inbound_call_events(&mut vm).unwrap().queued,
+                drivers
+                    .poll_inbound_call_events(&mut execution)
+                    .unwrap()
+                    .queued,
                 1
             );
         }
@@ -574,19 +593,22 @@ mod lab_tests {
             .offer(submission(Value::Text("waiting".into())), capacity as u64)
             .unwrap();
         let records_before = journal.records().len();
-        let retained = bindings.next_inbound().unwrap().unwrap();
+        let retained = drivers.next_inbound().unwrap().unwrap();
         for _ in 0..2 {
             assert_eq!(
-                bindings.poll_inbound(&mut vm, &mut journal).unwrap(),
+                drivers.poll_inbound(&mut execution, &mut journal).unwrap(),
                 Some(IngressAdmission::Pending)
             );
             assert_eq!(journal.records().len(), records_before);
             assert_eq!(
-                bindings.next_inbound().unwrap().unwrap().proposal(),
+                drivers.next_inbound().unwrap().unwrap().proposal(),
                 retained.proposal()
             );
             assert_eq!(
-                bindings.poll_inbound_call_events(&mut vm).unwrap().queued,
+                drivers
+                    .poll_inbound_call_events(&mut execution)
+                    .unwrap()
+                    .queued,
                 0
             );
         }
@@ -596,14 +618,18 @@ mod lab_tests {
                 .offer(submission(Value::Text("replacement".into())), 9999)
                 .is_err()
         );
-        vm.run_ready_with_bindings(&mut journal, &mut bindings)
+        execution
+            .run_ready_with_drivers(&mut journal, &mut drivers)
             .unwrap();
         assert!(matches!(
-            bindings.poll_inbound(&mut vm, &mut journal).unwrap(),
+            drivers.poll_inbound(&mut execution, &mut journal).unwrap(),
             Some(IngressAdmission::Accepted(_))
         ));
         assert_eq!(
-            bindings.poll_inbound_call_events(&mut vm).unwrap().queued,
+            drivers
+                .poll_inbound_call_events(&mut execution)
+                .unwrap()
+                .queued,
             1
         );
         assert!(!input.borrow().is_pending());

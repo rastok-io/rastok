@@ -62,10 +62,10 @@ impl FrameProduction {
     }
 }
 
-/// Closed facts derived from an exact Contract and its selected profile.
+/// Closed facts derived from an exact Contract and its selected mode.
 ///
 /// Construction is private: transported or author-supplied production claims
-/// cannot manufacture a more permissive profile. The terminal is exactly once
+/// cannot relax the Contract's cardinality rules. The terminal is exactly once
 /// after every frame; request admission is exactly once per application.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CallSemantics {
@@ -266,7 +266,7 @@ impl core::error::Error for RetryCaseError {}
 /// Resolves the standard finite-profile Call facts without a Driver registry.
 ///
 /// Exact identity, direction, lifecycle and selected mode must agree. Unknown
-/// contracts and unsupported/service profiles receive no inferred guarantees.
+/// contracts and unsupported or service modes receive no inferred guarantees.
 /// Timeout values and output types are separate validation obligations.
 #[must_use]
 pub fn outbound_call_semantics(

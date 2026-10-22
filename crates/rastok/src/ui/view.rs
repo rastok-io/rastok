@@ -266,7 +266,7 @@ pub fn snapshot(input: SnapshotInput<'_>) -> Result<UiSnapshot, serde_json::Erro
         state,
         plan,
         definitions,
-        execution: vm,
+        execution,
         journal,
         fault,
         activity,
@@ -275,9 +275,9 @@ pub fn snapshot(input: SnapshotInput<'_>) -> Result<UiSnapshot, serde_json::Erro
         boundary,
     } = input;
     let legal_commands = legal_commands(mode, state, fault, scenario.as_ref());
-    let inspection = vm.inspection();
+    let inspection = execution.inspection();
     let active_instances = active_instance_lifecycles(journal);
-    let retry_operations = retry::operations(vm, journal.records());
+    let retry_operations = retry::operations(execution, journal.records());
     let mut future = explanation::future(&inspection, journal.records());
     retry::append_future(&mut future, &retry_operations);
     let value = json!({
@@ -290,8 +290,8 @@ pub fn snapshot(input: SnapshotInput<'_>) -> Result<UiSnapshot, serde_json::Erro
         },
         "execution": {
             "state": state.spelling(),
-            "logical_time_ns": vm.logical_time().to_string(),
-            "awaiting_outbound_calls": vm.awaiting_outbound_calls(),
+            "logical_time_ns": execution.logical_time().to_string(),
+            "awaiting_outbound_calls": execution.awaiting_outbound_calls(),
             "legal_commands": legal_commands,
         },
         "topology": topology(
@@ -302,7 +302,7 @@ pub fn snapshot(input: SnapshotInput<'_>) -> Result<UiSnapshot, serde_json::Erro
             &active_instances,
             activity,
         ),
-        "history": history(plan, vm, journal),
+        "history": history(plan, execution, journal),
         "instances": instances(plan, &inspection, &active_instances),
         "loop_runs": loop_runs(plan, journal.records()),
         "retry_operations": retry_operations,
@@ -930,7 +930,11 @@ fn endpoint_json(endpoint: &crate::plan::Endpoint, source: bool) -> JsonValue {
     }
 }
 
-fn history(plan: &ValidatedExecutionPlan, vm: &Execution<'_>, journal: &MemJournal) -> JsonValue {
+fn history(
+    plan: &ValidatedExecutionPlan,
+    execution: &Execution<'_>,
+    journal: &MemJournal,
+) -> JsonValue {
     let observations = journal.retained_observations();
     let explanation = explanation::history(plan, journal.records());
     debug_assert_eq!(observations.len(), journal.records().len());
@@ -958,7 +962,7 @@ fn history(plan: &ValidatedExecutionPlan, vm: &Execution<'_>, journal: &MemJourn
             value
         })
         .collect::<Vec<_>>();
-    let deliveries = vm
+    let deliveries = execution
         .envelope_views()
         .iter()
         .enumerate()
@@ -998,7 +1002,7 @@ fn history(plan: &ValidatedExecutionPlan, vm: &Execution<'_>, journal: &MemJourn
             }))
         })
         .collect::<Vec<_>>();
-    let outputs = vm
+    let outputs = execution
         .outputs()
         .iter()
         .map(|output| {
@@ -1655,24 +1659,25 @@ mod tests {
             None,
         )
         .unwrap();
-        let view = |vm: &Execution<'_>, journal: &MemJournal, activity: Option<&ActivityView>| {
-            let snapshot = snapshot(SnapshotInput {
-                revision: 0,
-                mode: "simulate",
-                state: ExecutionState::Paused,
-                plan: &compilation.plan,
-                definitions: &compilation.source_definitions,
-                execution: vm,
-                journal,
-                fault: None,
-                activity,
-                scenario: None,
-                session: 0,
-                boundary: 0,
-            })
-            .unwrap();
-            serde_json::from_slice::<JsonValue>(&snapshot.json).unwrap()
-        };
+        let view =
+            |execution: &Execution<'_>, journal: &MemJournal, activity: Option<&ActivityView>| {
+                let snapshot = snapshot(SnapshotInput {
+                    revision: 0,
+                    mode: "simulate",
+                    state: ExecutionState::Paused,
+                    plan: &compilation.plan,
+                    definitions: &compilation.source_definitions,
+                    execution,
+                    journal,
+                    fault: None,
+                    activity,
+                    scenario: None,
+                    session: 0,
+                    boundary: 0,
+                })
+                .unwrap();
+                serde_json::from_slice::<JsonValue>(&snapshot.json).unwrap()
+            };
         let mut frames = vec![(0, view(session.execution(), session.journal(), None))];
         let mut saw_held = false;
         let mut saw_wait = false;
@@ -1793,8 +1798,8 @@ mod tests {
         .unwrap();
         let recording = crate::recording::Recording::decode(&recording.encode().unwrap()).unwrap();
         for cut in 0..=recording.records().len() {
-            let (journal, vm) = recording.inspect(cut).unwrap();
-            let replay = view(&vm, &journal, None);
+            let (journal, execution) = recording.inspect(cut).unwrap();
+            let replay = view(&execution, &journal, None);
             for operation in replay["retry_operations"].as_array().unwrap() {
                 for attempt in operation["attempts"].as_array().unwrap() {
                     for field in [
@@ -1812,8 +1817,8 @@ mod tests {
             }
         }
         for (cut, frame) in frames {
-            let (journal, vm) = recording.inspect(cut).unwrap();
-            let replay = view(&vm, &journal, None);
+            let (journal, execution) = recording.inspect(cut).unwrap();
+            let replay = view(&execution, &journal, None);
             assert_eq!(
                 replay["retry_operations"], frame["retry_operations"],
                 "prefix {cut}"
@@ -1830,14 +1835,14 @@ mod tests {
         .expect("minimal graph");
         let version = crate::plan::GraphVersion(1);
         let journal = MemJournal::new(version);
-        let vm = Execution::new(&compilation.plan, version);
+        let execution = Execution::new(&compilation.plan, version);
         let view = snapshot(SnapshotInput {
             revision: 0,
             mode: "simulate",
             state: ExecutionState::Paused,
             plan: &compilation.plan,
             definitions: &compilation.source_definitions,
-            execution: &vm,
+            execution: &execution,
             journal: &journal,
             fault: None,
             activity: None,
@@ -1907,8 +1912,8 @@ graph inspected : App {
         )
         .expect("the inspection fixture compiles");
         let journal = MemJournal::new(crate::plan::GraphVersion(1));
-        let vm = Execution::new(&compilation.plan, crate::plan::GraphVersion(1));
-        let inspection = vm.inspection();
+        let execution = Execution::new(&compilation.plan, crate::plan::GraphVersion(1));
+        let inspection = execution.inspection();
         let active_instances = active_instance_lifecycles(&journal);
 
         let value = topology(
@@ -1987,11 +1992,11 @@ graph inspected : App {
         )
         .unwrap();
         let journal = MemJournal::new(crate::plan::GraphVersion(1));
-        let vm = Execution::new(&compilation.plan, crate::plan::GraphVersion(1));
+        let execution = Execution::new(&compilation.plan, crate::plan::GraphVersion(1));
         let value = topology(
             &compilation.plan,
             &compilation.source_definitions,
-            &vm.inspection(),
+            &execution.inspection(),
             &journal,
             &active_instance_lifecycles(&journal),
             None,

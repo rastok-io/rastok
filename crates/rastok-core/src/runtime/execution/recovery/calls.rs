@@ -8,7 +8,7 @@ impl Execution<'_> {
     pub(super) fn restore_call(
         &mut self,
         journal: &dyn Journal,
-        bindings: &mut dyn OutboundDrivers,
+        drivers: &mut dyn OutboundDrivers,
         index: usize,
         record: &CallRecord,
     ) -> Result<(), ExecutionFault> {
@@ -152,7 +152,7 @@ impl Execution<'_> {
                 } else {
                     SchedulerCompletion::TimeoutExpired
                 };
-                let completion = bindings
+                let completion = drivers
                     .scheduler_completion(&intent.connector_path, terminal)
                     .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
                     .map_err(ExecutionFault::Dispatch)?;

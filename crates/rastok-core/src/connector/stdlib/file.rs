@@ -14,7 +14,7 @@ use crate::node::PortDirection;
 /// Effective logical type of one currently executable `File` port.
 ///
 /// This reads the shared Contract definition. `watch` is a
-/// known source profile but has no executable row until its inbound protocol
+/// known source mode but has no executable row until its inbound protocol
 /// is specified.
 #[must_use]
 pub fn file_port_type(
@@ -24,7 +24,7 @@ pub fn file_port_type(
 ) -> Option<DataType> {
     if contract.as_str() != FILE.id
         || !mode_word
-            .and_then(|word| FILE.profile(word))
+            .and_then(|word| FILE.mode(word))
             .is_some_and(|mode| matches!(mode.support, ModeSupport::Available))
     {
         return None;
@@ -235,7 +235,7 @@ pub const FILE: ConnectorContract = ConnectorContract {
         // Reading versus replacing is user intent and never inferred from the
         // payload or wiring.
         default: None,
-        profiles: &[
+        modes: &[
             ContractMode {
                 protocol: None,
                 word: "read",
@@ -256,7 +256,7 @@ pub const FILE: ConnectorContract = ConnectorContract {
             ContractMode {
                 protocol: None,
                 word: "watch",
-                support: ModeSupport::Deferred("the File watch profile"),
+                support: ModeSupport::Deferred("the File watch mode"),
                 attributes: &[],
             },
         ],
@@ -284,7 +284,7 @@ pub(super) fn validate(node: &Node, spec: &ConnectorSpec) -> Result<(), PlanVali
     let mode = match spec.attribute("mode") {
         Some(crate::plan::AttrSetting::Word(word))
             if FILE
-                .profile(word)
+                .mode(word)
                 .is_some_and(|mode| matches!(mode.support, ModeSupport::Available)) =>
         {
             word.as_str()
@@ -353,8 +353,7 @@ pub(super) fn validate(node: &Node, spec: &ConnectorSpec) -> Result<(), PlanVali
         }
     }
     for (name, _) in &spec.attributes {
-        if name != "mode"
-            && (name == "behavior" || FILE.attribute(FILE.profile(mode), name).is_none())
+        if name != "mode" && (name == "behavior" || FILE.attribute(FILE.mode(mode), name).is_none())
         {
             return Err(PlanValidationError::ContractAttributeMismatch {
                 node: node.path.clone(),

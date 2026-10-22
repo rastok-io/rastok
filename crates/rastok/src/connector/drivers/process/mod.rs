@@ -29,7 +29,7 @@ use std::process::{Command, Stdio};
 mod service;
 pub use service::ProcessServiceFactory;
 
-/// The selected profile's RESOLVED settings — one pure conversion from
+/// The selected mode's resolved settings — one pure conversion from
 /// the travelling spec, judged in full BEFORE any effect
 /// (D-2026-08-12-1, review rounds): the contract must be `Process`,
 /// every Defaulted attribute must be present (the checker injected
@@ -1246,22 +1246,24 @@ graph real : App {
         )
         .expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
+        let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
         let registry = crate::connector::drivers::DriverRegistry::default()
             .try_with(Box::new(ProcessFactory::try_new().unwrap()))
             .unwrap();
         let mut world =
             crate::connector::drivers::RuntimeDrivers::prepare(&compilation.plan, &registry)
                 .expect("the plan binds");
-        vm.accept_input(&mut journal, submission).unwrap();
+        execution.accept_input(&mut journal, submission).unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         loop {
-            vm.run_ready_with_bindings(&mut journal, &mut world)
+            execution
+                .run_ready_with_drivers(&mut journal, &mut world)
                 .unwrap();
-            let report = vm.poll_drivers(&mut journal, &mut world).unwrap();
-            vm.run_ready_with_bindings(&mut journal, &mut world)
+            let report = execution.poll_drivers(&mut journal, &mut world).unwrap();
+            execution
+                .run_ready_with_drivers(&mut journal, &mut world)
                 .unwrap();
-            if vm.is_stable() {
+            if execution.is_stable() {
                 break;
             }
             if report.settled == 0 {
@@ -1270,22 +1272,29 @@ graph real : App {
                     "the run wedged: neither settled nor expired"
                 );
                 std::thread::sleep(std::time::Duration::from_millis(10));
-                vm.advance_to(&mut journal, &mut world, vm.logical_time() + 10_000_000)
+                execution
+                    .advance_to(
+                        &mut journal,
+                        &mut world,
+                        execution.logical_time() + 10_000_000,
+                    )
                     .unwrap();
             }
         }
         (
             journal,
-            vm.outputs()
+            execution
+                .outputs()
                 .iter()
                 .map(|output| output.envelope.clone())
                 .collect(),
-            vm.envelope_views()
+            execution
+                .envelope_views()
                 .iter()
                 .filter(|item| item.node.is_some() && item.port.name() == "err")
                 .map(|item| item.envelope.clone())
                 .collect(),
-            vm.envelope_views().to_vec(),
+            execution.envelope_views().to_vec(),
         )
     }
 
@@ -1824,9 +1833,11 @@ graph unframeable : App {
         )
         .expect("the route resolves to text");
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
+        let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
         assert!(
-            vm.accept_input(&mut journal, submission("salut")).is_err(),
+            execution
+                .accept_input(&mut journal, submission("salut"))
+                .is_err(),
             "a struct cannot enter a text route"
         );
         assert!(journal.records().is_empty(), "nothing was journaled");

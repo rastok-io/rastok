@@ -53,28 +53,31 @@ graph app : App {{
             "a boundary-only Graph needs no synthetic Operator"
         );
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut vm = Execution::new(&plan, GraphVersion(1));
-        vm.accept_input(
-            &mut journal,
-            IngressProposal {
-                provenance: IngressProvenance::single(rastok::node::Path::new(["test"]).unwrap()),
-                draft: EnvelopeDraft {
-                    port: rastok::node::Port::new("in").unwrap(),
-                    data: Data::materialized(Value::Int(7)),
-                    ext: Namespace::new(),
+        let mut execution = Execution::new(&plan, GraphVersion(1));
+        execution
+            .accept_input(
+                &mut journal,
+                IngressProposal {
+                    provenance: IngressProvenance::single(
+                        rastok::node::Path::new(["test"]).unwrap(),
+                    ),
+                    draft: EnvelopeDraft {
+                        port: rastok::node::Port::new("in").unwrap(),
+                        data: Data::materialized(Value::Int(7)),
+                        ext: Namespace::new(),
+                    },
+                    sequence: IngressSequence::Next,
+                    session: None,
                 },
-                sequence: IngressSequence::Next,
-                session: None,
-            },
-        )
-        .unwrap();
+            )
+            .unwrap();
         for _ in 0..30 {
-            vm.recover_from_journal(&journal).unwrap();
-            if !vm.step(&mut journal).unwrap() {
+            execution.recover_from_journal(&journal).unwrap();
+            if !execution.step(&mut journal).unwrap() {
                 break;
             }
         }
-        assert!(vm.is_stable());
+        assert!(execution.is_stable());
         let fold =
             rastok::journal::loop_protocol::LoopView::from_records(journal.records()).unwrap();
         let run = fold.runs().next().unwrap().1;
@@ -83,7 +86,10 @@ graph app : App {{
             rastok::journal::loop_protocol::Phase::Closed
                 | rastok::journal::loop_protocol::Phase::Expired
         ));
-        assert_eq!(vm.outputs().len(), usize::from(body != "in -> Loop.done"));
+        assert_eq!(
+            execution.outputs().len(),
+            usize::from(body != "in -> Loop.done")
+        );
     }
 }
 
@@ -137,35 +143,38 @@ graph app : App {
     let compiled = compiler::compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
     let (plan, _) = plan::decode(&plan::encode(&compiled.plan, &compiled.hash)).unwrap();
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::new(&plan, GraphVersion(1));
+    let mut execution = Execution::new(&plan, GraphVersion(1));
     for n in [1, 10] {
-        vm.accept_input(
-            &mut journal,
-            IngressProposal {
-                provenance: IngressProvenance::single(rastok::node::Path::new(["test"]).unwrap()),
-                draft: EnvelopeDraft {
-                    port: rastok::node::Port::new("in").unwrap(),
-                    data: Data::materialized(Value::Int(n)),
-                    ext: Namespace::new(),
+        execution
+            .accept_input(
+                &mut journal,
+                IngressProposal {
+                    provenance: IngressProvenance::single(
+                        rastok::node::Path::new(["test"]).unwrap(),
+                    ),
+                    draft: EnvelopeDraft {
+                        port: rastok::node::Port::new("in").unwrap(),
+                        data: Data::materialized(Value::Int(n)),
+                        ext: Namespace::new(),
+                    },
+                    sequence: IngressSequence::Next,
+                    session: None,
                 },
-                sequence: IngressSequence::Next,
-                session: None,
-            },
-        )
-        .unwrap();
+            )
+            .unwrap();
     }
     for _ in 0..100 {
         let mut restored = Execution::new(&plan, GraphVersion(1));
         restored.recover_from_journal(&journal).unwrap();
-        assert_eq!(restored.inspection(), vm.inspection());
-        vm = restored;
-        if vm.is_stable() {
+        assert_eq!(restored.inspection(), execution.inspection());
+        execution = restored;
+        if execution.is_stable() {
             break;
         }
-        assert!(vm.step(&mut journal).unwrap());
+        assert!(execution.step(&mut journal).unwrap());
     }
-    assert!(vm.is_stable());
-    let mut values: Vec<_> = vm
+    assert!(execution.is_stable());
+    let mut values: Vec<_> = execution
         .outputs()
         .iter()
         .map(|output| {
@@ -239,29 +248,31 @@ graph app : App {{
                 compiler::compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap();
             let (plan, _) = plan::decode(&plan::encode(&compiled.plan, &compiled.hash)).unwrap();
             let mut journal = MemJournal::new(GraphVersion(1));
-            let mut vm = Execution::new(&plan, GraphVersion(1));
-            vm.accept_input(
-                &mut journal,
-                IngressProposal {
-                    provenance: IngressProvenance::single(
-                        rastok::node::Path::new(["nested"]).unwrap(),
-                    ),
-                    draft: EnvelopeDraft {
-                        port: rastok::node::Port::new("in").unwrap(),
-                        data: Data::materialized(Value::Int(n)),
-                        ext: Namespace::new(),
+            let mut execution = Execution::new(&plan, GraphVersion(1));
+            execution
+                .accept_input(
+                    &mut journal,
+                    IngressProposal {
+                        provenance: IngressProvenance::single(
+                            rastok::node::Path::new(["nested"]).unwrap(),
+                        ),
+                        draft: EnvelopeDraft {
+                            port: rastok::node::Port::new("in").unwrap(),
+                            data: Data::materialized(Value::Int(n)),
+                            ext: Namespace::new(),
+                        },
+                        sequence: IngressSequence::Next,
+                        session: None,
                     },
-                    sequence: IngressSequence::Next,
-                    session: None,
-                },
-            )
-            .unwrap();
+                )
+                .unwrap();
             for _ in 0..100 {
-                let mut restored = Execution::new_at(&plan, GraphVersion(1), vm.logical_time());
+                let mut restored =
+                    Execution::new_at(&plan, GraphVersion(1), execution.logical_time());
                 restored.recover_from_journal(&journal).unwrap();
-                assert_eq!(restored.inspection(), vm.inspection());
-                vm = restored;
-                if vm.is_stable() {
+                assert_eq!(restored.inspection(), execution.inspection());
+                execution = restored;
+                if execution.is_stable() {
                     if let Some(due) = LoopView::from_records(journal.records())
                         .unwrap()
                         .runs()
@@ -272,22 +283,24 @@ graph app : App {{
                         })
                         .min()
                     {
-                        let mut bindings = rastok::connector::drivers::RuntimeDrivers::prepare(
+                        let mut drivers = rastok::connector::drivers::RuntimeDrivers::prepare(
                             &plan,
                             &rastok::connector::drivers::DriverRegistry::default(),
                         )
                         .unwrap();
-                        vm.advance_to(&mut journal, &mut bindings, due).unwrap();
+                        execution
+                            .advance_to(&mut journal, &mut drivers, due)
+                            .unwrap();
                         continue;
                     }
                     break;
                 }
-                assert!(vm.step(&mut journal).unwrap());
+                assert!(execution.step(&mut journal).unwrap());
             }
-            assert!(vm.is_stable());
-            assert_eq!(vm.outputs().len(), 1);
+            assert!(execution.is_stable());
+            assert_eq!(execution.outputs().len(), 1);
             assert_eq!(
-                vm.outputs()[0].port.name(),
+                execution.outputs()[0].port.name(),
                 if n == 1 { "out" } else { "exhausted" }
             );
             let fold = LoopView::from_records(journal.records()).unwrap();
@@ -316,36 +329,37 @@ graph app : App {{
     let compiled = compiler::compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap();
     let (plan, _) = plan::decode(&plan::encode(&compiled.plan, &compiled.hash)).unwrap();
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::new(&plan, GraphVersion(1));
-    vm.accept_input(
-        &mut journal,
-        IngressProposal {
-            provenance: IngressProvenance::single(rastok::node::Path::new(["test"]).unwrap()),
-            draft: EnvelopeDraft {
-                port: rastok::node::Port::new("in").unwrap(),
-                data: Data::materialized(Value::Int(5)),
-                ext: Namespace::new(),
+    let mut execution = Execution::new(&plan, GraphVersion(1));
+    execution
+        .accept_input(
+            &mut journal,
+            IngressProposal {
+                provenance: IngressProvenance::single(rastok::node::Path::new(["test"]).unwrap()),
+                draft: EnvelopeDraft {
+                    port: rastok::node::Port::new("in").unwrap(),
+                    data: Data::materialized(Value::Int(5)),
+                    ext: Namespace::new(),
+                },
+                sequence: IngressSequence::Next,
+                session: None,
             },
-            sequence: IngressSequence::Next,
-            session: None,
-        },
-    )
-    .unwrap();
+        )
+        .unwrap();
     for _ in 0..100 {
         let mut restored = Execution::new(&plan, GraphVersion(1));
         restored.recover_from_journal(&journal).unwrap();
-        assert_eq!(restored.inspection(), vm.inspection());
-        vm = restored;
-        if vm.is_stable() {
+        assert_eq!(restored.inspection(), execution.inspection());
+        execution = restored;
+        if execution.is_stable() {
             break;
         }
-        assert!(vm.step(&mut journal).unwrap());
+        assert!(execution.step(&mut journal).unwrap());
     }
-    assert!(vm.is_stable());
+    assert!(execution.is_stable());
     let fold = LoopView::from_records(journal.records()).unwrap();
     let (_, run) = fold.runs().next().unwrap();
     assert_eq!((run.phase, run.iteration), (Phase::Closed, 5));
-    assert_eq!(vm.outputs().len(), 1);
+    assert_eq!(execution.outputs().len(), 1);
     let bad = source.replace("data - 1", "data + 1");
     assert!(compiler::compile(&[&bad], &ContractCatalog::try_m0().unwrap()).is_err());
     let mut forged = plan.plan().clone();
@@ -382,35 +396,41 @@ graph app : App {{
         let compiled = compiler::compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap();
         let (plan, _) = plan::decode(&plan::encode(&compiled.plan, &compiled.hash)).unwrap();
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut vm = Execution::new(&plan, GraphVersion(1));
-        vm.accept_input(
-            &mut journal,
-            IngressProposal {
-                provenance: IngressProvenance::single(rastok::node::Path::new(["test"]).unwrap()),
-                draft: EnvelopeDraft {
-                    port: rastok::node::Port::new("in").unwrap(),
-                    data: Data::materialized(Value::Int(1)),
-                    ext: Namespace::new(),
+        let mut execution = Execution::new(&plan, GraphVersion(1));
+        execution
+            .accept_input(
+                &mut journal,
+                IngressProposal {
+                    provenance: IngressProvenance::single(
+                        rastok::node::Path::new(["test"]).unwrap(),
+                    ),
+                    draft: EnvelopeDraft {
+                        port: rastok::node::Port::new("in").unwrap(),
+                        data: Data::materialized(Value::Int(1)),
+                        ext: Namespace::new(),
+                    },
+                    sequence: IngressSequence::Next,
+                    session: None,
                 },
-                sequence: IngressSequence::Next,
-                session: None,
-            },
-        )
-        .unwrap();
+            )
+            .unwrap();
         for _ in 0..100 {
             let mut restored = Execution::new(&plan, GraphVersion(1));
             restored.recover_from_journal(&journal).unwrap();
-            assert_eq!(restored.inspection(), vm.inspection());
-            vm = restored;
-            if vm.is_stable() {
+            assert_eq!(restored.inspection(), execution.inspection());
+            execution = restored;
+            if execution.is_stable() {
                 break;
             }
-            assert!(vm.step(&mut journal).unwrap());
+            assert!(execution.step(&mut journal).unwrap());
         }
-        assert!(vm.is_stable());
+        assert!(execution.is_stable());
         let fold = LoopView::from_records(journal.records()).unwrap();
         assert_eq!(fold.runs().count(), 2);
         assert!(fold.runs().all(|(_, run)| run.phase == Phase::Closed));
-        assert_eq!(vm.outputs().len(), if wiring.contains('{') { 2 } else { 1 });
+        assert_eq!(
+            execution.outputs().len(),
+            if wiring.contains('{') { 2 } else { 1 }
+        );
     }
 }

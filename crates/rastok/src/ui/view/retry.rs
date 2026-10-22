@@ -14,8 +14,8 @@ pub(super) fn spec(owner: &crate::plan::Node) -> JsonValue {
     }))
 }
 
-pub(super) fn operations(vm: &Execution<'_>, records: &[Record]) -> JsonValue {
-    let operations = vm
+pub(super) fn operations(execution: &Execution<'_>, records: &[Record]) -> JsonValue {
+    let operations = execution
         .retry_operations()
         .map(|(reference, operation)| {
             let mut owner = None;

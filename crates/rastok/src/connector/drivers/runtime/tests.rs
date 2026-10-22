@@ -542,11 +542,11 @@ fn a_both_role_family_exposes_one_shared_bound_object() {
             &starts,
         ))
         .unwrap();
-    let mut bindings = RuntimeDrivers::prepare(&plan, &registry).unwrap();
+    let mut drivers = RuntimeDrivers::prepare(&plan, &registry).unwrap();
 
-    assert!(bindings.next_inbound().unwrap().is_none());
+    assert!(drivers.next_inbound().unwrap().is_none());
     let preparation = OutboundDrivers::prepare_request(
-        &mut bindings,
+        &mut drivers,
         &node::Path::new(["first"]).unwrap(),
         &Data::materialized(Value::Text(String::from("request"))),
         &BTreeMap::new(),
@@ -768,8 +768,8 @@ fn one_both_role_session_driver_correlates_concurrent_openings_and_writes() {
             &starts,
         ))
         .unwrap();
-    let mut bindings = RuntimeDrivers::prepare(&plan, &registry).unwrap();
-    assert!(bindings.next_inbound().unwrap().is_none());
+    let mut drivers = RuntimeDrivers::prepare(&plan, &registry).unwrap();
+    assert!(drivers.next_inbound().unwrap().is_none());
 
     let mut journal = MemJournal::new(GraphVersion(1));
     let request = journal
@@ -800,10 +800,10 @@ fn one_both_role_session_driver_correlates_concurrent_openings_and_writes() {
     let second = opening(2);
     for intent in [&first, &second] {
         journal.open_outbound_session(intent.clone()).unwrap();
-        OutboundDrivers::open_session(&mut bindings, intent, &request).unwrap();
+        OutboundDrivers::open_session(&mut drivers, intent, &request).unwrap();
     }
     assert_eq!(
-        OutboundDrivers::poll_observations(&mut bindings).unwrap(),
+        OutboundDrivers::poll_observations(&mut drivers).unwrap(),
         [
             SessionObservation::Opened(second.session_id),
             SessionObservation::Opened(first.session_id),
@@ -828,10 +828,10 @@ fn one_both_role_session_driver_correlates_concurrent_openings_and_writes() {
     let second_write = write(second.session_id, 4);
     for intent in [&first_write, &second_write] {
         journal.open_session_write(intent.clone()).unwrap();
-        OutboundDrivers::write_session(&mut bindings, intent, &request).unwrap();
+        OutboundDrivers::write_session(&mut drivers, intent, &request).unwrap();
     }
     assert_eq!(
-        OutboundDrivers::poll_observations(&mut bindings).unwrap(),
+        OutboundDrivers::poll_observations(&mut drivers).unwrap(),
         [
             SessionObservation::WriteSettled {
                 session: second.session_id,
@@ -848,8 +848,8 @@ fn one_both_role_session_driver_correlates_concurrent_openings_and_writes() {
         ["inbound", "open", "open", "write", "write"]
     );
 
-    OutboundDrivers::abort_session(&mut bindings, &connector, first.session_id).unwrap();
-    OutboundDrivers::abort_session(&mut bindings, &connector, first.session_id).unwrap();
+    OutboundDrivers::abort_session(&mut drivers, &connector, first.session_id).unwrap();
+    OutboundDrivers::abort_session(&mut drivers, &connector, first.session_id).unwrap();
     assert_eq!(
         observations
             .lock()
@@ -859,14 +859,14 @@ fn one_both_role_session_driver_correlates_concurrent_openings_and_writes() {
             .count(),
         1
     );
-    assert!(bindings.sessions.contains_key(&first.session_id));
+    assert!(drivers.sessions.contains_key(&first.session_id));
     assert!(
-        OutboundDrivers::poll_observations(&mut bindings)
+        OutboundDrivers::poll_observations(&mut drivers)
             .unwrap()
             .is_empty()
     );
-    OutboundDrivers::forget_session(&mut bindings, first.session_id).unwrap();
-    OutboundDrivers::forget_session(&mut bindings, first.session_id).unwrap();
+    OutboundDrivers::forget_session(&mut drivers, first.session_id).unwrap();
+    OutboundDrivers::forget_session(&mut drivers, first.session_id).unwrap();
     assert_eq!(
         observations
             .lock()
@@ -877,17 +877,17 @@ fn one_both_role_session_driver_correlates_concurrent_openings_and_writes() {
         1,
         "the owning Driver releases a terminal resource once"
     );
-    assert!(!bindings.sessions.contains_key(&first.session_id));
-    assert!(bindings.sessions.contains_key(&second.session_id));
+    assert!(!drivers.sessions.contains_key(&first.session_id));
+    assert!(drivers.sessions.contains_key(&second.session_id));
     assert!(matches!(
-        OutboundDrivers::abort_session(&mut bindings, &connector, first.session_id),
+        OutboundDrivers::abort_session(&mut drivers, &connector, first.session_id),
         Err(crate::connector::driver::DriverRouteError::UncorrelatedSession(reference)) if reference == first.session_id
     ));
-    OutboundDrivers::write_session(&mut bindings, &second_write, &request).unwrap();
+    OutboundDrivers::write_session(&mut drivers, &second_write, &request).unwrap();
 }
 
 #[test]
-fn a_session_driver_passes_the_exchange_specific_conformance_profile() {
+fn a_session_driver_passes_the_exchange_specific_conformance_fixture() {
     let plan = session_family_plan();
     let observations = Arc::new(Mutex::new(Vec::new()));
     let starts = Arc::new(Mutex::new(Vec::new()));
@@ -918,7 +918,7 @@ fn a_session_driver_passes_the_exchange_specific_conformance_profile() {
         }
         .into_value(),
     );
-    let profile = crate::connector::drivers::conformance::SessionTestFixture {
+    let fixture = crate::connector::drivers::conformance::SessionTestFixture {
         contract,
         plan: &plan,
         connector: node::Path::new(["first"]).unwrap(),
@@ -934,7 +934,7 @@ fn a_session_driver_passes_the_exchange_specific_conformance_profile() {
         resolved_settings: BTreeMap::new(),
     };
 
-    let report = crate::connector::drivers::conformance::verify_session(&profile, &registry);
+    let report = crate::connector::drivers::conformance::verify_session(&fixture, &registry);
     crate::connector::drivers::conformance::assert_conformant(&report, &[]);
     assert_eq!(
         report.proven_cases,
@@ -1298,12 +1298,12 @@ codec = text
             state: Arc::clone(&state),
         }))
         .unwrap();
-    let mut bindings = RuntimeDrivers::prepare(&plan, &registry).unwrap();
-    let mut vm = Execution::new(&plan, GraphVersion(1));
+    let mut drivers = RuntimeDrivers::prepare(&plan, &registry).unwrap();
+    let mut execution = Execution::new(&plan, GraphVersion(1));
     let mut journal = MemJournal::new(GraphVersion(1));
 
-    let Some(crate::connector::exchange::IngressAdmission::Accepted(accepted)) = bindings
-        .poll_inbound(&mut vm, &mut journal)
+    let Some(crate::connector::exchange::IngressAdmission::Accepted(accepted)) = drivers
+        .poll_inbound(&mut execution, &mut journal)
         .expect("the proposal reaches atomic admission")
     else {
         panic!("the request must be accepted")
@@ -1315,10 +1315,11 @@ codec = text
     assert!(journal.find_envelope(accepted.envelope).is_some());
     assert_eq!(state.lock().unwrap().decisions.len(), 1);
 
-    let report = bindings.poll_inbound_call_events(&mut vm).unwrap();
+    let report = drivers.poll_inbound_call_events(&mut execution).unwrap();
     assert_eq!(report.queued, 1);
     assert!(report.rejected.is_empty());
-    vm.run_ready_with_bindings(&mut journal, &mut bindings)
+    execution
+        .run_ready_with_drivers(&mut journal, &mut drivers)
         .expect("start then reply commit in causal order");
     assert!(journal.open_inbound_calls().is_empty());
     let terminals = journal
@@ -1387,7 +1388,7 @@ codec = text
         call_id,
         completion: Completion::http_server_exit(HttpServerExit::Completed { status: 202 }),
     });
-    let duplicate = bindings.poll_inbound_call_events(&mut vm).unwrap();
+    let duplicate = drivers.poll_inbound_call_events(&mut execution).unwrap();
     assert_eq!(duplicate.uncorrelated.len(), 1);
     assert_eq!(
         journal
@@ -1431,12 +1432,12 @@ fn a_graph_response_closes_its_original_inbound_call_without_an_outbound_call() 
             state: Arc::clone(&state),
         }))
         .unwrap();
-    let mut bindings = RuntimeDrivers::prepare(&plan, &registry).unwrap();
-    let mut vm = Execution::new(&plan, GraphVersion(1));
+    let mut drivers = RuntimeDrivers::prepare(&plan, &registry).unwrap();
+    let mut execution = Execution::new(&plan, GraphVersion(1));
     let mut journal = MemJournal::new(GraphVersion(1));
 
-    let Some(crate::connector::exchange::IngressAdmission::Accepted(accepted)) = bindings
-        .poll_inbound(&mut vm, &mut journal)
+    let Some(crate::connector::exchange::IngressAdmission::Accepted(accepted)) = drivers
+        .poll_inbound(&mut execution, &mut journal)
         .expect("the request reaches atomic admission")
     else {
         panic!("the request must be accepted")
@@ -1465,7 +1466,8 @@ fn a_graph_response_closes_its_original_inbound_call_without_an_outbound_call() 
             crate::journal::Record::Transaction(_) | crate::journal::Record::Egress(_) => None,
         })
         .expect("the accepted Call records its exact source instance");
-    vm.run_ready_with_bindings(&mut journal, &mut bindings)
+    execution
+        .run_ready_with_drivers(&mut journal, &mut drivers)
         .expect("the graph response reaches the retained connector cursor");
     let response_target = journal
         .records()
@@ -1487,14 +1489,14 @@ fn a_graph_response_closes_its_original_inbound_call_without_an_outbound_call() 
         call_id,
         completion: Completion::http_server_exit(HttpServerExit::Completed { status: 200 }),
     });
-    let premature = bindings.poll_inbound_call_events(&mut vm).unwrap();
+    let premature = drivers.poll_inbound_call_events(&mut execution).unwrap();
     assert_eq!(premature.queued, 0);
     assert_eq!(premature.rejected.len(), 1);
 
-    let first = bindings.poll_inbound_call_responses(&mut vm).unwrap();
+    let first = drivers.poll_inbound_call_responses(&mut execution).unwrap();
     assert_eq!((first.started, first.pending), (0, 1));
     assert!(state.lock().unwrap().responses.is_empty());
-    let second = bindings.poll_inbound_call_responses(&mut vm).unwrap();
+    let second = drivers.poll_inbound_call_responses(&mut execution).unwrap();
     assert_eq!((second.started, second.pending), (1, 0));
     {
         let state = state.lock().unwrap();
@@ -1505,10 +1507,11 @@ fn a_graph_response_closes_its_original_inbound_call_without_an_outbound_call() 
             &Data::materialized(Value::Text(String::from("response")))
         );
     }
-    let report = bindings.poll_inbound_call_events(&mut vm).unwrap();
+    let report = drivers.poll_inbound_call_events(&mut execution).unwrap();
     assert_eq!(report.queued, 1);
     assert!(report.rejected.is_empty());
-    vm.run_ready_with_bindings(&mut journal, &mut bindings)
+    execution
+        .run_ready_with_drivers(&mut journal, &mut drivers)
         .expect("the observed protocol completion closes the original Call");
 
     let terminals = journal
@@ -1566,12 +1569,12 @@ fn a_response_after_the_inbound_call_closed_is_discarded_and_journaled() {
             state: Arc::clone(&state),
         }))
         .unwrap();
-    let mut bindings = RuntimeDrivers::prepare(&plan, &registry).unwrap();
-    let mut vm = Execution::new(&plan, GraphVersion(1));
+    let mut drivers = RuntimeDrivers::prepare(&plan, &registry).unwrap();
+    let mut execution = Execution::new(&plan, GraphVersion(1));
     let mut journal = MemJournal::new(GraphVersion(1));
 
-    let Some(crate::connector::exchange::IngressAdmission::Accepted(accepted)) = bindings
-        .poll_inbound(&mut vm, &mut journal)
+    let Some(crate::connector::exchange::IngressAdmission::Accepted(accepted)) = drivers
+        .poll_inbound(&mut execution, &mut journal)
         .expect("the request reaches atomic admission")
     else {
         panic!("the request must be accepted")
@@ -1580,13 +1583,17 @@ fn a_response_after_the_inbound_call_closed_is_discarded_and_journaled() {
         panic!("the accepted request opens one inbound Call")
     };
     assert_eq!(
-        bindings.poll_inbound_call_events(&mut vm).unwrap().queued,
+        drivers
+            .poll_inbound_call_events(&mut execution)
+            .unwrap()
+            .queued,
         1
     );
-    vm.run_ready_with_bindings(&mut journal, &mut bindings)
+    execution
+        .run_ready_with_drivers(&mut journal, &mut drivers)
         .expect("the accepted terminal and late graph response settle deterministically");
 
-    let response_report = bindings.poll_inbound_call_responses(&mut vm).unwrap();
+    let response_report = drivers.poll_inbound_call_responses(&mut execution).unwrap();
     assert_eq!((response_report.started, response_report.pending), (0, 0));
     assert!(state.lock().unwrap().responses.is_empty());
     let terminals = journal
@@ -1633,13 +1640,13 @@ fn inbound_proposals_ack_after_commit_and_remain_retained_under_pressure() {
             state: Arc::clone(&state),
         }))
         .unwrap();
-    let mut bindings = RuntimeDrivers::prepare(&plan, &registry).unwrap();
-    let mut vm = Execution::new(&plan, GraphVersion(1));
+    let mut drivers = RuntimeDrivers::prepare(&plan, &registry).unwrap();
+    let mut execution = Execution::new(&plan, GraphVersion(1));
     let mut journal = MemJournal::new(GraphVersion(1));
 
     for expected in 0..1024 {
-        let Some(crate::connector::exchange::IngressAdmission::Accepted(accepted)) = bindings
-            .poll_inbound(&mut vm, &mut journal)
+        let Some(crate::connector::exchange::IngressAdmission::Accepted(accepted)) = drivers
+            .poll_inbound(&mut execution, &mut journal)
             .expect("the bounded intake stays healthy")
         else {
             panic!("proposal {expected} should fit")
@@ -1670,15 +1677,15 @@ fn inbound_proposals_ack_after_commit_and_remain_retained_under_pressure() {
 
     let records_before = journal.records().len();
     assert_eq!(
-        bindings.poll_inbound(&mut vm, &mut journal).unwrap(),
+        drivers.poll_inbound(&mut execution, &mut journal).unwrap(),
         Some(crate::connector::exchange::IngressAdmission::Pending)
     );
     assert_eq!(journal.records().len(), records_before);
     assert_eq!(state.lock().unwrap().decisions.len(), 1024);
-    let retained = bindings.next_inbound().unwrap().unwrap();
+    let retained = drivers.next_inbound().unwrap().unwrap();
     assert_eq!(retained.proposal().handle.get(), 1024);
     assert_eq!(
-        bindings.poll_inbound(&mut vm, &mut journal).unwrap(),
+        drivers.poll_inbound(&mut execution, &mut journal).unwrap(),
         Some(crate::connector::exchange::IngressAdmission::Pending),
         "re-polling cannot replace or acknowledge the retained proposal"
     );
@@ -1699,11 +1706,11 @@ fn an_inbound_contract_rejection_releases_the_exact_proposal_without_a_fact() {
             state: Arc::clone(&state),
         }))
         .unwrap();
-    let mut bindings = RuntimeDrivers::prepare(&plan, &registry).unwrap();
-    let mut vm = Execution::new(&plan, GraphVersion(1));
+    let mut drivers = RuntimeDrivers::prepare(&plan, &registry).unwrap();
+    let mut execution = Execution::new(&plan, GraphVersion(1));
     let mut journal = MemJournal::new(GraphVersion(1));
     assert_eq!(
-        bindings.poll_inbound(&mut vm, &mut journal).unwrap(),
+        drivers.poll_inbound(&mut execution, &mut journal).unwrap(),
         Some(crate::connector::exchange::IngressAdmission::Rejected(
             crate::connector::exchange::IngressRejection::UnknownPort
         ))
@@ -1733,10 +1740,10 @@ fn inbound_session_framing_cannot_contradict_the_exchange_fact() {
             state,
         }))
         .unwrap();
-    let mut bindings = RuntimeDrivers::prepare(&plan, &registry).unwrap();
+    let mut drivers = RuntimeDrivers::prepare(&plan, &registry).unwrap();
 
     assert!(matches!(
-        bindings.next_inbound(),
+        drivers.next_inbound(),
         Err(
             crate::connector::driver::DriverRouteError::InboundExchangeMismatch {
                 exchange: ExchangeKind::Event,
@@ -1761,10 +1768,10 @@ fn an_inbound_family_cannot_forge_another_connector_as_its_source() {
             state,
         }))
         .unwrap();
-    let mut bindings = RuntimeDrivers::prepare(&plan, &registry).unwrap();
+    let mut drivers = RuntimeDrivers::prepare(&plan, &registry).unwrap();
 
     assert!(matches!(
-        bindings.next_inbound(),
+        drivers.next_inbound(),
         Err(crate::connector::driver::DriverRouteError::InboundSourceMismatch {
             source,
             ..
@@ -1773,7 +1780,7 @@ fn an_inbound_family_cannot_forge_another_connector_as_its_source() {
 }
 
 #[test]
-fn an_event_driver_passes_the_exchange_specific_conformance_profile() {
+fn an_event_driver_passes_the_exchange_specific_conformance_fixture() {
     let plan = inbound_event_plan();
     let state = Arc::new(Mutex::new(InboundQueueState {
         proposals: VecDeque::from([inbound_proposal(4, "out")]),
@@ -1801,19 +1808,19 @@ fn an_event_driver_passes_the_exchange_specific_conformance_profile() {
         common: crate::connector::stdlib::PROCESS.common,
         selector: crate::connector::stdlib::PROCESS.selector.clone(),
     }));
-    let profile = crate::connector::drivers::conformance::EventTestFixture {
+    let fixture = crate::connector::drivers::conformance::EventTestFixture {
         contract,
         plan: &plan,
         expected_outputs: vec![Data::materialized(Value::Text(String::from("event-4")))],
     };
 
-    let report = crate::connector::drivers::conformance::verify_event(&profile, &registry);
+    let report = crate::connector::drivers::conformance::verify_event(&fixture, &registry);
     crate::connector::drivers::conformance::assert_conformant(&report, &[]);
     assert_eq!(report.proven_cases, ["event-admission"]);
 }
 
 #[test]
-fn two_connector_families_bind_and_route_without_vm_name_dispatch() {
+fn two_connector_families_bind_and_route_without_execution_name_dispatch() {
     let plan = two_family_plan();
     let starts = Arc::new(Mutex::new(Vec::new()));
     let registry = DriverRegistry::default()
@@ -1831,29 +1838,32 @@ fn two_connector_families_bind_and_route_without_vm_name_dispatch() {
             &starts,
         ))
         .unwrap();
-    let mut bindings = RuntimeDrivers::prepare(&plan, &registry).unwrap();
+    let mut drivers = RuntimeDrivers::prepare(&plan, &registry).unwrap();
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::new(&plan, GraphVersion(1));
-    vm.accept_input(
-        &mut journal,
-        IngressProposal {
-            provenance: IngressProvenance::single(node::Path::new(["test"]).unwrap()),
-            draft: EnvelopeDraft {
-                port: node::Port::new("in").unwrap(),
-                data: Data::materialized(Value::Text(String::from("request"))),
-                ext: Namespace::new(),
+    let mut execution = Execution::new(&plan, GraphVersion(1));
+    execution
+        .accept_input(
+            &mut journal,
+            IngressProposal {
+                provenance: IngressProvenance::single(node::Path::new(["test"]).unwrap()),
+                draft: EnvelopeDraft {
+                    port: node::Port::new("in").unwrap(),
+                    data: Data::materialized(Value::Text(String::from("request"))),
+                    ext: Namespace::new(),
+                },
+                sequence: IngressSequence::Next,
+                session: None,
             },
-            sequence: IngressSequence::Next,
-            session: None,
-        },
-    )
-    .unwrap();
+        )
+        .unwrap();
     for _ in 0..2 {
-        vm.run_ready_with_bindings(&mut journal, &mut bindings)
+        execution
+            .run_ready_with_drivers(&mut journal, &mut drivers)
             .unwrap();
-        vm.poll_drivers(&mut journal, &mut bindings).unwrap();
+        execution.poll_drivers(&mut journal, &mut drivers).unwrap();
     }
-    vm.run_ready_with_bindings(&mut journal, &mut bindings)
+    execution
+        .run_ready_with_drivers(&mut journal, &mut drivers)
         .unwrap();
 
     assert_eq!(
@@ -1864,11 +1874,11 @@ fn two_connector_families_bind_and_route_without_vm_name_dispatch() {
         ]
     );
     assert_eq!(
-        vm.outputs()[0].envelope.data(),
+        execution.outputs()[0].envelope.data(),
         &Data::materialized(Value::Text(String::from("org.rastok.test/beta@1")))
     );
     assert!(
-        bindings.calls.is_empty(),
+        drivers.calls.is_empty(),
         "settled calls do not accumulate in the routing table"
     );
 }

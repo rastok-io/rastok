@@ -185,11 +185,11 @@ fn process_modes_share_one_identity_without_aliasing_another_catalogue_entry() {
     service_default.selector = Some(ModeSelector {
         attribute: "mode",
         default: Some("service"),
-        profiles: &[ContractMode {
+        modes: &[ContractMode {
             word: "service",
             support: ModeSupport::Available,
             attributes: &[],
-            protocol: Some(ProfileProtocol {
+            protocol: Some(ModeProtocol {
                 roles: ConnectorDirection::InboundAndOutbound,
                 exchange: ExchangeKind::Session,
             }),
@@ -202,13 +202,13 @@ fn process_modes_share_one_identity_without_aliasing_another_catalogue_entry() {
     let sheet = catalogue.connector_by_id(&id).unwrap();
     assert_eq!(sheet.id, PROCESS_CONNECTOR_ID);
     assert_eq!(
-        sheet.profile("service").unwrap().protocol.unwrap().exchange,
+        sheet.mode("service").unwrap().protocol.unwrap().exchange,
         ExchangeKind::Session
     );
 }
 
 #[test]
-fn independent_core_validation_rejects_forged_service_profiles() {
+fn independent_core_validation_rejects_forged_service_modes() {
     use rastok::{connector::*, plan::*};
     let compiled = compile(&[SERVICE], &ContractCatalog::try_m0().unwrap()).unwrap();
     for sabotage in 0..10 {
@@ -405,24 +405,24 @@ mod real {
         }
     }
     fn until<'a>(
-        vm: &mut Execution<'a>,
+        execution: &mut Execution<'a>,
         journal: &mut MemJournal,
         world: &mut RuntimeDrivers<'a>,
         predicate: impl Fn(&Execution<'a>, &MemJournal) -> bool,
     ) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
         loop {
-            vm.run_ready_with_bindings(journal, world).unwrap();
-            world.poll_inbound(vm, journal).unwrap();
-            vm.poll_drivers(journal, world).unwrap();
-            vm.run_ready_with_bindings(journal, world).unwrap();
-            if predicate(vm, journal) {
+            execution.run_ready_with_drivers(journal, world).unwrap();
+            world.poll_inbound(execution, journal).unwrap();
+            execution.poll_drivers(journal, world).unwrap();
+            execution.run_ready_with_drivers(journal, world).unwrap();
+            if predicate(execution, journal) {
                 return;
             }
             assert!(
                 std::time::Instant::now() < deadline,
                 "resident child failed to progress: {:?}",
-                vm.outputs()
+                execution.outputs()
             );
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
@@ -436,7 +436,7 @@ mod real {
     fn unix_service_reuses_a_child_then_observes_quit_and_opens_fresh() {
         let source = SERVICE.replace("command = \"cat\"", r#"command = "/bin/sh"; args = ["-c", "while IFS= read -r line; do if [ \"$line\" = quit ]; then exit 0; fi; printf '%s\\n' \"$line\"; done"]"#);
         let compiled = compile(&[source.as_str()], &ContractCatalog::try_m0().unwrap()).unwrap();
-        let mut vm = Execution::new(&compiled.plan, GraphVersion(1));
+        let mut execution = Execution::new(&compiled.plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
         let registry = hosted_registry(None).unwrap();
         let mut world = RuntimeDrivers::prepare(&compiled.plan, &registry).unwrap();
@@ -451,19 +451,21 @@ mod real {
                 "session_id".into(),
                 MetaValue::Scalar(Scalar::Text("00000000000000000000000000000001".into())),
             );
-            vm.accept_input(&mut journal, submission).unwrap();
-            until(&mut vm, &mut journal, &mut world, |vm, _| {
-                vm.outputs().len() == i + 1
+            execution.accept_input(&mut journal, submission).unwrap();
+            until(&mut execution, &mut journal, &mut world, |execution, _| {
+                execution.outputs().len() == i + 1
             });
             if i < 3 {
                 assert_eq!(openings(&journal), 1);
             }
             let before = journal.records().to_vec();
-            vm.recover_with_bindings(&journal, &mut world).unwrap();
+            execution
+                .recover_with_drivers(&journal, &mut world)
+                .unwrap();
             assert_eq!(journal.records(), before, "recovery never repeats a write");
         }
         assert_eq!(openings(&journal), 2);
-        assert!(!vm.has_open_obligations());
+        assert!(!execution.has_open_obligations());
     }
 
     /// Marked OS integration: retained logical deadlines trigger Unix signals.
@@ -482,26 +484,33 @@ mod real {
                 compile(&[source.as_str()], &ContractCatalog::try_m0().unwrap()).unwrap();
             let registry = hosted_registry(None).unwrap();
             let mut world = RuntimeDrivers::prepare(&compiled.plan, &registry).unwrap();
-            let mut vm = Execution::new(&compiled.plan, GraphVersion(1));
+            let mut execution = Execution::new(&compiled.plan, GraphVersion(1));
             let mut journal = MemJournal::new(GraphVersion(1));
-            vm.accept_input(&mut journal, input("in", "ready")).unwrap();
-            until(&mut vm, &mut journal, &mut world, |vm, _| {
-                vm.outputs().len() == 1
+            execution
+                .accept_input(&mut journal, input("in", "ready"))
+                .unwrap();
+            until(&mut execution, &mut journal, &mut world, |execution, _| {
+                execution.outputs().len() == 1
             });
-            vm.accept_input(&mut journal, input("close", "close this generation"))
+            execution
+                .accept_input(&mut journal, input("close", "close this generation"))
                 .unwrap();
-            vm.run_ready_with_bindings(&mut journal, &mut world)
+            execution
+                .run_ready_with_drivers(&mut journal, &mut world)
                 .unwrap();
-            vm.advance_to(&mut journal, &mut world, 1_000_000_000)
+            execution
+                .advance_to(&mut journal, &mut world, 1_000_000_000)
                 .unwrap();
             if ignore_term {
-                vm.advance_to(&mut journal, &mut world, 2_000_000_000)
+                execution
+                    .advance_to(&mut journal, &mut world, 2_000_000_000)
                     .unwrap();
             }
-            until(&mut vm, &mut journal, &mut world, |vm, _| {
-                vm.outputs().len() == 2
+            until(&mut execution, &mut journal, &mut world, |execution, _| {
+                execution.outputs().len() == 2
             });
-            let Data::Materialized(Value::TaggedUnion(exit)) = vm.outputs()[1].envelope.data()
+            let Data::Materialized(Value::TaggedUnion(exit)) =
+                execution.outputs()[1].envelope.data()
             else {
                 panic!("typed terminal");
             };
@@ -513,7 +522,7 @@ mod real {
                     "Exited"
                 }
             );
-            assert!(!vm.has_open_obligations());
+            assert!(!execution.has_open_obligations());
         }
     }
 
@@ -529,16 +538,19 @@ mod real {
         let compiled = compile(&[graph], &ContractCatalog::try_m0().unwrap()).unwrap();
         let registry = hosted_registry(None).unwrap();
         let mut world = RuntimeDrivers::prepare(&compiled.plan, &registry).unwrap();
-        let mut vm = Execution::new(&compiled.plan, GraphVersion(1));
+        let mut execution = Execution::new(&compiled.plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
-        vm.accept_input(&mut journal, input("in", "start")).unwrap();
-        until(&mut vm, &mut journal, &mut world, |vm, _| {
-            vm.outputs().len() == 2
+        execution
+            .accept_input(&mut journal, input("in", "start"))
+            .unwrap();
+        until(&mut execution, &mut journal, &mut world, |execution, _| {
+            execution.outputs().len() == 2
         });
-        let Data::Materialized(Value::TaggedUnion(exit)) = vm.outputs()[1].envelope.data() else {
+        let Data::Materialized(Value::TaggedUnion(exit)) = execution.outputs()[1].envelope.data()
+        else {
             panic!("typed terminal");
         };
         assert_eq!(exit.case, "DecodeFailed");
-        assert_eq!(vm.outputs()[0].port.name(), "out");
+        assert_eq!(execution.outputs()[0].port.name(), "out");
     }
 }

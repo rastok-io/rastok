@@ -199,41 +199,45 @@ fn expiry_and_pending_commands_recover_on_the_resolved_host_terminal() {
             .replace("count.err -> err", "count.failed -> failed"),
     ] {
         let compiled = compiler::compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap();
-        let mut vm = Execution::new(&compiled.plan, GraphVersion(1));
+        let mut execution = Execution::new(&compiled.plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
-        vm.accept_input(
-            &mut journal,
-            IngressProposal {
-                provenance: IngressProvenance::single(rastok::node::Path::new(["test"]).unwrap()),
-                draft: EnvelopeDraft {
-                    port: rastok::node::Port::new("in").unwrap(),
-                    data: Data::materialized(Value::Int(4)),
-                    ext: Namespace::new(),
+        execution
+            .accept_input(
+                &mut journal,
+                IngressProposal {
+                    provenance: IngressProvenance::single(
+                        rastok::node::Path::new(["test"]).unwrap(),
+                    ),
+                    draft: EnvelopeDraft {
+                        port: rastok::node::Port::new("in").unwrap(),
+                        data: Data::materialized(Value::Int(4)),
+                        ext: Namespace::new(),
+                    },
+                    sequence: IngressSequence::Next,
+                    session: None,
                 },
-                sequence: IngressSequence::Next,
-                session: None,
-            },
-        )
-        .unwrap();
+            )
+            .unwrap();
         for _ in 0..30 {
             let mut restored = Execution::new(&compiled.plan, GraphVersion(1));
             restored.recover_from_journal(&journal).unwrap();
-            assert_eq!(restored.inspection(), vm.inspection());
-            vm = restored;
-            if vm.is_stable() {
+            assert_eq!(restored.inspection(), execution.inspection());
+            execution = restored;
+            if execution.is_stable() {
                 break;
             }
-            assert!(vm.step(&mut journal).unwrap());
+            assert!(execution.step(&mut journal).unwrap());
         }
-        assert!(vm.is_stable());
-        assert_eq!(vm.outputs().len(), 1);
+        assert!(execution.is_stable());
+        assert_eq!(execution.outputs().len(), 1);
         let port = if source.contains("Loop.expired = failed") {
             "failed"
         } else {
             "err"
         };
-        assert_eq!(vm.outputs()[0].port.name(), port);
-        let Data::Materialized(Value::TaggedUnion(value)) = vm.outputs()[0].envelope.data() else {
+        assert_eq!(execution.outputs()[0].port.name(), port);
+        let Data::Materialized(Value::TaggedUnion(value)) = execution.outputs()[0].envelope.data()
+        else {
             panic!("expiry union")
         };
         assert_eq!(value.case, "LoopExpired");

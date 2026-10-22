@@ -252,7 +252,7 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
         }
         let source_input = Rc::new(RefCell::new(HttpServerLabInput::default()));
         let empty_boot = crate::deployment::BootBindings::empty();
-        let (driver, faults) = mock_bindings(
+        let (driver, faults) = mock_drivers(
             plan,
             mocks,
             boot.unwrap_or(&empty_boot),
@@ -1115,7 +1115,7 @@ impl DriverFactory for MockConnectorFactory {
         boot: &crate::deployment::BootBindings,
     ) -> Result<Box<dyn Driver + 'plan>, DriverFactoryError> {
         let protocol = (self.bind_protocol)(plan, nodes, boot)?;
-        Ok(Box::new(MockOutboundConnectorDriver {
+        Ok(Box::new(MockOutboundDriver {
             plan,
             mocks: self.mocks.clone(),
             protocol,
@@ -1125,7 +1125,7 @@ impl DriverFactory for MockConnectorFactory {
     }
 }
 
-fn mock_bindings<'plan>(
+fn mock_drivers<'plan>(
     plan: &'plan ValidatedExecutionPlan,
     mocks: BTreeMap<node::Path, Mock>,
     boot: &crate::deployment::BootBindings,
@@ -1134,9 +1134,9 @@ fn mock_bindings<'plan>(
     let faults = Rc::new(RefCell::new(Vec::new()));
     let mocks = share_mocks(mocks);
     let registry = mock_registry(mocks, Rc::clone(&faults), source_input)?;
-    let bindings = RuntimeDrivers::prepare_with_boot(plan, &registry, boot)
+    let drivers = RuntimeDrivers::prepare_with_boot(plan, &registry, boot)
         .map_err(|error| error.to_string())?;
-    Ok((bindings, faults))
+    Ok((drivers, faults))
 }
 
 /// Describes the same Lab model registry used by simulation, without binding a
@@ -1176,7 +1176,7 @@ fn mock_registry(
                     .flat_map(|definition| {
                         definition.selector.iter().flat_map(move |selector| {
                             selector
-                                .profiles
+                                .modes
                                 .iter()
                                 .filter(move |mode| {
                                     matches!(
@@ -1219,7 +1219,7 @@ fn share_mocks(mocks: BTreeMap<node::Path, Mock>) -> SharedMocks {
 /// match in text order — and reports every uncovered call loudly. Its protocol
 /// preparation is the same pure binding used by the real family Driver; only
 /// the external effect is replaced.
-struct MockOutboundConnectorDriver<'plan> {
+struct MockOutboundDriver<'plan> {
     plan: &'plan ValidatedExecutionPlan,
     mocks: SharedMocks,
     protocol: Box<dyn CallProtocol>,
@@ -1227,7 +1227,7 @@ struct MockOutboundConnectorDriver<'plan> {
     faults: MockFaults,
 }
 
-impl MockOutboundConnectorDriver<'_> {
+impl MockOutboundDriver<'_> {
     fn fault(&self, message: String) {
         self.faults.borrow_mut().push(message);
     }
@@ -1501,7 +1501,7 @@ impl MockOutboundConnectorDriver<'_> {
     }
 }
 
-impl OutboundCall for MockOutboundConnectorDriver<'_> {
+impl OutboundCall for MockOutboundDriver<'_> {
     fn prepare_request(
         &mut self,
         connector: &node::Path,
@@ -1534,7 +1534,7 @@ impl OutboundCall for MockOutboundConnectorDriver<'_> {
     }
 }
 
-impl Driver for MockOutboundConnectorDriver<'_> {
+impl Driver for MockOutboundDriver<'_> {
     fn inbound(&mut self) -> Option<&mut dyn crate::connector::driver::Ingress> {
         None
     }
@@ -1568,7 +1568,7 @@ mod tests {
         mocks.insert(path.clone(), mock);
         let faults = Rc::new(RefCell::new(Vec::new()));
         let nodes = [path.clone()];
-        let mut driver = MockOutboundConnectorDriver {
+        let mut driver = MockOutboundDriver {
             plan: &compilation.plan,
             mocks: share_mocks(mocks),
             protocol: Box::new(
@@ -2007,7 +2007,7 @@ graph websocket_server_source : App {
                 &ContractCatalog::try_m0().expect("the standard catalogue holds"),
             )
             .unwrap_or_else(|bag| panic!("the H2 source and Lab must check: {bag:#?}"));
-            mock_bindings(
+            mock_drivers(
                 &compilation.plan,
                 BTreeMap::new(),
                 &crate::deployment::BootBindings::empty(),
@@ -2035,7 +2035,7 @@ graph passive_server : App {
             &ContractCatalog::try_m0().unwrap(),
         )
         .unwrap();
-        mock_bindings(
+        mock_drivers(
             &compilation.plan,
             BTreeMap::new(),
             &crate::deployment::BootBindings::empty(),

@@ -279,17 +279,18 @@ graph app : App {
         .unwrap()
         .0;
     for value in [false, true] {
-        let mut vm = Execution::new(&decoded, plan::GraphVersion(1));
+        let mut execution = Execution::new(&decoded, plan::GraphVersion(1));
         let mut journal = MemJournal::new(plan::GraphVersion(1));
-        vm.accept_input(
-            &mut journal,
-            submission(Data::materialized(Value::Bool(value))),
-        )
-        .unwrap();
-        vm.run_ready(&mut journal).unwrap();
-        assert_eq!(vm.outputs().len(), 1);
+        execution
+            .accept_input(
+                &mut journal,
+                submission(Data::materialized(Value::Bool(value))),
+            )
+            .unwrap();
+        execution.run_ready(&mut journal).unwrap();
+        assert_eq!(execution.outputs().len(), 1);
         assert_eq!(
-            vm.outputs()[0].envelope.data(),
+            execution.outputs()[0].envelope.data(),
             &Data::materialized(Value::Bool(value))
         );
     }
@@ -400,15 +401,16 @@ graph app : App {
     let compilation = compiler::compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
     let encoded = plan::encode(&compilation.plan, &compilation.hash);
     let decoded = plan::decode(&encoded).unwrap().0;
-    let mut vm = Execution::new(&decoded, plan::GraphVersion(1));
+    let mut execution = Execution::new(&decoded, plan::GraphVersion(1));
     let mut journal = MemJournal::new(plan::GraphVersion(1));
-    vm.accept_input(&mut journal, submission(Data::materialized(Value::Int(2))))
+    execution
+        .accept_input(&mut journal, submission(Data::materialized(Value::Int(2))))
         .unwrap();
-    vm.run_ready(&mut journal).unwrap();
-    assert!(vm.is_stable());
-    assert_eq!(vm.outputs().len(), 1);
+    execution.run_ready(&mut journal).unwrap();
+    assert!(execution.is_stable());
+    assert_eq!(execution.outputs().len(), 1);
     assert_eq!(
-        vm.outputs()[0].envelope.data(),
+        execution.outputs()[0].envelope.data(),
         &Data::materialized(Value::Int(0))
     );
     let fold = rastok::journal::loop_protocol::LoopView::from_records(journal.records()).unwrap();
@@ -442,20 +444,21 @@ graph app : App {
     let compilation = compiler::compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
     let package = plan::encode(&compilation.plan, &compilation.hash);
     let decoded = plan::decode(&package).unwrap().0;
-    let mut vm = Execution::new_at(&decoded, plan::GraphVersion(1), 17);
+    let mut execution = Execution::new_at(&decoded, plan::GraphVersion(1), 17);
     let mut journal = MemJournal::new(plan::GraphVersion(1));
-    vm.accept_input(
-        &mut journal,
-        submission(Data::encoded(
-            rastok::envelope::Encoding::ArrowIpc,
-            b"opaque",
-        )),
-    )
-    .unwrap();
-    vm.run_ready(&mut journal).unwrap();
-    assert_eq!(vm.outputs().len(), 1);
+    execution
+        .accept_input(
+            &mut journal,
+            submission(Data::encoded(
+                rastok::envelope::Encoding::ArrowIpc,
+                b"opaque",
+            )),
+        )
+        .unwrap();
+    execution.run_ready(&mut journal).unwrap();
+    assert_eq!(execution.outputs().len(), 1);
     assert_eq!(
-        vm.outputs()[0].envelope.data(),
+        execution.outputs()[0].envelope.data(),
         &Data::materialized(Value::Text("selected".into()))
     );
     assert!(journal.records().iter().all(|record| !matches!(record, Record::Transaction(transaction) if transaction.logical_time.is_some())));
@@ -482,15 +485,16 @@ graph app : App {
 }
 "#;
     let compilation = compiler::compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
-    let mut vm = Execution::new(&compilation.plan, plan::GraphVersion(1));
+    let mut execution = Execution::new(&compilation.plan, plan::GraphVersion(1));
     let mut journal = MemJournal::new(plan::GraphVersion(1));
-    vm.accept_input(&mut journal, submission(Data::materialized(Value::Int(0))))
+    execution
+        .accept_input(&mut journal, submission(Data::materialized(Value::Int(0))))
         .unwrap();
     assert!(matches!(
-        vm.run_ready(&mut journal),
+        execution.run_ready(&mut journal),
         Err(rastok::runtime::execution::ExecutionFault::Fault(_))
     ));
-    assert!(vm.outputs().is_empty());
-    assert!(!vm.is_stable(), "the failed input stays pending");
+    assert!(execution.outputs().is_empty());
+    assert!(!execution.is_stable(), "the failed input stays pending");
     assert!(journal.records().iter().all(|record| !matches!(record, Record::Transaction(transaction) if !transaction.state_delta.is_empty() || !transaction.emissions.is_empty())));
 }

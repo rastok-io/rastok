@@ -40,7 +40,7 @@ pub(super) fn validate(
         return Ok(false);
     };
     let mode = spec.attribute("mode").and_then(|setting| match setting {
-        crate::plan::AttrSetting::Word(word) => shape.profile(word),
+        crate::plan::AttrSetting::Word(word) => shape.mode(word),
         _ => None,
     });
     if spec.roles != shape.roles {
@@ -89,7 +89,7 @@ pub(super) fn validate(
             .as_ref()
             .is_some_and(|selector| selector.attribute == name)
         {
-            matches!(setting, crate::plan::AttrSetting::Word(word) if shape.profile(word).is_some_and(|mode| matches!(mode.support, ModeSupport::Available)))
+            matches!(setting, crate::plan::AttrSetting::Word(word) if shape.mode(word).is_some_and(|mode| matches!(mode.support, ModeSupport::Available)))
         } else {
             name != "behavior"
                 && shape

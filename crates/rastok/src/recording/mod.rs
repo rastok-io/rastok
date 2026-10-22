@@ -357,17 +357,18 @@ impl Recording {
                 .ok_or(Error::Invalid("missing prefix observation"))?
         };
         let empty = BootBindings::empty();
-        let mut vm = Execution::new_program(
+        let mut execution = Execution::new_program(
             &self.plan,
             self.hash,
             self.version,
             now,
             self.empty_deployment_header.then_some(&empty),
         );
-        let mut contracts = replay::Contracts::bind(&self.plan)?;
-        vm.recover_with_bindings(&journal, &mut contracts)
+        let mut contracts = replay::Contracts::prepare(&self.plan)?;
+        execution
+            .recover_with_drivers(&journal, &mut contracts)
             .map_err(Error::Recovery)?;
-        Ok((journal, vm))
+        Ok((journal, execution))
     }
 }
 

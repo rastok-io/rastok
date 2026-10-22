@@ -159,7 +159,7 @@ fn the_m0_probe_checks_into_hir() {
     // The EFFECTIVE sheet (D-2026-08-12-1): the five written
     // attributes plus the injected defaults — `args = []`,
     // `err_codec = lines` and,
-    // on the job profile, `max_output = "8MiB"` and
+    // on the job mode, `max_output = "8MiB"` and
     // `on_timeout = kill`. `mode` was written here.
     assert_eq!(echo.attributes().len(), 9);
     assert_eq!(

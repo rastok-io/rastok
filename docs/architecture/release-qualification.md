@@ -271,7 +271,8 @@ remain unperformed.
 ## Retry journal-scan debt before M2
 
 The 18 September Fable prereview identifies repeated full-prefix traversal in
-`runtime/vm/retry_manager.rs`: `synchronize_retry_closures` scans when Calls
+`runtime/vm/retry_manager.rs` (now `runtime/execution/retry_manager.rs`):
+`synchronize_retry_closures` scans when Calls
 are open, `next_dated_recurrence` scans for retained creation order when both manager
 folds exist, and `step_retry_manager` scans when work is ready. `MemJournal`
 also performs linear `find_call` / `find_envelope` lookups. This is a structural

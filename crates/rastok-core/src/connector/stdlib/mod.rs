@@ -440,7 +440,7 @@ fn definition_attribute_site(
             definition
                 .selector
                 .iter()
-                .flat_map(|selector| selector.profiles)
+                .flat_map(|selector| selector.modes)
                 .flat_map(|mode| mode.attributes),
         )
         .find(|attribute| attribute.name == name)

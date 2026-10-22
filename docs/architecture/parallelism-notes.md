@@ -94,7 +94,7 @@ The local chat example has two sibling flows inside one App: an HttpServer
 returns an embedded HTML asset, while a WebSocketServer routes conversations
 to resident Processes. Both listeners are shared; only the conversation scope
 is keyed. Loading the page does not wait for Alice's model, and Bob can use a
-different child while Alice's child is working. The existing one-Worker VM and
+different child while Alice's child is working. The existing one-Worker Execution and
 non-blocking Driver boundaries are sufficient for this demonstration. This is
 I/O concurrency, not evidence of parallel Operator execution.
 

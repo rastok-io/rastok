@@ -360,7 +360,7 @@ fn json_selection_keeps_interleaved_calls_and_instance_generations_with_their_ob
     for tenant in ["alice", "bob"] {
         inject_tenant(&mut execution, &mut journal, tenant);
         execution
-            .run_ready_with_bindings(&mut journal, &mut drivers)
+            .run_ready_with_drivers(&mut journal, &mut drivers)
             .unwrap();
         execution.poll_drivers(&mut journal, &mut drivers).unwrap();
     }
@@ -406,7 +406,7 @@ fn json_selection_keeps_interleaved_calls_and_instance_generations_with_their_ob
     b.lock().unwrap().responses = second.iter().rev().map(|call| answer(call, "b")).collect();
     execution.poll_drivers(&mut journal, &mut drivers).unwrap();
     execution
-        .run_ready_with_bindings(&mut journal, &mut drivers)
+        .run_ready_with_drivers(&mut journal, &mut drivers)
         .unwrap();
     assert_eq!(execution.outputs().len(), 4);
     assert_eq!(
@@ -450,7 +450,7 @@ fn same_contract_response_and_cancellation_cannot_cross_implementation_ownership
     let mut journal = MemJournal::new(GraphVersion(1));
     inject_tenant(&mut execution, &mut journal, "alice");
     execution
-        .run_ready_with_bindings(&mut journal, &mut drivers)
+        .run_ready_with_drivers(&mut journal, &mut drivers)
         .unwrap();
     execution.poll_drivers(&mut journal, &mut drivers).unwrap();
     let call = a.lock().unwrap().starts[0].clone();
@@ -490,7 +490,7 @@ fn call_ownership_reconstructs_without_preparing_or_starting_external_operations
     let mut journal = MemJournal::new(GraphVersion(1));
     inject_tenant(&mut execution, &mut journal, "alice");
     execution
-        .run_ready_with_bindings(&mut journal, &mut original)
+        .run_ready_with_drivers(&mut journal, &mut original)
         .unwrap();
     execution.poll_drivers(&mut journal, &mut original).unwrap();
     let first = a.lock().unwrap().starts[0].clone();
@@ -506,7 +506,7 @@ fn call_ownership_reconstructs_without_preparing_or_starting_external_operations
     .unwrap();
     let mut restored = Execution::new(&compiled.plan, GraphVersion(1));
     restored
-        .recover_with_bindings(&journal, &mut recovered)
+        .recover_with_drivers(&journal, &mut recovered)
         .unwrap();
     recovered.restore_ownership(&journal).unwrap();
     assert_eq!(a.lock().unwrap().starts.len(), 1);
@@ -556,7 +556,7 @@ fn completed_call_prefix_restores_no_live_driver_ownership() {
     let mut journal = MemJournal::new(GraphVersion(1));
     inject_tenant(&mut execution, &mut journal, "alice");
     execution
-        .run_ready_with_bindings(&mut journal, &mut original)
+        .run_ready_with_drivers(&mut journal, &mut original)
         .unwrap();
     execution.poll_drivers(&mut journal, &mut original).unwrap();
     let first = a.lock().unwrap().starts[0].clone();
@@ -565,7 +565,7 @@ fn completed_call_prefix_restores_no_live_driver_ownership() {
     b.lock().unwrap().responses.push(answer(&second, "b"));
     execution.poll_drivers(&mut journal, &mut original).unwrap();
     execution
-        .run_ready_with_bindings(&mut journal, &mut original)
+        .run_ready_with_drivers(&mut journal, &mut original)
         .unwrap();
     assert_eq!(execution.outputs().len(), 2);
     assert!(journal.open_calls().is_empty());
@@ -580,7 +580,7 @@ fn completed_call_prefix_restores_no_live_driver_ownership() {
     .unwrap();
     let mut restored = Execution::new(&compiled.plan, GraphVersion(1));
     restored
-        .recover_with_bindings(&journal, &mut recovered)
+        .recover_with_drivers(&journal, &mut recovered)
         .unwrap();
     recovered.restore_ownership(&journal).unwrap();
     // A closed prefix leaves no active owner which would refuse a second restore.
@@ -809,7 +809,7 @@ fn same_contract_sessions_keep_openings_writes_and_equal_ingress_handles_with_th
     for tenant in ["alice", "bob"] {
         inject_tenant(&mut execution, &mut journal, tenant);
         execution
-            .run_ready_with_bindings(&mut journal, &mut drivers)
+            .run_ready_with_drivers(&mut journal, &mut drivers)
             .unwrap();
     }
     let first = a.lock().unwrap().openings.clone();
@@ -844,7 +844,7 @@ fn same_contract_sessions_keep_openings_writes_and_equal_ingress_handles_with_th
     for tenant in ["bob", "alice"] {
         inject_tenant(&mut execution, &mut journal, tenant);
         execution
-            .run_ready_with_bindings(&mut journal, &mut drivers)
+            .run_ready_with_drivers(&mut journal, &mut drivers)
             .unwrap();
     }
     assert_eq!(a.lock().unwrap().writes.len(), 2);
@@ -908,17 +908,17 @@ fn same_contract_sessions_keep_openings_writes_and_equal_ingress_handles_with_th
         two.proposal().proposal.provenance
     );
     drivers
-        .decide_inbound(&two, Err(IngressRejection::InvalidPayload))
+        .notify_inbound_admission(&two, Err(IngressRejection::InvalidPayload))
         .unwrap();
     assert!(a.lock().unwrap().decisions.is_empty());
     assert_eq!(b.lock().unwrap().decisions.len(), 1);
     drivers
-        .decide_inbound(&one, Err(IngressRejection::InvalidPayload))
+        .notify_inbound_admission(&one, Err(IngressRejection::InvalidPayload))
         .unwrap();
     assert_eq!(a.lock().unwrap().decisions.len(), 1);
     assert_eq!(b.lock().unwrap().decisions.len(), 1);
     assert!(matches!(
-        drivers.decide_inbound(&one, Err(IngressRejection::InvalidPayload)),
+        drivers.notify_inbound_admission(&one, Err(IngressRejection::InvalidPayload)),
         Err(DriverRouteError::UnknownIngressProposal { .. })
     ));
 
@@ -967,7 +967,7 @@ fn pending_session_openings_recover_ownership_without_opening_or_polling_again()
     let mut journal = MemJournal::new(GraphVersion(1));
     inject_tenant(&mut execution, &mut journal, "alice");
     execution
-        .run_ready_with_bindings(&mut journal, &mut drivers)
+        .run_ready_with_drivers(&mut journal, &mut drivers)
         .unwrap();
     let first = a.lock().unwrap().openings[0].clone();
     let second = b.lock().unwrap().openings[0].clone();
@@ -989,7 +989,7 @@ fn pending_session_openings_recover_ownership_without_opening_or_polling_again()
     .unwrap();
     let mut restored = Execution::new(&compiled.plan, GraphVersion(1));
     restored
-        .recover_with_bindings(&journal, &mut recovered)
+        .recover_with_drivers(&journal, &mut recovered)
         .unwrap();
     recovered.restore_ownership(&journal).unwrap();
     assert_eq!(

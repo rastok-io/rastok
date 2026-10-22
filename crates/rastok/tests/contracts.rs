@@ -1,5 +1,5 @@
 //! The contract metamodel and the effective sheet (D-2026-08-12-1):
-//! presence, profiles, defaults injected before the hash, the plan
+//! presence, modes, defaults injected before the hash, the plan
 //! carrying effective attributes, and the Driver consuming resolved
 //! values only.
 
@@ -654,8 +654,8 @@ fn port_type_cycles_are_rejected_even_when_reached_through_a_tail() {
 }
 
 #[test]
-fn same_as_and_profile_selected_ports_resolve_without_a_second_type_authority() {
-    const PROFILES: &[ContractMode] = &[
+fn same_as_and_mode_selected_ports_resolve_without_a_second_type_authority() {
+    const MODES: &[ContractMode] = &[
         ContractMode {
             protocol: None,
             word: "textual",
@@ -710,7 +710,7 @@ fn same_as_and_profile_selected_ports_resolve_without_a_second_type_authority() 
         selector: Some(ModeSelector {
             attribute: "mode",
             default: Some("textual"),
-            profiles: PROFILES,
+            modes: MODES,
         }),
     };
     let registry = ContractCatalog::try_m0()
@@ -735,7 +735,7 @@ fn same_as_and_profile_selected_ports_resolve_without_a_second_type_authority() 
 }
 
 #[test]
-fn a_profile_local_attribute_cannot_ambiguously_select_a_port_type() {
+fn a_mode_local_attribute_cannot_ambiguously_select_a_port_type() {
     const SHAPE_TEXT: &[AttributeSpec] = &[AttributeSpec {
         name: "shape",
         presence: Presence::Optional,
@@ -769,7 +769,7 @@ fn a_profile_local_attribute_cannot_ambiguously_select_a_port_type() {
         selector: Some(ModeSelector {
             attribute: "mode",
             default: Some("a"),
-            profiles: &[
+            modes: &[
                 ContractMode {
                     protocol: None,
                     word: "a",
@@ -903,7 +903,7 @@ fn file_modes_resolve_ports_from_the_shared_definition() {
                 String::from("mode"),
                 String::from(mode),
             )]))
-            .expect("every executable File profile resolves");
+            .expect("every executable File mode resolves");
         for port in ports {
             assert_eq!(
                 port.ty,
@@ -914,14 +914,14 @@ fn file_modes_resolve_ports_from_the_shared_definition() {
         }
     }
     for attribute in ["mode", "path", "effect", "behavior", "timeout", "max_read"] {
-        let profile = rastok::connector::stdlib::FILE
-            .profile("read")
-            .expect("the read profile");
+        let mode = rastok::connector::stdlib::FILE
+            .mode("read")
+            .expect("the read mode");
         let sheet_site = if attribute == "mode" {
             Some(EvaluationSite::Plan)
         } else {
             rastok::connector::stdlib::FILE
-                .attribute(Some(profile), attribute)
+                .attribute(Some(mode), attribute)
                 .map(|spec| spec.latest_site)
         };
         assert_eq!(
@@ -984,7 +984,7 @@ fn unsupported_file_surfaces_refuse_by_name() {
     refusal_with(
         &file_graph("    mode = watch\n    path = \"artifact.bin\""),
         "E-CHECK-DEFERRED",
-        "the File watch profile",
+        "the File watch mode",
     );
     refusal_with(
         &file_graph("    mode = list\n    path = \"artifact.bin\""),
@@ -1068,11 +1068,11 @@ fn a_forged_file_sheet_never_becomes_a_valid_plan() {
 }
 
 #[test]
-fn a_duplicate_profile_is_a_sheet_defect() {
+fn a_duplicate_mode_is_a_sheet_defect() {
     const TWICE: ModeSelector = ModeSelector {
         attribute: "mode",
         default: Some("a"),
-        profiles: &[
+        modes: &[
             ContractMode {
                 protocol: None,
                 word: "a",
@@ -1092,16 +1092,16 @@ fn a_duplicate_profile_is_a_sheet_defect() {
             .expect("the standard catalogue holds")
             .try_with(sheet(&[], Some(TWICE)))
             .unwrap_err(),
-        ContractValidationError::DuplicateProfile("a")
+        ContractValidationError::DuplicateMode("a")
     );
 }
 
 #[test]
-fn an_unknown_default_profile_is_a_sheet_defect() {
+fn an_unknown_default_mode_is_a_sheet_defect() {
     const GHOST: ModeSelector = ModeSelector {
         attribute: "mode",
         default: Some("ghost"),
-        profiles: &[ContractMode {
+        modes: &[ContractMode {
             protocol: None,
             word: "a",
             support: ModeSupport::Available,
@@ -1113,7 +1113,7 @@ fn an_unknown_default_profile_is_a_sheet_defect() {
             .expect("the standard catalogue holds")
             .try_with(sheet(&[], Some(GHOST)))
             .unwrap_err(),
-        ContractValidationError::UnknownDefaultProfile("ghost")
+        ContractValidationError::UnknownDefaultMode("ghost")
     );
 }
 
@@ -1128,7 +1128,7 @@ fn a_selector_colliding_with_an_attribute_is_a_sheet_defect() {
     const SELECTOR: ModeSelector = ModeSelector {
         attribute: "mode",
         default: Some("a"),
-        profiles: &[ContractMode {
+        modes: &[ContractMode {
             protocol: None,
             word: "a",
             support: ModeSupport::Available,
@@ -1256,7 +1256,7 @@ fn a_dotted_attribute_is_not_a_composite_patch() {
     refusal_with(&source, "E-CONTRACT-ATTR", "not on the contract sheet");
 }
 
-// ---------- the Process profiles ----------
+// ---------- the Process modes ----------
 
 #[test]
 fn mode_omitted_and_mode_job_are_one_identity() {
@@ -1398,7 +1398,7 @@ fn on_timeout_bypass_says_fixed_to_kill() {
 }
 
 #[test]
-fn a_service_attribute_on_a_job_names_the_owning_profile() {
+fn a_service_attribute_on_a_job_names_the_owning_mode() {
     let source = process_graph(&format!("{FULL}\n    max_frame = \"1MiB\""));
     refusal_with(
         &source,
@@ -1420,7 +1420,7 @@ fn mode_service_rejects_retired_rpc_attributes_by_name() {
                 && d.message().contains("`correlate` is retired for Process")),
         "{bag:?}"
     );
-    // No whole-profile deferral hides the offending field.
+    // No whole-mode deferral hides the offending field.
     assert!(
         !bag.diagnostics()
             .iter()
@@ -1759,7 +1759,7 @@ fn byte_size_is_target_independent_and_bounded() {
 
 #[test]
 fn an_unsatisfiable_sheet_never_enters_the_registry() {
-    // An empty choice, a selector with no profile, a `nothing`
+    // An empty choice, a selector with no mode, a `nothing`
     // choice word, an inexpressible contract name — each refuses at
     // the door.
     const EMPTY: &[AttributeSpec] = &[AttributeSpec {
@@ -1778,14 +1778,14 @@ fn an_unsatisfiable_sheet_never_enters_the_registry() {
     const NOBODY: ModeSelector = ModeSelector {
         attribute: "mode",
         default: None,
-        profiles: &[],
+        modes: &[],
     };
     assert_eq!(
         ContractCatalog::try_m0()
             .expect("the standard catalogue holds")
             .try_with(sheet(&[], Some(NOBODY)))
             .unwrap_err(),
-        ContractValidationError::NoProfiles("mode")
+        ContractValidationError::NoModes("mode")
     );
     const SENTINEL: &[AttributeSpec] = &[AttributeSpec {
         name: "x",
@@ -1912,7 +1912,7 @@ fn process_declares_the_phase_ceiling_of_every_setting() {
     ] {
         assert_eq!(
             PROCESS
-                .attribute(PROCESS.profile("job"), name)
+                .attribute(PROCESS.mode("job"), name)
                 .expect("the Process row")
                 .latest_site,
             EvaluationSite::Plan,
@@ -1922,7 +1922,7 @@ fn process_declares_the_phase_ceiling_of_every_setting() {
     for name in ["command", "args", "cwd", "timeout", "env"] {
         assert_eq!(
             PROCESS
-                .attribute(PROCESS.profile("job"), name)
+                .attribute(PROCESS.mode("job"), name)
                 .expect("the Process row")
                 .latest_site,
             EvaluationSite::Instance,
@@ -1951,7 +1951,7 @@ fn process_attribute_sites_come_from_the_shared_definition() {
             spec.name
         );
     }
-    let selector = PROCESS.selector.expect("Process has profiles");
+    let selector = PROCESS.selector.expect("Process has modes");
     assert_eq!(
         rastok::connector::stdlib::process_attribute_site(
             &rastok::connector::ContractId::parse(rastok::connector::stdlib::PROCESS_CONNECTOR_ID)
@@ -1959,10 +1959,10 @@ fn process_attribute_sites_come_from_the_shared_definition() {
             selector.attribute,
         ),
         Some(EvaluationSite::Plan),
-        "the profile selector shapes the plan"
+        "the mode selector shapes the plan"
     );
-    for profile in selector.profiles {
-        for spec in profile.attributes {
+    for mode in selector.modes {
+        for spec in mode.attributes {
             assert_eq!(
                 rastok::connector::stdlib::process_attribute_site(
                     &rastok::connector::ContractId::parse(
@@ -1973,7 +1973,7 @@ fn process_attribute_sites_come_from_the_shared_definition() {
                 ),
                 Some(spec.latest_site),
                 "{} attribute {}",
-                profile.word,
+                mode.word,
                 spec.name
             );
         }
@@ -2028,7 +2028,7 @@ fn constant_process_cwd_and_env_are_effective_plan_attributes() {
 }
 
 #[test]
-fn the_service_profile_still_owes_the_common_sheet() {
+fn the_service_mode_still_owes_the_common_sheet() {
     let source = process_graph("    mode = service");
     let bag = compile_one(&source).expect_err("must refuse");
     for name in ["`command`", "`codec`", "`behavior`"] {
@@ -2042,8 +2042,8 @@ fn the_service_profile_still_owes_the_common_sheet() {
 }
 
 #[test]
-fn sibling_profiles_may_share_an_attribute_name() {
-    // The selected profile disambiguates — only common-vs-profile
+fn sibling_modes_may_share_an_attribute_name() {
+    // The selected mode disambiguates — only common-vs-mode
     // and within-scope duplicates are defects.
     const SHARED: &AttributeSpec = &AttributeSpec {
         name: "shared",
@@ -2054,7 +2054,7 @@ fn sibling_profiles_may_share_an_attribute_name() {
     const SELECTOR: ModeSelector = ModeSelector {
         attribute: "mode",
         default: Some("a"),
-        profiles: &[
+        modes: &[
             ContractMode {
                 protocol: None,
                 word: "a",
@@ -2120,7 +2120,7 @@ fn a_deferred_domain_carries_no_default() {
     const LIE: ModeSelector = ModeSelector {
         attribute: "mode",
         default: Some("a"),
-        profiles: &[ContractMode {
+        modes: &[ContractMode {
             protocol: None,
             word: "a",
             support: ModeSupport::Deferred("someday"),
@@ -2532,7 +2532,7 @@ fn dead_and_reserved_parens_are_opaque_too() {
 }
 
 #[test]
-fn an_invalid_selector_selects_no_implicit_profile() {
+fn an_invalid_selector_selects_no_implicit_mode() {
     // `mode =` is PresentInvalid — the compiler never pretends
     // `mode = job` about a mode the author wrote and got wrong: one
     // parser voice, no belongs-to-job claim.

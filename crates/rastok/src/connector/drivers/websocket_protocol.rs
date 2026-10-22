@@ -370,7 +370,7 @@ impl WebSocketLabDriver {
     pub(crate) fn try_bind(
         plan: &ValidatedExecutionPlan,
         nodes: &[crate::node::Path],
-        connector_id: &ContractId,
+        contract_id: &ContractId,
     ) -> Result<Self, super::DriverFactoryError> {
         let mut specs = BTreeMap::new();
         for path in nodes {
@@ -388,9 +388,9 @@ impl WebSocketLabDriver {
                         "the WebSocket binding path `{path}` is not a connector"
                     ))
                 })?;
-            if &spec.contract != connector_id {
+            if &spec.contract != contract_id {
                 return Err(super::DriverFactoryError::new(format!(
-                    "the WebSocket binder for `{connector_id}` received `{}` at `{path}`",
+                    "the WebSocket binder for `{contract_id}` received `{}` at `{path}`",
                     spec.contract
                 )));
             }

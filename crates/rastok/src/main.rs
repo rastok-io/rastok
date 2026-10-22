@@ -511,7 +511,7 @@ fn run(
             return ExitCode::FAILURE;
         }
     };
-    let bindings = match configuration {
+    let drivers = match configuration {
         Some(configuration) => connector::drivers::RuntimeDrivers::prepare_with_selection(
             &compilation.plan,
             &registry,
@@ -520,8 +520,8 @@ fn run(
         ),
         None => connector::drivers::RuntimeDrivers::prepare(&compilation.plan, &registry),
     };
-    let world = match bindings {
-        Ok(bindings) => bindings,
+    let world = match drivers {
+        Ok(drivers) => drivers,
         Err(error) => {
             eprintln!("error: {error}");
             return ExitCode::FAILURE;
@@ -706,8 +706,8 @@ fn replay(arguments: &[String]) -> ExitCode {
     #[cfg(not(feature = "hosted-ui"))]
     let _ = ui;
     match recording.inspect(recording.records().len()) {
-        Ok((_, vm)) => {
-            print_new_outputs(&vm, &mut 0);
+        Ok((_, execution)) => {
+            print_new_outputs(&execution, &mut 0);
             ExitCode::SUCCESS
         }
         Err(error) => {
@@ -765,21 +765,21 @@ fn cli_submission(inbound_path: &node::Path, line: String) -> IngressProposal {
     }
 }
 
-fn print_new_outputs(vm: &Execution<'_>, printed_outputs: &mut usize) {
+fn print_new_outputs(execution: &Execution<'_>, printed_outputs: &mut usize) {
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
-    for output in &vm.outputs()[*printed_outputs..] {
+    for output in &execution.outputs()[*printed_outputs..] {
         let _ = writeln!(
             out,
             "{}: {}",
             output.port,
             render_data(
                 output.envelope.data(),
-                vm.boundary_annotations(&output.port),
+                execution.boundary_annotations(&output.port),
             )
         );
     }
-    *printed_outputs = vm.outputs().len();
+    *printed_outputs = execution.outputs().len();
 }
 
 /// Runs every lab of the unit; one line per scenario, non-zero exit

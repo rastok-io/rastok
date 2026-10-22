@@ -335,24 +335,26 @@ graph adjustments : App {{
             assert_eq!(hash, compiled.hash);
             let version = GraphVersion(1);
             let mut journal = MemJournal::new(version);
-            let mut vm = Execution::new(&decoded, version);
-            vm.accept_input(
-                &mut journal,
-                IngressProposal {
-                    provenance: IngressProvenance::single(
-                        node::Path::new(["refund-test"]).expect("provenance"),
-                    ),
-                    draft: EnvelopeDraft {
-                        port: node::Port::new("in").expect("input"),
-                        data: Data::materialized(Value::Int(0)),
-                        ext: Namespace::new(),
+            let mut execution = Execution::new(&decoded, version);
+            execution
+                .accept_input(
+                    &mut journal,
+                    IngressProposal {
+                        provenance: IngressProvenance::single(
+                            node::Path::new(["refund-test"]).expect("provenance"),
+                        ),
+                        draft: EnvelopeDraft {
+                            port: node::Port::new("in").expect("input"),
+                            data: Data::materialized(Value::Int(0)),
+                            ext: Namespace::new(),
+                        },
+                        sequence: IngressSequence::Next,
+                        session: None,
                     },
-                    sequence: IngressSequence::Next,
-                    session: None,
-                },
-            )
-            .expect("admission");
-            vm.run_ready(&mut journal)
+                )
+                .expect("admission");
+            execution
+                .run_ready(&mut journal)
                 .expect("both signed emissions commit");
 
             let observations = accounting_observations(&decoded, journal.records(), None)

@@ -25,7 +25,7 @@ fn snapshots(recording: &Recording) -> Result<Vec<UiSnapshot>, Error> {
     let mut views = Vec::new();
     let mut bytes = 0_usize;
     for through in 0..=recording.records().len() {
-        let (journal, vm) = recording.inspect(through)?;
+        let (journal, execution) = recording.inspect(through)?;
         let activity = through.checked_sub(1).and_then(|before| {
             ActivityView::journal_change(&journal, before, Some(through as u64))
         });
@@ -39,7 +39,7 @@ fn snapshots(recording: &Recording) -> Result<Vec<UiSnapshot>, Error> {
             },
             plan: recording.plan(),
             definitions: recording.definitions(),
-            execution: &vm,
+            execution: &execution,
             journal: &journal,
             fault: incomplete.as_ref(),
             activity: activity.as_ref(),

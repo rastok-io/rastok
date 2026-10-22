@@ -46,40 +46,43 @@ graph app : App {
     let (plan, _) = plan::decode(&plan::encode(&compiled.plan, &compiled.hash)).unwrap();
     for n in [1, 4] {
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut vm = Execution::new(&plan, GraphVersion(1));
-        vm.accept_input(
-            &mut journal,
-            IngressProposal {
-                provenance: IngressProvenance::single(rastok::node::Path::new(["policy"]).unwrap()),
-                draft: EnvelopeDraft {
-                    port: rastok::node::Port::new("in").unwrap(),
-                    data: Data::materialized(Value::Struct(vec![
-                        ("n".into(), Value::Int(n)),
-                        (
-                            "private".into(),
-                            Value::Text("never-export-this-value".into()),
-                        ),
-                    ])),
-                    ext: Namespace::new(),
+        let mut execution = Execution::new(&plan, GraphVersion(1));
+        execution
+            .accept_input(
+                &mut journal,
+                IngressProposal {
+                    provenance: IngressProvenance::single(
+                        rastok::node::Path::new(["policy"]).unwrap(),
+                    ),
+                    draft: EnvelopeDraft {
+                        port: rastok::node::Port::new("in").unwrap(),
+                        data: Data::materialized(Value::Struct(vec![
+                            ("n".into(), Value::Int(n)),
+                            (
+                                "private".into(),
+                                Value::Text("never-export-this-value".into()),
+                            ),
+                        ])),
+                        ext: Namespace::new(),
+                    },
+                    sequence: IngressSequence::Next,
+                    session: None,
                 },
-                sequence: IngressSequence::Next,
-                session: None,
-            },
-        )
-        .unwrap();
+            )
+            .unwrap();
         for _ in 0..100 {
             let mut restored = Execution::new(&plan, GraphVersion(1));
             restored.recover_from_journal(&journal).unwrap();
-            assert_eq!(restored.inspection(), vm.inspection());
-            vm = restored;
-            if vm.is_stable() {
+            assert_eq!(restored.inspection(), execution.inspection());
+            execution = restored;
+            if execution.is_stable() {
                 break;
             }
-            assert!(vm.step(&mut journal).unwrap());
+            assert!(execution.step(&mut journal).unwrap());
         }
-        assert!(vm.is_stable());
-        assert_eq!(vm.outputs().len(), 1);
-        let output = &vm.outputs()[0];
+        assert!(execution.is_stable());
+        assert_eq!(execution.outputs().len(), 1);
+        let output = &execution.outputs()[0];
         assert_eq!(output.port.name(), if n == 1 { "out" } else { "exhausted" });
         let annotations = plan
             .resolved_ports()

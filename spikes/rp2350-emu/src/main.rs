@@ -211,7 +211,7 @@ fn main() -> ! {
     #[cfg(feature = "stack-qualification")]
     stack::paint();
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::new(&plan, GraphVersion(1));
+    let mut execution = Execution::new(&plan, GraphVersion(1));
     let relay_owner = node::OwnerPath::new(["relay"]).expect("the measured owner path is valid");
     let relay_trigger = Trigger::Port(Port::new("in").expect("the measured port is valid"));
     let mut tx_ticks_total: u64 = 0;
@@ -219,10 +219,10 @@ fn main() -> ! {
     let mut tx_max = 0u64;
     const ROUNDS: u32 = 32;
     for round in 0..ROUNDS {
-        vm.accept_input(&mut journal, submission("salut", round as u8))
+        execution.accept_input(&mut journal, submission("salut", round as u8))
             .expect("the submission lands");
         loop {
-            let (t, stepped) = ticks.measure(|| vm.step(&mut journal));
+            let (t, stepped) = ticks.measure(|| execution.step(&mut journal));
             assert!(stepped.expect("ready work executes"), "work was ready");
             let relay_fired = matches!(
                 journal.records().last(),

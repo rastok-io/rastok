@@ -418,7 +418,7 @@ impl<'plan> RuntimeDrivers<'plan> {
     /// # Errors
     ///
     /// Refuses a stale, crossed-object, or otherwise unknown proposal.
-    pub fn decide_inbound(
+    pub fn notify_inbound_admission(
         &mut self,
         routed: &RoutedInboundProposal,
         decision: Result<AdmittedIngress, IngressRejection>,
@@ -493,21 +493,21 @@ impl<'plan> RuntimeDrivers<'plan> {
     /// distinct.
     pub fn poll_inbound(
         &mut self,
-        vm: &mut Execution<'plan>,
+        execution: &mut Execution<'plan>,
         journal: &mut dyn Journal,
     ) -> Result<Option<IngressAdmission>, InboundPollError> {
         let Some(routed) = self.next_inbound().map_err(InboundPollError::Driver)? else {
             return Ok(None);
         };
-        let admission = vm
+        let admission = execution
             .accept_connector_output(journal, routed.proposal())
             .map_err(InboundPollError::Machine)?;
         match admission {
             IngressAdmission::Accepted(accepted) => self
-                .decide_inbound(&routed, Ok(accepted))
+                .notify_inbound_admission(&routed, Ok(accepted))
                 .map_err(InboundPollError::Driver)?,
             IngressAdmission::Rejected(reason) => self
-                .decide_inbound(&routed, Err(reason))
+                .notify_inbound_admission(&routed, Err(reason))
                 .map_err(InboundPollError::Driver)?,
             IngressAdmission::Pending => {}
         }
@@ -524,10 +524,10 @@ impl<'plan> RuntimeDrivers<'plan> {
     /// binding is an integrity fault.
     pub fn poll_inbound_call_responses(
         &mut self,
-        vm: &mut Execution<'plan>,
+        execution: &mut Execution<'plan>,
     ) -> Result<InboundCallResponsePollReport, DriverRouteError> {
         let mut report = InboundCallResponsePollReport::default();
-        for response in vm.ready_inbound_call_responses() {
+        for response in execution.ready_inbound_call_responses() {
             let Some(id) = self.inbound_calls.get(&response.call_id).copied() else {
                 return Err(DriverRouteError::UncorrelatedInboundCall(response.call_id));
             };
@@ -548,7 +548,7 @@ impl<'plan> RuntimeDrivers<'plan> {
                 .ok_or_else(|| DriverRouteError::UnavailableInboundCall(family.contract.clone()))?;
             match driver.start_response(&response) {
                 InboundCallResponseStart::Started => {
-                    if !vm.mark_inbound_call_response_started(&response) {
+                    if !execution.mark_inbound_call_response_started(&response) {
                         return Err(DriverRouteError::UncorrelatedInboundCall(response.call_id));
                     }
                     report.started = report.started.saturating_add(1);
@@ -570,10 +570,10 @@ impl<'plan> RuntimeDrivers<'plan> {
     /// Missing or crossed ownership is a binding-integrity fault.
     pub fn poll_inbound_call_timeouts(
         &mut self,
-        vm: &mut Execution<'plan>,
+        execution: &mut Execution<'plan>,
     ) -> Result<InboundCallTimeoutPollReport, DriverRouteError> {
         let mut report = InboundCallTimeoutPollReport::default();
-        for timeout in vm.ready_inbound_call_timeouts() {
+        for timeout in execution.ready_inbound_call_timeouts() {
             let Some(id) = self.inbound_calls.get(&timeout.call_id).copied() else {
                 return Err(DriverRouteError::UncorrelatedInboundCall(timeout.call_id));
             };
@@ -594,7 +594,7 @@ impl<'plan> RuntimeDrivers<'plan> {
                 .ok_or_else(|| DriverRouteError::UnavailableInboundCall(family.contract.clone()))?;
             match driver.start_timeout(&timeout) {
                 InboundCallTimeoutStart::Started => {
-                    if !vm.mark_inbound_call_timeout_started(&timeout) {
+                    if !execution.mark_inbound_call_timeout_started(&timeout) {
                         return Err(DriverRouteError::UncorrelatedInboundCall(timeout.call_id));
                     }
                     report.started = report.started.saturating_add(1);
@@ -617,7 +617,7 @@ impl<'plan> RuntimeDrivers<'plan> {
     /// Call reference.
     pub fn poll_inbound_call_events(
         &mut self,
-        vm: &mut Execution<'plan>,
+        execution: &mut Execution<'plan>,
     ) -> Result<InboundCallPollReport, DriverRouteError> {
         let mut report = InboundCallPollReport::default();
         for owner in 0..self.drivers.len() {
@@ -651,7 +651,7 @@ impl<'plan> RuntimeDrivers<'plan> {
                     });
                 }
                 let call_id = event.call_id;
-                let mut observed = vm.queue_inbound_call_events(core::iter::once(event));
+                let mut observed = execution.queue_inbound_call_events(core::iter::once(event));
                 if observed.queued == 1 || !observed.uncorrelated.is_empty() {
                     self.inbound_calls.remove(&call_id);
                 }
@@ -1061,7 +1061,7 @@ impl std::error::Error for DriverRecoveryError {}
 impl RuntimeDrivers<'_> {
     /// Restores exchange routing from a successfully recovered journal prefix.
     ///
-    /// Call this after `Execution::recover_with_bindings`, with the same prefix
+    /// Call this after `Execution::recover_with_drivers`, with the same prefix
     /// and deployment selection, on a newly prepared association. It neither
     /// validates execution semantics nor restores sockets or processes. No
     /// Driver method is called; existing no-recall recovery rules still apply.

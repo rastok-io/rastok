@@ -44,9 +44,9 @@ fn proposal(reference: u64, text: &str) -> PendingIngress {
     }
 }
 
-fn recover(vm: &mut Execution<'_>, journal: &MemJournal) {
+fn recover(execution: &mut Execution<'_>, journal: &MemJournal) {
     let retained = journal.records().to_vec();
-    vm.recover_from_journal(journal).unwrap();
+    execution.recover_from_journal(journal).unwrap();
     assert_eq!(
         journal.records(),
         retained,
@@ -82,11 +82,11 @@ graph app : App {{
             if respond { "{ out; server.in }" } else { "out" }
         );
         let plan = compile(&source);
-        let mut vm = Execution::new(&plan, GraphVersion(1));
+        let mut execution = Execution::new(&plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
         let mut calls = Vec::new();
         for (reference, text) in [(1, "alice"), (2, "bob")] {
-            let IngressAdmission::Accepted(accepted) = vm
+            let IngressAdmission::Accepted(accepted) = execution
                 .accept_connector_output(&mut journal, &proposal(reference, text))
                 .unwrap()
             else {
@@ -96,10 +96,10 @@ graph app : App {{
                 panic!("Call reference");
             };
             calls.push(call);
-            recover(&mut vm, &journal);
+            recover(&mut execution, &journal);
         }
-        while vm.step(&mut journal).unwrap() {
-            recover(&mut vm, &journal);
+        while execution.step(&mut journal).unwrap() {
+            recover(&mut execution, &journal);
         }
         for call_id in calls {
             let completion = Completion::http_server_exit(HttpServerExit::Completed {
@@ -109,24 +109,31 @@ graph app : App {{
                 call_id,
                 completion,
             };
-            assert_eq!(vm.queue_inbound_call_events(vec![event.clone()]).queued, 1);
-            vm.run_ready(&mut journal).unwrap();
-            recover(&mut vm, &journal);
             assert_eq!(
-                vm.queue_inbound_call_events(vec![event]).queued,
+                execution
+                    .queue_inbound_call_events(vec![event.clone()])
+                    .queued,
+                1
+            );
+            execution.run_ready(&mut journal).unwrap();
+            recover(&mut execution, &journal);
+            assert_eq!(
+                execution.queue_inbound_call_events(vec![event]).queued,
                 0,
                 "closed once"
             );
         }
         assert_eq!(
-            vm.outputs()
+            execution
+                .outputs()
                 .iter()
                 .filter(|output| output.port == node::Port::conventional_out())
                 .count(),
             2
         );
         assert_eq!(
-            vm.outputs()
+            execution
+                .outputs()
                 .iter()
                 .filter(|output| output.port == node::Port::conventional_exit())
                 .count(),

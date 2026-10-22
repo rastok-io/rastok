@@ -2,7 +2,7 @@
 
 use super::*;
 
-/// The exact Contract/profile cannot host Retry or Call idempotence.
+/// The exact Contract/mode cannot host Retry or Call idempotence.
 pub(super) const E_RETRY_HOST: Code = Code::new("E-RETRY-HOST");
 /// The selected terminal set is malformed, duplicated or outside the Contract.
 const E_RETRY_CASES: Code = Code::new("E-RETRY-CASES");
@@ -118,13 +118,13 @@ impl Checker<'_, '_> {
                 );
             }
         }
-        let mode = if let Some(selector) = &sheet.selector {
+        let mode_word = if let Some(selector) = &sheet.selector {
             if let Some(attribute) = attributes.get(selector.attribute) {
                 let SynValue::Expr(source) = &attribute.value else {
                     self.retry_refusal(
                         E_RETRY_HOST,
                         attribute.span,
-                        "the Call profile must be a bare selector word",
+                        "the Call mode must be a bare selector word",
                     );
                     return None;
                 };
@@ -135,8 +135,8 @@ impl Checker<'_, '_> {
         } else {
             None
         };
-        let profile = mode.and_then(|word| sheet.profile(word));
-        let (roles, exchange) = profile
+        let mode = mode_word.and_then(|word| sheet.mode(word));
+        let (roles, exchange) = mode
             .and_then(|p| p.protocol)
             .map_or((sheet.roles, sheet.exchange), |p| (p.roles, p.exchange));
         let Ok(id) = crate::connector::ContractId::parse(sheet.id) else {
@@ -147,7 +147,7 @@ impl Checker<'_, '_> {
             );
             return None;
         };
-        let Some(call) = crate::connector::outbound_call_semantics(&id, roles, exchange, mode)
+        let Some(call) = crate::connector::outbound_call_semantics(&id, roles, exchange, mode_word)
         else {
             self.retry_refusal(E_RETRY_HOST, decl.name.span, "Retry/idempotence requires a finite outbound Call: Process job, File read/replace or HttpClient; no Event, Session or inbound Call");
             return None;

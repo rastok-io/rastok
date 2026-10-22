@@ -62,10 +62,10 @@ mod tests {
     #[test]
     fn the_process_sheet_holds_its_own_door() {
         // The sheet validates at the registry door — defaults
-        // compiled, profiles coherent.
+        // compiled, modes coherent.
         assert!(crate::connector::contract::validate_sheet(&PROCESS).is_ok());
         let process = PROCESS;
-        let job = process.profile("job").unwrap();
+        let job = process.mode("job").unwrap();
         let guarantee = process.attribute(Some(job), "idempotent").unwrap();
         assert_eq!(
             guarantee.presence,
@@ -74,14 +74,14 @@ mod tests {
         assert!(process.attribute(Some(job), "effect").is_none());
         assert!(
             process
-                .attribute(process.profile("service"), "idempotent")
+                .attribute(process.mode("service"), "idempotent")
                 .is_none()
         );
         assert!(process.attribute(Some(job), "max_output").is_some());
         assert!(process.attribute(Some(job), "restart").is_none());
-        assert!(process.owning_profile("restart").is_none());
+        assert!(process.owning_mode("restart").is_none());
         assert_eq!(
-            process.owning_profile("max_frame").map(|p| p.word),
+            process.owning_mode("max_frame").map(|p| p.word),
             Some("service")
         );
         let ports = PROCESS
@@ -103,7 +103,7 @@ mod tests {
     #[test]
     fn the_file_sheet_holds_its_own_door() {
         assert!(crate::connector::contract::validate_sheet(&FILE).is_ok());
-        let read = FILE.profile("read").expect("the read profile");
+        let read = FILE.mode("read").expect("the read mode");
         assert!(FILE.attribute(Some(read), "max_read").is_some());
         assert_eq!(
             FILE.attribute(Some(read), "path")
@@ -146,14 +146,14 @@ mod tests {
                     crate::connector::stdlib::network_attribute_site(&id, selector.attribute),
                     Some(EvaluationSite::Plan)
                 );
-                for profile in selector.profiles {
-                    for attribute in profile.attributes {
+                for mode in selector.modes {
+                    for attribute in mode.attributes {
                         assert_eq!(
                             crate::connector::stdlib::network_attribute_site(&id, attribute.name),
                             Some(attribute.latest_site),
                             "{}({}).{}",
                             sheet.name,
-                            profile.word,
+                            mode.word,
                             attribute.name
                         );
                     }

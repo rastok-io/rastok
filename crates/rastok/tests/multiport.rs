@@ -200,7 +200,7 @@ fn the_machine_verifies_the_ingress_port() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
+    let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
     let submission = |port: &str| IngressProposal {
         provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
         draft: EnvelopeDraft {
@@ -212,15 +212,16 @@ fn the_machine_verifies_the_ingress_port() {
         session: None,
     };
     assert!(matches!(
-        vm.accept_input(&mut journal, submission("out")).unwrap_err(),
+        execution.accept_input(&mut journal, submission("out")).unwrap_err(),
         ExecutionFault::UnknownIngress(port) if port.name() == "out"
     ));
     assert!(matches!(
-        vm.accept_input(&mut journal, submission("ghost")).unwrap_err(),
+        execution.accept_input(&mut journal, submission("ghost")).unwrap_err(),
         ExecutionFault::UnknownIngress(port) if port.name() == "ghost"
     ));
     // The declared input accepts.
-    vm.accept_input(&mut journal, submission("alpha"))
+    execution
+        .accept_input(&mut journal, submission("alpha"))
         .expect("a declared input ingresses");
 }
 
@@ -791,23 +792,26 @@ fn the_braced_record_is_physically_a_struct() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
-    vm.accept_input(
-        &mut journal,
-        IngressProposal {
-            provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
-            draft: EnvelopeDraft {
-                port: rastok::node::Port::new("in").unwrap(),
-                data: Data::materialized(Value::Int(1)),
-                ext: Namespace::new(),
+    let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
+    execution
+        .accept_input(
+            &mut journal,
+            IngressProposal {
+                provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
+                draft: EnvelopeDraft {
+                    port: rastok::node::Port::new("in").unwrap(),
+                    data: Data::materialized(Value::Int(1)),
+                    ext: Namespace::new(),
+                },
+                sequence: IngressSequence::Next,
+                session: None,
             },
-            sequence: IngressSequence::Next,
-            session: None,
-        },
-    )
-    .expect("the injection lands");
-    vm.run_ready(&mut journal).expect("the drain completes");
-    let output = &vm.outputs()[0];
+        )
+        .expect("the injection lands");
+    execution
+        .run_ready(&mut journal)
+        .expect("the drain completes");
+    let output = &execution.outputs()[0];
     let Data::Materialized(Value::Struct(fields)) = output.envelope.data() else {
         panic!("a STRUCT, not a map: {:?}", output.envelope.data());
     };
@@ -907,24 +911,27 @@ fn an_empty_brace_is_an_empty_record() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
-    vm.accept_input(
-        &mut journal,
-        IngressProposal {
-            provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
-            draft: EnvelopeDraft {
-                port: rastok::node::Port::new("in").unwrap(),
-                data: Data::materialized(Value::Int(1)),
-                ext: Namespace::new(),
+    let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
+    execution
+        .accept_input(
+            &mut journal,
+            IngressProposal {
+                provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
+                draft: EnvelopeDraft {
+                    port: rastok::node::Port::new("in").unwrap(),
+                    data: Data::materialized(Value::Int(1)),
+                    ext: Namespace::new(),
+                },
+                sequence: IngressSequence::Next,
+                session: None,
             },
-            sequence: IngressSequence::Next,
-            session: None,
-        },
-    )
-    .expect("the injection lands");
-    vm.run_ready(&mut journal).expect("the drain completes");
+        )
+        .expect("the injection lands");
+    execution
+        .run_ready(&mut journal)
+        .expect("the drain completes");
     assert_eq!(
-        vm.outputs()[0].envelope.data(),
+        execution.outputs()[0].envelope.data(),
         &Data::materialized(Value::Struct(Vec::new())),
         "an empty record, not the input"
     );
@@ -950,24 +957,27 @@ fn a_whole_data_write_is_the_payload_itself() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
-    vm.accept_input(
-        &mut journal,
-        IngressProposal {
-            provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
-            draft: EnvelopeDraft {
-                port: rastok::node::Port::new("in").unwrap(),
-                data: Data::materialized(Value::Text(String::from("gone"))),
-                ext: Namespace::new(),
+    let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
+    execution
+        .accept_input(
+            &mut journal,
+            IngressProposal {
+                provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
+                draft: EnvelopeDraft {
+                    port: rastok::node::Port::new("in").unwrap(),
+                    data: Data::materialized(Value::Text(String::from("gone"))),
+                    ext: Namespace::new(),
+                },
+                sequence: IngressSequence::Next,
+                session: None,
             },
-            sequence: IngressSequence::Next,
-            session: None,
-        },
-    )
-    .expect("the injection lands");
-    vm.run_ready(&mut journal).expect("the drain completes");
+        )
+        .expect("the injection lands");
+    execution
+        .run_ready(&mut journal)
+        .expect("the drain completes");
     assert_eq!(
-        vm.outputs()[0].envelope.data(),
+        execution.outputs()[0].envelope.data(),
         &Data::materialized(Value::Int(1)),
         "the payload itself"
     );
@@ -1058,7 +1068,7 @@ fn identity_re_emits_the_materialized_envelope_whole() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
+    let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
     let mut app = Namespace::new();
     // The one ext field this plan's schema declares — the standard
     // `content_type` (inject validates the zone, D-2026-08-10-1).
@@ -1066,22 +1076,28 @@ fn identity_re_emits_the_materialized_envelope_whole() {
         String::from("content_type"),
         MetaValue::Scalar(Scalar::Text(String::from("text/x-probe"))),
     );
-    vm.accept_input(
-        &mut journal,
-        IngressProposal {
-            provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
-            draft: EnvelopeDraft {
-                port: rastok::node::Port::new("in").unwrap(),
-                data: Data::materialized(Value::Struct(vec![(String::from("v"), Value::Int(1))])),
-                ext: app,
+    execution
+        .accept_input(
+            &mut journal,
+            IngressProposal {
+                provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
+                draft: EnvelopeDraft {
+                    port: rastok::node::Port::new("in").unwrap(),
+                    data: Data::materialized(Value::Struct(vec![(
+                        String::from("v"),
+                        Value::Int(1),
+                    )])),
+                    ext: app,
+                },
+                sequence: IngressSequence::Next,
+                session: None,
             },
-            sequence: IngressSequence::Next,
-            session: None,
-        },
-    )
-    .expect("the injection lands");
-    vm.run_ready(&mut journal).expect("the drain completes");
-    let output = &vm.outputs()[0];
+        )
+        .expect("the injection lands");
+    execution
+        .run_ready(&mut journal)
+        .expect("the drain completes");
+    let output = &execution.outputs()[0];
     assert_eq!(
         output.envelope.data(),
         &Data::materialized(Value::Struct(vec![(String::from("v"), Value::Int(1),)])),
@@ -1120,23 +1136,28 @@ fn an_empty_nested_record_is_a_value_not_an_absence() {
         )
         .expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
-        vm.accept_input(
-            &mut journal,
-            IngressProposal {
-                provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
-                draft: EnvelopeDraft {
-                    port: rastok::node::Port::new("in").unwrap(),
-                    data: Data::materialized(Value::Int(1)),
-                    ext: Namespace::new(),
+        let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
+        execution
+            .accept_input(
+                &mut journal,
+                IngressProposal {
+                    provenance: IngressProvenance::single(
+                        rastok::node::Path::new(["probe"]).unwrap(),
+                    ),
+                    draft: EnvelopeDraft {
+                        port: rastok::node::Port::new("in").unwrap(),
+                        data: Data::materialized(Value::Int(1)),
+                        ext: Namespace::new(),
+                    },
+                    sequence: IngressSequence::Next,
+                    session: None,
                 },
-                sequence: IngressSequence::Next,
-                session: None,
-            },
-        )
-        .expect("the injection lands");
-        vm.run_ready(&mut journal).expect("the drain completes");
-        vm.outputs()[0].envelope.data().clone()
+            )
+            .expect("the injection lands");
+        execution
+            .run_ready(&mut journal)
+            .expect("the drain completes");
+        execution.outputs()[0].envelope.data().clone()
     };
     let empty = || Value::Struct(Vec::new());
     // The record form.
@@ -1358,23 +1379,26 @@ fn boundary_outputs_carry_their_port() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
-    vm.accept_input(
-        &mut journal,
-        IngressProposal {
-            provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
-            draft: EnvelopeDraft {
-                port: rastok::node::Port::new("in").unwrap(),
-                data: Data::materialized(Value::Int(1)),
-                ext: Namespace::new(),
+    let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
+    execution
+        .accept_input(
+            &mut journal,
+            IngressProposal {
+                provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
+                draft: EnvelopeDraft {
+                    port: rastok::node::Port::new("in").unwrap(),
+                    data: Data::materialized(Value::Int(1)),
+                    ext: Namespace::new(),
+                },
+                sequence: IngressSequence::Next,
+                session: None,
             },
-            sequence: IngressSequence::Next,
-            session: None,
-        },
-    )
-    .expect("the injection lands");
-    vm.run_ready(&mut journal).expect("the drain completes");
-    let ports: Vec<&str> = vm
+        )
+        .expect("the injection lands");
+    execution
+        .run_ready(&mut journal)
+        .expect("the drain completes");
+    let ports: Vec<&str> = execution
         .outputs()
         .iter()
         .map(|output| output.port.name())
@@ -1385,9 +1409,10 @@ fn boundary_outputs_carry_their_port() {
         "each envelope names the boundary port it left through"
     );
     assert!(
-        vm.outputs()
+        execution
+            .outputs()
             .iter()
-            .all(|output| output.envelope.data() == vm.outputs()[0].envelope.data()),
+            .all(|output| output.envelope.data() == execution.outputs()[0].envelope.data()),
         "one fan-out, two named exits"
     );
 }
@@ -1415,7 +1440,7 @@ fn a_raw_ingress_holds_the_pin_before_any_append() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
+    let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
     let submission = IngressProposal {
         provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
         draft: EnvelopeDraft {
@@ -1426,7 +1451,8 @@ fn a_raw_ingress_holds_the_pin_before_any_append() {
         sequence: IngressSequence::Next,
         session: None,
     };
-    vm.accept_input(&mut journal, submission)
+    execution
+        .accept_input(&mut journal, submission)
         .expect_err("a text draft cannot enter an int input");
     assert_eq!(journal.records().len(), 0, "refused BEFORE the append");
 }
@@ -1850,23 +1876,28 @@ fn the_bare_data_relay_preserves_the_logical_type() {
     .expect("a valid plan");
     let relay = |data: Value| {
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
-        vm.accept_input(
-            &mut journal,
-            IngressProposal {
-                provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
-                draft: EnvelopeDraft {
-                    port: rastok::node::Port::new("in").unwrap(),
-                    data: Data::materialized(data),
-                    ext: Namespace::new(),
+        let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
+        execution
+            .accept_input(
+                &mut journal,
+                IngressProposal {
+                    provenance: IngressProvenance::single(
+                        rastok::node::Path::new(["probe"]).unwrap(),
+                    ),
+                    draft: EnvelopeDraft {
+                        port: rastok::node::Port::new("in").unwrap(),
+                        data: Data::materialized(data),
+                        ext: Namespace::new(),
+                    },
+                    sequence: IngressSequence::Next,
+                    session: None,
                 },
-                sequence: IngressSequence::Next,
-                session: None,
-            },
-        )
-        .expect("the injection lands");
-        vm.run_ready(&mut journal).expect("the drain completes");
-        vm.outputs()[0].envelope.data().clone()
+            )
+            .expect("the injection lands");
+        execution
+            .run_ready(&mut journal)
+            .expect("the drain completes");
+        execution.outputs()[0].envelope.data().clone()
     };
     // Struct in, Struct out — tag 15 stays tag 15.
     let sent = Value::Struct(vec![(String::from("field"), Value::Int(7))]);
@@ -1904,8 +1935,8 @@ fn an_ingress_pin_violation_is_a_named_error() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
-    let error = vm
+    let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
+    let error = execution
         .accept_input(
             &mut journal,
             IngressProposal {
@@ -2125,23 +2156,28 @@ fn the_struct_witness_survives_every_equivalent_spelling() {
         )
         .expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
-        vm.accept_input(
-            &mut journal,
-            IngressProposal {
-                provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
-                draft: EnvelopeDraft {
-                    port: rastok::node::Port::new("in").unwrap(),
-                    data: Data::materialized(data),
-                    ext: Namespace::new(),
+        let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
+        execution
+            .accept_input(
+                &mut journal,
+                IngressProposal {
+                    provenance: IngressProvenance::single(
+                        rastok::node::Path::new(["probe"]).unwrap(),
+                    ),
+                    draft: EnvelopeDraft {
+                        port: rastok::node::Port::new("in").unwrap(),
+                        data: Data::materialized(data),
+                        ext: Namespace::new(),
+                    },
+                    sequence: IngressSequence::Next,
+                    session: None,
                 },
-                sequence: IngressSequence::Next,
-                session: None,
-            },
-        )
-        .expect("the injection lands");
-        vm.run_ready(&mut journal).expect("the drain completes");
-        vm.outputs()[0].envelope.data().clone()
+            )
+            .expect("the injection lands");
+        execution
+            .run_ready(&mut journal)
+            .expect("the drain completes");
+        execution.outputs()[0].envelope.data().clone()
     };
     let a_struct = || Value::Struct(vec![(String::from("field"), Value::Int(7))]);
     let a_map = || {
@@ -2241,23 +2277,26 @@ fn an_encoded_bare_relay_passes_the_representation_through() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
-    vm.accept_input(
-        &mut journal,
-        IngressProposal {
-            provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
-            draft: EnvelopeDraft {
-                port: rastok::node::Port::new("in").unwrap(),
-                data: Data::encoded(Encoding::ArrowIpc, *b"\x01\x02"),
-                ext: opaque_ext(),
+    let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
+    execution
+        .accept_input(
+            &mut journal,
+            IngressProposal {
+                provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
+                draft: EnvelopeDraft {
+                    port: rastok::node::Port::new("in").unwrap(),
+                    data: Data::encoded(Encoding::ArrowIpc, *b"\x01\x02"),
+                    ext: opaque_ext(),
+                },
+                sequence: IngressSequence::Next,
+                session: None,
             },
-            sequence: IngressSequence::Next,
-            session: None,
-        },
-    )
-    .expect("the injection lands");
-    vm.run_ready(&mut journal).expect("an Avro RELAY works");
-    let output = &vm.outputs()[0];
+        )
+        .expect("the injection lands");
+    execution
+        .run_ready(&mut journal)
+        .expect("an Avro RELAY works");
+    let output = &execution.outputs()[0];
     assert!(
         matches!(
             output.envelope.data(),
@@ -2398,26 +2437,30 @@ fn data_materializes_only_on_demand() {
         )
         .expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
-        vm.accept_input(
-            &mut journal,
-            IngressProposal {
-                provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
-                draft: EnvelopeDraft {
-                    port: rastok::node::Port::new("in").unwrap(),
-                    data: Data::encoded(Encoding::ArrowIpc, *b"\x01\x02"),
-                    ext: opaque_ext(),
+        let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
+        execution
+            .accept_input(
+                &mut journal,
+                IngressProposal {
+                    provenance: IngressProvenance::single(
+                        rastok::node::Path::new(["probe"]).unwrap(),
+                    ),
+                    draft: EnvelopeDraft {
+                        port: rastok::node::Port::new("in").unwrap(),
+                        data: Data::encoded(Encoding::ArrowIpc, *b"\x01\x02"),
+                        ext: opaque_ext(),
+                    },
+                    sequence: IngressSequence::Next,
+                    session: None,
                 },
-                sequence: IngressSequence::Next,
-                session: None,
-            },
-        )
-        .expect("the injection lands");
-        let result = vm.run_ready(&mut journal);
+            )
+            .expect("the injection lands");
+        let result = execution.run_ready(&mut journal);
         (
             result,
-            vm.outputs().to_vec(),
-            vm.envelope_views()
+            execution.outputs().to_vec(),
+            execution
+                .envelope_views()
                 .iter()
                 .filter(|event| event.node.is_some() && event.port.name() == "err")
                 .count(),
@@ -2486,26 +2529,30 @@ fn short_circuits_never_demand_the_data() {
         )
         .expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
-        vm.accept_input(
-            &mut journal,
-            IngressProposal {
-                provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
-                draft: EnvelopeDraft {
-                    port: rastok::node::Port::new("in").unwrap(),
-                    data: Data::encoded(Encoding::ArrowIpc, *b"\x01\x02"),
-                    ext: opaque_ext(),
+        let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
+        execution
+            .accept_input(
+                &mut journal,
+                IngressProposal {
+                    provenance: IngressProvenance::single(
+                        rastok::node::Path::new(["probe"]).unwrap(),
+                    ),
+                    draft: EnvelopeDraft {
+                        port: rastok::node::Port::new("in").unwrap(),
+                        data: Data::encoded(Encoding::ArrowIpc, *b"\x01\x02"),
+                        ext: opaque_ext(),
+                    },
+                    sequence: IngressSequence::Next,
+                    session: None,
                 },
-                sequence: IngressSequence::Next,
-                session: None,
-            },
-        )
-        .expect("the injection lands");
-        let result = vm.run_ready(&mut journal);
+            )
+            .expect("the injection lands");
+        let result = execution.run_ready(&mut journal);
         (
             result,
-            vm.outputs().to_vec(),
-            vm.envelope_views()
+            execution.outputs().to_vec(),
+            execution
+                .envelope_views()
                 .iter()
                 .filter(|event| event.node.is_some() && event.port.name() == "err")
                 .count(),
@@ -2582,41 +2629,48 @@ fn the_carry_is_as_lazy_as_the_name() {
         )
         .expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
-        vm.accept_input(
-            &mut journal,
-            IngressProposal {
-                provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
-                draft: EnvelopeDraft {
-                    port: rastok::node::Port::new("in").unwrap(),
-                    data: Data::encoded(encoding, bytes.to_vec()),
-                    ext: {
-                        let mut ext = Namespace::new();
-                        ext.insert(
-                            String::from("content_type"),
-                            rastok::envelope::MetaValue::Scalar(rastok::envelope::Scalar::Text(
-                                String::from("application/x-opaque"),
-                            )),
-                        );
-                        ext
+        let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
+        execution
+            .accept_input(
+                &mut journal,
+                IngressProposal {
+                    provenance: IngressProvenance::single(
+                        rastok::node::Path::new(["probe"]).unwrap(),
+                    ),
+                    draft: EnvelopeDraft {
+                        port: rastok::node::Port::new("in").unwrap(),
+                        data: Data::encoded(encoding, bytes.to_vec()),
+                        ext: {
+                            let mut ext = Namespace::new();
+                            ext.insert(
+                                String::from("content_type"),
+                                rastok::envelope::MetaValue::Scalar(
+                                    rastok::envelope::Scalar::Text(String::from(
+                                        "application/x-opaque",
+                                    )),
+                                ),
+                            );
+                            ext
+                        },
                     },
+                    sequence: IngressSequence::Next,
+                    session: None,
                 },
-                sequence: IngressSequence::Next,
-                session: None,
-            },
-        )
-        .expect("the injection lands");
-        vm.run_ready(&mut journal)
+            )
+            .expect("the injection lands");
+        execution
+            .run_ready(&mut journal)
             .expect("no forced materialization");
         assert_eq!(
-            vm.envelope_views()
+            execution
+                .envelope_views()
                 .iter()
                 .filter(|event| event.node.is_some() && event.port.name() == "err")
                 .count(),
             0,
             "no decode was demanded"
         );
-        vm.outputs()[0].envelope.clone()
+        execution.outputs()[0].envelope.clone()
     };
     let holds = |body: &str| {
         let output = run(body, Encoding::ArrowIpc, b"\x01\x02");
@@ -2684,23 +2738,26 @@ fn an_inspection_then_identity_ships_the_filled_cell() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
-    vm.accept_input(
-        &mut journal,
-        IngressProposal {
-            provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
-            draft: EnvelopeDraft {
-                port: rastok::node::Port::new("in").unwrap(),
-                data: Data::encoded(Encoding::Raw, *b"ok"),
-                ext: Namespace::new(),
+    let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
+    execution
+        .accept_input(
+            &mut journal,
+            IngressProposal {
+                provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
+                draft: EnvelopeDraft {
+                    port: rastok::node::Port::new("in").unwrap(),
+                    data: Data::encoded(Encoding::Raw, *b"ok"),
+                    ext: Namespace::new(),
+                },
+                sequence: IngressSequence::Next,
+                session: None,
             },
-            sequence: IngressSequence::Next,
-            session: None,
-        },
-    )
-    .expect("the injection lands");
-    vm.run_ready(&mut journal).expect("the drain completes");
-    let output = &vm.outputs()[0];
+        )
+        .expect("the injection lands");
+    execution
+        .run_ready(&mut journal)
+        .expect("the drain completes");
+    let output = &execution.outputs()[0];
     match output.envelope.data() {
         Data::Encoded { bytes, .. } => {
             assert_eq!(bytes.as_ref(), b"ok", "the bytes ship untouched");
@@ -2779,8 +2836,8 @@ fn a_duplicated_struct_field_refuses_at_the_door() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
-    let error = vm
+    let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
+    let error = execution
         .accept_input(
             &mut journal,
             IngressProposal {
@@ -2828,7 +2885,7 @@ fn the_conformance_judgement_is_matchable() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
+    let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
     let submission = |data: Value| IngressProposal {
         provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
         draft: EnvelopeDraft {
@@ -2840,7 +2897,7 @@ fn the_conformance_judgement_is_matchable() {
         session: None,
     };
     // A tool MATCHES the judgement — no message parsing.
-    let error = vm
+    let error = execution
         .accept_input(&mut journal, submission(Value::Text(String::from("wrong"))))
         .unwrap_err();
     assert!(matches!(
@@ -2850,7 +2907,7 @@ fn the_conformance_judgement_is_matchable() {
                 && violation.found == ValueKind::Text
                 && violation.reason == ConformanceReason::TypeMismatch
     ));
-    let error = vm
+    let error = execution
         .accept_input(&mut journal, submission(Value::Int(1 << 40)))
         .unwrap_err();
     assert!(matches!(

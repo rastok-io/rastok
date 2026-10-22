@@ -20,7 +20,7 @@ impl Execution<'_> {
     /// come from retained `Advance` facts, never from that instant.
     ///
     /// A scheduler-owned Call closure needs the pure Contract projection from
-    /// [`Self::recover_with_bindings`]. Reconstructed exchanges retain their
+    /// [`Self::recover_with_drivers`]. Reconstructed exchanges retain their
     /// obligations; recovery never reopens a socket or repeats a write. An
     /// inbound response already eligible for handoff is conservatively held
     /// until its original transport supplies a terminal fact.
@@ -29,7 +29,7 @@ impl Execution<'_> {
     /// An unsupported recovery profile, an inconsistent committed prefix, or
     /// a journal read failure. On every error the original execution is unchanged.
     pub fn recover_from_journal(&mut self, journal: &dyn Journal) -> Result<(), ExecutionFault> {
-        self.recover_with_bindings(journal, &mut NoOutboundBindings)
+        self.recover_with_drivers(journal, &mut NoOutboundDrivers)
     }
 
     /// Reconstructs the same retained state, with Contract projections for
@@ -39,10 +39,10 @@ impl Execution<'_> {
     /// # Errors
     /// The same atomic recovery refusals as [`Self::recover_from_journal`],
     /// or an unavailable/invalid pure Contract projection.
-    pub fn recover_with_bindings(
+    pub fn recover_with_drivers(
         &mut self,
         journal: &dyn Journal,
-        bindings: &mut dyn OutboundDrivers,
+        drivers: &mut dyn OutboundDrivers,
     ) -> Result<(), ExecutionFault> {
         self.preflight(journal)?;
         let resume_at = self.now;
@@ -98,14 +98,7 @@ impl Execution<'_> {
                     }
                     if result.is_ok() {
                         result = candidate
-                            .restore_record(
-                                journal,
-                                &admissions,
-                                bindings,
-                                index,
-                                record,
-                                resume_at,
-                            )
+                            .restore_record(journal, &admissions, drivers, index, record, resume_at)
                             .and_then(|()| {
                                 admissions.apply(record).map_err(ExecutionFault::Journal)
                             })
@@ -143,7 +136,7 @@ impl Execution<'_> {
         &mut self,
         journal: &dyn Journal,
         admissions: &dyn InstanceAdmissions,
-        bindings: &mut dyn OutboundDrivers,
+        drivers: &mut dyn OutboundDrivers,
         index: usize,
         record: &Record,
         resume_at: i64,
@@ -177,7 +170,7 @@ impl Execution<'_> {
                 Ok(())
             }
             Record::Egress(crate::journal::EgressRecord::Call(record)) => {
-                self.restore_call(journal, bindings, index, record)
+                self.restore_call(journal, drivers, index, record)
             }
             Record::Egress(crate::journal::EgressRecord::Session(record)) => {
                 self.restore_session(index, record)

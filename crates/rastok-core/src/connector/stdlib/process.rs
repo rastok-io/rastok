@@ -385,7 +385,7 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
     selector: Some(ModeSelector {
         attribute: "mode",
         default: Some("job"),
-        profiles: &[
+        modes: &[
             ContractMode {
                 protocol: None,
                 word: "job",
@@ -424,7 +424,7 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
                 ],
             },
             ContractMode {
-                protocol: Some(crate::connector::contract::ProfileProtocol {
+                protocol: Some(crate::connector::contract::ModeProtocol {
                     roles: ConnectorDirection::InboundAndOutbound,
                     exchange: ExchangeKind::Session,
                 }),
@@ -444,7 +444,7 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
 /// Checks the resolved Process mode and its exact protocol restrictions.
 pub(super) fn validate(node: &Node, spec: &ConnectorSpec) -> Result<(), PlanValidationError> {
     let mode = match spec.attribute("mode") {
-        Some(crate::plan::AttrSetting::Word(word)) => PROCESS.profile(word),
+        Some(crate::plan::AttrSetting::Word(word)) => PROCESS.mode(word),
         None => {
             return Err(PlanValidationError::MissingContractAttribute {
                 node: node.path.clone(),

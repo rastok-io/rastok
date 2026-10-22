@@ -267,16 +267,19 @@ fn authenticated_boot(url: String) -> BootBindings {
     BootBindings::resolve(profile, &FixedSecretProvider).expect("all boot bindings resolve")
 }
 
-fn drive(vm: &mut Execution<'_>, journal: &mut MemJournal, world: &mut RuntimeDrivers<'_>) {
+fn drive(execution: &mut Execution<'_>, journal: &mut MemJournal, world: &mut RuntimeDrivers<'_>) {
     let mut settled = false;
     for _ in 0..250 {
-        vm.run_ready_with_bindings(journal, world)
+        execution
+            .run_ready_with_drivers(journal, world)
             .expect("the authenticated graph drains");
-        vm.poll_drivers(journal, world)
+        execution
+            .poll_drivers(journal, world)
             .expect("the authenticated Driver pumps");
-        vm.run_ready_with_bindings(journal, world)
+        execution
+            .run_ready_with_drivers(journal, world)
             .expect("the authenticated completion drains");
-        if !vm.has_open_obligations() {
+        if !execution.has_open_obligations() {
             settled = true;
             break;
         }
@@ -328,25 +331,26 @@ lab authenticated {
         .expect("the real Driver resolves its exact boot inputs");
     let version = GraphVersion(1);
     let mut journal = MemJournal::new_with_deployment(version, boot.attestation().clone());
-    let mut vm = Execution::new_with_deployment(&compilation.plan, version, &boot);
-    vm.accept_input(
-        &mut journal,
-        rastok::connector::exchange::IngressProposal {
-            provenance: rastok::connector::exchange::IngressProvenance::single(
-                node::Path::new(["test"]).expect("valid provenance"),
-            ),
-            draft: rastok::connector::exchange::EnvelopeDraft {
-                port: node::Port::new("in").expect("valid input port"),
-                data: Data::materialized(Value::Text(String::from("request"))),
-                ext: Namespace::new(),
+    let mut execution = Execution::new_with_deployment(&compilation.plan, version, &boot);
+    execution
+        .accept_input(
+            &mut journal,
+            rastok::connector::exchange::IngressProposal {
+                provenance: rastok::connector::exchange::IngressProvenance::single(
+                    node::Path::new(["test"]).expect("valid provenance"),
+                ),
+                draft: rastok::connector::exchange::EnvelopeDraft {
+                    port: node::Port::new("in").expect("valid input port"),
+                    data: Data::materialized(Value::Text(String::from("request"))),
+                    ext: Namespace::new(),
+                },
+                sequence: rastok::connector::exchange::IngressSequence::Next,
+                session: None,
             },
-            sequence: rastok::connector::exchange::IngressSequence::Next,
-            session: None,
-        },
-    )
-    .expect("the request is admitted");
-    drive(&mut vm, &mut journal, &mut world);
-    assert!(vm.outputs().iter().any(|output| {
+        )
+        .expect("the request is admitted");
+    drive(&mut execution, &mut journal, &mut world);
+    assert!(execution.outputs().iter().any(|output| {
         output.envelope.data().materialized_value()
             == Some(&Value::Text(String::from("authenticated")))
     }));
@@ -374,7 +378,7 @@ lab authenticated {
 fn http_client_passes_the_connector_neutral_call_battery() {
     let server = LoopbackServer::start();
     let unreachable = unused_address();
-    let profile = DriverTestFixture {
+    let fixture = DriverTestFixture {
         contract: &HTTP_CLIENT,
         source: probe("happy", &server.url("/happy"), "text", "1s", "1KiB"),
         input: "request",
@@ -448,7 +452,7 @@ fn http_client_passes_the_connector_neutral_call_battery() {
         }),
     };
     let report = verify(
-        &profile,
+        &fixture,
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         &registry(),
     );
@@ -499,24 +503,26 @@ graph app : App {{
     let mut world = RuntimeDrivers::prepare(&compilation.plan, &registry()).expect("HTTP binder");
     let version = GraphVersion(1);
     let mut journal = MemJournal::new(version);
-    let mut vm = Execution::new_program(&compilation.plan, compilation.hash, version, 0, None);
-    vm.accept_input(
-        &mut journal,
-        rastok::connector::exchange::IngressProposal {
-            provenance: rastok::connector::exchange::IngressProvenance::single(
-                node::Path::new(["wire-test"]).expect("provenance"),
-            ),
-            draft: rastok::connector::exchange::EnvelopeDraft {
-                port: node::Port::new("in").expect("port"),
-                data: Data::materialized(Value::Map(BTreeMap::new())),
-                ext: Namespace::new(),
+    let mut execution =
+        Execution::new_program(&compilation.plan, compilation.hash, version, 0, None);
+    execution
+        .accept_input(
+            &mut journal,
+            rastok::connector::exchange::IngressProposal {
+                provenance: rastok::connector::exchange::IngressProvenance::single(
+                    node::Path::new(["wire-test"]).expect("provenance"),
+                ),
+                draft: rastok::connector::exchange::EnvelopeDraft {
+                    port: node::Port::new("in").expect("port"),
+                    data: Data::materialized(Value::Map(BTreeMap::new())),
+                    ext: Namespace::new(),
+                },
+                sequence: rastok::connector::exchange::IngressSequence::Next,
+                session: None,
             },
-            sequence: rastok::connector::exchange::IngressSequence::Next,
-            session: None,
-        },
-    )
-    .expect("admission");
-    drive(&mut vm, &mut journal, &mut world);
+        )
+        .expect("admission");
+    drive(&mut execution, &mut journal, &mut world);
     let samples = accounting_observations(&compilation.plan, journal.records(), None)
         .expect("original samples");
     assert_eq!(
@@ -529,7 +535,7 @@ graph app : App {{
         && sample.measures()[0].quantity().to_string() == "12"
         && sample.measures()[0].unit() == "token"));
     assert_eq!(
-        vm.outputs().len(),
+        execution.outputs().len(),
         1,
         "only the final response reaches the graph"
     );
@@ -549,7 +555,7 @@ graph app : App {{
         .collect();
     assert_eq!(dispositions, ["held", "published"]);
     assert!(!format!("{:?}", journal.records()).contains("OMITTED-WIRE-DATA"));
-    let recording = Recording::capture(&compilation, &journal, vm.logical_time())
+    let recording = Recording::capture(&compilation, &journal, execution.logical_time())
         .expect("diagnostic recording");
     let decoded =
         Recording::decode(&recording.encode().expect("encode")).expect("independent decode");

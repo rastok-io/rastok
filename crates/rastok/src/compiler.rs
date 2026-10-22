@@ -1081,27 +1081,29 @@ graph app : App {{
             .expect("the finite countdown is a valid Loop");
             let plan = Box::leak(Box::new(compilation.plan));
             let mut journal = MemJournal::new(crate::plan::GraphVersion(1));
-            let mut vm = Execution::new(plan, crate::plan::GraphVersion(1));
-            vm.accept_input(
-                &mut journal,
-                IngressProposal {
-                    provenance: IngressProvenance::single(
-                        crate::node::Path::new(["loop-test"])
-                            .expect("the provenance path is valid"),
-                    ),
-                    draft: EnvelopeDraft {
-                        port: crate::node::Port::new("in").expect("the input port is valid"),
-                        data: Data::materialized(Value::Int(3)),
-                        ext: Namespace::new(),
+            let mut execution = Execution::new(plan, crate::plan::GraphVersion(1));
+            execution
+                .accept_input(
+                    &mut journal,
+                    IngressProposal {
+                        provenance: IngressProvenance::single(
+                            crate::node::Path::new(["loop-test"])
+                                .expect("the provenance path is valid"),
+                        ),
+                        draft: EnvelopeDraft {
+                            port: crate::node::Port::new("in").expect("the input port is valid"),
+                            data: Data::materialized(Value::Int(3)),
+                            ext: Namespace::new(),
+                        },
+                        sequence: IngressSequence::Next,
+                        session: None,
                     },
-                    sequence: IngressSequence::Next,
-                    session: None,
-                },
-            )
-            .expect("the root is admitted before Loop work");
-            vm.run_ready(&mut journal)
+                )
+                .expect("the root is admitted before Loop work");
+            execution
+                .run_ready(&mut journal)
                 .expect("the immediate Loop reaches one terminal fact");
-            (vm, journal)
+            (execution, journal)
         }
 
         let (completed, completed_journal) = run("Loop.fuel = 4");
@@ -1348,30 +1350,32 @@ graph app : App {
         .expect("the finite countdown is a valid Loop");
         let plan = Box::leak(Box::new(compilation.plan));
         let mut journal = MemJournal::new(crate::plan::GraphVersion(1));
-        let mut vm = Execution::new(plan, crate::plan::GraphVersion(1));
+        let mut execution = Execution::new(plan, crate::plan::GraphVersion(1));
         for value in [2, 1] {
-            vm.accept_input(
-                &mut journal,
-                IngressProposal {
-                    provenance: IngressProvenance::single(
-                        crate::node::Path::new(["concurrent-loops"])
-                            .expect("the provenance path is valid"),
-                    ),
-                    draft: EnvelopeDraft {
-                        port: crate::node::Port::new("in").expect("the input port is valid"),
-                        data: Data::materialized(Value::Int(value)),
-                        ext: Namespace::new(),
+            execution
+                .accept_input(
+                    &mut journal,
+                    IngressProposal {
+                        provenance: IngressProvenance::single(
+                            crate::node::Path::new(["concurrent-loops"])
+                                .expect("the provenance path is valid"),
+                        ),
+                        draft: EnvelopeDraft {
+                            port: crate::node::Port::new("in").expect("the input port is valid"),
+                            data: Data::materialized(Value::Int(value)),
+                            ext: Namespace::new(),
+                        },
+                        sequence: IngressSequence::Next,
+                        session: None,
                     },
-                    sequence: IngressSequence::Next,
-                    session: None,
-                },
-            )
-            .expect("both roots fit the host mailbox");
+                )
+                .expect("both roots fit the host mailbox");
         }
-        vm.run_ready(&mut journal)
+        execution
+            .run_ready(&mut journal)
             .expect("both runs terminate independently");
-        assert_eq!(vm.outputs().len(), 2);
-        assert!(vm.outputs().iter().all(|output| {
+        assert_eq!(execution.outputs().len(), 2);
+        assert!(execution.outputs().iter().all(|output| {
             crate::runtime::data_value(output.envelope.data()) == Ok(Value::Int(0))
         }));
         let opens: Vec<_> = journal

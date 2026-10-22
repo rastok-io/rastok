@@ -1,6 +1,6 @@
 //! `File` through the connector-neutral conformance battery.
 //!
-//! The fixtures are physical because this profile proves the real Driver.
+//! The fixtures use physical I/O to test the real Driver.
 //! Contract identity, typed completion, correlation and journal ordering are
 //! still judged by the shared harness rather than by File-private tests.
 
@@ -108,7 +108,7 @@ fn file_registry(root: &Path) -> DriverRegistry {
 #[test]
 fn file_passes_the_connector_neutral_battery() {
     let root = TestRoot::new();
-    let profile = DriverTestFixture {
+    let fixture = DriverTestFixture {
         contract: &FILE,
         source: read_probe("happy", "happy.bin", "16B"),
         input: "ignored",
@@ -154,7 +154,7 @@ fn file_passes_the_connector_neutral_battery() {
         }),
     };
     let report = verify(
-        &profile,
+        &fixture,
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         &file_registry(root.path()),
     );

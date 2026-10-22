@@ -58,7 +58,7 @@ impl DriverFactory for Factory {
             .map_err(|e| DriverFactoryError::new(e.to_string()))?;
         Ok(Box::new(World {
             bindings,
-            evaluator: MockOutboundConnectorDriver {
+            evaluator: MockOutboundDriver {
                 plan,
                 mocks: Rc::clone(&self.mocks),
                 faults: Rc::clone(&self.faults),
@@ -75,7 +75,7 @@ impl DriverFactory for Factory {
 }
 struct World<'plan> {
     bindings: ProcessRequestSettings,
-    evaluator: MockOutboundConnectorDriver<'plan>,
+    evaluator: MockOutboundDriver<'plan>,
     resources: BTreeMap<SessionId, node::Path>,
     terminating: std::collections::BTreeSet<SessionId>,
     events: VecDeque<SessionObservation>,

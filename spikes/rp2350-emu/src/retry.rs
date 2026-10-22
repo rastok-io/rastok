@@ -80,10 +80,10 @@ pub(super) fn run(plan: &ValidatedExecutionPlan, hash: SemanticHash) -> usize {
         frames,
         bytes,
     };
-    let mut vm = Execution::new_program(plan, hash, GraphVersion(1), 0, None);
+    let mut execution = Execution::new_program(plan, hash, GraphVersion(1), 0, None);
     let mut journal = MemJournal::new(GraphVersion(1));
     for _ in 0..operations {
-        vm.accept_input(
+        execution.accept_input(
             &mut journal,
             IngressProposal {
                 provenance: IngressProvenance::single(Path::new(["spike"]).unwrap()),
@@ -100,20 +100,20 @@ pub(super) fn run(plan: &ValidatedExecutionPlan, hash: SemanticHash) -> usize {
     }
     let mut now = 0;
     for _ in 0..4096 {
-        vm.run_ready_with_bindings(&mut journal, &mut world)
+        execution.run_ready_with_drivers(&mut journal, &mut world)
             .unwrap();
-        vm.poll_drivers(&mut journal, &mut world).unwrap();
-        vm.run_ready_with_bindings(&mut journal, &mut world)
+        execution.poll_drivers(&mut journal, &mut world).unwrap();
+        execution.run_ready_with_drivers(&mut journal, &mut world)
             .unwrap();
-        if vm.is_stable() {
+        if execution.is_stable() {
             break;
         }
         if world.ready.is_empty() {
             now += 1_000_000;
-            vm.advance_to(&mut journal, &mut world, now).unwrap();
+            execution.advance_to(&mut journal, &mut world, now).unwrap();
         }
     }
-    assert!(vm.is_stable());
+    assert!(execution.is_stable());
     assert_eq!(world.preparations, operations);
     hprintln!(
         "retry: {} operations / {} Calls / {} frames per channel / {} bytes per frame",
@@ -128,11 +128,11 @@ pub(super) fn run(plan: &ValidatedExecutionPlan, hash: SemanticHash) -> usize {
         super::HEAP.peak.load(core::sync::atomic::Ordering::Relaxed)
     );
     let records = journal.records().len();
-    drop(vm);
+    drop(execution);
     let mut restored = Execution::new_program(plan, hash, GraphVersion(1), now, None);
     let starts = world.starts;
     restored
-        .recover_with_bindings(&journal, &mut world)
+        .recover_with_drivers(&journal, &mut world)
         .unwrap();
     assert_eq!(world.starts, starts);
     assert_eq!(world.preparations, operations);

@@ -12,7 +12,7 @@ new dependency, package version, Contract version, journal record or execution
 command. No golden is re-blessed.
 
 Compiler source-arm locations are debug side metadata, outside the executable
-plan. The Lab exposes the last assertion's existing observation window. The VM
+plan. The Lab exposes the last assertion's existing observation window. Execution
 inspection exposes its existing shared mailbox capacity. Neither accessor
 changes admission, consumption, deadlines, state or commit. The timeline's action
 index is a disposable view field, not a semantic fact.
@@ -134,7 +134,7 @@ preceding qualification, not this retest. Existing user sessions were untouched.
 
 ## Limits kept visible
 
-- An authored `advance` can still retain several VM transactions inside one
+- An authored `advance` can still retain several Execution transactions inside one
   UI transition. Changing that grain requires the controller/Lab seam, outside
   this brief. This pass does **not** close the outstanding M1.9 stepping gate.
 - Unknown predicate evaluation is not a failed predicate or zero matching

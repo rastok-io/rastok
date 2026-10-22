@@ -105,13 +105,13 @@ pub enum ContractValidationError {
         reason: String,
     },
     /// An attribute declared twice within one scope (the common
-    /// sheet, or one profile), or in both the common sheet and a
-    /// profile.
+    /// sheet, or one mode), or in both the common sheet and a
+    /// mode.
     DuplicateAttribute(&'static str),
-    /// Two profiles carry one word.
-    DuplicateProfile(&'static str),
-    /// The selector's default names no profile.
-    UnknownDefaultProfile(&'static str),
+    /// Two modes carry one word.
+    DuplicateMode(&'static str),
+    /// The selector's default names no mode.
+    UnknownDefaultMode(&'static str),
     /// The selector attribute collides with a declared attribute.
     SelectorCollision(&'static str),
     /// A `Choice` domain lists one word twice.
@@ -119,12 +119,12 @@ pub enum ContractValidationError {
     /// A `Choice` domain with no word at all — an attribute nobody
     /// could ever write.
     EmptyChoice(&'static str),
-    /// A selector with no profile — nothing to select.
-    NoProfiles(&'static str),
-    /// A sheet name (port, attribute, selector, profile word,
+    /// A selector with no mode — nothing to select.
+    NoModes(&'static str),
+    /// A sheet name (port, attribute, selector, mode word,
     /// choice word, or error kind) the DSL cannot express.
     InexpressibleName(&'static str),
-    /// A deferred-only domain sits in an AVAILABLE profile or the
+    /// A deferred-only domain sits in an AVAILABLE mode or the
     /// common sheet.
     UnimplementedDomain(&'static str),
     /// A default that does not compile, reduce, or fit its domain.
@@ -187,12 +187,9 @@ impl core::fmt::Display for ContractValidationError {
                 write!(f, "port `{port}` has an invalid logical type: {reason}")
             }
             Self::DuplicateAttribute(name) => write!(f, "`{name}` is declared twice"),
-            Self::DuplicateProfile(word) => write!(f, "profile `{word}` is declared twice"),
-            Self::UnknownDefaultProfile(word) => {
-                write!(
-                    f,
-                    "the selector defaults to `{word}`, which names no profile"
-                )
+            Self::DuplicateMode(word) => write!(f, "mode `{word}` is declared twice"),
+            Self::UnknownDefaultMode(word) => {
+                write!(f, "the selector defaults to `{word}`, which names no mode")
             }
             Self::SelectorCollision(name) => {
                 write!(f, "`{name}` is both the selector and a declared attribute")
@@ -206,8 +203,8 @@ impl core::fmt::Display for ContractValidationError {
                     "`{name}`'s choice domain is empty — nothing could satisfy it"
                 )
             }
-            Self::NoProfiles(attribute) => {
-                write!(f, "the `{attribute}` selector has no profile to select")
+            Self::NoModes(attribute) => {
+                write!(f, "the `{attribute}` selector has no mode to select")
             }
             Self::InexpressibleName(name) => {
                 write!(
@@ -217,7 +214,7 @@ impl core::fmt::Display for ContractValidationError {
             }
             Self::UnimplementedDomain(name) => write!(
                 f,
-                "`{name}` carries a deferred-only domain outside a deferred profile"
+                "`{name}` carries a deferred-only domain outside a deferred mode"
             ),
             Self::InvalidDefault { attribute, reason } => {
                 write!(f, "`{attribute}`'s default is invalid: {reason}")
@@ -230,7 +227,7 @@ impl std::error::Error for ContractValidationError {}
 
 /// Whether a sheet-declared name is expressible in the DSL — the
 /// identifier grammar the sheet's ports, attributes, selector,
-/// profile words and choice words must all satisfy: an
+/// mode words and choice words must all satisfy: an
 /// admitted sheet is an authority, so nothing inexpressible enters.
 pub(crate) fn expressible_name(text: &str) -> bool {
     // `nothing` is excluded with the literals: the parser turns it
@@ -288,7 +285,7 @@ fn validate_default(spec: &AttributeSpec) -> Result<(), ContractValidationError>
 fn validate_attributes(
     specs: &[AttributeSpec],
     seen: &mut std::collections::BTreeSet<&'static str>,
-    deferred_profile: bool,
+    deferred_mode: bool,
 ) -> Result<(), ContractValidationError> {
     let mut local = std::collections::BTreeSet::new();
     for spec in specs {
@@ -326,7 +323,7 @@ fn validate_attributes(
         if spec.domain.implemented() {
             validate_default(spec)?;
         } else {
-            if !deferred_profile {
+            if !deferred_mode {
                 return Err(ContractValidationError::UnimplementedDomain(spec.name));
             }
             // A domain nobody can judge carries no default — a
@@ -385,8 +382,8 @@ pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), ContractValida
                 selector.attribute,
             ));
         }
-        if selector.profiles.is_empty() {
-            return Err(ContractValidationError::NoProfiles(selector.attribute));
+        if selector.modes.is_empty() {
+            return Err(ContractValidationError::NoModes(selector.attribute));
         }
         if names.contains(selector.attribute) {
             return Err(ContractValidationError::SelectorCollision(
@@ -394,8 +391,8 @@ pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), ContractValida
             ));
         }
         let mut words = std::collections::BTreeSet::new();
-        for profile in selector.profiles {
-            if let Some(protocol) = profile.protocol {
+        for mode in selector.modes {
+            if let Some(protocol) = mode.protocol {
                 let exits = contract
                     .ports
                     .iter()
@@ -422,13 +419,13 @@ pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), ContractValida
                     });
                 }
             }
-            if !expressible_name(profile.word) {
-                return Err(ContractValidationError::InexpressibleName(profile.word));
+            if !expressible_name(mode.word) {
+                return Err(ContractValidationError::InexpressibleName(mode.word));
             }
-            if !words.insert(profile.word) {
-                return Err(ContractValidationError::DuplicateProfile(profile.word));
+            if !words.insert(mode.word) {
+                return Err(ContractValidationError::DuplicateMode(mode.word));
             }
-            if profile
+            if mode
                 .attributes
                 .iter()
                 .any(|spec| spec.name == selector.attribute)
@@ -437,24 +434,24 @@ pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), ContractValida
                     selector.attribute,
                 ));
             }
-            // Common-vs-profile collisions refuse; two PROFILES may
+            // Common-vs-mode collisions refuse; two MODES may
             // each own a name (none does today).
             let mut shared = names.clone();
             validate_attributes(
-                profile.attributes,
+                mode.attributes,
                 &mut shared,
-                matches!(profile.support, ModeSupport::Deferred(_)),
+                matches!(mode.support, ModeSupport::Deferred(_)),
             )?;
         }
         if let Some(default) = selector.default
             && !words.contains(default)
         {
-            return Err(ContractValidationError::UnknownDefaultProfile(default));
+            return Err(ContractValidationError::UnknownDefaultMode(default));
         }
     }
-    // A port type may depend on one common closed choice, or on the profile
-    // selector itself. Profile-local attributes are deliberately excluded:
-    // sibling profiles may reuse one attribute name with different domains,
+    // A port type may depend on one common closed choice, or on the mode
+    // selector itself. Mode-local attributes are deliberately excluded:
+    // sibling modes may reuse one attribute name with different domains,
     // so that spelling alone cannot name one deterministic type rule.
     let choice_domain = |attribute: &str| -> Option<Vec<&'static str>> {
         contract
@@ -472,9 +469,9 @@ pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), ContractValida
                 contract.selector.as_ref().and_then(|selector| {
                     (selector.attribute == attribute).then_some(
                         selector
-                            .profiles
+                            .modes
                             .iter()
-                            .map(|profile| profile.word)
+                            .map(|mode| mode.word)
                             .collect::<Vec<_>>(),
                     )
                 })

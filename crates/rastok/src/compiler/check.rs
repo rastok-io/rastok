@@ -2503,7 +2503,7 @@ impl Checker<'_, '_> {
                 .find(|port| port.direction == PortDirection::Input && port.port.name() == "in")
                 .and_then(|port| port.ty.clone())
             else {
-                // An invalid/deferred profile already spoke. Do not add a
+                // An invalid or deferred mode already has a diagnostic. Do not add a
                 // speculative value diagnostic against a recovery port row.
                 continue;
             };
@@ -3108,7 +3108,7 @@ impl Checker<'_, '_> {
                         None => selector.default,
                         Some(_) => None,
                     };
-                    word.and_then(|word| contract.profile(word))
+                    word.and_then(|word| contract.mode(word))
                         .and_then(|mode| mode.protocol)
                 });
                 (
@@ -3296,7 +3296,7 @@ impl Checker<'_, '_> {
     }
 
     /// Validates a connector declaration against its contract sheet
-    /// (D-2026-08-12-1): resolve the contract, resolve the PROFILE
+    /// (D-2026-08-12-1): resolve the contract, resolve the MODE
     /// through the selector (written or defaulted), validate the
     /// written attributes against the composed sheet, then inject
     /// the contract's defaults into the effective HIR — BEFORE
@@ -3403,22 +3403,18 @@ impl Checker<'_, '_> {
                 _ => None,
             })
             .collect();
-        // 1. The PROFILE: the selector's written word, or its
-        // default. The admitted words are derived from the profiles.
-        let mut profile: Option<&crate::connector::contract::ContractMode> = None;
+        // 1. The MODE: the selector's written word, or its
+        // default. The admitted words are derived from the modes.
+        let mut mode: Option<&crate::connector::contract::ContractMode> = None;
         let mut selector_written = false;
         // The selector itself is three-state: WRITTEN-BUT-INVALID
         // (its value failed to check, so it reached no HIR) selects
-        // NO implicit profile — the compiler never pretends
+        // NO implicit mode — the compiler never pretends
         // `mode = job` about a mode the author wrote and got wrong
         // (D-2026-08-12-1, review round).
         let mut selector_invalid = false;
         if let Some(selector) = &contract.selector {
-            let words: Vec<&str> = selector
-                .profiles
-                .iter()
-                .map(|profile| profile.word)
-                .collect();
+            let words: Vec<&str> = selector.modes.iter().map(|mode| mode.word).collect();
             let written = node
                 .attributes()
                 .iter()
@@ -3435,7 +3431,7 @@ impl Checker<'_, '_> {
                                 selector.attribute,
                                 span_of(selector.attribute),
                                 format!(
-                                    "the profile selector expects one of {words:?} as a bare \
+                                    "the mode selector expects one of {words:?} as a bare \
                                      word, not a Rastok expression"
                                 ),
                             );
@@ -3450,9 +3446,9 @@ impl Checker<'_, '_> {
                 None => selector.default.map(String::from),
             };
             match word {
-                Some(word) => match contract.profile(&word) {
+                Some(word) => match contract.mode(&word) {
                     Some(found) => {
-                        profile = Some(found);
+                        mode = Some(found);
                         if let crate::connector::contract::ModeSupport::Deferred(reason) =
                             found.support
                         {
@@ -3476,7 +3472,7 @@ impl Checker<'_, '_> {
                             E_CONTRACT_REQUIRED,
                             Phase::Check,
                             format!(
-                                "the {} sheet requires `{}` (no default profile)",
+                                "the {} sheet requires `{}` (no default mode)",
                                 contract.name, selector.attribute
                             ),
                         )
@@ -3487,13 +3483,13 @@ impl Checker<'_, '_> {
                 }
             }
         }
-        let deferred_profile = matches!(
-            profile.map(|profile| profile.support),
+        let deferred_mode = matches!(
+            mode.map(|mode| mode.support),
             Some(crate::connector::contract::ModeSupport::Deferred(_))
         );
         // 2. NAME-level judgement is SYNTACTIC — an attribute whose
         // value failed to check still deserves the precise refusal
-        // ("belongs to another profile" / "not on the sheet").
+        // ("belongs to another mode" / "not on the sheet").
         for item in &decl.body {
             let OperatorItem::Attribute(attribute) = item else {
                 continue;
@@ -3531,15 +3527,15 @@ impl Checker<'_, '_> {
             {
                 continue;
             }
-            if contract.attribute(profile, &name).is_some() {
+            if contract.attribute(mode, &name).is_some() {
                 continue;
             }
-            if let Some(owner) = contract.owning_profile(&name) {
+            if let Some(owner) = contract.owning_mode(&name) {
                 let selector = contract
                     .selector
                     .as_ref()
                     .map_or("mode", |selector| selector.attribute);
-                let current = profile.map_or("?", |profile| profile.word);
+                let current = mode.map_or("?", |mode| mode.word);
                 refuse(
                     self.bag,
                     &name,
@@ -3570,17 +3566,17 @@ impl Checker<'_, '_> {
                 continue;
             }
             let span = span_of(&attribute.name);
-            let Some(spec) = contract.attribute(profile, &attribute.name) else {
+            let Some(spec) = contract.attribute(mode, &attribute.name) else {
                 // The syntactic pre-pass already refused the name.
                 continue;
             };
-            if deferred_profile
+            if deferred_mode
                 && contract
                     .common
                     .iter()
                     .all(|common| common.name != attribute.name)
             {
-                // A deferred profile's own attributes are declared,
+                // A deferred mode's own attributes are declared,
                 // not validated — the deferral already spoke.
                 continue;
             }
@@ -3589,7 +3585,7 @@ impl Checker<'_, '_> {
                     if words.contains(&word.as_str()) {
                         None
                     } else if let [only] = words {
-                        let current = profile.map_or("?", |profile| profile.word);
+                        let current = mode.map_or("?", |mode| mode.word);
                         let selector = contract
                             .selector
                             .as_ref()
@@ -3656,17 +3652,15 @@ impl Checker<'_, '_> {
             }
         }
         // 4. Required attributes — the COMMON sheet is known and
-        // fully owed even under a deferred profile; only the
-        // deferred profile's own attributes wait with it.
+        // fully owed even under a deferred mode; only the
+        // deferred mode's own attributes wait with it.
         let composed: Vec<&crate::connector::contract::AttributeSpec> = contract
             .common
             .iter()
-            .chain(if deferred_profile {
+            .chain(if deferred_mode {
                 &[] as &[crate::connector::contract::AttributeSpec]
             } else {
-                profile
-                    .map(|profile| profile.attributes)
-                    .unwrap_or_default()
+                mode.map(|mode| mode.attributes).unwrap_or_default()
             })
             .collect();
         for spec in &composed {
@@ -3710,7 +3704,7 @@ impl Checker<'_, '_> {
                 );
             }
         }
-        if deferred_profile {
+        if deferred_mode {
             // No injection: the deferral already refused the
             // compilation honestly.
             return;
@@ -3764,7 +3758,7 @@ impl Checker<'_, '_> {
             attributes.extend(injected);
         }
         if contract.id == crate::connector::stdlib::PROCESS_CONNECTOR_ID
-            && profile.is_some_and(|mode| mode.word == "service")
+            && mode.is_some_and(|mode| mode.word == "service")
         {
             for attribute in node.attributes() {
                 let rejected = match attribute.name.as_str() {
@@ -3845,9 +3839,9 @@ impl Checker<'_, '_> {
     }
 
     /// Returns one sheet row whose value may legitimately remain open until
-    /// an invocation. A profile-local name is admitted here only when every
+    /// an invocation. A mode-local name is admitted here only when every
     /// occurrence has the same domain and phase ceiling; the later contract
-    /// pass still judges whether it belongs to the selected profile.
+    /// pass still judges whether it belongs to the selected mode.
     fn invocation_attribute_spec(
         &self,
         node: &Node,
@@ -3865,8 +3859,8 @@ impl Checker<'_, '_> {
                 sheet
                     .selector
                     .iter()
-                    .flat_map(|selector| selector.profiles.iter())
-                    .flat_map(|profile| profile.attributes.iter()),
+                    .flat_map(|selector| selector.modes.iter())
+                    .flat_map(|mode| mode.attributes.iter()),
             )
             .filter(|spec| {
                 spec.name == name
@@ -4019,7 +4013,7 @@ impl Checker<'_, '_> {
                     let expression_setting = node
                         .connector_contract_id()
                         .and_then(|id| self.registry.connector_by_id(id))
-                        .and_then(|sheet| sheet.attribute(sheet.owning_profile(&name), &name))
+                        .and_then(|sheet| sheet.attribute(sheet.owning_mode(&name), &name))
                         .is_some_and(|spec| spec.domain.expression_type().is_some());
                     if node.connector_contract_id().is_none() {
                         self.deferred("an operator attribute", attribute.span);

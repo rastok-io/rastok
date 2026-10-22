@@ -15,7 +15,7 @@ pub(super) struct Contracts {
     protocols: BTreeMap<node::Path, Box<dyn CallProtocol>>,
 }
 impl Contracts {
-    pub(super) fn bind(plan: &ValidatedExecutionPlan) -> Result<Self, Error> {
+    pub(super) fn prepare(plan: &ValidatedExecutionPlan) -> Result<Self, Error> {
         let mut protocols = BTreeMap::new();
         for node in &plan.nodes {
             let Some(contract) = node.connector() else {

@@ -161,6 +161,8 @@ domain output and VM faults commit nothing.
 
 ## Keeping the map honest
 
+- Historical rows keep the names used at their recorded checkpoint; the
+  current implementation table uses current names.
 - `Planned` behavior is not described as implemented in public
   documentation.
 - A deferred feature gets a clear diagnostic if source syntax can reach

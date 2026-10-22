@@ -301,26 +301,30 @@ fn malformed_native_or_undeserialized_data_cannot_enter_the_outbound_journal() {
             data,
             responses: Vec::new(),
         };
-        let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
+        let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
         let mut journal = MemJournal::new(GraphVersion(1));
-        vm.accept_input(
-            &mut journal,
-            IngressProposal {
-                provenance: IngressProvenance::single(node::Path::new(["probe"]).expect("path")),
-                draft: EnvelopeDraft {
-                    port: node::Port::new("in").expect("port"),
-                    data: Data::materialized(Value::Map(BTreeMap::new())),
-                    ext: Namespace::new(),
+        execution
+            .accept_input(
+                &mut journal,
+                IngressProposal {
+                    provenance: IngressProvenance::single(
+                        node::Path::new(["probe"]).expect("path"),
+                    ),
+                    draft: EnvelopeDraft {
+                        port: node::Port::new("in").expect("port"),
+                        data: Data::materialized(Value::Map(BTreeMap::new())),
+                        ext: Namespace::new(),
+                    },
+                    sequence: IngressSequence::Next,
+                    session: None,
                 },
-                sequence: IngressSequence::Next,
-                session: None,
-            },
-        )
-        .expect("admission");
-        vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut driver))
+            )
+            .expect("admission");
+        execution
+            .run_ready_with_drivers(&mut journal, &mut CallDriver(&mut driver))
             .expect("Call opened");
         let retained = journal.records().to_vec();
-        let report = vm
+        let report = execution
             .poll_drivers(&mut journal, &mut CallDriver(&mut driver))
             .expect("the Driver fault is a rejected observation");
         assert_eq!(report.settled, 0);

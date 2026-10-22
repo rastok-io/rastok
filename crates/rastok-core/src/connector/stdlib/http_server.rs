@@ -171,7 +171,7 @@ pub const HTTP_SERVER: ConnectorContract = ConnectorContract {
     selector: Some(ModeSelector {
         attribute: "mode",
         default: Some("ack"),
-        profiles: &[
+        modes: &[
             ContractMode {
                 protocol: None,
                 word: "ack",

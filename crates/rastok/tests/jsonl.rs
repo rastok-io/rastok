@@ -36,37 +36,41 @@ fn drive(
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
+    let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
     let mut world =
         rastok::connector::drivers::Process::try_new(&compilation.plan).expect("the plan binds");
-    vm.accept_input(
-        &mut journal,
-        IngressProposal {
-            provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
-            draft: EnvelopeDraft {
-                port: rastok::node::Port::new("in").unwrap(),
-                data: Data::materialized(data),
-                ext: Namespace::new(),
+    execution
+        .accept_input(
+            &mut journal,
+            IngressProposal {
+                provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
+                draft: EnvelopeDraft {
+                    port: rastok::node::Port::new("in").unwrap(),
+                    data: Data::materialized(data),
+                    ext: Namespace::new(),
+                },
+                sequence: IngressSequence::Next,
+                session: None,
             },
-            sequence: IngressSequence::Next,
-            session: None,
-        },
-    )
-    .expect("the injection lands");
-    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
+        )
+        .expect("the injection lands");
+    execution
+        .run_ready_with_drivers(&mut journal, &mut CallDriver(&mut world))
         .expect("the request opens");
     for _ in 0..200 {
-        if vm.is_stable() && !vm.has_open_obligations() {
+        if execution.is_stable() && !execution.has_open_obligations() {
             break;
         }
-        vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        execution
+            .poll_drivers(&mut journal, &mut CallDriver(&mut world))
             .expect("the world answers");
-        vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
+        execution
+            .run_ready_with_drivers(&mut journal, &mut CallDriver(&mut world))
             .expect("the reply routes");
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    assert!(vm.is_stable(), "the run must settle");
-    let errors = vm
+    assert!(execution.is_stable(), "the run must settle");
+    let errors = execution
         .envelope_views()
         .iter()
         .filter(|observed| observed.node.is_some() && observed.port.name() == "err")
@@ -75,7 +79,7 @@ fn drive(
             Data::Encoded { bytes, .. } => Value::Text(String::from_utf8_lossy(bytes).into_owned()),
         })
         .collect();
-    let exits = vm
+    let exits = execution
         .envelope_views()
         .iter()
         .filter(|observed| observed.node.is_some() && observed.port.name() == "exit")
@@ -84,7 +88,7 @@ fn drive(
             Data::Encoded { .. } => panic!("Process.exit is materialized"),
         })
         .collect();
-    (vm.outputs().to_vec(), errors, exits)
+    (execution.outputs().to_vec(), errors, exits)
 }
 
 fn assert_exit<'a>(exits: &'a [Value], expected: &str) -> &'a [(String, Value)] {
@@ -482,8 +486,8 @@ fn an_out_of_domain_decimal_refuses_at_the_door() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
-    let refused = vm.accept_input(
+    let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
+    let refused = execution.accept_input(
         &mut journal,
         IngressProposal {
             provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),

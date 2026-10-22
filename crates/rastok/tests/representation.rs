@@ -148,24 +148,25 @@ graph g : App {
 "#;
     let compiled = compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::new(&compiled.plan, GraphVersion(1));
-    vm.accept_input(
-        &mut journal,
-        IngressProposal {
-            provenance: IngressProvenance::single(Path::new(["cli"]).unwrap()),
-            draft: EnvelopeDraft {
-                port: Port::new("in").unwrap(),
-                data: Data::encoded(Encoding::Raw, "é\n".as_bytes()),
-                ext: Default::default(),
+    let mut execution = Execution::new(&compiled.plan, GraphVersion(1));
+    execution
+        .accept_input(
+            &mut journal,
+            IngressProposal {
+                provenance: IngressProvenance::single(Path::new(["cli"]).unwrap()),
+                draft: EnvelopeDraft {
+                    port: Port::new("in").unwrap(),
+                    data: Data::encoded(Encoding::Raw, "é\n".as_bytes()),
+                    ext: Default::default(),
+                },
+                sequence: IngressSequence::Next,
+                session: None,
             },
-            sequence: IngressSequence::Next,
-            session: None,
-        },
-    )
-    .unwrap();
-    vm.run_ready(&mut journal).unwrap();
+        )
+        .unwrap();
+    execution.run_ready(&mut journal).unwrap();
     assert_eq!(
-        vm.outputs()[0].envelope.data(),
+        execution.outputs()[0].envelope.data(),
         &Data::materialized(Value::Int(2))
     );
     let scope = OwnerPath::new(["names"]).unwrap();
@@ -216,25 +217,26 @@ fn loop_expiry_materializes_last_state_by_the_host_entry_type() {
             );
             let compiled = compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap();
             let mut journal = MemJournal::new(GraphVersion(1));
-            let mut vm = Execution::new(&compiled.plan, GraphVersion(1));
-            vm.accept_input(
-                &mut journal,
-                IngressProposal {
-                    provenance: IngressProvenance::single(Path::new(["cli"]).unwrap()),
-                    draft: EnvelopeDraft {
-                        port: Port::new("in").unwrap(),
-                        data: Data::encoded(Encoding::Raw, "é\n".as_bytes()),
-                        ext: Default::default(),
+            let mut execution = Execution::new(&compiled.plan, GraphVersion(1));
+            execution
+                .accept_input(
+                    &mut journal,
+                    IngressProposal {
+                        provenance: IngressProvenance::single(Path::new(["cli"]).unwrap()),
+                        draft: EnvelopeDraft {
+                            port: Port::new("in").unwrap(),
+                            data: Data::encoded(Encoding::Raw, "é\n".as_bytes()),
+                            ext: Default::default(),
+                        },
+                        sequence: IngressSequence::Next,
+                        session: None,
                     },
-                    sequence: IngressSequence::Next,
-                    session: None,
-                },
-            )
-            .unwrap();
-            vm.run_ready(&mut journal).unwrap();
-            assert_eq!(vm.outputs().len(), 1, "{host} with {ty} entry");
+                )
+                .unwrap();
+            execution.run_ready(&mut journal).unwrap();
+            assert_eq!(execution.outputs().len(), 1, "{host} with {ty} entry");
             let Value::TaggedUnion(output) =
-                rastok::runtime::data_value(vm.outputs()[0].envelope.data()).unwrap()
+                rastok::runtime::data_value(execution.outputs()[0].envelope.data()).unwrap()
             else {
                 unreachable!("expiry is a typed union case")
             };
@@ -248,7 +250,7 @@ fn loop_expiry_materializes_last_state_by_the_host_entry_type() {
             MemJournal::from_records(GraphVersion(1), None, journal.records()).unwrap();
             let mut recovered = Execution::new(&compiled.plan, GraphVersion(1));
             recovered.recover_from_journal(&journal).unwrap();
-            assert_eq!(recovered.outputs(), vm.outputs());
+            assert_eq!(recovered.outputs(), execution.outputs());
 
             // Both readings preserve these raw bytes, but only one agrees
             // with this host's entry and terminal. The journal fold has no

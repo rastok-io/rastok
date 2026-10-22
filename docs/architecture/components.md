@@ -312,7 +312,7 @@ explicitly. `poll_drivers` delegates physical I/O to the supplied Drivers.
 Admission follows **prepare → commit → apply**: check the proposal, commit
 the record and routes to the journal, then update instances, exchanges and
 mailboxes. Applying the decision is not a second transaction. Recovery is
-explicit: `Execution::recover_from_journal` and `recover_with_bindings` rebuild
+explicit: `Execution::recover_from_journal` and `recover_with_drivers` rebuild
 candidate state from recorded facts before replacing live state. They do not
 re-execute producers or perform physical I/O. “RecoveryFold” names the design
 responsibility, not a public Rust type. The Lab runner and visual debugger use
@@ -526,7 +526,7 @@ Rules, in force from the first commit:
    Execution's DriverPoller uses the `Journal` trait, never a concrete store.
 4. **`connector::stdlib`** is declarative data over the base vocabulary; the
    checker and `main` read it; it depends on no Driver.
-5. **`lab`** consumes compiler output, the public Execution, boundary/Driver bindings,
+5. **`lab`** consumes compiler output, the public Execution, Driver interfaces and the runtime Driver association,
    and journal records. It never patches runtime internals or implements a
    second execution engine.
 6. **`node`, `envelope`, `diagnostics`** are shared foundations for the

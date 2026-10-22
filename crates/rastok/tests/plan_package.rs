@@ -244,33 +244,36 @@ fn v16_retains_one_operator_loop_without_a_graph_handler_or_command_port() {
     use rastok::plan::GraphVersion;
     use rastok::runtime::execution::Execution;
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::new(&decoded, GraphVersion(1));
-    vm.accept_input(
-        &mut journal,
-        IngressProposal {
-            provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
-            draft: EnvelopeDraft {
-                port: rastok::node::Port::new("in").unwrap(),
-                data: Data::materialized(rastok::value::Value::Text(String::from("go"))),
-                ext: Namespace::new(),
+    let mut execution = Execution::new(&decoded, GraphVersion(1));
+    execution
+        .accept_input(
+            &mut journal,
+            IngressProposal {
+                provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
+                draft: EnvelopeDraft {
+                    port: rastok::node::Port::new("in").unwrap(),
+                    data: Data::materialized(rastok::value::Value::Text(String::from("go"))),
+                    ext: Namespace::new(),
+                },
+                sequence: IngressSequence::Next,
+                session: None,
             },
-            sequence: IngressSequence::Next,
-            session: None,
-        },
-    )
-    .expect("the App routes the opening input to the Loop Operator");
-    vm.run_ready(&mut journal)
+        )
+        .expect("the App routes the opening input to the Loop Operator");
+    execution
+        .run_ready(&mut journal)
         .expect("the terminal output reaches the public App boundary");
-    assert_eq!(vm.outputs().len(), 1);
+    assert_eq!(execution.outputs().len(), 1);
     assert_eq!(
-        rastok::runtime::data_value(vm.outputs()[0].envelope.data()).unwrap(),
+        rastok::runtime::data_value(execution.outputs()[0].envelope.data()).unwrap(),
         rastok::value::Value::Text(String::from("go"))
     );
 
     let registry = rastok::connector::drivers::DriverRegistry::default();
-    let mut bindings = rastok::connector::drivers::RuntimeDrivers::prepare(&decoded, &registry)
+    let mut drivers = rastok::connector::drivers::RuntimeDrivers::prepare(&decoded, &registry)
         .expect("a connector-free Loop needs no Driver");
-    vm.poll_drivers(&mut journal, &mut bindings)
+    execution
+        .poll_drivers(&mut journal, &mut drivers)
         .expect("a connector-free boundary pump remains inert");
 }
 
@@ -1022,7 +1025,7 @@ fn run_boundary_probe(plan: &rastok::plan::ValidatedExecutionPlan) -> (Vec<Strin
     use rastok::plan::GraphVersion;
     use rastok::runtime::execution::Execution;
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::new(plan, GraphVersion(1));
+    let mut execution = Execution::new(plan, GraphVersion(1));
     let submission = IngressProposal {
         provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
         draft: EnvelopeDraft {
@@ -1033,17 +1036,21 @@ fn run_boundary_probe(plan: &rastok::plan::ValidatedExecutionPlan) -> (Vec<Strin
         sequence: IngressSequence::Next,
         session: None,
     };
-    vm.accept_input(&mut journal, submission)
+    execution
+        .accept_input(&mut journal, submission)
         .expect("the injection lands");
-    vm.run_ready(&mut journal).expect("the drain completes");
-    let outputs = vm
+    execution
+        .run_ready(&mut journal)
+        .expect("the drain completes");
+    let outputs = execution
         .outputs()
         .iter()
         .map(|output| format!("{}: {:?}", output.port, output.envelope.data()))
         .collect();
     (
         outputs,
-        vm.envelope_views()
+        execution
+            .envelope_views()
             .iter()
             .filter(|event| event.node.is_some() && event.port.name() == "err")
             .count(),

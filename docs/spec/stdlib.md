@@ -60,7 +60,7 @@ not mean the command executed it. See the
 | 3 | **Ports** | `in`/`out`/`err`/`exit` conventions + extras, with types |
 | 4 | **Repetition guarantee** | plan-owned `idempotent` where the Call profile admits it; absent/false supplies no guarantee. Session opening follows roles, not an effect sentinel |
 | 5 | **`behavior`** | deterministic / probabilistic — §2; pre-declared or per-instance |
-| 6 | **Attributes** | the config surface with a contract-declared latest evaluation site (plan, boot, instance, or invocation); checking chooses the earliest legal actual site and transports it; `env()`/`secret()` are boot-only, and timeout/shutdown settings belong only to the profiles that declare them |
+| 6 | **Attributes** | the config surface with a contract-declared latest evaluation site (plan, boot, instance, or invocation); checking chooses the earliest legal actual site and transports it; `env()`/`secret()` are boot-only, and timeout/shutdown settings belong only to the modes that declare them |
 | 7 | **Correlator** | what one invocation or session is in its protocol, and how messages/answers find it (execution-model §6.1: the Connector matches) |
 | 8 | **Outcome coverage** | the finite typed cases each output may emit and the completion rule the future `rastok simulate --coverage` enumerates |
 | 9 | **Instances** | singleton / `instance.key` (each resource run may have a `run_id`) / per-invocation or per-session; Node-instance closing policy and each exchange's terminal exit |
@@ -274,7 +274,7 @@ requires verified HTTPS. Every valid status, including non-2xx, publishes its
 body on `out`; the wire version is observation in `meta.ext.http_version`, not
 payload or identity.
 
-A4's boot references are exact roots, not general evaluator calls. A profile
+A4's boot references are exact roots, not general evaluator calls. A deployment profile
 must supply the URL value and resolve the versioned bearer before Driver
 binding. The logical request seen by real and Lab Drivers contains the secret
 reference only. The real Driver may validate the bearer before opening an
@@ -297,7 +297,7 @@ weaken verification or reinterpret the plan bytes.
 | Stable identity | `std/process@6` for both modes, using the [current package format](identity.md) |
 | Role / Direction | Job: outbound Call. Service: both roles, resident Session. The mode resolves direction, exchange and resource lifecycle before lowering; the Contract id does not change. |
 | Ports | `in` → stdin; `out` ← decoded/framed stdout; `err` ← framed stderr data; `exit` ← `ProcessExit` |
-| idempotent / behavior | job: `idempotent: bool = false`; service has no idempotence attribute. `behavior` required for both profiles, plan-evaluated |
+| idempotent / behavior | job: `idempotent: bool = false`; service has no idempotence attribute. `behavior` required for both modes, plan-evaluated |
 | Attributes | the normative table below (D-2026-08-12-1, amended by D-2026-08-14-1) — every attribute is `name = value`, presence and defaults are the CONTRACT's, and the checker injects every omitted default into the effective HIR |
 | Correlation | Job: the Call itself. Service: the exact Node instance selects its resource Session; application request/reply correlation belongs to Operators. An upstream socket's SessionId cannot select a child process. |
 | Outcome cases | `ProcessExit` below; exactly one terminal per job invocation or resident child incarnation, never per service message. stderr never carries lifecycle data. |
@@ -305,7 +305,7 @@ weaken verification or reinterpret the plan bytes.
 | Instances | see modes below |
 | Journal / sim | EGRESS records per call (job: per run); spontaneous emissions = INGRESS roots; mocked in scenarios |
 
-**The attribute table (D-2026-08-12-1).** `mode` is the PROFILE
+**The attribute table (D-2026-08-12-1).** `mode` is the mode
 selector; its omission selects `job` and the checker materializes
 `mode = job` into the effective HIR — omission and the exact
 spelling of a default are one identity (hash included). The plan
@@ -318,7 +318,7 @@ type selector. Plan-resolved `cwd` and `env` already bind through the real
 Driver; transport of their boot/instance expressions remains the categorical
 R2 step, never a Driver fallback.
 
-| Attribute | Profile | Domain | Latest evaluation site | Presence |
+| Attribute | Mode | Domain | Latest evaluation site | Presence |
 |---|---|---|---|---|
 | `command` | common | Rastok expression → `text` | instance | **Required** |
 | `args` | common | Rastok expression → `array<text>` | instance | Defaulted(`[]`) — omission ≡ `[]`; `null` refuses (no domain is implicitly nullable) |
@@ -383,7 +383,7 @@ keeps bounded on-exit publication: all ordered frame values and the one
 `exit` are committed as one completion, so a retry cannot expose a partial
 attempt. **On-exit does not aggregate frames**: line-framed stderr may yield
 two hundred `err` envelopes in that transaction. An explicit bounded
-collector may instead aggregate them. The resident Session profile
+collector may instead aggregate them. The resident Session mode
 publishes frames while the resource lives: it preserves Session identity,
 emits no frame after that resource's `exit`, and keeps intake/backpressure
 bounded. It does not change job completion or introduce per-message Calls.
@@ -464,9 +464,9 @@ the application protocol. Syntax decoding belongs to Process; response ids,
 notifications, progress, business errors and turn completion belong to the
 graph. Valid JSON with an unexpected domain shape is not a Process framing
 failure. No hidden RPC table classifies stdout or matches it to the most
-recent stdin message. `correlate` is not part of this profile.
+recent stdin message. `correlate` is not part of this mode.
 
-The profile uses D-2026-08-25-1's generic `Session` exchange: the first input
+The mode uses D-2026-08-25-1's generic `Session` exchange: the first input
 lazily opens a child for the exact Node instance; later inputs write to that
 live child. Several turns share one resource. stdout/stderr frames and the
 single resource `ProcessExit` carry its Session context. Local write settlement
@@ -595,7 +595,7 @@ run can inject selected values as new roots.
 | Common attributes | `path: text` Required, latest site **invocation**; `timeout: duration` Optional, latest site instance |
 | Read attributes | `max_read: ByteSize = "8MiB"` (plan; portable maximum 4 GiB) |
 | Outcome cases | `Completed`; `NotFound`; `NotAFile`; `PermissionDenied`; `InvalidPath`; `ReadLimitExceeded { limit: uint }`; `AtomicReplaceUnavailable`; `IoFailed`; scheduler `TimeoutExpired`; bounded-Closing `OutcomeUnknown` |
-| Application profile | outbound finite Call and Loop-admissible: both profiles consume exactly one `in` and produce exactly one terminal `exit`; `read` produces exactly one `out` iff Completed, while `replace` can never produce `out`; terminal visibility is the conservative `@2` table in [R1](../architecture/rework-r1-host-contracts.md#71-contracts-for-loop-admissible-connectors) |
+| Application profile | outbound finite Call and Loop-admissible: both modes consume exactly one `in` and produce exactly one terminal `exit`; `read` produces exactly one `out` iff Completed, while `replace` can never produce `out`; terminal visibility is the conservative `@2` table in [R1](../architecture/rework-r1-host-contracts.md#71-contracts-for-loop-admissible-connectors) |
 | Instances | ordinary Node instances; a dynamic `path` is evaluated for each invocation and is not instance addressing |
 | Journal / sim | request preparation and typed rejection occur before EGRESS open; C4's real Driver executes only the sealed operation after open; replay never recalls it without recovery triage; C5's mock factory reuses the same pure File request binding and only replaces the post-open effect |
 

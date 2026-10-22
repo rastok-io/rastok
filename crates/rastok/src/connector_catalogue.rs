@@ -286,7 +286,7 @@ fn catalogue(
         .connectors()
         .map(|definition| {
             let modes: Vec<_> = match &definition.selector {
-                Some(selector) => selector.profiles.iter().map(Some).collect(),
+                Some(selector) => selector.modes.iter().map(Some).collect(),
                 None => vec![None],
             };
             let modes = modes
@@ -716,7 +716,7 @@ mod tests {
         );
         for definition in definitions.connectors() {
             let modes: Vec<_> = definition.selector.as_ref().map_or(vec![None], |selector| {
-                selector.profiles.iter().map(Some).collect()
+                selector.modes.iter().map(Some).collect()
             });
             for declared in modes {
                 let actual = mode(&view, definition.name, declared.map(|mode| mode.word));

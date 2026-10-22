@@ -116,30 +116,34 @@ fn run(source: &str) -> Vec<Record> {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
+    let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
     let mut world = EchoWorld::default();
     let data = vec![(String::from("text"), Value::Text(String::from("salut")))];
-    vm.accept_input(
-        &mut journal,
-        IngressProposal {
-            provenance: IngressProvenance::single(node::Path::new(["cli"]).unwrap()),
-            draft: EnvelopeDraft {
-                port: rastok::node::Port::new("in").unwrap(),
-                data: Data::materialized(Value::Struct(data)),
-                ext: Namespace::new(),
+    execution
+        .accept_input(
+            &mut journal,
+            IngressProposal {
+                provenance: IngressProvenance::single(node::Path::new(["cli"]).unwrap()),
+                draft: EnvelopeDraft {
+                    port: rastok::node::Port::new("in").unwrap(),
+                    data: Data::materialized(Value::Struct(data)),
+                    ext: Namespace::new(),
+                },
+                sequence: IngressSequence::Next,
+                session: None,
             },
-            sequence: IngressSequence::Next,
-            session: None,
-        },
-    )
-    .unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
+        )
         .unwrap();
-    vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+    execution
+        .run_ready_with_drivers(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
-    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
+    execution
+        .poll_drivers(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
-    assert!(vm.is_stable());
+    execution
+        .run_ready_with_drivers(&mut journal, &mut CallDriver(&mut world))
+        .unwrap();
+    assert!(execution.is_stable());
     journal.records().to_vec()
 }
 

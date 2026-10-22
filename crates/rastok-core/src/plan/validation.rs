@@ -173,8 +173,8 @@ pub enum PlanValidationError {
         /// Required effective attribute.
         attribute: &'static str,
     },
-    /// A built-in Connector attribute contradicts its Registry-free sheet
-    /// mirror (shape, value, phase, or profile applicability).
+    /// A built-in Connector attribute contradicts its Registry-free Contract
+    /// definition (shape, value, phase, or mode applicability).
     ContractAttributeMismatch {
         /// Connector node.
         node: node::OwnerPath,

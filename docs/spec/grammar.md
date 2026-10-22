@@ -12,7 +12,7 @@
 > signature is now exactly `id` and `unit`.
 > The [Retry contract](../architecture/retry-extension-refactor.md) admits
 > finite outbound Call `+ Retry`, plan-owned `idempotent` and static retry
-> attributes. Unsupported profiles still refuse by name. Retry contributes
+> attributes. Unsupported modes still refuse by name. Retry contributes
 > no port, command or state binding. The [`@struct` declaration](annotations.md#2-flatness-and-parsing)
 > parses as a distinct LL(1) base type; flat data and typed annotation
 > applications are executable without a separate value algebra. Qualified
@@ -1410,7 +1410,7 @@ DECL_KW    = { "graph", "operator", "connector",
                "expect", "envelope", "advance", "mock",
                "after", "crash", "restart",                            // scenario steps (simulation-semantics.md §5)
                "as" }
-// `profile`, `behavior` and `idempotent` are ordinary Contract attribute
+// `mode`, `behavior` and `idempotent` are ordinary Contract attribute
 // names, not global effect-class keywords. Removed `effect` refuses.
 // Simulation setup uses ordinary fixture injections.
 TYPE_KW    = { "variant",                                             // the value-type tree (types.md)

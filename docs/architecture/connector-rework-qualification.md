@@ -495,3 +495,80 @@ artifacts and 67 unchanged. Each change has its old/new value and reason in
 the identity inventory. The T5/T9 implementation is ready for independent
 review; this report does not claim a new Fable replay, completion of external
 release gates, or any push, tag or publication.
+
+## A-T5-7 — finish derived names, comments and living documentation
+
+22 October 2026, against `590d070`. This pass preserves execution behavior,
+serialized identities and every protected artifact. Locals, fields, parameters,
+helpers, test names and diagnostic wording now follow `Execution`,
+`RuntimeDrivers` / `OutboundDrivers`, `ModeProtocol` / `ContractMode`, and the
+conformance fixtures. The three execution methods use `*_with_drivers`;
+expression evaluation still uses `fire_with_bindings`. No alias is introduced.
+
+RustRover performs the symbol renames. Yoann's narrowly approved patch fallback
+covers verified lexical shadowing, ambiguous same-name declarations, and the
+spike references omitted by successful IDE refactorings. The retry checker
+keeps the selector word (`mode_word`) separate from the resolved mode. The
+conformance functions distinguish the available `driver_registry` from the
+selected runtime `drivers`. Neither change alters selection or ownership.
+
+The final sweep includes lower-case `vm`, which the supplied inventory script's
+upper-case `VM` pattern does not cover. Retired identifiers have no source
+hits. Ambiguous words are classified, not replaced indiscriminately:
+`BootBindings`, expression bindings, request-setting bindings, application and
+deployment profiles, JSON profiles, HIR names and the hosted network pump keep
+their meanings. In stdlib's A4 paragraph the profile supplying URL and bearer
+is explicitly a **deployment profile**, not a Connector mode. Historical rows
+and the two human-review registers remain unchanged; errata and the M2 scan-debt
+note retain their old paths with a current-path annotation.
+
+A read-only Claude Haiku 5.5 review used the Anthropic CLI with tools, MCP,
+customizations and session persistence disabled. Four batches covered the
+rename diff, followed by a targeted reread. Its useful findings identified
+remaining Driver locals in integration tests; the follow-up also checked the
+conformance fixtures and precise type comments. Scope objections to the
+explicitly requested documentation annotations were rejected against the
+brief. Test-name changes are intentional, not changed test assertions;
+`recover_with_drivers` is defined in the separate recovery module. This review
+does not substitute for compilation, tests or Fable's independent replay.
+
+The first qualification was intentionally stopped at Yoann's request before
+the machine slept: 714 tests had passed in 23 completed groups, with no
+failure. That interrupted run is not counted as a complete gate. The fresh
+resumed run passes:
+
+- `cargo fmt --all -- --check`.
+- Strict all-target/all-feature Clippy, with `--locked` and `-D warnings`.
+- `cargo test --locked --workspace --all-features --no-fail-fast -- --test-threads=1`:
+  **1,623 passed in 61 groups, zero failures, zero ignored tests**.
+- Rustdoc with `--locked --workspace --no-deps` and `RUSTDOCFLAGS='-D warnings'`.
+- The separate site-content suite: **12/12**.
+- All three `no_std` targets: `thumbv8m.main-none-eabihf`, `thumbv7m-none-eabi`
+  and `riscv32imac-unknown-none-elf`.
+- The complete browser suite: **35/35**, zero failures, skips or cancellations.
+- The rustdoc-link lint: 238 Rust files, zero relative Markdown links.
+
+The Rust sources did not change during this resumed gate. Executable startup
+delays lengthened qualification; no system security setting or test timeout
+was changed. Network tests ran without a concurrent build. The browser suite
+used the same local Playwright/Chrome configuration as the preceding gate.
+
+Both Cortex-M33 images finish with `SPIKE_OK`. Measurements use Rust 1.97.1,
+the release profile and the exact build, `llvm-size -A` and QEMU commands
+listed under **Embedded measurements** above. Retry keeps one operation,
+three Calls, 16 frames per channel, four bytes per frame and 17 records.
+
+| Workload | Decode peak heap | Total peak heap | `.text` | `.rodata` | Code total | Heap margin | Code margin |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Echo | 36,160 B | 111,404 B | 897,420 B | 74,008 B | 971,428 B | 19,668 B | 77,148 B |
+| Retry and recovery | 30,684 B | 129,188 B | 958,676 B | 84,784 B | 1,043,460 B | 1,884 B | 5,116 B |
+
+Against `590d070`, heap peaks and both `.text` sizes are unchanged. Echo's
+code total is unchanged; Retry's `.rodata` grows by 8 B. The unchanged
+128 KiB heap and 1 MiB code gates hold. Retry's live and recovered heap
+peaks are both 129,188 B. Stack was not remeasured for this vocabulary pass.
+
+The final digest comparison finds all **73 protected artifacts byte-identical
+to `590d070`**; no witness was regenerated. The independent reviewer replay
+and external opening gates are not claimed here. No push, tag or publication
+is authorized by this pass.

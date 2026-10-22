@@ -62,34 +62,35 @@ graph accounting_probe : App {
     )
     .expect("the annotated probe compiles");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
-    vm.accept_input(
-        &mut journal,
-        IngressProposal {
-            provenance: IngressProvenance::single(
-                node::Path::new(["accounting-test"]).expect("valid provenance"),
-            ),
-            draft: EnvelopeDraft {
-                port: node::Port::new("in").expect("conventional port"),
-                data: Data::materialized(Value::Struct(vec![
-                    (String::from("input_tokens"), Value::Uint(1_000)),
-                    (String::from("cached_tokens"), Value::Uint(200)),
-                    (
-                        String::from("charge"),
-                        Value::Decimal {
-                            unscaled: 1_250_000_000_000_000_000,
-                            scale: 18,
-                        },
-                    ),
-                ])),
-                ext: Namespace::new(),
+    let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
+    execution
+        .accept_input(
+            &mut journal,
+            IngressProposal {
+                provenance: IngressProvenance::single(
+                    node::Path::new(["accounting-test"]).expect("valid provenance"),
+                ),
+                draft: EnvelopeDraft {
+                    port: node::Port::new("in").expect("conventional port"),
+                    data: Data::materialized(Value::Struct(vec![
+                        (String::from("input_tokens"), Value::Uint(1_000)),
+                        (String::from("cached_tokens"), Value::Uint(200)),
+                        (
+                            String::from("charge"),
+                            Value::Decimal {
+                                unscaled: 1_250_000_000_000_000_000,
+                                scale: 18,
+                            },
+                        ),
+                    ])),
+                    ext: Namespace::new(),
+                },
+                sequence: IngressSequence::Next,
+                session: None,
             },
-            sequence: IngressSequence::Next,
-            session: None,
-        },
-    )
-    .expect("inbound commits");
-    vm.run_ready(&mut journal).expect("graph drains");
+        )
+        .expect("inbound commits");
+    execution.run_ready(&mut journal).expect("graph drains");
 
     let first = accounting_observations(&compilation.plan, journal.records(), None)
         .expect("individual typed observations");
@@ -217,38 +218,42 @@ graph priced_call : App {
     .expect("the secret-free deployment resolves");
     let version = GraphVersion(1);
     let mut journal = MemJournal::new_with_deployment(version, boot.attestation().clone());
-    let mut vm = Execution::new_with_deployment(&compilation.plan, version, &boot);
+    let mut execution = Execution::new_with_deployment(&compilation.plan, version, &boot);
     let mut world =
         rastok::connector::drivers::Process::try_new(&compilation.plan).expect("Process binds");
-    vm.accept_input(
-        &mut journal,
-        IngressProposal {
-            provenance: IngressProvenance::single(
-                node::Path::new(["accounting-test"]).expect("valid provenance"),
-            ),
-            draft: EnvelopeDraft {
-                port: node::Port::new("in").expect("conventional port"),
-                data: Data::materialized(Value::Int(1_000)),
-                ext: Namespace::new(),
+    execution
+        .accept_input(
+            &mut journal,
+            IngressProposal {
+                provenance: IngressProvenance::single(
+                    node::Path::new(["accounting-test"]).expect("valid provenance"),
+                ),
+                draft: EnvelopeDraft {
+                    port: node::Port::new("in").expect("conventional port"),
+                    data: Data::materialized(Value::Int(1_000)),
+                    ext: Namespace::new(),
+                },
+                sequence: IngressSequence::Next,
+                session: None,
             },
-            sequence: IngressSequence::Next,
-            session: None,
-        },
-    )
-    .expect("inbound commits");
-    vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
+        )
+        .expect("inbound commits");
+    execution
+        .run_ready_with_drivers(&mut journal, &mut CallDriver(&mut world))
         .expect("the Call opens");
     for _ in 0..200 {
-        if vm.is_stable() && !vm.has_open_obligations() {
+        if execution.is_stable() && !execution.has_open_obligations() {
             break;
         }
-        vm.poll_drivers(&mut journal, &mut CallDriver(&mut world))
+        execution
+            .poll_drivers(&mut journal, &mut CallDriver(&mut world))
             .expect("the Driver progresses");
-        vm.run_ready_with_bindings(&mut journal, &mut CallDriver(&mut world))
+        execution
+            .run_ready_with_drivers(&mut journal, &mut CallDriver(&mut world))
             .expect("the reply routes");
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    assert!(vm.is_stable(), "the priced Call must settle");
+    assert!(execution.is_stable(), "the priced Call must settle");
 
     let observations =
         accounting_observations(&compilation.plan, journal.records(), Some(&profile))

@@ -21,7 +21,7 @@
 
 ## E-2026-09-14-2 — nested Session frames lost their owner context — RESOLVED
 
-- **Where:** `runtime/vm.rs`, admission routing for an existing Session.
+- **Where:** `runtime/vm.rs` (now `runtime/execution.rs`), admission routing for an existing Session.
 - **Defect:** selecting downstream targets without the installed source
   instance re-evaluated a keyed containing Graph from the child frame's new
   metadata. A Process response could enter another conversation instead of

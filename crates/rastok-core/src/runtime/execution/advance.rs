@@ -58,9 +58,9 @@ impl TimeAdvance {
     /// A refused transaction/expiry retains its cursor for retry.
     pub fn advance_once(
         &mut self,
-        vm: &mut Execution<'_>,
+        execution: &mut Execution<'_>,
         journal: &mut dyn Journal,
-        bindings: &mut dyn OutboundDrivers,
+        drivers: &mut dyn OutboundDrivers,
     ) -> Result<bool, ExecutionFault> {
         loop {
             match &self.phase {
@@ -71,23 +71,27 @@ impl TimeAdvance {
                     // Lifecycle work queued by an expiry waits for the rest
                     // of that frontier. `peek_due` fences only the lifetime
                     // of an instance whose own start has not committed yet.
-                    if self.instant.is_none() && vm.peek_due(vm.now.min(self.target)).is_some() {
+                    if self.instant.is_none()
+                        && execution.peek_due(execution.now.min(self.target)).is_some()
+                    {
                         self.phase = Phase::Due;
                         continue;
                     }
-                    if vm.step_with_bindings(journal, bindings)? {
+                    if execution.step_with_drivers(journal, drivers)? {
                         return Ok(true);
                     }
                     self.phase = Phase::Due;
                 }
                 Phase::Due => {
-                    if let Some((key, payload)) = vm.peek_due(self.instant.unwrap_or(self.target)) {
+                    if let Some((key, payload)) =
+                        execution.peek_due(self.instant.unwrap_or(self.target))
+                    {
                         if self.instant.is_none() {
                             self.instant = Some(key.0);
                             self.polled_at_settlement = false;
                             self.saw_drain = false;
                         }
-                        vm.now = vm.now.max(key.0);
+                        execution.now = execution.now.max(key.0);
                         if !self.polled_at_settlement
                             && matches!(
                                 payload,
@@ -97,9 +101,9 @@ impl TimeAdvance {
                                 }
                             )
                         {
-                            let report = vm.poll_outbound_driver(journal, bindings)?;
+                            let report = execution.poll_outbound_driver(journal, drivers)?;
                             let progressed = report.settled > 0;
-                            vm.buffered_poll.append(report);
+                            execution.buffered_poll.append(report);
                             self.polled_at_settlement = true;
                             self.phase = Phase::Settlement { key, payload };
                             if progressed {
@@ -111,22 +115,22 @@ impl TimeAdvance {
                     } else if self.instant.take().is_some() {
                         self.phase = Phase::Ready;
                         if self.saw_drain {
-                            let report = vm.poll_outbound_driver(journal, bindings)?;
+                            let report = execution.poll_outbound_driver(journal, drivers)?;
                             let progressed = report.settled > 0;
-                            vm.buffered_poll.append(report);
+                            execution.buffered_poll.append(report);
                             if progressed {
                                 return Ok(true);
                             }
                         }
                     } else {
-                        let changed = vm.now < self.target;
-                        vm.now = vm.now.max(self.target);
+                        let changed = execution.now < self.target;
+                        execution.now = execution.now.max(self.target);
                         self.phase = Phase::Done;
                         return Ok(changed);
                     }
                 }
                 Phase::Settlement { key, payload } => {
-                    if vm.step_with_bindings(journal, bindings)? {
+                    if execution.step_with_drivers(journal, drivers)? {
                         return Ok(true);
                     }
                     self.phase = Phase::Expiry {
@@ -142,8 +146,8 @@ impl TimeAdvance {
                             ..
                         }
                     );
-                    vm.expire(journal, bindings, payload.clone())?;
-                    vm.scheduler.ack(*key);
+                    execution.expire(journal, drivers, payload.clone())?;
+                    execution.scheduler.ack(*key);
                     self.phase = Phase::Due;
                     return Ok(true);
                 }

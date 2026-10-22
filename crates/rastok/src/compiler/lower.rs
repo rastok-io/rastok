@@ -2280,9 +2280,9 @@ graph m0_probe : App {
             "the raw and independently derived resolved schemas agree"
         );
 
-        let mut vm = crate::runtime::execution::Execution::new(&decoded, GraphVersion(1));
+        let mut execution = crate::runtime::execution::Execution::new(&decoded, GraphVersion(1));
         let mut journal = crate::journal::MemJournal::new(GraphVersion(1));
-        assert_eq!(vm.step(&mut journal), Ok(false));
+        assert_eq!(execution.step(&mut journal), Ok(false));
         assert!(journal.records().is_empty());
     }
 
@@ -2310,10 +2310,10 @@ graph m0_probe : App {
             .expect("categorical validation retains the defensive secret policy");
         let bytes = crate::plan::encode(&plan, &hash);
         let (decoded, _) = crate::plan::decode(&bytes).expect("the forged package decodes");
-        let mut vm = crate::runtime::execution::Execution::new(&decoded, GraphVersion(1));
+        let mut execution = crate::runtime::execution::Execution::new(&decoded, GraphVersion(1));
         let mut journal = crate::journal::MemJournal::new(GraphVersion(1));
         assert!(matches!(
-            vm.step(&mut journal),
+            execution.step(&mut journal),
             Err(crate::runtime::execution::ExecutionFault::UnsupportedDataPolicy { .. })
         ));
         assert!(journal.records().is_empty());
@@ -2686,7 +2686,8 @@ graph app : App {
             &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect("sensitive policy is executable after A3");
-        let mut vm = crate::runtime::execution::Execution::new(&compilation.plan, GraphVersion(1));
+        let mut execution =
+            crate::runtime::execution::Execution::new(&compilation.plan, GraphVersion(1));
         let mut journal = crate::journal::MemJournal::new(GraphVersion(1));
         let submission = crate::connector::exchange::IngressProposal {
             provenance: crate::connector::exchange::IngressProvenance::single(
@@ -2702,15 +2703,17 @@ graph app : App {
             sequence: crate::connector::exchange::IngressSequence::Next,
             session: None,
         };
-        vm.accept_input(&mut journal, submission)
+        execution
+            .accept_input(&mut journal, submission)
             .expect("the classified envelope is admitted");
-        vm.run_ready(&mut journal)
+        execution
+            .run_ready(&mut journal)
             .expect("A3 executes a proved sensitive flow");
-        assert_eq!(vm.outputs().len(), 1);
-        let annotations = vm
+        assert_eq!(execution.outputs().len(), 1);
+        let annotations = execution
             .boundary_annotations(&node::Port::new("out").expect("valid output"))
             .expect("the presentation boundary owns its verdict");
-        let value = vm.outputs()[0]
+        let value = execution.outputs()[0]
             .envelope
             .data()
             .materialized_value()
@@ -2730,9 +2733,10 @@ graph app : App {
             &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         )
         .expect("personal-data policy crosses source and categorical validation");
-        let mut vm = crate::runtime::execution::Execution::new(&compilation.plan, GraphVersion(1));
+        let mut execution =
+            crate::runtime::execution::Execution::new(&compilation.plan, GraphVersion(1));
         let mut journal = crate::journal::MemJournal::new(GraphVersion(1));
-        let error = vm
+        let error = execution
             .step(&mut journal)
             .expect_err("personal data requires an A4 privacy attestation");
         assert!(matches!(
@@ -2944,7 +2948,7 @@ graph app : App {
             &NoSecrets,
         )
         .expect("a profile without secrets resolves");
-        let mut disclosed_vm = crate::runtime::execution::Execution::new_with_deployment(
+        let mut disclosed_execution = crate::runtime::execution::Execution::new_with_deployment(
             &disclosed.plan,
             GraphVersion(1),
             &recipient_boot,
@@ -2953,7 +2957,7 @@ graph app : App {
             GraphVersion(1),
             recipient_boot.attestation().clone(),
         );
-        assert_eq!(disclosed_vm.step(&mut disclosed_journal), Ok(false));
+        assert_eq!(disclosed_execution.step(&mut disclosed_journal), Ok(false));
     }
 
     #[test]

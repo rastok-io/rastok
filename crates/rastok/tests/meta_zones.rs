@@ -311,28 +311,33 @@ fn content_type_follows_the_payload_not_the_merge() {
         )
         .expect("a valid plan");
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
+        let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
         let mut ext = Namespace::new();
         ext.insert(
             String::from("content_type"),
             MetaValue::Scalar(Scalar::Text(String::from("text/csv"))),
         );
-        vm.accept_input(
-            &mut journal,
-            IngressProposal {
-                provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
-                draft: EnvelopeDraft {
-                    port: rastok::node::Port::new("in").unwrap(),
-                    data: Data::materialized(Value::Text(String::from("a,b"))),
-                    ext,
+        execution
+            .accept_input(
+                &mut journal,
+                IngressProposal {
+                    provenance: IngressProvenance::single(
+                        rastok::node::Path::new(["probe"]).unwrap(),
+                    ),
+                    draft: EnvelopeDraft {
+                        port: rastok::node::Port::new("in").unwrap(),
+                        data: Data::materialized(Value::Text(String::from("a,b"))),
+                        ext,
+                    },
+                    sequence: IngressSequence::Next,
+                    session: None,
                 },
-                sequence: IngressSequence::Next,
-                session: None,
-            },
-        )
-        .expect("the injection lands");
-        vm.run_ready(&mut journal).expect("the drain completes");
-        vm.outputs()[0]
+            )
+            .expect("the injection lands");
+        execution
+            .run_ready(&mut journal)
+            .expect("the drain completes");
+        execution.outputs()[0]
             .envelope
             .meta()
             .ext()

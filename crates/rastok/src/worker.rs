@@ -157,7 +157,7 @@ struct PollProgress {
 pub struct Worker<'plan> {
     execution: Execution<'plan>,
     journal: MemJournal,
-    bindings: RuntimeDrivers<'plan>,
+    drivers: RuntimeDrivers<'plan>,
 }
 
 impl<'plan> Worker<'plan> {
@@ -171,7 +171,7 @@ impl<'plan> Worker<'plan> {
         version: GraphVersion,
         logical_time: i64,
         boot: Option<&BootBindings>,
-        bindings: RuntimeDrivers<'plan>,
+        drivers: RuntimeDrivers<'plan>,
     ) -> Self {
         let journal = boot.map_or_else(
             || MemJournal::new(version),
@@ -189,7 +189,7 @@ impl<'plan> Worker<'plan> {
         Self {
             execution,
             journal,
-            bindings,
+            drivers,
         }
     }
 
@@ -208,7 +208,7 @@ impl<'plan> Worker<'plan> {
     /// Whether source Drivers require continued polling after App input ends.
     #[must_use]
     pub fn has_runnable_inbound(&self) -> bool {
-        self.bindings.has_runnable_inbound()
+        self.drivers.has_runnable_inbound()
     }
 
     /// Admits one App input using this Worker's journal.
@@ -225,7 +225,7 @@ impl<'plan> Worker<'plan> {
     /// The same refusals as [`Execution::advance_to`]; earlier work may commit.
     pub fn advance_to(&mut self, target: i64) -> Result<(), ExecutionFault> {
         self.execution
-            .advance_to(&mut self.journal, &mut self.bindings, target)
+            .advance_to(&mut self.journal, &mut self.drivers, target)
     }
 
     /// Advances one transition of the Lab's suspended logical-time action.
@@ -233,17 +233,17 @@ impl<'plan> Worker<'plan> {
         &mut self,
         advance: &mut TimeAdvance,
     ) -> Result<bool, ExecutionFault> {
-        advance.advance_once(&mut self.execution, &mut self.journal, &mut self.bindings)
+        advance.advance_once(&mut self.execution, &mut self.journal, &mut self.drivers)
     }
 
     /// Performs at most one ready execution step, without polling the world.
     /// The caller can inspect the resulting prefix before continuing.
     ///
     /// # Errors
-    /// The same transaction refusals as [`Execution::step_with_bindings`].
+    /// The same transaction refusals as [`Execution::step_with_drivers`].
     pub fn step(&mut self) -> Result<bool, ExecutionFault> {
         self.execution
-            .step_with_bindings(&mut self.journal, &mut self.bindings)
+            .step_with_drivers(&mut self.journal, &mut self.drivers)
     }
 
     /// Drives the hosted execution continuously. Unlike [`Self::run_until_idle`],
@@ -332,7 +332,7 @@ impl<'plan> Worker<'plan> {
         let mut progress = PollProgress::default();
         for _ in 0..64 {
             match self
-                .bindings
+                .drivers
                 .poll_inbound(&mut self.execution, &mut self.journal)
                 .map_err(Error::Ingress)?
             {
@@ -344,23 +344,23 @@ impl<'plan> Worker<'plan> {
             }
         }
         self.execution
-            .run_ready_with_bindings(&mut self.journal, &mut self.bindings)
+            .run_ready_with_drivers(&mut self.journal, &mut self.drivers)
             .map_err(Error::Step)?;
         let responses = self
-            .bindings
+            .drivers
             .poll_inbound_call_responses(&mut self.execution)
             .map_err(Error::Driver)?;
         let timeouts = self
-            .bindings
+            .drivers
             .poll_inbound_call_timeouts(&mut self.execution)
             .map_err(Error::Driver)?;
         let inbound_events = self
-            .bindings
+            .drivers
             .poll_inbound_call_events(&mut self.execution)
             .map_err(Error::Driver)?;
         let outbound = self
             .execution
-            .poll_drivers(&mut self.journal, &mut self.bindings)
+            .poll_drivers(&mut self.journal, &mut self.drivers)
             .map_err(Error::Poll)?;
         observe(&outbound);
         let settled = responses.started > 0
@@ -370,7 +370,7 @@ impl<'plan> Worker<'plan> {
         progress.host_activity |= settled;
         progress.work_changed |= settled || !outbound.rejected.is_empty();
         self.execution
-            .run_ready_with_bindings(&mut self.journal, &mut self.bindings)
+            .run_ready_with_drivers(&mut self.journal, &mut self.drivers)
             .map_err(Error::Step)?;
         Ok(progress)
     }
@@ -381,7 +381,7 @@ impl<'plan> Worker<'plan> {
     pub(crate) fn poll(&mut self, mut observe: impl FnMut(&PollReport)) -> Result<bool, Error> {
         let report = self
             .execution
-            .poll_drivers(&mut self.journal, &mut self.bindings)
+            .poll_drivers(&mut self.journal, &mut self.drivers)
             .map_err(Error::Poll)?;
         let inbound = self.poll_inbound()?;
         observe(&report);
@@ -403,13 +403,13 @@ impl<'plan> Worker<'plan> {
             };
             if let Err(error) = self
                 .execution
-                .run_ready_with_bindings(&mut self.journal, &mut self.bindings)
+                .run_ready_with_drivers(&mut self.journal, &mut self.drivers)
             {
                 return Err(vec![Error::Step(error)]);
             }
             let report = match self
                 .execution
-                .poll_drivers(&mut self.journal, &mut self.bindings)
+                .poll_drivers(&mut self.journal, &mut self.drivers)
             {
                 Ok(report) => report,
                 Err(error) => return Err(vec![Error::Poll(error)]),
@@ -426,7 +426,7 @@ impl<'plan> Worker<'plan> {
         }
         if let Err(error) = self
             .execution
-            .run_ready_with_bindings(&mut self.journal, &mut self.bindings)
+            .run_ready_with_drivers(&mut self.journal, &mut self.drivers)
         {
             errors.push(Error::Step(error));
         }
@@ -441,7 +441,7 @@ impl<'plan> Worker<'plan> {
     /// A pending proposal remains with the Driver under mailbox pressure.
     pub(crate) fn poll_inbound(&mut self) -> Result<bool, Error> {
         let admitted = match self
-            .bindings
+            .drivers
             .poll_inbound(&mut self.execution, &mut self.journal)
             .map_err(Error::Ingress)?
         {
@@ -450,7 +450,7 @@ impl<'plan> Worker<'plan> {
             Some(IngressAdmission::Pending) | None => false,
         };
         let report = self
-            .bindings
+            .drivers
             .poll_inbound_call_events(&mut self.execution)
             .map_err(Error::Driver)?;
         if !report.uncorrelated.is_empty() || !report.discarded.is_empty() {
@@ -467,7 +467,7 @@ impl<'plan> Worker<'plan> {
     /// cancellation or terminal records: graph-level closure is explicit.
     #[must_use]
     pub fn shutdown(self) -> MemJournal {
-        drop(self.bindings);
+        drop(self.drivers);
         self.journal
     }
 }
@@ -541,8 +541,8 @@ mod tests {
         .unwrap();
         let plan = &compilation.plan;
         let version = GraphVersion(1);
-        let bindings = || RuntimeDrivers::prepare(plan, &DriverRegistry::default()).unwrap();
-        let new_worker = || Worker::new(plan, Some(compilation.hash), version, 0, None, bindings());
+        let drivers = || RuntimeDrivers::prepare(plan, &DriverRegistry::default()).unwrap();
+        let new_worker = || Worker::new(plan, Some(compilation.hash), version, 0, None, drivers());
         let mut hosted = new_worker();
         let mut continuous = new_worker();
         let mut idle = new_worker();
@@ -695,14 +695,14 @@ mod tests {
                     .unwrap(),
             )))
             .unwrap();
-        let bindings = RuntimeDrivers::prepare(&compilation.plan, &registry).unwrap();
+        let drivers = RuntimeDrivers::prepare(&compilation.plan, &registry).unwrap();
         let mut worker = Worker::new(
             &compilation.plan,
             Some(compilation.hash),
             GraphVersion(1),
             0,
             None,
-            bindings,
+            drivers,
         );
         worker
             .accept_input(IngressProposal {
@@ -746,7 +746,7 @@ mod tests {
             &crate::connector::contract::ContractCatalog::try_m0().unwrap(),
         )
         .unwrap();
-        let bindings =
+        let drivers =
             RuntimeDrivers::prepare(&compilation.plan, &DriverRegistry::default()).unwrap();
         let mut worker = Worker::new(
             &compilation.plan,
@@ -754,7 +754,7 @@ mod tests {
             GraphVersion(1),
             0,
             None,
-            bindings,
+            drivers,
         );
         let mut host = TestHost {
             inputs: VecDeque::from([
@@ -799,7 +799,7 @@ mod tests {
         )
         .unwrap();
         for (input, recording_fails) in [(0, false), (1, true)] {
-            let bindings =
+            let drivers =
                 RuntimeDrivers::prepare(&compilation.plan, &DriverRegistry::default()).unwrap();
             let mut worker = Worker::new(
                 &compilation.plan,
@@ -807,7 +807,7 @@ mod tests {
                 GraphVersion(1),
                 0,
                 None,
-                bindings,
+                drivers,
             );
             let mut host = TestHost {
                 inputs: VecDeque::from([Poll::Ready(Some(IngressProposal {
@@ -861,7 +861,7 @@ mod tests {
             &crate::connector::contract::ContractCatalog::try_m0().unwrap(),
         )
         .unwrap();
-        let bindings =
+        let drivers =
             RuntimeDrivers::prepare(&compilation.plan, &DriverRegistry::default()).unwrap();
         let mut worker = Worker::new(
             &compilation.plan,
@@ -869,7 +869,7 @@ mod tests {
             GraphVersion(1),
             0,
             None,
-            bindings,
+            drivers,
         );
         worker.process_ready(|_| {}).unwrap();
         worker

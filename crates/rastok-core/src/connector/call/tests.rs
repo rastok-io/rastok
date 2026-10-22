@@ -30,10 +30,10 @@ fn retry_safety_is_derived_for_every_terminal_without_an_effect_class() {
         (FILE_CONNECTOR_ID, Some("replace")),
         (HTTP_CLIENT_CONNECTOR_ID, None),
     ] {
-        let profile = contract(id, mode);
-        for (case, visibility) in profile.terminal_cases() {
+        let mode = contract(id, mode);
+        for (case, visibility) in mode.terminal_cases() {
             for idempotent in [false, true] {
-                let result = profile.validate_retry_cases(&[(*case).to_string()], idempotent);
+                let result = mode.validate_retry_cases(&[(*case).to_string()], idempotent);
                 assert_eq!(
                     result.is_ok(),
                     idempotent || *visibility == TerminalVisibility::BeforeEffect,
@@ -50,24 +50,24 @@ fn retry_safety_is_derived_for_every_terminal_without_an_effect_class() {
                 }
             }
         }
-        assert_eq!(profile.validate_retry_cases(&[], false), Ok(()));
+        assert_eq!(mode.validate_retry_cases(&[], false), Ok(()));
     }
 }
 
 #[test]
 fn retry_never_trusts_unknown_or_noncanonical_case_sets() {
-    let profile = contract(PROCESS_CONNECTOR_ID, Some("job"));
+    let mode = contract(PROCESS_CONNECTOR_ID, Some("job"));
     for cases in [
         ["SpawnFailed", "SpawnFailed"],
         ["TimeoutExpired", "SpawnFailed"],
     ] {
         assert_eq!(
-            profile.validate_retry_cases(&cases.map(String::from), true),
+            mode.validate_retry_cases(&cases.map(String::from), true),
             Err(RetryCaseError::Noncanonical)
         );
     }
     assert_eq!(
-        profile.validate_retry_cases(&["RetryExpired".into()], true),
+        mode.validate_retry_cases(&["RetryExpired".into()], true),
         Err(RetryCaseError::Unknown("RetryExpired".into()))
     );
     // The new case belongs only to the new Contract, never an old-id alias.
@@ -159,14 +159,14 @@ fn every_terminal_type_case_has_exactly_one_canonical_visibility_row() {
             http_client_exit_type as ExitType,
         ),
     ] {
-        let profile = contract(id, mode);
-        assert_eq!(profile.request(), "in");
-        assert_eq!(profile.terminal(), "exit");
+        let mode = contract(id, mode);
+        assert_eq!(mode.request(), "in");
+        assert_eq!(mode.terminal(), "exit");
         let DataType::TaggedUnion(union) = exit_type().unwrap() else {
             panic!("a terminal union");
         };
         let names: Vec<_> = union.cases().iter().map(|case| case.name()).collect();
-        let classified: Vec<_> = profile
+        let classified: Vec<_> = mode
             .terminal_cases()
             .iter()
             .map(|(case, _)| *case)
@@ -238,34 +238,31 @@ fn repetition_safety_is_the_full_visibility_by_guarantee_matrix() {
 
 #[test]
 fn loop_command_sources_are_checked_without_claiming_retry_safety() {
-    let profile = contract(PROCESS_CONNECTOR_ID, Some("job"));
+    let mode = contract(PROCESS_CONNECTOR_ID, Some("job"));
     for case in ["SpawnFailed", "TimeoutExpired", "Exited"] {
-        assert_eq!(
-            profile.validate_command("exit", Some(&[case.into()])),
-            Ok(())
-        );
+        assert_eq!(mode.validate_command("exit", Some(&[case.into()])), Ok(()));
     }
-    assert_eq!(profile.validate_command("exit", None), Ok(()));
+    assert_eq!(mode.validate_command("exit", None), Ok(()));
     assert_eq!(
-        profile.validate_command("exit", Some(&["Ghost".into()])),
+        mode.validate_command("exit", Some(&["Ghost".into()])),
         Err(CallCommandError::UnknownCase("Ghost".into()))
     );
     assert_eq!(
-        profile.validate_command("in", None),
+        mode.validate_command("in", None),
         Err(CallCommandError::UnknownPort)
     );
 }
 
 #[test]
 fn stream_frames_cannot_issue_an_unbounded_number_of_any_verdict() {
-    let profile = contract(PROCESS_CONNECTOR_ID, Some("job"));
+    let mode = contract(PROCESS_CONNECTOR_ID, Some("job"));
     for port in ["out", "err"] {
         assert_eq!(
-            profile.frame_production(port),
+            mode.frame_production(port),
             Some(FrameProduction::ZeroOrMore)
         );
         assert_eq!(
-            profile.validate_command(port, None),
+            mode.validate_command(port, None),
             Err(CallCommandError::RepeatedFrames)
         );
     }
@@ -298,15 +295,14 @@ fn frame_case_sets_are_nonempty_canonical_and_owned_by_the_contract() {
         (FILE_CONNECTOR_ID, Some("replace")),
         (HTTP_CLIENT_CONNECTOR_ID, None),
     ] {
-        let profile = contract(id, mode);
-        for (_, production) in profile.frames {
+        let mode = contract(id, mode);
+        for (_, production) in mode.frames {
             if let FrameProduction::ExactlyOneOn(cases) = production {
                 assert!(!cases.is_empty());
                 assert!(cases.windows(2).all(|pair| pair[0] < pair[1]));
                 for case in *cases {
                     assert!(
-                        profile
-                            .terminal_cases()
+                        mode.terminal_cases()
                             .contains(&(case, TerminalVisibility::AfterEffect))
                     );
                 }
@@ -325,13 +321,13 @@ fn single_response_frames_follow_both_http_response_cases_and_replace_has_no_fra
             &["Completed", "ServerError"][..],
         ),
     ] {
-        let profile = contract(id, mode);
+        let mode = contract(id, mode);
         assert_eq!(
-            profile.frame_production("out"),
+            mode.frame_production("out"),
             Some(FrameProduction::ExactlyOneOn(cases))
         );
-        assert_eq!(profile.frame_production("err"), None);
-        assert_eq!(profile.validate_command("out", None), Ok(()));
+        assert_eq!(mode.frame_production("err"), None);
+        assert_eq!(mode.validate_command("out", None), Ok(()));
     }
     let replace = contract(FILE_CONNECTOR_ID, Some("replace"));
     assert_eq!(
@@ -344,7 +340,7 @@ fn single_response_frames_follow_both_http_response_cases_and_replace_has_no_fra
 #[test]
 fn http_status_classification_is_contract_checked_not_just_a_tag() {
     use crate::connector::stdlib::HttpClientExit;
-    let profile = contract(HTTP_CLIENT_CONNECTOR_ID, None);
+    let mode = contract(HTTP_CLIENT_CONNECTOR_ID, None);
     for status in [499, 500, 599, 600] {
         let expected = if (500..=599).contains(&status) {
             "ServerError"
@@ -352,27 +348,26 @@ fn http_status_classification_is_contract_checked_not_just_a_tag() {
             "Completed"
         };
         let value = HttpClientExit::response(status).into_value();
-        assert_eq!(profile.terminal_case(&value), Some(expected));
+        assert_eq!(mode.terminal_case(&value), Some(expected));
         let forged = if expected == "Completed" {
             HttpClientExit::ServerError { status }
         } else {
             HttpClientExit::Completed { status }
         };
-        assert_eq!(profile.terminal_case(&forged.into_value()), None);
+        assert_eq!(mode.terminal_case(&forged.into_value()), None);
         assert!(
-            profile
-                .frame_production("out")
+            mode.frame_production("out")
                 .unwrap()
                 .accepts_count(expected, 1)
         );
         assert!(
-            !profile
+            !mode
                 .frame_production("out")
                 .unwrap()
                 .accepts_count(expected, 0)
         );
         assert!(
-            !profile
+            !mode
                 .frame_production("out")
                 .unwrap()
                 .accepts_count(expected, 2)
@@ -380,7 +375,7 @@ fn http_status_classification_is_contract_checked_not_just_a_tag() {
     }
     for status in [0, 99, 1000, u16::MAX] {
         assert_eq!(
-            profile.terminal_case(&HttpClientExit::response(status).into_value()),
+            mode.terminal_case(&HttpClientExit::response(status).into_value()),
             None
         );
     }

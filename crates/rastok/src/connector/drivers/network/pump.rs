@@ -654,7 +654,7 @@ mod tests {
     }
 
     #[test]
-    fn event_memory_remains_owned_until_the_vm_drains_it() {
+    fn event_memory_remains_owned_until_execution_drains_it() {
         let mut engine = HostedNetworkEngine::<(), _, _>::start(
             "rastok-network-events",
             limits(),

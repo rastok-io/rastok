@@ -1,7 +1,7 @@
 // A test harness drives the OS on purpose; the frontier lints
 // guard the core modules, not the evidence.
 #![allow(clippy::expect_used)]
-//! `Process` re-expressed on the conformance harness: the profile is
+//! `Process` re-expressed on the conformance harness: the fixture is
 //! the whole suite — probes, provocations, and the stated gap — and
 //! the battery holds the Driver to the ten contract cases. A second
 //! test turns the harness against a lying Driver to prove the
@@ -197,7 +197,7 @@ fn process_registry() -> DriverRegistry {
         .expect("Process is registered once")
 }
 
-fn process_profile() -> DriverTestFixture {
+fn process_fixture() -> DriverTestFixture {
     DriverTestFixture {
         contract: &PROCESS,
         source: HAPPY.into(),
@@ -248,7 +248,7 @@ fn process_profile() -> DriverTestFixture {
 #[test]
 fn process_passes_the_whole_battery() {
     let report = verify(
-        &process_profile(),
+        &process_fixture(),
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         &process_registry(),
     );
@@ -360,7 +360,7 @@ impl DriverFactory for LiarFactory {
 
 #[test]
 fn a_malformed_terminal_case_fails_the_battery() {
-    let profile = DriverTestFixture {
+    let fixture = DriverTestFixture {
         contract: &PROCESS,
         source: HAPPY.into(),
         input: "salut",
@@ -376,7 +376,7 @@ fn a_malformed_terminal_case_fails_the_battery() {
         )))
         .expect("the liar registers once");
     let report = verify(
-        &profile,
+        &fixture,
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         &drivers,
     );
@@ -491,7 +491,7 @@ impl DriverFactory for SwapperFactory {
 
 #[test]
 fn crossed_concurrent_replies_fail_the_battery() {
-    let profile = DriverTestFixture {
+    let fixture = DriverTestFixture {
         contract: &PROCESS,
         source: HAPPY.into(),
         input: "salut",
@@ -521,7 +521,7 @@ fn crossed_concurrent_replies_fail_the_battery() {
         )))
         .expect("the swapper registers once");
     let report = verify(
-        &profile,
+        &fixture,
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         &drivers,
     );
@@ -537,15 +537,15 @@ fn crossed_concurrent_replies_fail_the_battery() {
 
 #[test]
 fn identical_interleave_expectations_cannot_claim_correlation_proof() {
-    let mut profile = process_profile();
-    let probe = profile
+    let mut fixture = process_fixture();
+    let probe = fixture
         .interleave
         .as_mut()
-        .expect("the Process profile carries an interleave proof");
+        .expect("the Process fixture carries an interleave proof");
     probe.expected[1].data = probe.expected[0].data.clone();
 
     let report = verify(
-        &profile,
+        &fixture,
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
         &process_registry(),
     );

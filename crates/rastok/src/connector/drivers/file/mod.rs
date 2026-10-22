@@ -215,7 +215,7 @@ pub enum FileSettingsError {
     NotFile(crate::connector::ContractId),
     /// A required effective setting did not travel in the plan.
     Unresolved(&'static str),
-    /// The selected profile has no Driver in this build.
+    /// The selected mode has no Driver in this build.
     UnknownMode(String),
     /// The path row is not text or a checked expression producing text.
     PathNotText,

@@ -147,17 +147,17 @@ impl DriverPoller {
     pub fn poll_drivers<B: OutboundDrivers + ?Sized>(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut B,
+        drivers: &mut B,
         gate: &dyn CompletionCheck,
         now: i64,
     ) -> Result<PollBatch, PollFault> {
-        self.poll_drivers_with_timing(journal, bindings, gate, now, &mut |_, _| Ok(None))
+        self.poll_drivers_with_timing(journal, drivers, gate, now, &mut |_, _| Ok(None))
     }
 
     pub(crate) fn poll_drivers_with_timing<B: OutboundDrivers + ?Sized>(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut B,
+        drivers: &mut B,
         gate: &dyn CompletionCheck,
         now: i64,
         timing: &mut impl FnMut(
@@ -184,9 +184,7 @@ impl DriverPoller {
                 let request = journal
                     .find_envelope(intent.emitting_id)
                     .ok_or(PollFault::MissingRequest(intent.call_id))?;
-                let start = bindings
-                    .start(intent, &request)
-                    .map_err(PollFault::Driver)?;
+                let start = drivers.start(intent, &request).map_err(PollFault::Driver)?;
                 if start == CallStart::Started {
                     self.started.insert(intent.call_id);
                 }
@@ -197,7 +195,7 @@ impl DriverPoller {
         let mut settlement = match self.pending_settlement.take() {
             Some(pending) => *pending,
             None => PendingSettlement {
-                responses: bindings.poll_responses().map_err(PollFault::Driver)?.into(),
+                responses: drivers.poll_responses().map_err(PollFault::Driver)?.into(),
                 batch: PollBatch::default(),
             },
         };
@@ -422,7 +420,7 @@ mod tests {
     #[test]
     fn a_refused_start_is_not_remembered_as_started() {
         let (mut journal, _) = seeded_journal();
-        let mut bindings = StartRefusal {
+        let mut drivers = StartRefusal {
             refuse: true,
             pending: false,
             attempts: 0,
@@ -430,21 +428,21 @@ mod tests {
         let mut poller = DriverPoller::new();
 
         assert!(matches!(
-            poller.poll_drivers(&mut journal, &mut bindings, &AcceptAnyCompletion, 0),
+            poller.poll_drivers(&mut journal, &mut drivers, &AcceptAnyCompletion, 0),
             Err(PollFault::Driver(DriverRouteError::UnboundOutbound(_)))
         ));
-        assert_eq!(bindings.attempts, 1);
-        bindings.refuse = false;
+        assert_eq!(drivers.attempts, 1);
+        drivers.refuse = false;
         poller
-            .poll_drivers(&mut journal, &mut bindings, &AcceptAnyCompletion, 0)
+            .poll_drivers(&mut journal, &mut drivers, &AcceptAnyCompletion, 0)
             .unwrap();
-        assert_eq!(bindings.attempts, 2, "the open call was retried");
+        assert_eq!(drivers.attempts, 2, "the open call was retried");
     }
 
     #[test]
     fn a_backpressured_start_remains_open_and_is_offered_again() {
         let (mut journal, _) = seeded_journal();
-        let mut bindings = StartRefusal {
+        let mut drivers = StartRefusal {
             refuse: false,
             pending: true,
             attempts: 0,
@@ -452,20 +450,20 @@ mod tests {
         let mut poller = DriverPoller::new();
 
         poller
-            .poll_drivers(&mut journal, &mut bindings, &AcceptAnyCompletion, 0)
+            .poll_drivers(&mut journal, &mut drivers, &AcceptAnyCompletion, 0)
             .unwrap();
-        assert_eq!(bindings.attempts, 1);
+        assert_eq!(drivers.attempts, 1);
         assert_eq!(journal.open_calls().len(), 1);
 
-        bindings.pending = false;
+        drivers.pending = false;
         poller
-            .poll_drivers(&mut journal, &mut bindings, &AcceptAnyCompletion, 0)
+            .poll_drivers(&mut journal, &mut drivers, &AcceptAnyCompletion, 0)
             .unwrap();
-        assert_eq!(bindings.attempts, 2, "capacity recovery retries the call");
+        assert_eq!(drivers.attempts, 2, "capacity recovery retries the call");
         poller
-            .poll_drivers(&mut journal, &mut bindings, &AcceptAnyCompletion, 0)
+            .poll_drivers(&mut journal, &mut drivers, &AcceptAnyCompletion, 0)
             .unwrap();
-        assert_eq!(bindings.attempts, 2, "a started call is never duplicated");
+        assert_eq!(drivers.attempts, 2, "a started call is never duplicated");
     }
 
     #[test]

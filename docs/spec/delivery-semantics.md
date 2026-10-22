@@ -505,7 +505,7 @@ publication.
 
 `RootSink`, `UnwiredPolicy`, and name tests for `err` or `exit` have no
 current meaning. Each emission is observed once at its source. Crossing the App
-boundary feeds `vm.outputs()` without a duplicate emission or anonymous
+boundary feeds `execution.outputs()` without a duplicate emission or anonymous
 observation.
 
 A required input which can never be fed receives `W-DEAD-INPUT`. A missing

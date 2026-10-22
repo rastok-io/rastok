@@ -27,23 +27,26 @@ fn emitted(body: &str) -> rastok::envelope::Data {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
-    vm.accept_input(
-        &mut journal,
-        IngressProposal {
-            provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
-            draft: EnvelopeDraft {
-                port: rastok::node::Port::new("in").unwrap(),
-                data: Data::materialized(Value::Int(1)),
-                ext: Namespace::new(),
+    let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
+    execution
+        .accept_input(
+            &mut journal,
+            IngressProposal {
+                provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
+                draft: EnvelopeDraft {
+                    port: rastok::node::Port::new("in").unwrap(),
+                    data: Data::materialized(Value::Int(1)),
+                    ext: Namespace::new(),
+                },
+                sequence: IngressSequence::Next,
+                session: None,
             },
-            sequence: IngressSequence::Next,
-            session: None,
-        },
-    )
-    .expect("the injection lands");
-    vm.run_ready(&mut journal).expect("the drain completes");
-    vm.outputs()[0].envelope.data().clone()
+        )
+        .expect("the injection lands");
+    execution
+        .run_ready(&mut journal)
+        .expect("the drain completes");
+    execution.outputs()[0].envelope.data().clone()
 }
 
 fn hash_of(body: &str) -> String {
@@ -129,23 +132,26 @@ fn base64_with_a_content_type_is_whole_payload() {
         "typing the frontend content type is one declared H4.1 identity move"
     );
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
-    vm.accept_input(
-        &mut journal,
-        IngressProposal {
-            provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
-            draft: EnvelopeDraft {
-                port: rastok::node::Port::new("in").unwrap(),
-                data: Data::materialized(Value::Int(1)),
-                ext: Namespace::new(),
+    let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
+    execution
+        .accept_input(
+            &mut journal,
+            IngressProposal {
+                provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
+                draft: EnvelopeDraft {
+                    port: rastok::node::Port::new("in").unwrap(),
+                    data: Data::materialized(Value::Int(1)),
+                    ext: Namespace::new(),
+                },
+                sequence: IngressSequence::Next,
+                session: None,
             },
-            sequence: IngressSequence::Next,
-            session: None,
-        },
-    )
-    .expect("the injection lands");
-    vm.run_ready(&mut journal).expect("the drain completes");
-    let output = &vm.outputs()[0];
+        )
+        .expect("the injection lands");
+    execution
+        .run_ready(&mut journal)
+        .expect("the drain completes");
+    let output = &execution.outputs()[0];
     assert_eq!(
         output.envelope.data(),
         &Data::materialized(Value::Bytes(vec![0, 1, 2]))
@@ -405,23 +411,26 @@ fn an_asset_emission_runs_and_carries_its_type() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
-    vm.accept_input(
-        &mut journal,
-        IngressProposal {
-            provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
-            draft: EnvelopeDraft {
-                port: rastok::node::Port::new("in").unwrap(),
-                data: Data::materialized(Value::Int(1)),
-                ext: Namespace::new(),
+    let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
+    execution
+        .accept_input(
+            &mut journal,
+            IngressProposal {
+                provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
+                draft: EnvelopeDraft {
+                    port: rastok::node::Port::new("in").unwrap(),
+                    data: Data::materialized(Value::Int(1)),
+                    ext: Namespace::new(),
+                },
+                sequence: IngressSequence::Next,
+                session: None,
             },
-            sequence: IngressSequence::Next,
-            session: None,
-        },
-    )
-    .expect("the injection lands");
-    vm.run_ready(&mut journal).expect("the drain completes");
-    let output = &vm.outputs()[0];
+        )
+        .expect("the injection lands");
+    execution
+        .run_ready(&mut journal)
+        .expect("the drain completes");
+    let output = &execution.outputs()[0];
     assert_eq!(
         output.envelope.data(),
         &Data::materialized(Value::Bytes(b"PDFISH".to_vec()))
@@ -571,7 +580,7 @@ fn the_carry_survives_a_dead_earlier_write() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
+    let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
     let mut ext = Namespace::new();
     ext.insert(
         String::from("content_type"),
@@ -579,23 +588,25 @@ fn the_carry_survives_a_dead_earlier_write() {
             "application/vnd.apache.arrow.stream",
         ))),
     );
-    vm.accept_input(
-        &mut journal,
-        IngressProposal {
-            provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
-            draft: EnvelopeDraft {
-                port: rastok::node::Port::new("in").unwrap(),
-                data: Data::encoded(Encoding::ArrowIpc, *b"\x01\x02"),
-                ext,
+    execution
+        .accept_input(
+            &mut journal,
+            IngressProposal {
+                provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
+                draft: EnvelopeDraft {
+                    port: rastok::node::Port::new("in").unwrap(),
+                    data: Data::encoded(Encoding::ArrowIpc, *b"\x01\x02"),
+                    ext,
+                },
+                sequence: IngressSequence::Next,
+                session: None,
             },
-            sequence: IngressSequence::Next,
-            session: None,
-        },
-    )
-    .expect("the injection lands");
-    vm.run_ready(&mut journal)
+        )
+        .expect("the injection lands");
+    execution
+        .run_ready(&mut journal)
         .expect("no forced materialization");
-    let output = &vm.outputs()[0];
+    let output = &execution.outputs()[0];
     assert!(
         matches!(
             output.envelope.data(),
@@ -630,13 +641,13 @@ fn inject_holds_the_ext_zone_to_the_schema() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
+    let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
     let mut ext = Namespace::new();
     ext.insert(
         String::from("invented"),
         MetaValue::Scalar(Scalar::Text(String::from("x"))),
     );
-    let refused = vm.accept_input(
+    let refused = execution.accept_input(
         &mut journal,
         IngressProposal {
             provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
@@ -736,13 +747,13 @@ fn the_meta_type_grid_is_closed_end_to_end() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
+    let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
     let mut ext = Namespace::new();
     ext.insert(
         String::from("content_type"),
         MetaValue::Scalar(Scalar::Int(7)),
     );
-    let refused = vm.accept_input(
+    let refused = execution.accept_input(
         &mut journal,
         IngressProposal {
             provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
@@ -1267,27 +1278,30 @@ fn a_decimal_meta_value_round_trips_through_a_copy() {
     )
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut vm = Execution::new(&compilation.plan, GraphVersion(1));
-    vm.accept_input(
-        &mut journal,
-        IngressProposal {
-            provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
-            draft: EnvelopeDraft {
-                port: rastok::node::Port::new("in").unwrap(),
-                data: Data::materialized(Value::Decimal {
-                    unscaled: 1999,
-                    scale: 2,
-                }),
-                ext: Namespace::new(),
+    let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
+    execution
+        .accept_input(
+            &mut journal,
+            IngressProposal {
+                provenance: IngressProvenance::single(rastok::node::Path::new(["probe"]).unwrap()),
+                draft: EnvelopeDraft {
+                    port: rastok::node::Port::new("in").unwrap(),
+                    data: Data::materialized(Value::Decimal {
+                        unscaled: 1999,
+                        scale: 2,
+                    }),
+                    ext: Namespace::new(),
+                },
+                sequence: IngressSequence::Next,
+                session: None,
             },
-            sequence: IngressSequence::Next,
-            session: None,
-        },
-    )
-    .expect("the injection lands");
-    vm.run_ready(&mut journal).expect("the copy converts");
+        )
+        .expect("the injection lands");
+    execution
+        .run_ready(&mut journal)
+        .expect("the copy converts");
     assert_eq!(
-        vm.outputs()[0].envelope.meta().app().get("price"),
+        execution.outputs()[0].envelope.meta().app().get("price"),
         Some(&MetaValue::Scalar(Scalar::Decimal {
             unscaled: 1999,
             scale: 2

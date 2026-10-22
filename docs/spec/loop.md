@@ -63,7 +63,7 @@ Contract, not a source-facing contract name.
 | Graph | admitted |
 | finite outbound Connector Call | admitted |
 | Event, Session, inbound Call | `E-LOOP-HOST` |
-| Process service profile | `E-LOOP-HOST` |
+| Process service mode | `E-LOOP-HOST` |
 
 The initial standard outbound Call hosts are Process job, File, and
 HttpClient. A Connector's Contract must transport a closed finite profile before
@@ -311,7 +311,7 @@ terminate, for example through positive Call timeouts and bounded guests.
 
 A Loop Connector must resolve to a finite outbound Call with one request input,
 closed frame cardinalities, and exactly one terminal exit. Event, Session,
-inbound Call, and resident-service profiles refuse.
+inbound Call, and resident-service modes refuse.
 
 `out` and `err` are frames, not implicit terminals. A frame may select a
 command, but the manager still waits for the Call exit. A Contract port with

@@ -141,12 +141,12 @@ impl core::fmt::Display for PortResolutionError {
 impl core::error::Error for PortResolutionError {}
 
 /// One declarative connector contract sheet: the attributes every
-/// profile shares, and the profiles one selector attribute picks.
+/// mode shares, and the modes one selector attribute picks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectorContract {
     /// Stable semantic identity transported by the categorical plan.
     pub id: &'static str,
-    /// The NodeType name (`Process`).
+    /// The DSL Connector name (`Process`).
     pub name: &'static str,
     /// External-world roles required from a runtime Driver registration.
     pub roles: crate::connector::ConnectorDirection,
@@ -154,10 +154,10 @@ pub struct ConnectorContract {
     pub exchange: crate::connector::ExchangeKind,
     /// Ports, their directions and effective type rules.
     pub ports: &'static [PortContract],
-    /// The attributes common to every profile.
+    /// The attributes common to every mode.
     pub common: &'static [AttributeSpec],
-    /// The profile selector, when the contract has profiles. The
-    /// admitted selector words are DERIVED from the profiles — they
+    /// The mode selector, when the contract has modes. The
+    /// admitted selector words are DERIVED from the modes — they
     /// are spelled nowhere else.
     pub selector: Option<ModeSelector>,
 }
@@ -212,38 +212,36 @@ impl ConnectorContract {
         Err(PortResolutionError::UnresolvedDependency(initial.name))
     }
 
-    /// The spec of one attribute within the given resolved profile:
-    /// the common sheet first, then the profile's own.
+    /// The spec of one attribute within the given resolved mode:
+    /// the common sheet first, then the mode's own.
     #[must_use]
-    pub fn attribute(&self, profile: Option<&ContractMode>, name: &str) -> Option<&AttributeSpec> {
+    pub fn attribute(&self, mode: Option<&ContractMode>, name: &str) -> Option<&AttributeSpec> {
         self.common
             .iter()
             .find(|spec| spec.name == name)
-            .or_else(|| {
-                profile.and_then(|profile| profile.attributes.iter().find(|spec| spec.name == name))
-            })
+            .or_else(|| mode.and_then(|mode| mode.attributes.iter().find(|spec| spec.name == name)))
     }
 
-    /// The profile owning an attribute NAME that the resolved profile
-    /// does not — the "belongs to another profile" diagnostic's
+    /// The mode owning an attribute NAME that the resolved mode
+    /// does not — the "belongs to another mode" diagnostic's
     /// source.
     #[must_use]
-    pub fn owning_profile(&self, name: &str) -> Option<&ContractMode> {
-        let profiles = self.selector.as_ref()?.profiles;
-        profiles
+    pub fn owning_mode(&self, name: &str) -> Option<&ContractMode> {
+        let modes = self.selector.as_ref()?.modes;
+        modes
             .iter()
-            .find(|profile| profile.attributes.iter().any(|spec| spec.name == name))
+            .find(|mode| mode.attributes.iter().any(|spec| spec.name == name))
     }
 
     /// Resolves the selector word — written or defaulted — to its
-    /// profile.
+    /// mode.
     #[must_use]
-    pub fn profile(&self, word: &str) -> Option<&ContractMode> {
+    pub fn mode(&self, word: &str) -> Option<&ContractMode> {
         self.selector
             .as_ref()?
-            .profiles
+            .modes
             .iter()
-            .find(|profile| profile.word == word)
+            .find(|mode| mode.word == word)
     }
 
     /// Resolves this sheet's complete travelling port table from effective
@@ -325,53 +323,53 @@ impl ConnectorContract {
     }
 }
 
-/// The one attribute selecting a contract's profile, and the profiles
+/// The one attribute selecting a contract's mode, and the modes
 /// themselves.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModeSelector {
     /// The selecting attribute's name (`mode`).
     pub attribute: &'static str,
-    /// The profile selected when the attribute is omitted; the
+    /// The mode selected when the attribute is omitted; the
     /// checker materializes the word into the effective HIR.
     pub default: Option<&'static str>,
-    /// The contract's profiles.
-    pub profiles: &'static [ContractMode],
+    /// The contract's modes.
+    pub modes: &'static [ContractMode],
 }
 
-/// One profile of a contract: a name the selector picks, the build's
+/// One mode of a contract: a name the selector picks, the build's
 /// support for it, and its own attributes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContractMode {
     /// A mode may change direction and interaction lifecycle within the same
     /// Contract. Omission preserves the definition's roles and exchange.
-    pub protocol: Option<ProfileProtocol>,
+    pub protocol: Option<ModeProtocol>,
     /// The selector word (`job`).
     pub word: &'static str,
-    /// Whether THIS build executes the profile — distinct from the
+    /// Whether THIS build executes the mode — distinct from the
     /// contract knowing it.
     pub support: ModeSupport,
-    /// The attributes existing only in this profile. A field of
-    /// another profile is simply ABSENT here — there is no
+    /// The attributes existing only in this mode. A field of
+    /// another mode is simply ABSENT here — there is no
     /// `Forbidden` state (D-2026-08-12-1).
     pub attributes: &'static [AttributeSpec],
 }
 
-/// Resolved protocol of a profile whose resource lifecycle differs from the
+/// Resolved protocol of a mode whose resource lifecycle differs from the
 /// sheet's default (for example a resident Process versus a finite job).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ProfileProtocol {
+pub struct ModeProtocol {
     /// Required Driver views.
     pub roles: crate::connector::ConnectorDirection,
     /// Interaction cardinality.
     pub exchange: crate::connector::ExchangeKind,
 }
 
-/// The build's relationship to a profile the contract knows.
+/// The build's relationship to a mode the contract knows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModeSupport {
-    /// The build validates and executes the profile.
+    /// The build validates and executes the mode.
     Available,
-    /// The build defers the profile with this named reason; its
+    /// The build defers the mode with this named reason; its
     /// attributes are declared but not validated (their domains may
     /// be deferred-only).
     Deferred(&'static str),
@@ -422,8 +420,8 @@ pub enum DefaultValue {
 
 /// The value domain of a contract attribute.
 ///
-/// Implemented domains are admitted on available profiles; the rest are
-/// DECLARED for deferred profiles (the sheet says exactly what it knows) and
+/// Implemented domains are admitted on available modes; the rest are
+/// DECLARED for deferred modes (the sheet says exactly what it knows) and
 /// admitted only behind [`ModeSupport::Deferred`]. Hosted catalogue validation
 /// checks this before accepting a definition.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -466,7 +464,7 @@ pub enum ValueDomain {
 impl ValueDomain {
     /// Whether this domain is implemented by the current build's
     /// validation — the others may only appear behind a deferred
-    /// profile.
+    /// mode.
     #[must_use]
     pub fn implemented(&self) -> bool {
         matches!(

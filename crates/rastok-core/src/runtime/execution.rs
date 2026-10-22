@@ -620,12 +620,12 @@ struct PlanCompletionCheck<'plan> {
     plan: &'plan ValidatedExecutionPlan,
 }
 
-/// The explicit no-world binding used by the pure `step`/`run_ready` helpers.
-/// It lets Operator-only plans keep their compact API while a Connector call
-/// fails loudly instead of falling back to a concrete built-in contract.
-struct NoOutboundBindings;
+/// Empty Driver association used by the pure `step`/`run_ready` helpers.
+/// Operator-only plans need no Drivers; a Connector call is refused rather
+/// than selecting a built-in implementation implicitly.
+struct NoOutboundDrivers;
 
-impl OutboundDrivers for NoOutboundBindings {
+impl OutboundDrivers for NoOutboundDrivers {
     fn prepare_request(
         &mut self,
         connector: &node::Path,
@@ -1244,9 +1244,9 @@ impl<'plan> Execution<'plan> {
         logical_time: i64,
         boot: Option<&crate::deployment::BootBindings>,
     ) -> Self {
-        let mut vm = Self::new_at_inner(plan, graph_version, logical_time, boot);
-        vm.original_hash = Some(hash);
-        vm
+        let mut execution = Self::new_at_inner(plan, graph_version, logical_time, boot);
+        execution.original_hash = Some(hash);
+        execution
     }
 
     fn new_at_inner(
@@ -1598,19 +1598,19 @@ impl<'plan> Execution<'plan> {
     /// its private state. An operation may already have committed earlier
     /// transitions; the journal determines which changes took effect.
     pub fn step(&mut self, journal: &mut dyn Journal) -> Result<bool, ExecutionFault> {
-        self.step_with_bindings(journal, &mut NoOutboundBindings)
+        self.step_with_drivers(journal, &mut NoOutboundDrivers)
     }
 
-    /// Advances ready work with verified outbound bindings available for
+    /// Advances ready work with verified outbound Drivers available for
     /// Connector request preparation.
     ///
     /// # Errors
     ///
     /// The same transaction or binding-integrity failures as [`Self::step`].
-    pub fn step_with_bindings(
+    pub fn step_with_drivers(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut dyn OutboundDrivers,
+        drivers: &mut dyn OutboundDrivers,
     ) -> Result<bool, ExecutionFault> {
         self.preflight(journal)?;
         self.synchronize_retry_closures(journal)?;
@@ -1662,7 +1662,7 @@ impl<'plan> Execution<'plan> {
                         .any(|write| write.intent.session_id == settled.session)
             })
         }) {
-            self.settle_session_next(journal, bindings, index)?;
+            self.settle_session_next(journal, drivers, index)?;
             return Ok(true);
         }
         if let Some(index) = self.settled.iter().position(|entry| {
@@ -1710,12 +1710,12 @@ impl<'plan> Execution<'plan> {
                 }
                 NodeKind::Operator(_) => self.fire_operator(journal, slot, &instance, &delivery)?,
                 NodeKind::Connector(_) => {
-                    self.fire_connector(journal, bindings, slot, &instance, &delivery)?
+                    self.fire_connector(journal, drivers, slot, &instance, &delivery)?
                 }
             }
             return Ok(true);
         }
-        self.step_join_mailboxes(journal, bindings)
+        self.step_join_mailboxes(journal, drivers)
     }
 
     // Keep join reservation state out of the ordinary relay's stack frame.
@@ -1726,7 +1726,7 @@ impl<'plan> Execution<'plan> {
     fn step_join_mailboxes(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut dyn OutboundDrivers,
+        drivers: &mut dyn OutboundDrivers,
     ) -> Result<bool, ExecutionFault> {
         let mut after = None;
         while let Some((slot, instance, delivery)) =
@@ -1762,7 +1762,7 @@ impl<'plan> Execution<'plan> {
                     {
                         return Ok(true);
                     }
-                    self.fire_connector(journal, bindings, slot, &instance, &delivery)?;
+                    self.fire_connector(journal, drivers, slot, &instance, &delivery)?;
                     return Ok(true);
                 }
                 NodeKind::Operator(_) => {
@@ -1832,20 +1832,20 @@ impl<'plan> Execution<'plan> {
     /// The first faulting step; everything before it committed, and
     /// the faulting work stays reserved.
     pub fn run_ready(&mut self, journal: &mut dyn Journal) -> Result<(), ExecutionFault> {
-        self.run_ready_with_bindings(journal, &mut NoOutboundBindings)
+        self.run_ready_with_drivers(journal, &mut NoOutboundDrivers)
     }
 
-    /// Runs ready work with the verified outbound bindings available.
+    /// Runs ready work with the verified outbound Drivers available.
     ///
     /// # Errors
     ///
     /// The first transaction or binding-integrity failure.
-    pub fn run_ready_with_bindings(
+    pub fn run_ready_with_drivers(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut dyn OutboundDrivers,
+        drivers: &mut dyn OutboundDrivers,
     ) -> Result<(), ExecutionFault> {
-        while self.step_with_bindings(journal, bindings)? {}
+        while self.step_with_drivers(journal, drivers)? {}
         Ok(())
     }
 
@@ -1860,25 +1860,25 @@ impl<'plan> Execution<'plan> {
     pub fn poll_drivers(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut dyn OutboundDrivers,
+        drivers: &mut dyn OutboundDrivers,
     ) -> Result<PollReport, ExecutionFault> {
         self.preflight(journal)?;
         let mut report = core::mem::take(&mut self.buffered_poll);
-        report.append(self.poll_outbound_driver(journal, bindings)?);
+        report.append(self.poll_outbound_driver(journal, drivers)?);
         Ok(report)
     }
 
     fn poll_outbound_driver(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut dyn OutboundDrivers,
+        drivers: &mut dyn OutboundDrivers,
     ) -> Result<PollReport, ExecutionFault> {
         let gate = PlanCompletionCheck { plan: self.plan };
         let retry = self.retry_manager.as_deref();
         let now = self.now;
         let batch = self
             .poller
-            .poll_drivers_with_timing(journal, bindings, &gate, now, &mut |intent, completion| {
+            .poll_drivers_with_timing(journal, drivers, &gate, now, &mut |intent, completion| {
                 retry_manager::closure_schedule(retry, intent, completion, now).map_err(|error| {
                     crate::runtime::execution::driver_polling::PollFault::Journal(
                         crate::journal::Error::InvalidRetryProtocol(error),
@@ -1887,8 +1887,8 @@ impl<'plan> Execution<'plan> {
             })
             .map_err(ExecutionFault::Dispatch)?;
         self.synchronize_retry_closures(journal)?;
-        self.retry_session_actions(bindings)?;
-        self.retry_session_closes(bindings)?;
+        self.retry_session_actions(drivers)?;
+        self.retry_session_closes(drivers)?;
         let settled = batch.events.len();
         let in_port =
             node::Port::new("in").unwrap_or_else(|_| unreachable!("`in` is a valid port"));
@@ -1906,7 +1906,7 @@ impl<'plan> Execution<'plan> {
             uncorrelated_sessions: Vec::new(),
             rejected_sessions: Vec::new(),
         };
-        let session_events = bindings
+        let session_events = drivers
             .poll_observations()
             .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
             .map_err(ExecutionFault::Dispatch)?;
@@ -2060,7 +2060,7 @@ impl<'plan> Execution<'plan> {
     /// and spin the deterministic transaction drain.
     fn retry_session_actions(
         &mut self,
-        bindings: &mut dyn OutboundDrivers,
+        drivers: &mut dyn OutboundDrivers,
     ) -> Result<(), ExecutionFault> {
         let openings = self
             .sessions
@@ -2104,7 +2104,7 @@ impl<'plan> Execution<'plan> {
                         node: self.plan.nodes[session.slot.index()].path.clone(),
                         reason: "a retryable Session opening lost its sealed intent",
                     })?;
-            if bindings
+            if drivers
                 .open_session(intent, &session.opening)
                 .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
                 .map_err(ExecutionFault::Dispatch)?
@@ -2143,7 +2143,7 @@ impl<'plan> Execution<'plan> {
                         .unwrap_or_else(|_| unreachable!("a literal path is valid")),
                     reason: "a pending Session write disappeared before retry",
                 })?;
-            if bindings
+            if drivers
                 .write_session(&write.intent, &write.delivery.envelope)
                 .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
                 .map_err(ExecutionFault::Dispatch)?
@@ -2158,7 +2158,7 @@ impl<'plan> Execution<'plan> {
 
     fn retry_session_closes(
         &mut self,
-        bindings: &mut dyn OutboundDrivers,
+        drivers: &mut dyn OutboundDrivers,
     ) -> Result<(), ExecutionFault> {
         let pending: Vec<SessionId> = self
             .sessions
@@ -2189,7 +2189,7 @@ impl<'plan> Execution<'plan> {
                 }
             })?;
             let connector = self.executor_path(session.slot)?.clone();
-            if bindings
+            if drivers
                 .close_session(&connector, reference)
                 .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
                 .map_err(ExecutionFault::Dispatch)?
@@ -2217,11 +2217,11 @@ impl<'plan> Execution<'plan> {
     pub fn advance_to(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut dyn OutboundDrivers,
+        drivers: &mut dyn OutboundDrivers,
         target: i64,
     ) -> Result<(), ExecutionFault> {
         let mut advance = TimeAdvance::new(target);
-        while advance.advance_once(self, journal, bindings)? {}
+        while advance.advance_once(self, journal, drivers)? {}
         Ok(())
     }
 
@@ -2238,7 +2238,7 @@ impl<'plan> Execution<'plan> {
     fn expire(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut dyn OutboundDrivers,
+        drivers: &mut dyn OutboundDrivers,
         payload: Obligation,
     ) -> Result<(), ExecutionFault> {
         let (connector, edge, delivery, instance) = match payload {
@@ -2307,7 +2307,7 @@ impl<'plan> Execution<'plan> {
                 cause,
                 deadline,
             } => {
-                self.expire_closing(journal, bindings, &instance, cause, deadline)?;
+                self.expire_closing(journal, drivers, &instance, cause, deadline)?;
                 return Ok(());
             }
         };
@@ -2317,7 +2317,7 @@ impl<'plan> Execution<'plan> {
             .is_some_and(|spec| spec.exchange == ExchangeKind::Session)
         {
             return self
-                .expire_session_handshake(journal, bindings, slot, instance, &edge, delivery);
+                .expire_session_handshake(journal, drivers, slot, instance, &edge, delivery);
         }
         // An open call for THIS obligation — the delivered edge and
         // envelope both: a fan-out of one envelope creates one budget
@@ -2354,14 +2354,14 @@ impl<'plan> Execution<'plan> {
             // Contract projection is pure, but it can still expose a broken
             // binding. Prove it before the close-once mutation so an
             // integrity refusal cannot strand a journaled obligation.
-            let completion = bindings
+            let completion = drivers
                 .scheduler_completion(&connector, SchedulerCompletion::TimeoutExpired)
                 .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
                 .map_err(ExecutionFault::Dispatch)?;
             // Cancellation is a fallible Driver boundary. Prove it before
             // close-once so a refusal leaves both the call and its deadline
             // replayable; no terminal fact can strand a claimed mailbox.
-            bindings
+            drivers
                 .cancel(&connector, &call_id)
                 .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
                 .map_err(ExecutionFault::Dispatch)?;
@@ -2437,7 +2437,7 @@ impl<'plan> Execution<'plan> {
                     self.executor_path(slot)?,
                     &queued.envelope,
                 )?;
-                match bindings
+                match drivers
                     .prepare_request(
                         self.executor_path(slot)?,
                         queued.envelope.data(),
@@ -2534,7 +2534,7 @@ impl<'plan> Execution<'plan> {
             Ok(intent) => {
                 // As above, establish the contract-owned representation
                 // before the open/close facts or mailbox state can move.
-                let completion = bindings
+                let completion = drivers
                     .scheduler_completion(&connector, SchedulerCompletion::TimeoutExpired)
                     .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
                     .map_err(ExecutionFault::Dispatch)?;
@@ -2623,7 +2623,7 @@ impl<'plan> Execution<'plan> {
     fn expire_session_handshake(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut dyn OutboundDrivers,
+        drivers: &mut dyn OutboundDrivers,
         slot: NodeIndex,
         instance: instance::Generation,
         edge: &str,
@@ -2654,12 +2654,12 @@ impl<'plan> Execution<'plan> {
             {
                 return Ok(());
             }
-            let completion = bindings
+            let completion = drivers
                 .scheduler_session_completion(&connector, SchedulerCompletion::TimeoutExpired)
                 .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
                 .map_err(ExecutionFault::Dispatch)?;
             if session.opening_started {
-                let _ = bindings
+                let _ = drivers
                     .close_session(&connector, session_id)
                     .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
                     .map_err(ExecutionFault::Dispatch)?;
@@ -2711,7 +2711,7 @@ impl<'plan> Execution<'plan> {
         })?;
         let settings =
             self.resolve_invocation_settings(&instance, spec, &connector, &queued.envelope)?;
-        let preparation = bindings
+        let preparation = drivers
             .prepare_session_open(&connector, queued.envelope.data(), &settings)
             .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
             .map_err(ExecutionFault::Dispatch)?;
@@ -2763,7 +2763,7 @@ impl<'plan> Execution<'plan> {
                 close_started: false,
             },
         );
-        let completion = bindings
+        let completion = drivers
             .scheduler_session_completion(&connector, SchedulerCompletion::TimeoutExpired)
             .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
             .map_err(ExecutionFault::Dispatch)?;
@@ -2841,7 +2841,7 @@ impl<'plan> Execution<'plan> {
     /// Outbound Calls whose terminal observation is not retained yet.
     ///
     /// A hosted pause controller uses this distinction to keep polling the
-    /// world after an open, then stop before [`Self::step_with_bindings`]
+    /// world after an open, then stop before [`Self::step_with_drivers`]
     /// consumes the retained completion.
     #[must_use]
     pub fn awaiting_outbound_calls(&self) -> usize {
@@ -2921,7 +2921,7 @@ impl<'plan> Execution<'plan> {
         true
     }
 
-    /// Whether one call to [`Self::step_with_bindings`] can select semantic
+    /// Whether one call to [`Self::step_with_drivers`] can select semantic
     /// work without waiting for the world or advancing logical time.
     ///
     /// Unlike [`Self::is_stable`], an open Call, Session or partial join does
@@ -3367,7 +3367,7 @@ impl<'plan> Execution<'plan> {
     fn expire_closing(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut dyn OutboundDrivers,
+        drivers: &mut dyn OutboundDrivers,
         reference: &instance::Generation,
         cause: Id,
         deadline: ClosingDeadline,
@@ -3403,7 +3403,7 @@ impl<'plan> Execution<'plan> {
                         .get(&call_id)
                         .ok_or(ExecutionFault::MissingPending(call_id))?;
                     let connector = self.executor_path(pending.slot)?;
-                    bindings
+                    drivers
                         .cancel(connector, &call_id)
                         .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
                         .map_err(ExecutionFault::Dispatch)?;
@@ -3426,7 +3426,7 @@ impl<'plan> Execution<'plan> {
                         }
                     })?;
                     let connector = self.executor_path(session.slot)?.clone();
-                    if bindings
+                    if drivers
                         .close_session(&connector, session_id)
                         .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
                         .map_err(ExecutionFault::Dispatch)?
@@ -3451,7 +3451,7 @@ impl<'plan> Execution<'plan> {
                         .get(&call_id)
                         .ok_or(ExecutionFault::MissingPending(call_id))?;
                     let connector = self.executor_path(pending.slot)?.clone();
-                    let completion = bindings
+                    let completion = drivers
                         .scheduler_completion(&connector, SchedulerCompletion::OutcomeUnknown)
                         .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
                         .map_err(ExecutionFault::Dispatch)?;
@@ -3512,7 +3512,7 @@ impl<'plan> Execution<'plan> {
                         }
                     })?;
                     let connector = self.executor_path(session.slot)?.clone();
-                    let completion = bindings
+                    let completion = drivers
                         .scheduler_session_completion(
                             &connector,
                             SchedulerCompletion::OutcomeUnknown,
@@ -3522,7 +3522,7 @@ impl<'plan> Execution<'plan> {
                     // The committed Closing request sealed this deadline.
                     // Forced cleanup must not wait for exit-route capacity or
                     // terminal storage; it proves no successful outcome.
-                    bindings
+                    drivers
                         .abort_session(&connector, session_id)
                         .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
                         .map_err(ExecutionFault::Dispatch)?;
@@ -3926,7 +3926,7 @@ impl<'plan> Execution<'plan> {
     fn settle_session_next(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut dyn OutboundDrivers,
+        drivers: &mut dyn OutboundDrivers,
         index: usize,
     ) -> Result<(), ExecutionFault> {
         let settled = self
@@ -3981,7 +3981,7 @@ impl<'plan> Execution<'plan> {
         self.progress_closures();
         // Local cleanup follows the retained winner. Even a broken binding
         // cannot leave this committed transaction's deliveries unapplied.
-        bindings
+        drivers
             .forget_session(settled.session)
             .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
             .map_err(ExecutionFault::Dispatch)?;
@@ -4250,7 +4250,7 @@ impl<'plan> Execution<'plan> {
     fn fire_connector(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut dyn OutboundDrivers,
+        drivers: &mut dyn OutboundDrivers,
         slot: NodeIndex,
         instance: &instance::Generation,
         delivery: &envelope::Delivery,
@@ -4264,13 +4264,13 @@ impl<'plan> Execution<'plan> {
         };
         match spec.exchange {
             ExchangeKind::Call if spec.roles.has_outbound() => {
-                self.open_call(journal, bindings, slot, instance, delivery)
+                self.open_call(journal, drivers, slot, instance, delivery)
             }
             ExchangeKind::Call if spec.roles.has_inbound() => {
                 self.open_inbound_call_response(journal, slot, instance, delivery)
             }
             ExchangeKind::Session => {
-                self.progress_session(journal, bindings, slot, instance, delivery)
+                self.progress_session(journal, drivers, slot, instance, delivery)
             }
             ExchangeKind::Event | ExchangeKind::Call => Err(ExecutionFault::PlanInvariant {
                 node: planned.path.clone(),
@@ -4555,7 +4555,7 @@ impl<'plan> Execution<'plan> {
     fn progress_session(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut dyn OutboundDrivers,
+        drivers: &mut dyn OutboundDrivers,
         slot: NodeIndex,
         instance: &instance::Generation,
         delivery: &envelope::Delivery,
@@ -4593,7 +4593,7 @@ impl<'plan> Execution<'plan> {
             }) {
                 self.write_session(
                     journal,
-                    bindings,
+                    drivers,
                     SessionDispatch {
                         slot,
                         instance,
@@ -4620,7 +4620,7 @@ impl<'plan> Execution<'plan> {
             return self.discard_session_write(journal, slot, instance, delivery);
         }
         match live.as_slice() {
-            [] => self.open_session(journal, bindings, slot, instance, delivery, &settings),
+            [] => self.open_session(journal, drivers, slot, instance, delivery, &settings),
             [session_id] => {
                 let pending_open = self.sessions.get(session_id).is_some_and(|session| {
                     !session.opened
@@ -4628,11 +4628,11 @@ impl<'plan> Execution<'plan> {
                         && session.opening.meta().sys().id() == delivery.envelope.meta().sys().id()
                 });
                 if pending_open {
-                    self.open_session(journal, bindings, slot, instance, delivery, &settings)
+                    self.open_session(journal, drivers, slot, instance, delivery, &settings)
                 } else if self.sessions[session_id].opened {
                     self.write_session(
                         journal,
-                        bindings,
+                        drivers,
                         SessionDispatch {
                             slot,
                             instance,
@@ -4699,14 +4699,14 @@ impl<'plan> Execution<'plan> {
     fn open_session(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut dyn OutboundDrivers,
+        drivers: &mut dyn OutboundDrivers,
         slot: NodeIndex,
         instance: &instance::Generation,
         delivery: &envelope::Delivery,
         settings: &BTreeMap<String, crate::value::Value>,
     ) -> Result<(), ExecutionFault> {
         let planned = &self.plan.nodes[slot.index()];
-        let preparation = bindings
+        let preparation = drivers
             .prepare_session_open(
                 self.executor_path(slot)?,
                 delivery.envelope.data(),
@@ -4763,7 +4763,7 @@ impl<'plan> Execution<'plan> {
             });
             self.scheduler.mailboxes.claim(slot, instance);
         }
-        match bindings
+        match drivers
             .open_session(&intent, &delivery.envelope)
             .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
             .map_err(ExecutionFault::Dispatch)?
@@ -4785,7 +4785,7 @@ impl<'plan> Execution<'plan> {
     fn write_session(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut dyn OutboundDrivers,
+        drivers: &mut dyn OutboundDrivers,
         dispatch: SessionDispatch<'_>,
         session_id: SessionId,
         settings: &BTreeMap<String, crate::value::Value>,
@@ -4796,7 +4796,7 @@ impl<'plan> Execution<'plan> {
             delivery,
         } = dispatch;
         let planned = &self.plan.nodes[slot.index()];
-        let preparation = bindings
+        let preparation = drivers
             .prepare_session_write(
                 self.executor_path(slot)?,
                 session_id,
@@ -4871,7 +4871,7 @@ impl<'plan> Execution<'plan> {
                 self.scheduler.mailboxes.claim(slot, instance);
             }
         }
-        match bindings
+        match drivers
             .write_session(&intent, &delivery.envelope)
             .map_err(crate::runtime::execution::driver_polling::PollFault::Driver)
             .map_err(ExecutionFault::Dispatch)?
@@ -4939,7 +4939,7 @@ impl<'plan> Execution<'plan> {
     fn open_call(
         &mut self,
         journal: &mut dyn Journal,
-        bindings: &mut dyn OutboundDrivers,
+        drivers: &mut dyn OutboundDrivers,
         slot: NodeIndex,
         instance: &instance::Generation,
         delivery: &envelope::Delivery,
@@ -4952,7 +4952,7 @@ impl<'plan> Execution<'plan> {
                 if edge == self.scheduler.mailboxes.routes.text(delivery.edge) && *id == delivery.envelope.meta().sys().id() && target == instance)
         }).map(|(key, payload)| (*key, payload.clone()));
         if let Some((key, payload)) = overdue {
-            self.expire(journal, bindings, payload)?;
+            self.expire(journal, drivers, payload)?;
             self.scheduler.ack(key);
             return Ok(());
         }
@@ -4981,7 +4981,7 @@ impl<'plan> Execution<'plan> {
             self.executor_path(slot)?,
             &delivery.envelope,
         )?;
-        let prepared = match bindings
+        let prepared = match drivers
             .prepare_request(
                 self.executor_path(slot)?,
                 delivery.envelope.data(),
