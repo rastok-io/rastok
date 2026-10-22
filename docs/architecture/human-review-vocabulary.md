@@ -1219,6 +1219,22 @@ This entry supersedes the neutral checkpoint's pending approval, not its
 historical measurements. It claims no new Fable replay and authorizes no
 push, tag or publication.
 
+### Reviewed — 22 October (Fable)
+
+Tables 3, 4 and 5 are applied in both crates; no retired name survives in
+`crates` or the living documents except the derived names below, and
+`decisions.md` and the dated M1.5 rows of `spec-to-code.md` keep theirs as
+history. Two complements for Yoann:
+
+| Name | Status | Note |
+|---|---|---|
+| `ProfileProtocol`, `ContractMode::profile`, `ContractMode::owning_profile`, parameters named `profile` | ⟂ residual derived names of the retired `Profile` word, 27 sites in nine files | Proposed `ModeProtocol`, `mode`, `owning_mode`; zero bytes; action A-T5-7 in the action ledger, lot to decide. |
+| `RuntimeDrivers::prepare_with_selection`, `RuntimeDrivers::restore_ownership`, `OutboundDrivers::forget_session`, `DriverRecoveryError` | new public names, not in the tables | Apt. `forget_session` is a fourth verb beside `close_session`, `abort_session`, `release_session`, on the routing interface only: it releases routing state after a terminal commit. Recorded, no change proposed. |
+
+The appendix inventory of public types is still anchored on `fedada7` and
+predates the rename lot, the realignment and this rework; re-anchoring it is
+Fable's debt.
+
 ## What validation produces
 
 For each **⟂**: keep / rename / merge, with the chosen word. The answers

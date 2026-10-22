@@ -1258,7 +1258,9 @@ Lot: before the 23 October freeze, with the documentation touch.
 
 ### Connector rework — requested before the freeze, 21 October
 
-**Status: recorded for implementation and review, not implemented.** Yoann
+**Status: implemented on 22 October (eight commits, `491e397` to `974f85f`)
+and reviewed by Fable the same day; see the Applied and Reviewed entries at
+the end of this section.** Originally recorded on 21 October as follows. Yoann
 asks that the complete Connector proposal discussed with Astra enter the
 pre-freeze rework, followed by Fable's review for possible simplifications.
 This scheduling supersedes the 17 October deferral of the **T5 layout**
@@ -1428,6 +1430,80 @@ measurements are in the [qualification](connector-rework-qualification.md).
 This entry supersedes the neutral checkpoint's pending approval, not its
 historical measurements. It claims no new Fable replay and authorizes no
 push, tag or publication.
+
+### Reviewed — 22 October (Fable)
+
+**Gates reproduced on `974f85f`.** fmt, Clippy `-D warnings` on all targets
+and features, rustdoc; 61 groups, 1 623 tests passed, 0 failed, 0 ignored
+(baseline 1 598); `site_content` 12/12; the three `no_std` targets
+(`thumbv8m.main-none-eabihf`, `thumbv7m-none-eabi`,
+`riscv32imac-unknown-none-elf`); both QEMU workloads `SPIKE_OK` with the
+same measurements as Astra: echo 111 404 B peak heap, 971 428 B code
+(`.text` 897 420 + `.rodata` 74 008), semantic hash equal to the CI pin;
+Retry with recovery 129 188 B peak heap, 1 043 452 B code, package hash
+equal to the commit's. Against A-T5-1 (`491e397`) the code grows by 2 576 B
+(echo) and 2 716 B (Retry) while heap is unchanged; the Retry code margin
+goes from 7 840 B to 5 124 B. The growth comes from the shared standard
+definitions now compiled into the core (A-T5-2, +3 016 B on echo), partly
+reclaimed by the later commits. The gates did not move.
+
+**Byte neutrality verified.** Across `491e397..3ca0867` no package, trace,
+recording or spike witness changed, and no 64-hex literal appears on one side
+only of the diff; the edits to `golden_trace.rs` are renames. The identity
+commit `974f85f` moves exactly the six artifacts the inventory names (echo,
+jsonl and gauge packages, the spike package, the two `two-tenants` Retry
+seals) and the pins the inventory lists; `keyed-retry` has no stored gallery
+trace, so its movement is a package hash only, as the inventory's table
+states. The spike package carries `std/process@6` in clear; the test
+packages were checked by decoding (`package_ledger` example), not by text
+search. The public narrative paragraph is verbatim in `README.md`,
+`WHITEPAPER.md` and `crates/rastok/README.md` against its source. Both
+registers kept every earlier paragraph; Astra added only the Applied entries.
+
+**Structure, as the brief asked.** `boundary` is gone from the core and
+`connectors` from the hosted crate; no alias or re-export of an old path
+remains; `Supervisor`, `LifecycleObservation` and `SessionConnectorBindings`
+are deleted; `ContractShape` has left `plan/validation.rs`, which reads the
+same `connector::stdlib` definitions as the compiler; `RuntimeDrivers` owns
+Calls, inbound Calls and Sessions by a private implementation index, as the
+implementation notes suggested; the hosted registry refuses missing,
+unknown, incompatible and ambiguous selections before any factory runs; the
+Lab mock factory implements `DriverFactory` and is not re-modelled as a
+selectable implementation. The registry file of 3 112 lines became
+`registry.rs` (536) and `runtime.rs` (1 252) with their tests apart.
+
+**Findings, none blocking.**
+
+- A-T5-7 (proposed, zero bytes): derived names of the retired `Profile` word
+  survive: `ProfileProtocol` (kept with `roles` and `exchange`, `id`
+  removed) and the `ContractMode` accessors `profile`, `owning_profile` and
+  their `profile` parameters, 27 sites in nine files. The vocabulary ledger
+  asked that no renamed API be explained with the removed name. Proposed:
+  `ModeProtocol`, `mode`, `owning_mode`. Owner: Astra; lot: Yoann decides
+  whether before the freeze or v21.
+- Four public names are outside the vocabulary tables and are recorded there:
+  `RuntimeDrivers::prepare_with_selection`, `RuntimeDrivers::restore_ownership`,
+  `OutboundDrivers::forget_session`, `DriverRecoveryError`. The names are
+  apt; `forget_session` is a fourth verb beside `close`, `abort` and
+  `release`, on the routing interface only, releasing routing state after a
+  terminal commit.
+- Design observation, not a defect today: the core keeps a blanket
+  `impl<T: OutboundCall> Outbound for T`, so an object implementing
+  `OutboundCall` cannot also write its own `Outbound` to expose a Session
+  view; a future Call-and-Session object would delegate through an inner
+  object. No shipped Driver is in that case.
+- For T10, the catalogue's human view embeds raw JSON for interaction,
+  cardinality and attribute domains, and the deferred reason for File
+  `watch` reads as a fragment; the CLI presentation was not frozen by this
+  entry, so this goes to the first-hour review.
+- `spec-to-code.md` keeps the retired names only in its dated M1.5 rows,
+  consistent with the rule for historical sections.
+- On disk only: the emptied `crates/rastok/src/connectors/` directory
+  survives the move and is untracked; it can be removed locally.
+
+**Status.** The Connector rework is applied and reviewed. The human review
+resumes on this tree. The external brief's and this ledger's line references
+anchored on `fedada7` remain Fable's re-anchoring debt.
 
 ## Realignment on the Node ontology — decided 2026-10-11
 
