@@ -1314,6 +1314,98 @@ the three `no_std` targets; every package, trace, recording and spike witness
 byte-identical; the counts above at zero on re-run of the sweep. Fable
 replays and records "applied" here.
 
+### Applied and replayed — 22 October evening (Astra `819a2ff`, Fable)
+
+Astra applied the finishing lot in one commit, `819a2ff`, on top of
+`590d070`: 83 files, 72 of them Rust, +4 020 / −3 096 lines, most of the
+volume being rustfmt re-wrapping after the longer identifiers. Astra's own
+qualification, with the Haiku 5.5 read-only pass it credits, is the
+[A-T5-7 section](connector-rework-qualification.md#a-t5-7--finish-derived-names-comments-and-living-documentation)
+of the Connector rework qualification. Neither review register was edited by
+that commit; this entry is Fable's replay.
+
+**Replay, same checkout.** `cargo fmt --check`, strict Clippy and rustdoc
+pass. `cargo test --workspace --all-features`: 61 groups, 1 623 passed,
+0 failed, 0 ignored. `site_content` 12/12. The three `no_std` targets
+check. QEMU Cortex-M33: echo heap 111 404 B, code 971 428 B (`.text`
+897 420 + `.rodata` 74 008), hash `7106f322…`; Retry with recovery heap
+129 188 B, code 1 043 460 B (`.text` 958 676 + `.rodata` 84 784), hash
+`3cad77ef…`, the Retry package regenerated on `819a2ff` byte-identical to
+the one generated on `974f85f`. Against `590d070`: echo unchanged; Retry
+`.rodata` +8 B, which is the one `assert!(execution.is_stable())` in the
+spike's `retry.rs` whose panic text embeds the renamed identifier. Margins:
+heap 1 884 B, code 5 116 B.
+
+**Byte neutrality.** The commit touches `.rs` and `.md` files only: no
+package, trace, recording, SVG or other witness; no 64-hex literal appears
+on any line of the diff.
+
+**How the diff was read.** Each old/new pair of the inventory (`vm` and
+`execution`; `bindings` and `drivers`; `profile`, `mode` and `fixture`;
+`decide_inbound` and `notify_inbound_admission`; the two mock Driver names;
+`connector_id` and `contract_id`; `bind` and `prepare`) was mapped to one
+placeholder on both sides, and the token streams were compared with
+whitespace ignored. Over 72 Rust files, what remains is: commas and closure
+braces moved by rustfmt; the struct-literal shorthand `execution`; the
+conformance parameter `driver_registry`, which now distinguishes the
+available registry from the selected `drivers`; the local `mode_word` in the
+Retry checker; four test names that contained `vm`; the constant `PROFILES`
+→ `MODES` in `tests/contracts.rs`; and eleven diagnostic strings where
+"profile" becomes "mode" or "fixture" (the `Display` impls of
+`connector/contract.rs`, the selector refusal of `compiler/check.rs`,
+`retry_control.rs`, the File `watch` deferral reason, the conformance
+fixture violations). Comments: the rename plus six rewordings read one by
+one, among them the stale "does not admit the deferred Process service
+profile" in `tests/execution.rs`, now "independently of Process service
+mode", which is correct since `std/process@6`. No executable change.
+
+**Sweep re-run on `819a2ff`.** The script was extended with lower-case
+`vm`, which the 22 October version did not pattern; Astra noticed the gap
+and swept it anyway. Code: `vm` 0 lines (from 1 678); `*_with_bindings` and
+`mock_bindings` 0 apart from `fire_with_bindings`, kept; `NoOutboundBindings`,
+`ProfileProtocol`, the `ConnectorDriver` suffix, `connector_id` and
+`decide_inbound` 0. `bindings` falls from 332 to 181 lines and `profile`
+from 304 to 134; every remaining line was read: name-to-value bindings
+(`expr`, `dispatch`, `BootBindings`, `data_policy`, the `FileBinding` and
+`ProcessBinding` maps) and the deployment, price, JSON, schema, lifetime,
+exchange and Call-semantics profiles. No new hit appears anywhere.
+
+**Second layer, found at replay and absent from the 22 October inventory —
+Fable's gap, not Astra's.** All zero bytes.
+
+| Where (`819a2ff`) | What | Proposed |
+|---|---|---|
+| `drivers/file/mod.rs:350`, `drivers/process/mod.rs:502`, `drivers/process/service.rs:59` and `:198`, `drivers/network/http_client.rs:288` | fields and parameters named `bindings` holding `FileRequestSettings`, `ProcessRequestSettings`, `HttpClientRequestSettings`: the 12 October `*RequestBindings` → `*RequestSettings` rename without its derived word, about 40 lines. The `bindings: BTreeMap<Path, FileBinding>` maps beside them are named correctly. | `settings` |
+| `tests/connector_composition.rs:253` | panic text "cannot create bindings for WebSocketClient" | "cannot create Drivers for" |
+| `identity.md:28` | "the profile selector's word included" | "mode selector" |
+| `delivery-semantics.md:512` | "an inbound Call `respond` profile" | "`respond` mode" |
+| `types.md:386` | "a type selected by a profile or attribute" | "by a mode or attribute" |
+| `simulation-semantics.md:200` | "unmodeled source profiles refuse at check" | "source modes" |
+| `WHITEPAPER.md:1539` and `:1562` | "the resident Process service profile are sessions"; "The resident Process profile uses one Session" | "service mode"; body text, outside the verbatim narrative |
+| `components.md:274` | "Contract profiles" in the `ValidatedExecutionPlan` row | "Contract modes" |
+| `plan-package.md:131` | "the two Process profiles" | "the two Process modes" |
+| `opening-showcase.md:683` | "the executable job profile" | "job mode" |
+| `process-service.md:27–28` and `:116` | "resolved profile", "profile/catalogue identities", "codec/profile refusals" | "mode"; a dated ledger with a current pointer, so annotate or amend, Yoann's call |
+
+Kept on reading: "exchange profile" (Event, Call or Session:
+`components.md:205`, `simulation-semantics.md:122`, `ui.md:306`, the
+recovery messages "contradicts its Contract profile"); "finite Call profile"
+and "host profile" (R1, `loop.md:69`, `plan/call_loop.rs`, `plan/retry.rs`,
+E-LOOP-HOST); "lifetime profiles"; `json_profile`; "lowering profile";
+"external schema profile"; the pre-v16 sketches of `dsl-examples.md`
+("Prospective append/log profile"), preserved as historical by that file's
+own notice.
+
+**Observations for T10, not residues.** The catalogue human view labels the
+`lab_models` key "Lab bindings" (`connector_catalogue.rs:562`, asserted by
+`cli.rs:1606`); the label should follow the key. The empty
+`crates/rastok/src/connectors/{file,network,process}` directories from the
+21 October move are still on disk, untracked; `git` does not see them.
+
+**Status.** A-T5-7 applied and reviewed. The second layer is A-T5-8 in the
+[actions register](human-review-m1.md); whether it joins a lot before the
+freeze or waits for v21 is Yoann's decision.
+
 ## What validation produces
 
 For each **⟂**: keep / rename / merge, with the chosen word. The answers

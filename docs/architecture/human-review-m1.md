@@ -1485,8 +1485,26 @@ selectable implementation. The registry file of 3 112 lines became
   locals (about 200 lines), `profile` naming test fixtures in
   `conformance.rs` (56), `decide_inbound`, `MockOutboundConnectorDriver`,
   one `connector_id` parameter; plus a dozen specification and living-document
-  sentences. Gate: the four checks, the suite, witnesses identical, the
-  sweep at zero. Lot: Yoann decides whether before the freeze or v21.
+  sentences. **Applied by Astra in `819a2ff` on 22 October and replayed by
+  Fable the same evening**: four checks, 1 623 tests in 61 groups,
+  `site_content` 12/12, three `no_std` targets, QEMU echo and Retry (code
+  margin 5 116 B, heap 1 884 B), only `.rs` and `.md` files touched, no hash
+  literal in the diff, the token-normalized diff reduced to rustfmt moves,
+  diagnostic wording and the inventory's renames; the sweep re-run is at
+  zero on every listed term. Record:
+  [Applied and replayed — 22 October evening](human-review-vocabulary.md#applied-and-replayed--22-october-evening-astra-819a2ff-fable).
+  Status: applied, reviewed.
+- A-T5-8 (zero bytes, owner to assign): a second layer found at the
+  replay and absent from the 22 October inventory, Fable's gap. Five
+  `bindings` fields and parameters that hold `*RequestSettings` values
+  (`drivers/file`, `drivers/process`, `drivers/network/http_client`, about
+  40 lines, proposed `settings`), one panic text in
+  `tests/connector_composition.rs`, and eleven sentences where "profile"
+  still means a Contract mode: `identity.md`, `delivery-semantics.md`,
+  `types.md`, `simulation-semantics.md`, `WHITEPAPER.md` (body, twice),
+  `components.md`, `plan-package.md`, `opening-showcase.md`,
+  `process-service.md`. The table with lines and proposed wording is in the
+  record above. Lot before the freeze or v21: Yoann decides.
 - Four public names are outside the vocabulary tables and are recorded there:
   `RuntimeDrivers::prepare_with_selection`, `RuntimeDrivers::restore_ownership`,
   `OutboundDrivers::forget_session`, `DriverRecoveryError`. The names are
