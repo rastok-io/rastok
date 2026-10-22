@@ -17,7 +17,7 @@ impl Execution<'_> {
     /// Closing, mailboxes/cursors, and command Loops from the committed journal prefix. No
     /// producer executes and no new record is appended during reconstruction.
     /// The explicitly supplied boot time is the resume instant; Loop deadlines
-    /// come from retained `Advance` facts, never from that instant.
+    /// come from retained `Advanced` facts, never from that instant.
     ///
     /// A scheduler-owned Call closure needs the pure Contract projection from
     /// [`Self::recover_with_drivers`]. Reconstructed exchanges retain their
@@ -333,7 +333,7 @@ impl Execution<'_> {
         if record.trigger == node::Trigger::Lifecycle(node::Lifecycle::Next)
             && record.loop_protocol().is_some()
         {
-            self.check_node_manager(journal, index, slot, record, resume_at)?;
+            self.check_loop_manager(journal, index, slot, record, resume_at)?;
         } else if record.exchange_exit.is_none() {
             self.check_consumed_loop_context(index, slot, record)?;
         }
@@ -446,7 +446,7 @@ impl Execution<'_> {
         let mut recurrence = None;
         if let Some(packet) = record.loop_protocol() {
             for fact in &packet.facts {
-                if let protocol::Fact::Admit {
+                if let protocol::Fact::Admitted {
                     run,
                     iteration,
                     envelope,
@@ -531,7 +531,7 @@ impl Execution<'_> {
         self.route_emissions(slot, &record.instance, prepared);
         if let Some(packet) = record.loop_protocol() {
             for fact in &packet.facts {
-                if let protocol::Fact::Advance {
+                if let protocol::Fact::Advanced {
                     run,
                     to_iteration,
                     command,

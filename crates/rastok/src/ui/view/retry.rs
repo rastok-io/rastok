@@ -79,7 +79,7 @@ pub(super) fn operations(execution: &Execution<'_>, records: &[Record]) -> JsonV
                                         row["consumed_record"] = json!(index);
                                     }
                                 }
-                                Fact::Advance { .. } | Fact::Close { .. } => {}
+                                Fact::Advanced { .. } | Fact::Closed { .. } => {}
                             }
                         }
                     }
@@ -164,13 +164,13 @@ pub(super) fn description(
             "Retry result consumed",
             Some(batch.attempt.ordinal),
         ),
-        Fact::Advance { from, .. } => ("retry-advance", "Retry scheduled", Some(from.ordinal)),
+        Fact::Advanced { from, .. } => ("retry-advance", "Retry scheduled", Some(from.ordinal)),
         Fact::Published(batch) => (
             "retry-published",
             "Retry result published",
             Some(batch.attempt.ordinal),
         ),
-        Fact::Close { attempt, reason } => match reason {
+        Fact::Closed { attempt, reason } => match reason {
             crate::journal::retry_protocol::CloseReason::Final => (
                 "retry-published",
                 "Retry final result published",

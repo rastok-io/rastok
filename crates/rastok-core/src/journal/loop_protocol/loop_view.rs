@@ -27,7 +27,7 @@ pub enum Error {
     ContextDelivery,
     /// An expiry fact is not published as the same ordinary output emission.
     ExpiryEmission,
-    /// Open identity, entry or application budget contradicts its fields.
+    /// An Opened fact's identity, entry or application budget contradicts its fields.
     OpenIdentity,
     /// One opening was recorded twice.
     DuplicateRun,
@@ -80,7 +80,7 @@ pub enum Phase {
 
 /// Reconstructible state of one run, including an unconsumed command.
 #[derive(Debug, Clone, PartialEq)]
-pub struct RunState {
+pub struct Run {
     /// Exact enclosing applications retained by the opening transaction.
     pub enclosing: Vec<LoopRunId>,
     /// Exact owner generation.
@@ -110,7 +110,7 @@ pub struct RunState {
 /// journal remains authoritative. No Driver, scheduler or clock is consulted.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct LoopView {
-    runs: BTreeMap<LoopRunId, RunState>,
+    runs: BTreeMap<LoopRunId, Run>,
     /// Active parent-generation links from lifecycle records. An owner path
     /// alone cannot distinguish tenants or successive enclosing generations.
     parents: BTreeMap<instance::Generation, Option<instance::Generation>>,
@@ -133,12 +133,12 @@ impl LoopView {
 
     /// Current state by exact run id, not business origin.
     #[must_use]
-    pub fn run(&self, run: LoopRunId) -> Option<&RunState> {
+    pub fn run(&self, run: LoopRunId) -> Option<&Run> {
         self.runs.get(&run)
     }
 
     /// Retained runs in canonical identity order.
-    pub fn runs(&self) -> impl Iterator<Item = (&LoopRunId, &RunState)> {
+    pub fn runs(&self) -> impl Iterator<Item = (&LoopRunId, &Run)> {
         self.runs.iter()
     }
 
@@ -326,7 +326,7 @@ impl LoopView {
             consumed.insert(*reference, command);
         }
         for fact in &packet.facts {
-            if let Fact::Open {
+            if let Fact::Opened {
                 run,
                 instance,
                 opening,
@@ -352,7 +352,7 @@ impl LoopView {
                 }
                 self.runs.insert(
                     *run,
-                    RunState {
+                    Run {
                         enclosing: packet.context.clone(),
                         instance: instance.clone(),
                         entry: entry.clone(),
@@ -370,8 +370,8 @@ impl LoopView {
             }
             let state = self.runs.get_mut(&fact.run()).ok_or(Error::UnknownRun)?;
             match fact {
-                Fact::Open { .. } => return Err(Error::DuplicateRun),
-                Fact::Admit {
+                Fact::Opened { .. } => return Err(Error::DuplicateRun),
+                Fact::Admitted {
                     iteration,
                     admission,
                     envelope,
@@ -406,7 +406,7 @@ impl LoopView {
                     state.phase = Phase::Active;
                     state.due_at = None;
                 }
-                Fact::Advance {
+                Fact::Advanced {
                     run,
                     from_iteration,
                     to_iteration,
@@ -455,7 +455,7 @@ impl LoopView {
                     }
                     state.phase = Phase::Expired;
                 }
-                Fact::Close {
+                Fact::Closed {
                     run,
                     iteration,
                     reason,
@@ -597,7 +597,7 @@ mod tests {
         let run = run_ref(&instance, &opening);
         let packets = vec![
             LoopRecord {
-                facts: vec![Fact::Open {
+                facts: vec![Fact::Opened {
                     run,
                     instance: instance.clone(),
                     opening,
@@ -608,7 +608,7 @@ mod tests {
                 ..LoopRecord::default()
             },
             LoopRecord {
-                facts: vec![Fact::Admit {
+                facts: vec![Fact::Admitted {
                     run,
                     iteration: 0,
                     admission: state.meta().sys().id(),
@@ -679,7 +679,7 @@ mod tests {
         assert_eq!(recovered.run(run).unwrap().pending.as_ref(), Some(&command));
         let consumption = LoopRecord {
             consumed: vec![command.reference],
-            facts: vec![Fact::Advance {
+            facts: vec![Fact::Advanced {
                 run,
                 from_iteration: 0,
                 to_iteration: 1,
@@ -703,7 +703,7 @@ mod tests {
             "repeating consumption cannot advance twice"
         );
         live.apply(&LoopRecord {
-            facts: vec![Fact::Admit {
+            facts: vec![Fact::Admitted {
                 run,
                 iteration: 1,
                 admission: admission_ref(run, 1, command.reference),
@@ -735,7 +735,7 @@ mod tests {
         .unwrap();
         live.apply(&LoopRecord {
             consumed: vec![done.reference],
-            facts: vec![Fact::Close {
+            facts: vec![Fact::Closed {
                 run,
                 iteration: 1,
                 reason: super::super::CloseReason::Natural,
@@ -974,7 +974,7 @@ mod tests {
         assert_eq!(fold, before);
         let mut advance = LoopRecord {
             consumed: vec![command.reference],
-            facts: vec![Fact::Advance {
+            facts: vec![Fact::Advanced {
                 run,
                 from_iteration: 0,
                 to_iteration: 1,
@@ -987,7 +987,7 @@ mod tests {
         };
         assert_eq!(fold.apply(&advance), Err(Error::Transition));
         assert_eq!(fold, before);
-        let Fact::Advance { state: next, .. } = &mut advance.facts[0] else {
+        let Fact::Advanced { state: next, .. } = &mut advance.facts[0] else {
             panic!("advance")
         };
         *next = state(2);
@@ -1039,7 +1039,7 @@ mod tests {
             .unwrap();
             fold.apply(&LoopRecord {
                 consumed: vec![command.reference],
-                facts: vec![Fact::Advance {
+                facts: vec![Fact::Advanced {
                     run,
                     from_iteration: iteration,
                     to_iteration: iteration + 1,
@@ -1053,7 +1053,7 @@ mod tests {
             .unwrap();
             let admission = admission_ref(run, iteration + 1, command.reference);
             let mut packet = LoopRecord {
-                facts: vec![Fact::Admit {
+                facts: vec![Fact::Admitted {
                     run,
                     iteration: iteration + 1,
                     admission,
@@ -1064,7 +1064,7 @@ mod tests {
             let checkpoint = fold.clone();
             assert_eq!(fold.apply(&packet), Err(Error::Transition));
             assert_eq!(fold, checkpoint);
-            let Fact::Admit { envelope, .. } = &mut packet.facts[0] else {
+            let Fact::Admitted { envelope, .. } = &mut packet.facts[0] else {
                 panic!("admission")
             };
             *envelope = Envelope::new(
@@ -1096,7 +1096,7 @@ mod tests {
         assert_eq!(
             fold.apply(&LoopRecord {
                 consumed: vec![command.reference],
-                facts: vec![Fact::Advance {
+                facts: vec![Fact::Advanced {
                     run,
                     from_iteration: 0,
                     to_iteration: 1,
@@ -1150,7 +1150,7 @@ mod tests {
         assert_eq!(fold.run(run).unwrap().phase, Phase::Expired);
         assert_eq!(
             fold.apply(&LoopRecord {
-                facts: vec![Fact::Admit {
+                facts: vec![Fact::Admitted {
                     run,
                     iteration: 1,
                     admission: admission_ref(run, 1, command.reference),
@@ -1203,7 +1203,7 @@ mod tests {
         .unwrap();
         fold.apply(&LoopRecord {
             consumed: vec![command.reference],
-            facts: vec![Fact::Close {
+            facts: vec![Fact::Closed {
                 run,
                 iteration: 0,
                 reason: super::super::CloseReason::ExplicitDone,

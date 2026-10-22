@@ -728,7 +728,7 @@ fn loop_runs(plan: &ValidatedExecutionPlan, records: &[Record]) -> JsonValue {
                 .facts
                 .iter()
                 .filter_map(|fact| match fact {
-                    Fact::Open { run, fuel, .. } => {
+                    Fact::Opened { run, fuel, .. } => {
                         Some((*run, (transaction.owner_path.to_string(), *fuel)))
                     }
                     _ => None,
@@ -744,7 +744,7 @@ fn loop_runs(plan: &ValidatedExecutionPlan, records: &[Record]) -> JsonValue {
         })
         .flat_map(|packet| &packet.facts)
         .filter_map(|fact| match fact {
-            Fact::Admit { run, iteration, .. } => Some((*run, iteration.saturating_add(1))),
+            Fact::Admitted { run, iteration, .. } => Some((*run, iteration.saturating_add(1))),
             _ => None,
         })
         .collect::<BTreeMap<_, _>>();
@@ -1040,10 +1040,10 @@ fn history_record_description(record: &Record) -> (&'static str, Option<String>,
             {
                 use crate::journal::loop_protocol::Fact;
                 let (kind, trigger) = match fact {
-                    Fact::Open { .. } => ("loop-open", "l:open"),
-                    Fact::Admit { .. } => ("loop-admit", "l:admit"),
-                    Fact::Advance { .. } => ("loop-advance", "l:advance"),
-                    Fact::Close { .. } => ("loop-close", "l:close"),
+                    Fact::Opened { .. } => ("loop-open", "l:open"),
+                    Fact::Admitted { .. } => ("loop-admit", "l:admit"),
+                    Fact::Advanced { .. } => ("loop-advance", "l:advance"),
+                    Fact::Closed { .. } => ("loop-close", "l:close"),
                     Fact::Expired { .. } => ("loop-expired", "l:expired"),
                 };
                 return (kind, Some(trigger.into()), transaction_summary(transaction));
@@ -1114,10 +1114,10 @@ fn transaction_summary(transaction: &crate::journal::TransactionRecord) -> Strin
     {
         use crate::journal::loop_protocol::Fact;
         let verb = match fact {
-            Fact::Open { .. } => "Loop run opened",
-            Fact::Advance { .. } => "Loop recurrence scheduled",
-            Fact::Admit { .. } => "Loop application admitted",
-            Fact::Close { .. } => "Loop run closed",
+            Fact::Opened { .. } => "Loop run opened",
+            Fact::Advanced { .. } => "Loop recurrence scheduled",
+            Fact::Admitted { .. } => "Loop application admitted",
+            Fact::Closed { .. } => "Loop run closed",
             Fact::Expired { .. } => "Loop fuel exhausted",
         };
         return format!("{verb} · {owner} · gen {generation}");
@@ -2097,10 +2097,10 @@ graph inspected : App {
             };
             for fact in &packet.facts {
                 let (reference, trigger) = match fact {
-                    Fact::Open { run, .. } => (run, "l:open"),
-                    Fact::Admit { run, .. } => (run, "l:admit"),
-                    Fact::Advance { run, .. } => (run, "l:advance"),
-                    Fact::Close { run, .. } => (run, "l:close"),
+                    Fact::Opened { run, .. } => (run, "l:open"),
+                    Fact::Admitted { run, .. } => (run, "l:admit"),
+                    Fact::Advanced { run, .. } => (run, "l:advance"),
+                    Fact::Closed { run, .. } => (run, "l:close"),
                     Fact::Expired { run, .. } => (run, "l:expired"),
                 };
                 assert_eq!(
@@ -2115,11 +2115,11 @@ graph inspected : App {
                     .unwrap();
                 assert_eq!(run["expired_port"], "failed");
                 match fact {
-                    Fact::Open { .. } => assert_eq!(run["application"], "0"),
-                    Fact::Admit { iteration, .. } => {
+                    Fact::Opened { .. } => assert_eq!(run["application"], "0"),
+                    Fact::Admitted { iteration, .. } => {
                         assert_eq!(run["application"], (iteration + 1).to_string())
                     }
-                    Fact::Advance { .. } => {
+                    Fact::Advanced { .. } => {
                         let old = before
                             .as_array()
                             .unwrap()
@@ -2128,13 +2128,13 @@ graph inspected : App {
                             .unwrap();
                         assert_eq!(
                             run["application"], old["application"],
-                            "Advance is not Admit"
+                            "Advanced is not Admitted"
                         );
                         assert_eq!(run["application"], "1");
                         assert_eq!(run["waiting"], true);
                         saw_wait = true;
                     }
-                    Fact::Close { .. } | Fact::Expired { .. } => assert_eq!(run["active"], false),
+                    Fact::Closed { .. } | Fact::Expired { .. } => assert_eq!(run["active"], false),
                 }
             }
         }

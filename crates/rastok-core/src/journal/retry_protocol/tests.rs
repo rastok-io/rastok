@@ -411,7 +411,7 @@ fn publish(batch: &Batch) -> RetryRecord {
         context: Some(batch.attempt),
         facts: vec![
             Fact::Published(batch.clone()),
-            Fact::Close {
+            Fact::Closed {
                 attempt: batch.attempt,
                 reason: CloseReason::Final,
             },
@@ -421,7 +421,7 @@ fn publish(batch: &Batch) -> RetryRecord {
 fn advance(batch: &Batch) -> RetryRecord {
     manager(vec![
         Fact::Consumed(batch.clone()),
-        Fact::Advance {
+        Fact::Advanced {
             from: batch.attempt,
             to: batch.attempt.ordinal + 1,
             call: batch.call,
@@ -593,7 +593,7 @@ fn closing_during_backoff_consumes_once_without_publishing_any_failure() {
             fold.apply(&advance(&batch), None, 10).unwrap();
         }
         fold.begin_closing(&f.instance);
-        let close = Fact::Close {
+        let close = Fact::Closed {
             attempt: f.attempt(1),
             reason: CloseReason::Stopped,
         };
@@ -627,7 +627,7 @@ fn closing_after_settlement_does_not_change_its_already_selected_disposition() {
     fold.apply(
         &manager(vec![
             Fact::Consumed(batch.clone()),
-            Fact::Close {
+            Fact::Closed {
                 attempt: batch.attempt,
                 reason: CloseReason::Stopped,
             },
@@ -706,7 +706,7 @@ fn pending_initial_stop_has_no_fake_admission_and_successor_generation_is_indepe
     fold.begin_closing(&instance::Generation::new(f.instance.address().clone(), 1));
     refuses_unchanged(
         &mut fold,
-        &manager(vec![Fact::Close {
+        &manager(vec![Fact::Closed {
             attempt: f.attempt(0),
             reason: CloseReason::Stopped,
         }]),
@@ -715,7 +715,7 @@ fn pending_initial_stop_has_no_fake_admission_and_successor_generation_is_indepe
     );
     fold.begin_closing(&f.instance);
     fold.apply(
-        &manager(vec![Fact::Close {
+        &manager(vec![Fact::Closed {
             attempt: f.attempt(0),
             reason: CloseReason::Stopped,
         }]),

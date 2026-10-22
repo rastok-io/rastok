@@ -83,7 +83,7 @@ pub(crate) fn record_tree(
                         ]),
                         Fact::Held(batch) => batch_tree(3, batch),
                         Fact::Consumed(batch) => batch_tree(4, batch),
-                        Fact::Advance { from, to, call } => Cbor::Array(vec![
+                        Fact::Advanced { from, to, call } => Cbor::Array(vec![
                             Cbor::Uint(5),
                             id(from.operation.id()),
                             Cbor::Uint(from.ordinal),
@@ -91,7 +91,7 @@ pub(crate) fn record_tree(
                             id(call.id()),
                         ]),
                         Fact::Published(batch) => batch_tree(6, batch),
-                        Fact::Close { attempt, reason } => Cbor::Array(vec![
+                        Fact::Closed { attempt, reason } => Cbor::Array(vec![
                             Cbor::Uint(7),
                             id(attempt.operation.id()),
                             Cbor::Uint(attempt.ordinal),

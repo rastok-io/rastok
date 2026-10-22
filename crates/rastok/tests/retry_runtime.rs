@@ -366,7 +366,7 @@ fn closing_in_backoff_does_not_publish_a_held_failure() {
         assert!(execution.outputs().is_empty());
         assert!(journal.records().iter().any(|r| matches!(r,
         Record::Transaction(r) if r.retry_record.as_ref().is_some_and(|p| p.facts.iter().any(|f|
-            matches!(f, Fact::Close { reason: rastok::journal::retry_protocol::CloseReason::Stopped, .. }))))));
+            matches!(f, Fact::Closed { reason: rastok::journal::retry_protocol::CloseReason::Stopped, .. }))))));
         assert!(execution.is_stable());
     }
 }
@@ -1177,7 +1177,7 @@ graph app : App {
                     packet
                         .facts
                         .iter()
-                        .any(|fact| matches!(fact, LoopFact::Admit { iteration: 1, .. }))
+                        .any(|fact| matches!(fact, LoopFact::Admitted { iteration: 1, .. }))
                 }) || record.retry_record.as_deref().is_some_and(|packet| {
                     packet.facts.iter().any(|fact| {
                         matches!(fact, Fact::Admitted { attempt, .. } if attempt.ordinal == 2)
@@ -1607,7 +1607,7 @@ graph app : App {
             };
             assert!(matches!(
                 record.retry_record.as_deref().unwrap().facts.as_slice(),
-                [Fact::Published(_), Fact::Close { .. }]
+                [Fact::Published(_), Fact::Closed { .. }]
             ));
             assert_eq!(record.emissions.len(), frames + 1, "stdout and terminal");
             assert_eq!(
@@ -1642,7 +1642,7 @@ graph app : App {
             assert_eq!(
                 journal.records(),
                 before,
-                "no partial publication or Close on retry"
+                "no partial publication or Closed fact on retry"
             );
         }
 
@@ -1904,7 +1904,7 @@ graph app : App {
                 let facts = &record.retry_record.as_deref().unwrap().facts;
                 assert!(matches!(
                     (steps_after_closure, facts.as_slice()),
-                    (1, [Fact::Held(_)]) | (2, [Fact::Consumed(_), Fact::Advance { .. }])
+                    (1, [Fact::Held(_)]) | (2, [Fact::Consumed(_), Fact::Advanced { .. }])
                 ));
             }
             _ => panic!("the probe must stop at closure, Held or Consumed"),
@@ -1957,7 +1957,7 @@ graph app : App {
         );
         assert!(matches!(
             facts.last(),
-            Some(Fact::Close {
+            Some(Fact::Closed {
                 reason: rastok::journal::retry_protocol::CloseReason::Stopped,
                 ..
             })

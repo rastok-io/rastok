@@ -176,7 +176,7 @@ fn graph_admissions_consume_each_edge_in_delivery_order() {
                     packet
                         .facts
                         .iter()
-                        .any(|fact| matches!(fact, Fact::Admit { iteration: 0, .. }))
+                        .any(|fact| matches!(fact, Fact::Admitted { iteration: 0, .. }))
                 }) =>
             {
                 Some(record.consumed[0].seq)
@@ -268,8 +268,8 @@ fn graph_loop_commands_wait_for_siblings_and_keep_concurrent_runs_separate() {
         }
         for fact in &packet.facts {
             let iteration = match fact {
-                Fact::Advance { from_iteration, .. } => Some(*from_iteration),
-                Fact::Close { iteration, .. } => Some(*iteration),
+                Fact::Advanced { from_iteration, .. } => Some(*from_iteration),
+                Fact::Closed { iteration, .. } => Some(*iteration),
                 _ => None,
             };
             if let Some(iteration) = iteration {
@@ -787,7 +787,7 @@ fn a_rejected_transaction_does_not_update_the_journal_loop_projection() {
                     packet
                         .facts
                         .iter()
-                        .any(|fact| matches!(fact, Fact::Open { .. }))
+                        .any(|fact| matches!(fact, Fact::Opened { .. }))
                 }) =>
             {
                 Some(transaction.clone())
@@ -799,7 +799,7 @@ fn a_rejected_transaction_does_not_update_the_journal_loop_projection() {
         panic!("the selected record must carry the opening fact");
     };
     for fact in &mut packet.facts {
-        if let Fact::Open {
+        if let Fact::Opened {
             run,
             instance,
             opening,
@@ -1132,7 +1132,7 @@ fn unsealed_deadline_bytes_are_required_for_delays_but_not_part_of_the_causal_se
             }
             2 => {
                 let packet = transaction.loop_record.as_deref_mut().unwrap();
-                let Fact::Advance { due_at, .. } = &mut packet.facts[0] else {
+                let Fact::Advanced { due_at, .. } = &mut packet.facts[0] else {
                     unreachable!()
                 };
                 *due_at = Some(8_000_000_001);
@@ -1389,7 +1389,7 @@ fn again_keeps_data_and_private_state_but_not_the_previous_causal_identity() {
         })
         .flat_map(|packet| &packet.facts)
         .filter_map(|fact| match fact {
-            Fact::Admit { envelope, .. } => Some(envelope),
+            Fact::Admitted { envelope, .. } => Some(envelope),
             _ => None,
         })
         .collect();

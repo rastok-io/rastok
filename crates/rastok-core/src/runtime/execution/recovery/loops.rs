@@ -6,7 +6,7 @@ use crate::instance;
 use protocol::{Fact, OpeningAdmissionId, Phase};
 
 impl Execution<'_> {
-    pub(super) fn check_node_manager(
+    pub(super) fn check_loop_manager(
         &mut self,
         journal: &dyn Journal,
         index: usize,
@@ -47,7 +47,7 @@ impl Execution<'_> {
             ));
         }
         let expected_context = match fact {
-            Fact::Open {
+            Fact::Opened {
                 run,
                 instance,
                 opening,
@@ -73,7 +73,7 @@ impl Execution<'_> {
                             delivery.envelope.meta().sys().id(),
                         ) == *reference
                     })
-                    .ok_or_else(|| invalid(index, "a Loop Open has no exact queued admission"))?;
+                    .ok_or_else(|| invalid(index, "a Loop Opened has no exact queued admission"))?;
                 let expected_fuel = match spec.fuel.as_ref().map(|fuel| &fuel.resolved) {
                     Some(crate::value::Value::Int(n)) if *n > 0 => Some(*n as u64),
                     Some(crate::value::Value::Uint(n)) if *n > 0 => Some(*n),
@@ -102,7 +102,7 @@ impl Execution<'_> {
                 {
                     return Err(invalid(
                         index,
-                        "a Loop Open contradicts its admission or plan bound",
+                        "a Loop Opened contradicts its admission or plan bound",
                     ));
                 }
                 self.graph_context(delivery).to_vec()
@@ -116,7 +116,7 @@ impl Execution<'_> {
                     .ok_or_else(|| invalid(index, "a manager transition has no retained run"))?
                     .clone();
                 match fact {
-                    Fact::Admit {
+                    Fact::Admitted {
                         iteration,
                         admission,
                         envelope,
@@ -137,7 +137,7 @@ impl Execution<'_> {
                         {
                             return Err(invalid(
                                 index,
-                                "a Loop Admit changes its state, identity or deadline",
+                                "a Loop Admitted changes its state, identity or deadline",
                             ));
                         }
                         if let Some(due) = current.due_at {
@@ -147,7 +147,7 @@ impl Execution<'_> {
                     _ => {
                         let stopped = matches!(
                             fact,
-                            Fact::Close {
+                            Fact::Closed {
                                 reason: protocol::CloseReason::Stopped,
                                 ..
                             }
@@ -188,7 +188,7 @@ impl Execution<'_> {
                                 ));
                             }
                         }
-                        if let Fact::Advance {
+                        if let Fact::Advanced {
                             to_iteration,
                             due_at,
                             ..
@@ -200,7 +200,7 @@ impl Execution<'_> {
                             if *due_at != expected {
                                 return Err(invalid(
                                     index,
-                                    "a Loop Advance changes its configured delay",
+                                    "a Loop Advanced changes its configured delay",
                                 ));
                             }
                         }

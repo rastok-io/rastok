@@ -260,7 +260,7 @@ impl RetryView {
                 Some(context),
                 [
                     Fact::Published(batch),
-                    Fact::Close {
+                    Fact::Closed {
                         attempt,
                         reason: CloseReason::Final,
                     },
@@ -269,7 +269,7 @@ impl RetryView {
                 self.produce(batch, false)?;
                 self.close(*attempt, CloseReason::Final)
             }
-            (None, [Fact::Consumed(batch), Fact::Advance { from, to, call }])
+            (None, [Fact::Consumed(batch), Fact::Advanced { from, to, call }])
                 if batch.attempt == *from && batch.call == *call =>
             {
                 self.consume(batch)?;
@@ -288,7 +288,7 @@ impl RetryView {
                 None,
                 [
                     Fact::Consumed(batch),
-                    Fact::Close {
+                    Fact::Closed {
                         attempt,
                         reason: CloseReason::Stopped,
                     },
@@ -300,7 +300,7 @@ impl RetryView {
             (
                 None,
                 [
-                    Fact::Close {
+                    Fact::Closed {
                         attempt,
                         reason: CloseReason::Stopped,
                     },

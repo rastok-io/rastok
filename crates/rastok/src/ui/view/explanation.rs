@@ -354,7 +354,7 @@ pub(super) fn history(plan: &ValidatedExecutionPlan, records: &[Record]) -> Hist
                     }
                     for fact in &packet.facts {
                         match fact {
-                            protocol::Fact::Advance {
+                            protocol::Fact::Advanced {
                                 run,
                                 to_iteration,
                                 command,
@@ -363,7 +363,7 @@ pub(super) fn history(plan: &ValidatedExecutionPlan, records: &[Record]) -> Hist
                                 readmissions
                                     .insert((*run, *to_iteration), command.id().to_string());
                             }
-                            protocol::Fact::Admit { run, iteration, .. } => {
+                            protocol::Fact::Admitted { run, iteration, .. } => {
                                 if let Some(reference) = readmissions.get(&(*run, *iteration))
                                     && let Some(command) = commands.get_mut(reference)
                                 {

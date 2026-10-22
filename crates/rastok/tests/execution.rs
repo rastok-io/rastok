@@ -55,7 +55,7 @@ use rastok::journal::{CallStatus, CloseVerdict, EgressRecord, MemJournal, Record
 fn loop_state(
     journal: &MemJournal,
     run: rastok::journal::LoopRunId,
-) -> rastok::journal::loop_protocol::RunState {
+) -> rastok::journal::loop_protocol::Run {
     LoopFold::from_records(journal.records())
         .unwrap()
         .run(run)
@@ -5279,7 +5279,10 @@ graph app : App {
                 record.trigger == node::Trigger::Lifecycle(node::Lifecycle::Start)
                     || record.loop_protocol().is_some_and(|packet| {
                         packet.facts.iter().any(|fact| {
-                            matches!(fact, Fact::Open { .. } | Fact::Admit { iteration: 0, .. })
+                            matches!(
+                                fact,
+                                Fact::Opened { .. } | Fact::Admitted { iteration: 0, .. }
+                            )
                         })
                     })
             }
@@ -5498,7 +5501,7 @@ fn graph_call_recovery_refuses_missing_contexts_and_unsettled_obligations() {
         .poll_drivers(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
     while !journal.inner.records().iter().any(|record| matches!(record, Record::Transaction(record)
-        if record.loop_protocol().is_some_and(|packet| packet.facts.iter().any(|fact| matches!(fact, Fact::Advance { .. }))))) {
+        if record.loop_protocol().is_some_and(|packet| packet.facts.iter().any(|fact| matches!(fact, Fact::Advanced { .. }))))) {
         assert!(execution.step_with_drivers(&mut journal, &mut CallDriver(&mut world)).unwrap());
     }
     let original = journal.inner.records().to_vec();
@@ -5601,12 +5604,12 @@ fn graph_recovery_rederives_admission_context_and_quiescence() {
                     0 | 1 => packet
                         .facts
                         .iter()
-                        .any(|fact| matches!(fact, Fact::Admit { .. })),
+                        .any(|fact| matches!(fact, Fact::Admitted { .. })),
                     2 => !packet.produced.is_empty(),
                     _ => packet
                         .facts
                         .iter()
-                        .any(|fact| matches!(fact, Fact::Advance { .. })),
+                        .any(|fact| matches!(fact, Fact::Advanced { .. })),
                 })
             })
             .unwrap();
@@ -6991,7 +6994,7 @@ graph countdown : App + Loop {
                     packet
                         .facts
                         .iter()
-                        .any(|fact| matches!(fact, LoopFact::Advance { .. }))
+                        .any(|fact| matches!(fact, LoopFact::Advanced { .. }))
                 }) =>
             {
                 Some(transaction)
@@ -7169,7 +7172,7 @@ graph countdown : App + Loop {
         })
         .flat_map(|packet| &packet.facts)
         .filter_map(|fact| match fact {
-            LoopFact::Open { run, .. } => Some(*run),
+            LoopFact::Opened { run, .. } => Some(*run),
             _ => None,
         })
         .collect();
@@ -7199,14 +7202,14 @@ graph countdown : App + Loop {
             _ => None,
         })
         .flat_map(|packet| &packet.facts)
-        .filter(|fact| matches!(fact, LoopFact::Advance { .. } | LoopFact::Close { .. }))
+        .filter(|fact| matches!(fact, LoopFact::Advanced { .. } | LoopFact::Closed { .. }))
         .collect();
     assert!(
         matches!(
             transitions.as_slice(),
             [
-                LoopFact::Close { run: first, .. },
-                LoopFact::Advance { run: second, .. }
+                LoopFact::Closed { run: first, .. },
+                LoopFact::Advanced { run: second, .. }
             ] if *first == runs[0] && *second == runs[1]
         ),
         "opened {runs:?}, transitions {transitions:?}"

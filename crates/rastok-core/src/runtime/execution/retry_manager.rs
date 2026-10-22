@@ -297,7 +297,7 @@ impl Execution<'_> {
             } else {
                 vec![
                     Fact::Published(batch),
-                    Fact::Close {
+                    Fact::Closed {
                         attempt,
                         reason: protocol::CloseReason::Final,
                     },
@@ -333,17 +333,19 @@ impl Execution<'_> {
     }
 
     pub(super) fn recurrence_admission_load(&self) -> usize {
-        let mut occupied = self
-            .loop_admission_load()
-            .saturating_add(self.graph_admission_load());
+        self.loop_admission_load()
+            .saturating_add(self.graph_admission_load())
+            .saturating_add(self.retry_admission_load())
+    }
+
+    pub(super) fn retry_admission_load(&self) -> usize {
         let Some(fold) = self.retry_manager.as_deref() else {
-            return occupied;
+            return 0;
         };
-        occupied = occupied.saturating_add(
-            fold.operations()
-                .filter(|(_, state)| state.phase != Phase::Closed)
-                .count(),
-        );
+        let mut occupied = fold
+            .operations()
+            .filter(|(_, state)| state.phase != Phase::Closed)
+            .count();
         for ((slot, instance), queue) in &self.scheduler.mailboxes.queues {
             let Some(spec) = self.plan.nodes[slot.index()].retry_spec() else {
                 continue;
@@ -387,7 +389,7 @@ impl Execution<'_> {
                         Record::Transaction(record) => {
                             record.loop_protocol().is_some_and(|packet| {
                                 packet.facts.iter().any(|fact| {
-                                    let LoopFact::Advance { run, .. } = fact else {
+                                    let LoopFact::Advanced { run, .. } = fact else {
                                         return false;
                                     };
                                     loops.and_then(|fold| fold.run(*run)).is_some_and(|state| {
@@ -510,12 +512,12 @@ impl Execution<'_> {
             facts.push(Fact::Consumed(batch.clone()));
         }
         if self.closing.contains(&state.instance) {
-            facts.push(Fact::Close {
+            facts.push(Fact::Closed {
                 attempt,
                 reason: protocol::CloseReason::Stopped,
             });
         } else if state.phase == Phase::Held {
-            facts.push(Fact::Advance {
+            facts.push(Fact::Advanced {
                 from: attempt,
                 to: state.ordinal + 1,
                 call: state

@@ -649,7 +649,7 @@ fn a_loop_scope_can_be_stopped_without_a_port_or_a_loop_verdict_command() {
         rastok::envelope::Value::Int(1),
     );
     execution.run_ready(&mut journal).unwrap();
-    assert!(journal.records().iter().any(|record| matches!(record, Record::Transaction(record) if record.loop_protocol().is_some_and(|packet| packet.facts.iter().any(|fact| matches!(fact, Fact::Close { reason: CloseReason::Stopped, .. }))))));
+    assert!(journal.records().iter().any(|record| matches!(record, Record::Transaction(record) if record.loop_protocol().is_some_and(|packet| packet.facts.iter().any(|fact| matches!(fact, Fact::Closed { reason: CloseReason::Stopped, .. }))))));
     for through in 0..=journal.records().len() {
         let mut retained =
             MemJournal::from_records(GraphVersion(1), None, &journal.records()[..through]).unwrap();

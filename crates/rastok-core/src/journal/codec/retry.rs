@@ -155,10 +155,10 @@ impl Decoder {
                 let to = uint(next)?;
                 if from.ordinal.checked_add(1) != Some(to) {
                     return Err(Error::Invalid(
-                        "Retry Advance must name the following attempt",
+                        "Retry Advanced must name the following attempt",
                     ));
                 }
-                Ok(Fact::Advance {
+                Ok(Fact::Advanced {
                     from,
                     to,
                     call: CallId::new(read_id(call)?),
@@ -171,7 +171,7 @@ impl Decoder {
                     2 => CloseReason::Stopped,
                     _ => return Err(Error::Invalid("Retry close reason")),
                 };
-                Ok(Fact::Close {
+                Ok(Fact::Closed {
                     attempt: attempt(operation, ordinal, reason == CloseReason::Stopped)?,
                     reason,
                 })
@@ -252,7 +252,7 @@ mod tests {
             },
             manager(vec![
                 Fact::Consumed(batch.clone()),
-                Fact::Advance {
+                Fact::Advanced {
                     from: attempt,
                     to: 2,
                     call: batch.call,
@@ -262,7 +262,7 @@ mod tests {
                 context: Some(attempt),
                 facts: vec![
                     Fact::Published(batch.clone()),
-                    Fact::Close {
+                    Fact::Closed {
                         attempt,
                         reason: CloseReason::Final,
                     },
@@ -270,12 +270,12 @@ mod tests {
             },
             manager(vec![
                 Fact::Consumed(batch),
-                Fact::Close {
+                Fact::Closed {
                     attempt,
                     reason: CloseReason::Stopped,
                 },
             ]),
-            manager(vec![Fact::Close {
+            manager(vec![Fact::Closed {
                 attempt: AttemptId {
                     operation,
                     ordinal: 0,

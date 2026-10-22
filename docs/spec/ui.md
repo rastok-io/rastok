@@ -179,8 +179,8 @@ Connectors. The UI never infers execution from geometry.
 
 Each Loop badge carries a journal-derived `⟳ n/N` dial with explicit fuel N,
 or `⟳ n` when the budget is derived from a measure. It counts admitted
-applications, not Advance facts: `0` before the first Admit, `1` during the
-first application, `2` only after the second Admit. Close or Expired resets the
+applications, not Advanced facts: `0` before the first Admitted, `1` during the
+first application, `2` only after the second Admitted. Closed or Expired resets the
 dial to `0`. With multiple active runs, `⟳ n ·k` shows the highest admitted
 ordinal and number of active runs. Selecting an instance filters those runs.
 A pending delay adds `⏱ 1.0 s` (time remaining at the selected logical instant)
@@ -320,9 +320,9 @@ append a record or modify the live machine.
 - **Causal links.** Envelope selection highlights the recorded origin lineage in
   pipes, nodes and journal rows. Origin and parent links navigate to recorded
   envelopes; system metadata without a DATA observation says so. Command links explicitly
-  connect `CommandProduced`, `CommandConsumed`, and the resulting `Admit` through
+  connect `CommandProduced`, `CommandConsumed`, and the resulting `Admitted` through
   the r2 command reference and `(run, iteration)`, not by matching a convenient
-  business key. A Done command has no Admit link. Nothing beyond the selected
+  business key. A Done command has no Admitted link. Nothing beyond the selected
   prefix is offered as already happened.
 - **Scenario and timeline.** Action source lines are keyboard/click targets for
   their first recorded effect transition. Selecting a transition highlights its

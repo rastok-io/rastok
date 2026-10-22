@@ -520,7 +520,7 @@ fn loop_record(value: &lp::LoopRecord) -> Cbor {
 fn loop_fact(value: &lp::Fact) -> Cbor {
     use lp::Fact;
     match value {
-        Fact::Open {
+        Fact::Opened {
             run,
             instance,
             opening,
@@ -542,7 +542,7 @@ fn loop_fact(value: &lp::Fact) -> Cbor {
             Cbor::Uint(*fuel),
             envelope(state),
         ]),
-        Fact::Advance {
+        Fact::Advanced {
             run,
             from_iteration,
             to_iteration,
@@ -560,7 +560,7 @@ fn loop_fact(value: &lp::Fact) -> Cbor {
             envelope(state),
             optional(due_at.as_ref(), |value| integer(*value)),
         ]),
-        Fact::Admit {
+        Fact::Admitted {
             run,
             iteration,
             admission,
@@ -572,7 +572,7 @@ fn loop_fact(value: &lp::Fact) -> Cbor {
             id(*admission),
             envelope(value),
         ]),
-        Fact::Close {
+        Fact::Closed {
             run,
             iteration,
             reason,
@@ -983,7 +983,7 @@ impl Decoder {
                 entry,
                 fuel,
                 state,
-            ] => Fact::Open {
+            ] => Fact::Opened {
                 run: run(reference)?,
                 instance: instance(instance_ref)?,
                 opening: match items(opening)? {
@@ -1009,7 +1009,7 @@ impl Decoder {
                 command,
                 state,
                 due,
-            ] => Fact::Advance {
+            ] => Fact::Advanced {
                 run: run(reference)?,
                 from_iteration: uint(from)?,
                 to_iteration: uint(to)?,
@@ -1018,13 +1018,13 @@ impl Decoder {
                 state: self.envelope(state)?,
                 due_at: read_optional(due, |value| signed(value).map_err(Error::Read))?,
             },
-            [Cbor::Uint(3), reference, iteration, admission, envelope] => Fact::Admit {
+            [Cbor::Uint(3), reference, iteration, admission, envelope] => Fact::Admitted {
                 run: run(reference)?,
                 iteration: uint(iteration)?,
                 admission: read_id(admission)?,
                 envelope: self.envelope(envelope)?,
             },
-            [Cbor::Uint(4), reference, iteration, reason] => Fact::Close {
+            [Cbor::Uint(4), reference, iteration, reason] => Fact::Closed {
                 run: run(reference)?,
                 iteration: uint(iteration)?,
                 reason: match uint(reason)? {

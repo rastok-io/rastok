@@ -1818,11 +1818,11 @@ impl Checker<'_, '_> {
                 ),
                 GraphItem::Defaults(_) => self.deferred("a defaults block", decl.span),
                 GraphItem::Attribute(attribute) => {
-                    if retry_control::retry_attribute(attribute) {
+                    if retry_control::is_retry_attribute(attribute) {
                         self.retry_refusal(retry_control::E_RETRY_HOST, attribute.span,
                             "Retry attributes require a finite outbound Call Connector, not a Graph");
                     }
-                    if !is_common_node_attribute(attribute) && !is_loop_attribute(attribute) && !retry_control::retry_attribute(attribute) {
+                    if !is_common_node_attribute(attribute) && !is_loop_attribute(attribute) && !retry_control::is_retry_attribute(attribute) {
                         self.deferred("a graph attribute", attribute.span);
                     }
                 }
@@ -3388,7 +3388,7 @@ impl Checker<'_, '_> {
                 OperatorItem::Attribute(attribute)
                     if !is_common_node_attribute(attribute)
                         && !is_loop_attribute(attribute)
-                        && !retry_control::retry_attribute(attribute) =>
+                        && !retry_control::is_retry_attribute(attribute) =>
                 {
                     Some(
                         attribute
@@ -3496,7 +3496,7 @@ impl Checker<'_, '_> {
             };
             if is_common_node_attribute(attribute)
                 || is_loop_attribute(attribute)
-                || retry_control::retry_attribute(attribute)
+                || retry_control::is_retry_attribute(attribute)
             {
                 continue;
             }
@@ -3991,14 +3991,14 @@ impl Checker<'_, '_> {
                 }
                 OperatorItem::Attribute(attribute) => {
                     if node.kind() == node::Kind::Operator
-                        && retry_control::retry_attribute(attribute)
+                        && retry_control::is_retry_attribute(attribute)
                     {
                         self.retry_refusal(retry_control::E_RETRY_HOST, attribute.span,
                             "Retry attributes require a finite outbound Call Connector, not an Operator");
                     }
                     if is_common_node_attribute(attribute)
                         || is_loop_attribute(attribute)
-                        || retry_control::retry_attribute(attribute)
+                        || retry_control::is_retry_attribute(attribute)
                     {
                         continue;
                     }

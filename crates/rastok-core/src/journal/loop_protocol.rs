@@ -9,7 +9,7 @@ use crate::node::Port;
 use alloc::vec::Vec;
 
 mod loop_view;
-pub use loop_view::{Error, LoopView, Phase, RunState};
+pub use loop_view::{Error, LoopView, Phase, Run};
 
 /// Exact admission which opens a run, not its possibly shared business origin.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -135,8 +135,8 @@ pub enum CloseReason {
 /// Transition of the manager's replay-derived state.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Fact {
-    /// Retain one admission before its first application can execute.
-    Open {
+    /// One admission was retained before its first application could execute.
+    Opened {
         /// Derived run identity.
         run: LoopRunId,
         /// Exact owner generation.
@@ -151,7 +151,7 @@ pub enum Fact {
         state: Envelope,
     },
     /// A consumed recurrence command selected a new state; admission is later.
-    Advance {
+    Advanced {
         /// Run being advanced.
         run: LoopRunId,
         /// Application which produced the command.
@@ -168,7 +168,7 @@ pub enum Fact {
         due_at: Option<i64>,
     },
     /// Capacity was proved and the current state entered the host.
-    Admit {
+    Admitted {
         /// Admitted run.
         run: LoopRunId,
         /// Admitted application ordinal.
@@ -180,7 +180,7 @@ pub enum Fact {
         envelope: Envelope,
     },
     /// No more applications of this run will execute.
-    Close {
+    Closed {
         /// Closed run.
         run: LoopRunId,
         /// Last application ordinal.
@@ -188,7 +188,7 @@ pub enum Fact {
         /// Natural completion, explicit Done, or owner closure.
         reason: CloseReason,
     },
-    /// A recurrence would exceed fuel; no following Admit exists.
+    /// A recurrence would exceed fuel; no following Admitted fact exists.
     Expired {
         /// Exhausted run.
         run: LoopRunId,
@@ -208,10 +208,10 @@ impl Fact {
     #[must_use]
     pub const fn run(&self) -> LoopRunId {
         match self {
-            Self::Open { run, .. }
-            | Self::Advance { run, .. }
-            | Self::Admit { run, .. }
-            | Self::Close { run, .. }
+            Self::Opened { run, .. }
+            | Self::Advanced { run, .. }
+            | Self::Admitted { run, .. }
+            | Self::Closed { run, .. }
             | Self::Expired { run, .. } => *run,
         }
     }
@@ -255,12 +255,14 @@ impl LoopRecord {
             })
             .chain(self.facts.iter().flat_map(|fact| {
                 let (first, second) = match fact {
-                    Fact::Open { state, .. } | Fact::Advance { state, .. } => (Some(state), None),
+                    Fact::Opened { state, .. } | Fact::Advanced { state, .. } => {
+                        (Some(state), None)
+                    }
                     Fact::Expired {
                         last_state, output, ..
                     } => (Some(last_state), Some(output)),
-                    Fact::Admit { envelope, .. } => (Some(envelope), None),
-                    Fact::Close { .. } => (None, None),
+                    Fact::Admitted { envelope, .. } => (Some(envelope), None),
+                    Fact::Closed { .. } => (None, None),
                 };
                 first.into_iter().chain(second)
             }))

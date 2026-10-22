@@ -75,7 +75,7 @@ pub(crate) fn validate_transaction(record: &super::TransactionRecord) -> Result<
         .loop_protocol()
         .map_or(&[][..], |packet| packet.facts.as_slice());
     let delayed = facts.iter().filter_map(|fact| match fact {
-        super::loop_protocol::Fact::Advance {
+        super::loop_protocol::Fact::Advanced {
             run,
             to_iteration,
             command,
@@ -112,7 +112,7 @@ pub(crate) fn validate_transaction(record: &super::TransactionRecord) -> Result<
     if let Some(schedule) = record.deadlines.as_deref() {
         for deadline in schedule.items() {
             if deadline.kind == super::DeadlineKind::RecurrenceDelay && !facts.iter().any(|fact| {
-                matches!(fact, super::loop_protocol::Fact::Advance {
+                matches!(fact, super::loop_protocol::Fact::Advanced {
                     run, to_iteration, command, due_at: Some(due_at), ..
                 } if super::loop_protocol::admission_ref(*run, *to_iteration, *command) == deadline.reference
                     && *due_at == deadline.due_at)

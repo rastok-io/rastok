@@ -499,7 +499,7 @@ fn loop_record_tree(packet: &crate::journal::loop_protocol::LoopRecord) -> Cbor 
                     .iter()
                     .map(|fact| {
                         Cbor::Array(match fact {
-                            Fact::Open {
+                            Fact::Opened {
                                 run,
                                 instance,
                                 opening,
@@ -529,7 +529,7 @@ fn loop_record_tree(packet: &crate::journal::loop_protocol::LoopRecord) -> Cbor 
                                     canonical::envelope(state),
                                 ]
                             }
-                            Fact::Advance {
+                            Fact::Advanced {
                                 run,
                                 from_iteration,
                                 to_iteration,
@@ -546,7 +546,7 @@ fn loop_record_tree(packet: &crate::journal::loop_protocol::LoopRecord) -> Cbor 
                                 id(command.id()),
                                 canonical::envelope(state),
                             ],
-                            Fact::Admit {
+                            Fact::Admitted {
                                 run,
                                 iteration,
                                 admission,
@@ -558,7 +558,7 @@ fn loop_record_tree(packet: &crate::journal::loop_protocol::LoopRecord) -> Cbor 
                                 id(*admission),
                                 canonical::envelope(envelope),
                             ],
-                            Fact::Close {
+                            Fact::Closed {
                                 run,
                                 iteration,
                                 reason,
@@ -978,7 +978,7 @@ mod tests {
             exchange_exit: None,
             retry_record: None,
             loop_record: Some(Box::new(LoopRecord {
-                facts: vec![Fact::Open {
+                facts: vec![Fact::Opened {
                     run,
                     instance: instance.clone(),
                     opening,
@@ -1041,7 +1041,7 @@ mod tests {
         };
         admit.trigger = crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Next);
         admit.loop_record = Some(Box::new(LoopRecord {
-            facts: vec![Fact::Admit {
+            facts: vec![Fact::Admitted {
                 run,
                 iteration: 0,
                 admission: root,

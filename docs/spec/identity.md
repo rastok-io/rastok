@@ -277,7 +277,7 @@ execution-model §1) — keys `17–26`, `34–36`, `38–40`, `42–43`:
 | 39 | logical_time | int | the signed nanosecond logical instant since the Unix epoch, present exactly when a checked firing handler can observe `now()`; fixed across guard selection and body evaluation, omitted otherwise. This is an explicit transaction input, not a scheduler due date or host `committed_at`. |
 | 40 | loop_protocol | map | Sparse r2 packet: 1 context, 2 routed contexts, 3 produced commands, 4 consumed commands, 5 manager facts. Exact forms below; absent for unrelated transactions. |
 | 42 | instance_commands | map | Production or winning target-owned consumption; exact shape below. Absent without commands; separate from Loop r2. |
-| 43 | retry_protocol | map | Sparse Retry packet, also carried on its outbound Call facts. Correlation and Opened/Admitted/Held/Consumed/Advance/Published/Close use the exact forms below, checked against the retained prefix. Absent on unrelated records, INGRESS and Sessions. |
+| 43 | retry_protocol | map | Sparse Retry packet, also carried on its outbound Call facts. Correlation and Opened/Admitted/Held/Consumed/Advanced/Published/Closed use the exact forms below, checked against the retained prefix. Absent on unrelated records, INGRESS and Sessions. |
 
 **Instance closure packet — key 42.** This is causal, unlike scheduler metadata
 at key 41. Exactly one field: `1: [command+]` for production, or
@@ -312,7 +312,7 @@ opening := [1, inbound_id, entry_port] | [2, delivery_id]
 close_reason := 1 natural | 2 explicit_done | 3 stopped
 ```
 
-Fact tags are Open/Advance/Admit/Close/Expired. Advance also retains its
+Fact tags are Opened/Advanced/Admitted/Closed/Expired. Advanced also retains its
 optional due instant, excluded from this causal form and checked against key 41.
 Domains are run `0x08`, command `0x09` and re-admission `0x03`; exact opening
 admission, not only business origin, identifies a run. See [Loop](loop.md).
@@ -328,7 +328,7 @@ fact := [1, operation_id, opening_delivery_id, entry, plan_hash, contract_id, pi
       | [2, operation_id, attempt_ordinal, admitted_form, delivery_id]
       | [3, operation_id, attempt_ordinal, call_id, [emission_id*]] // Held
       | [4, operation_id, attempt_ordinal, call_id, [emission_id*]] // Consumed
-      | [5, operation_id, from_ordinal, to_ordinal, call_id]        // Advance
+      | [5, operation_id, from_ordinal, to_ordinal, call_id]        // Advanced
       | [6, operation_id, attempt_ordinal, call_id, [emission_id*]] // Published
       | [7, operation_id, attempt_ordinal, close_reason]
 pin := [opening_envelope_id, request_digest, [[name, tagged_value]*], call_key_or_null]

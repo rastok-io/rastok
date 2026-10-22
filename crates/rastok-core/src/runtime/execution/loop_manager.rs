@@ -18,13 +18,12 @@ use crate::node;
 
 impl Execution<'_> {
     /// A delayed run still owns its future command slot. Count retained runs
-    /// plus opening deliveries not yet folded into Open; neither an empty
+    /// plus opening deliveries not yet folded into Opened; neither an empty
     /// host mailbox nor scheduling a delayed command releases that capacity.
     pub(super) fn loop_admission_load(&self) -> usize {
         let fold = self.loop_manager.as_deref();
-        let live = |state: &protocol::RunState| {
-            matches!(state.phase, Phase::Active | Phase::AwaitingAdmission)
-        };
+        let live =
+            |state: &protocol::Run| matches!(state.phase, Phase::Active | Phase::AwaitingAdmission);
         let mut occupied = fold.map_or(0, |fold| {
             fold.runs().filter(|(_, state)| live(state)).count()
         });
@@ -71,7 +70,7 @@ impl Execution<'_> {
             .filter_map(|(run, state)| {
                 (state.instance == *instance
                     && !matches!(state.phase, Phase::Closed | Phase::Expired))
-                .then_some(Fact::Close {
+                .then_some(Fact::Closed {
                     run: *run,
                     iteration: state.iteration,
                     reason: CloseReason::Stopped,
@@ -118,7 +117,7 @@ impl Execution<'_> {
         &self,
         instance: &instance::Generation,
         delivery: &envelope::Delivery,
-    ) -> Option<(LoopRunId, &protocol::RunState)> {
+    ) -> Option<(LoopRunId, &protocol::Run)> {
         let fold = self.loop_manager.as_deref()?;
         let reference = ids::delivery_id(
             self.scheduler.mailboxes.routes.text(delivery.edge),
@@ -196,7 +195,7 @@ impl Execution<'_> {
             delivery.envelope.meta().sys().id(),
             LoopRecord {
                 context: self.graph_context(delivery).to_vec(),
-                facts: vec![Fact::Open {
+                facts: vec![Fact::Opened {
                     run,
                     instance: instance.clone(),
                     opening,
@@ -247,7 +246,7 @@ impl Execution<'_> {
             envelope,
             LoopRecord {
                 context: self.graph_context(&delivery).to_vec(),
-                facts: vec![Fact::Admit {
+                facts: vec![Fact::Admitted {
                     run,
                     iteration: 0,
                     admission: ids::delivery_id(edge, envelope),
@@ -327,7 +326,7 @@ impl Execution<'_> {
                 },
             ));
         } else if stopped {
-            packet.facts.push(Fact::Close {
+            packet.facts.push(Fact::Closed {
                 run,
                 iteration: current.iteration,
                 reason: CloseReason::Stopped,
@@ -513,7 +512,7 @@ impl Execution<'_> {
                 current.state.meta().sys().id(),
                 LoopRecord {
                     context: current.enclosing.clone(),
-                    facts: vec![Fact::Close {
+                    facts: vec![Fact::Closed {
                         run,
                         iteration: current.iteration,
                         reason: CloseReason::Stopped,
@@ -544,7 +543,7 @@ impl Execution<'_> {
                 envelope.meta().sys().id(),
                 LoopRecord {
                     context: current.enclosing.clone(),
-                    facts: vec![Fact::Admit {
+                    facts: vec![Fact::Admitted {
                         run,
                         iteration: current.iteration,
                         admission: current.admission,
@@ -643,7 +642,7 @@ impl Execution<'_> {
         let mut emission = None;
         let mut due = None;
         match &command.value {
-            CommandValue::Done { kind, .. } => packet.facts.push(Fact::Close {
+            CommandValue::Done { kind, .. } => packet.facts.push(Fact::Closed {
                 run,
                 iteration: current.iteration,
                 reason: match kind {
@@ -670,7 +669,7 @@ impl Execution<'_> {
                     due = self
                         .loop_delay_for(owner, iteration)?
                         .map(|delay| self.now.saturating_add(delay));
-                    packet.facts.push(Fact::Advance {
+                    packet.facts.push(Fact::Advanced {
                         run,
                         from_iteration: current.iteration,
                         to_iteration: iteration,
@@ -859,7 +858,7 @@ pub(super) fn manager_edge(run: LoopRunId, entry: &node::Port) -> String {
 pub(super) fn application_envelope(
     journal: &dyn Journal,
     graph_version: GraphVersion,
-    current: &protocol::RunState,
+    current: &protocol::Run,
 ) -> Result<Envelope, ExecutionFault> {
     let Some(cause) = current.reentry_cause else {
         return Ok(current.state.clone());

@@ -115,12 +115,12 @@ observes normal deterministic instance serialization.
 `Loop.state` is the complete envelope admitted at the beginning of the
 current application. It is immutable and bound to one `LoopRunId`.
 
-Advance selects the proposed state (Next) or retains the current state
-(Again). Admit then creates the next application envelope: DATA and the
+Advanced selects the proposed state (Next) or retains the current state
+(Again). Admitted then creates the next application envelope: DATA and the
 travelling `meta.app`/`meta.ext` zones are preserved, `origin_id` remains the
 business lineage, and the system metadata receives the recurrence admission id
 and the command's causal parent. The admitted envelope is retained in the
-Admit fact. “Again retains state” never means reusing an application's
+Admitted fact. “Again retains state” never means reusing an application's
 causal id: that would repeat emission and Call identities on identical retries.
 
 It is visible:
@@ -285,7 +285,7 @@ It uses logical time and the recurrence deadline kind (byte 4). Arithmetic
 saturates before overflow.
 There is no jitter in the current subset.
 
-No destination capacity is held during the wait. At the due instant, Admit
+No destination capacity is held during the wait. At the due instant, Admitted
 rechecks run and generation, proves the capacities selected from the
 remembered entry port, commits `l:next` and the routes, then exposes the
 deliveries. Closing makes stale wake-ups inert.
@@ -374,8 +374,8 @@ Closing wins over recurrence:
 - nothing migrates to a successor generation;
 - descendants close inner-first.
 
-The r2 fold contains Open, CommandProduced, CommandConsumed, Next/Again, Admit,
-Close, and Expired evidence. The current wire keys are specified in
+The r2 fold contains Opened, CommandProduced, CommandConsumed, Next/Again, Admitted,
+Closed, and Expired evidence. The current wire keys are specified in
 [identity.md §3](identity.md#3-the-canonical-record-form).
 
 Spatial recovery reconstructs instance generations, state deltas, unconsumed

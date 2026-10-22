@@ -383,11 +383,7 @@ impl Execution<'_> {
             })
     }
 
-    pub(super) fn graph_run_awaits_verdict(
-        &self,
-        run: LoopRunId,
-        state: &protocol::RunState,
-    ) -> bool {
+    pub(super) fn graph_run_awaits_verdict(&self, run: LoopRunId, state: &protocol::Run) -> bool {
         state.phase == protocol::Phase::Active
             && state.pending.is_none()
             && self.instances.get(&state.instance).is_some_and(|instance| {
@@ -473,7 +469,7 @@ impl Execution<'_> {
             admission.delivery.envelope.meta().sys().id(),
             LoopRecord {
                 context: self.graph_context(&admission.delivery).to_vec(),
-                facts: vec![Fact::Open {
+                facts: vec![Fact::Opened {
                     run: protocol::run_ref(&admission.instance, &admission.opening),
                     instance: admission.instance.clone(),
                     opening: admission.opening,
@@ -550,7 +546,7 @@ impl Execution<'_> {
         journal: &mut dyn Journal,
         owner: node::NodeIndex,
         run: LoopRunId,
-        current: &protocol::RunState,
+        current: &protocol::Run,
         envelope: Envelope,
     ) -> Result<bool, ExecutionFault> {
         let source = Endpoint {
@@ -579,7 +575,7 @@ impl Execution<'_> {
             envelope.meta().sys().id(),
             LoopRecord {
                 context: current.enclosing.clone(),
-                facts: vec![Fact::Admit {
+                facts: vec![Fact::Admitted {
                     run,
                     iteration: current.iteration,
                     admission: current.admission,
@@ -833,7 +829,7 @@ impl Execution<'_> {
     pub(super) fn graph_entry_verdict(
         &self,
         run: LoopRunId,
-        current: &protocol::RunState,
+        current: &protocol::Run,
     ) -> Result<Option<crate::journal::TransactionRecord>, ExecutionFault> {
         if current.phase != protocol::Phase::Active
             || current.pending.is_some()
@@ -1056,7 +1052,7 @@ impl Execution<'_> {
             return Err(invalid("a manager emission changed its enclosing verdicts"));
         }
         match &packet.facts[0] {
-            Fact::Open {
+            Fact::Opened {
                 run,
                 instance,
                 opening,
@@ -1073,7 +1069,7 @@ impl Execution<'_> {
                         })
                     })
                     .ok_or_else(|| {
-                        invalid("a Graph Open has no exact retained boundary admission")
+                        invalid("a Graph Opened has no exact retained boundary admission")
                     })?;
                 let spec = self.plan.nodes[owner.index()]
                     .loop_spec()
@@ -1114,11 +1110,11 @@ impl Execution<'_> {
                     || record.deadlines.is_some()
                 {
                     return Err(invalid(
-                        "a Graph Open contradicts its admission or plan fuel",
+                        "a Graph Opened contradicts its admission or plan fuel",
                     ));
                 }
             }
-            Fact::Admit {
+            Fact::Admitted {
                 run,
                 iteration,
                 admission,
@@ -1128,7 +1124,7 @@ impl Execution<'_> {
                     .loop_manager
                     .as_deref()
                     .and_then(|fold| fold.run(*run))
-                    .ok_or_else(|| invalid("a Graph Admit has no retained opening"))?;
+                    .ok_or_else(|| invalid("a Graph Admitted has no retained opening"))?;
                 if *iteration != current.iteration
                     || packet.context != current.enclosing
                     || *admission != current.admission
@@ -1146,7 +1142,7 @@ impl Execution<'_> {
                         )?
                 {
                     return Err(invalid(
-                        "a Graph Admit contradicts its retained state or deadline",
+                        "a Graph Admitted contradicts its retained state or deadline",
                     ));
                 }
                 let current = current.clone();
@@ -1163,7 +1159,7 @@ impl Execution<'_> {
                             })
                         })
                         .ok_or_else(|| {
-                            invalid("a Graph Admit has no unconsumed boundary delivery")
+                            invalid("a Graph Admitted has no unconsumed boundary delivery")
                         })?;
                     let expected = crate::journal::ConsumedPosition {
                         edge: self
@@ -1177,14 +1173,14 @@ impl Execution<'_> {
                     };
                     if record.consumed.as_slice() != [expected] {
                         return Err(invalid(
-                            "a Graph Admit does not consume its exact boundary cursor",
+                            "a Graph Admitted does not consume its exact boundary cursor",
                         ));
                     }
                     Some(*opening.0)
                 } else {
                     if !record.consumed.is_empty() {
                         return Err(invalid(
-                            "a recurrent Graph Admit cannot consume another opening",
+                            "a recurrent Graph Admitted cannot consume another opening",
                         ));
                     }
                     None
@@ -1278,7 +1274,7 @@ impl Execution<'_> {
                     ));
                 }
                 let mut deadlines = Vec::new();
-                if let Fact::Advance {
+                if let Fact::Advanced {
                     to_iteration,
                     due_at,
                     command,
@@ -1321,7 +1317,7 @@ impl Execution<'_> {
                         "Graph transition deadlines contradict its retained obligations",
                     ));
                 }
-                if let Fact::Advance {
+                if let Fact::Advanced {
                     to_iteration,
                     command,
                     due_at: Some(due_at),

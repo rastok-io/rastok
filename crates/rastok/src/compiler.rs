@@ -1126,20 +1126,20 @@ graph app : App {{
         assert_eq!(
             completed_facts
                 .iter()
-                .filter(|fact| matches!(fact, Fact::Advance { .. }))
+                .filter(|fact| matches!(fact, Fact::Advanced { .. }))
                 .count(),
             3
         );
         assert_eq!(
             completed_facts
                 .iter()
-                .filter(|fact| matches!(fact, Fact::Admit { iteration: 1.., .. }))
+                .filter(|fact| matches!(fact, Fact::Admitted { iteration: 1.., .. }))
                 .count(),
             3,
             "every selected state crosses the temporal boundary exactly once"
         );
-        assert!(matches!(completed_facts.first(), Some(Fact::Open { .. })));
-        assert!(matches!(completed_facts.last(), Some(Fact::Close { .. })));
+        assert!(matches!(completed_facts.first(), Some(Fact::Opened { .. })));
+        assert!(matches!(completed_facts.last(), Some(Fact::Closed { .. })));
 
         let (expired, expired_journal) = run("Loop.fuel = 2");
         assert_eq!(expired.outputs().len(), 1);
@@ -1179,7 +1179,7 @@ graph app : App {{
                     _ => None,
                 })
                 .flat_map(|packet| &packet.facts)
-                .filter(|fact| matches!(fact, Fact::Admit { iteration: 1.., .. }))
+                .filter(|fact| matches!(fact, Fact::Admitted { iteration: 1.., .. }))
                 .count(),
             3,
             "measure 3 derives exactly four body applications, three of them recurrent"
@@ -1293,21 +1293,21 @@ graph app : App {
         assert_eq!(
             facts
                 .iter()
-                .filter(|fact| matches!(fact, Fact::Open { .. }))
+                .filter(|fact| matches!(fact, Fact::Opened { .. }))
                 .count(),
             1
         );
         let ordinals: Vec<_> = facts
             .iter()
             .filter_map(|fact| match fact {
-                Fact::Advance { to_iteration, .. } => Some(*to_iteration),
+                Fact::Advanced { to_iteration, .. } => Some(*to_iteration),
                 _ => None,
             })
             .collect();
         assert_eq!(ordinals, [1, 2, 3]);
         assert!(matches!(
             facts.last(),
-            Some(Fact::Close { iteration: 3, .. })
+            Some(Fact::Closed { iteration: 3, .. })
         ));
     }
 
@@ -1387,7 +1387,7 @@ graph app : App {
             })
             .flat_map(|packet| &packet.facts)
             .filter_map(|fact| match fact {
-                Fact::Open { run, .. } => Some(*run),
+                Fact::Opened { run, .. } => Some(*run),
                 _ => None,
             })
             .collect();

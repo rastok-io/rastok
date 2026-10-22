@@ -11,7 +11,7 @@ const E_RETRY_EFFECT: Code = Code::new("E-RETRY-EFFECT");
 /// Extension contributions have no admitted same-owner composition.
 const E_EXTENSION_CONFLICT: Code = Code::new("E-EXTENSION-CONFLICT");
 
-pub(super) fn retry_attribute(attribute: &SynAttribute) -> bool {
+pub(super) fn is_retry_attribute(attribute: &SynAttribute) -> bool {
     attribute
         .target
         .segments
@@ -25,7 +25,7 @@ fn retry_symbols(symbols: &[Name]) -> bool {
 
 fn body_has_retry(body: &[OperatorItem]) -> bool {
     body.iter().any(
-        |item| matches!(item, OperatorItem::Attribute(attribute) if retry_attribute(attribute)),
+        |item| matches!(item, OperatorItem::Attribute(attribute) if is_retry_attribute(attribute)),
     )
 }
 
@@ -217,7 +217,7 @@ impl Checker<'_, '_> {
                         );
                     }
                 }
-                _ if retry_attribute(attribute) => {
+                _ if is_retry_attribute(attribute) => {
                     let detail = if !owns_retry && name.starts_with("Retry.") {
                         "Retry attributes require this Connector's `+ Retry` Extension".to_string()
                     } else {

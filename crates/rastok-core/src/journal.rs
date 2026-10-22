@@ -2785,7 +2785,7 @@ mod tests {
             .envelope()
             .clone();
         record.loop_record = Some(Box::new(loop_protocol::LoopRecord {
-            facts: vec![loop_protocol::Fact::Advance {
+            facts: vec![loop_protocol::Fact::Advanced {
                 run,
                 from_iteration: 0,
                 to_iteration: 1,

@@ -44,7 +44,7 @@ pub(crate) fn validate_transaction(record: &TransactionRecord) -> Result<(), Err
             Some(context),
             [
                 Fact::Published(batch),
-                Fact::Close {
+                Fact::Closed {
                     attempt,
                     reason: CloseReason::Final,
                 },
@@ -56,13 +56,13 @@ pub(crate) fn validate_transaction(record: &TransactionRecord) -> Result<(), Err
         | (
             None,
             [
-                Fact::Close {
+                Fact::Closed {
                     reason: CloseReason::Stopped,
                     ..
                 },
             ],
         ) => manager_carrier(record),
-        (None, [Fact::Consumed(batch), Fact::Advance { from, to, call }])
+        (None, [Fact::Consumed(batch), Fact::Advanced { from, to, call }])
             if batch.attempt == *from
                 && from.ordinal > 0
                 && from.ordinal.checked_add(1) == Some(*to)
@@ -74,7 +74,7 @@ pub(crate) fn validate_transaction(record: &TransactionRecord) -> Result<(), Err
             None,
             [
                 Fact::Consumed(batch),
-                Fact::Close {
+                Fact::Closed {
                     attempt,
                     reason: CloseReason::Stopped,
                 },

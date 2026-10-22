@@ -348,7 +348,7 @@ fn public_lab_runs_independent_roots_in_one_singleton_loop_instance() {
                 record,
                 Record::Transaction(transaction)
                     if transaction.loop_protocol().is_some_and(|packet| packet.facts.iter().any(|fact|
-                        matches!(fact, rastok::journal::loop_protocol::Fact::Open { .. })
+                        matches!(fact, rastok::journal::loop_protocol::Fact::Opened { .. })
                     ))
             )
         })

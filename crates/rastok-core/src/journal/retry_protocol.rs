@@ -50,7 +50,8 @@ impl OperationId {
 pub struct AttemptId {
     /// Original operation.
     pub operation: OperationId,
-    /// First attempt is 1; zero is reserved for a never-admitted stopped Close.
+    /// First attempt is 1. A `Closed` fact with reason `Stopped` uses zero
+    /// only when no attempt was admitted.
     pub ordinal: u64,
 }
 
@@ -150,7 +151,7 @@ pub struct Batch {
 /// Closure has no new output wrapper and no authored command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CloseReason {
-    /// An ordinary final attempt was published atomically with this Close.
+    /// An ordinary final attempt was published atomically with this Closed fact.
     Final,
     /// Exact-generation Closing cancelled further admissions, without output.
     Stopped,
@@ -159,7 +160,7 @@ pub enum CloseReason {
 /// Policy-specific facts carried by the existing journal species.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Fact {
-    /// Keep original preparation before an admission can reach the world.
+    /// Original preparation was retained before any attempt could reach a Driver.
     Opened {
         /// Derived from this instance, entry and exact opening delivery.
         operation: OperationId,
@@ -185,10 +186,10 @@ pub enum Fact {
     },
     /// Producer retained the complete batch for the manager, not downstream.
     Held(Batch),
-    /// One pending batch was acknowledged in the same transaction as Advance/Close.
+    /// One pending batch was acknowledged in the same transaction as Advanced/Closed.
     Consumed(Batch),
     /// The consumed predecessor selected the following admission.
-    Advance {
+    Advanced {
         /// Attempt whose batch was consumed by this same transaction.
         from: AttemptId,
         /// Following one-based ordinal.
@@ -198,8 +199,8 @@ pub enum Fact {
     },
     /// Final batch uses ordinary authored routes, without changing envelope identities.
     Published(Batch),
-    /// Publication or exact-instance Closing ends the operation.
-    Close {
+    /// Publication or exact-instance Closing ended the operation.
+    Closed {
         /// Last admitted ordinal, or zero only before any admission.
         attempt: AttemptId,
         /// Final or stopped, never Loop exhaustion.
@@ -213,11 +214,11 @@ impl Fact {
     pub const fn operation(&self) -> OperationId {
         match self {
             Self::Opened { operation, .. } => *operation,
-            Self::Admitted { attempt, .. } | Self::Close { attempt, .. } => attempt.operation,
+            Self::Admitted { attempt, .. } | Self::Closed { attempt, .. } => attempt.operation,
             Self::Held(batch) | Self::Consumed(batch) | Self::Published(batch) => {
                 batch.attempt.operation
             }
-            Self::Advance { from, .. } => from.operation,
+            Self::Advanced { from, .. } => from.operation,
         }
     }
 }
