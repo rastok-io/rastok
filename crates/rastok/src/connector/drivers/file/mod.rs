@@ -204,7 +204,7 @@ pub(super) fn bind_scripted_protocol(
     _boot: &crate::deployment::BootBindings,
 ) -> Result<Box<dyn super::CallProtocol>, super::DriverFactoryError> {
     FileRequestSettings::try_bind(plan, nodes)
-        .map(|bindings| Box::new(bindings) as Box<dyn super::CallProtocol>)
+        .map(|request_settings| Box::new(request_settings) as Box<dyn super::CallProtocol>)
         .map_err(|error| super::DriverFactoryError::new(error.to_string()))
 }
 
@@ -347,7 +347,7 @@ struct WorkerResult {
 pub struct File<'plan> {
     _plan: &'plan crate::plan::ValidatedExecutionPlan,
     root: PathBuf,
-    bindings: FileRequestSettings,
+    request_settings: FileRequestSettings,
     runs: BTreeMap<crate::connector::exchange::CallId, Arc<AtomicBool>>,
     sender: mpsc::Sender<WorkerResult>,
     receiver: mpsc::Receiver<WorkerResult>,
@@ -378,12 +378,12 @@ impl<'plan> File<'plan> {
         nodes: &[crate::node::Path],
         root: PathBuf,
     ) -> Result<Self, FileBindError> {
-        let bindings = FileRequestSettings::try_bind(plan, nodes)?;
+        let request_settings = FileRequestSettings::try_bind(plan, nodes)?;
         let (sender, receiver) = mpsc::channel();
         Ok(Self {
             _plan: plan,
             root,
-            bindings,
+            request_settings,
             runs: BTreeMap::new(),
             sender,
             receiver,
@@ -399,7 +399,7 @@ impl OutboundCall for File<'_> {
         data: &Data,
         resolved_settings: &BTreeMap<String, Value>,
     ) -> RequestPreparation {
-        self.bindings
+        self.request_settings
             .prepare_request(connector, data, resolved_settings)
     }
 
@@ -418,7 +418,7 @@ impl OutboundCall for File<'_> {
     }
 
     fn start(&mut self, intent: &CallOpen, _request: &Envelope) -> CallStart {
-        let Some(binding) = self.bindings.get(&intent.connector_path) else {
+        let Some(binding) = self.request_settings.get(&intent.connector_path) else {
             self.answers.push(CallResponse {
                 call_id: intent.call_id,
                 completion: Completion::file_exit(FileExit::IoFailed),

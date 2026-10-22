@@ -24,8 +24,8 @@ with journal-before-write and exactly one observed or unknown resource exit.
 | `job`, default | `std/process@4` | Call / outbound | Bounded captured frames and one exit, atomic |
 | `service` | `std/process@5` | Session / inbound and outbound | Complete frames while alive, one resource exit |
 
-The source catalogue's resolved profile can select an exact protocol id,
-roles and exchange. Colliding profile/catalogue identities refuse. All three
+The source catalogue's resolved mode can select an exact protocol id,
+roles and exchange. Colliding mode/catalogue identities refuse. All three
 fields travel in the validated plan; core accepts only the exact sheet for
 the selected id. The current identities and witnesses were qualified in the
 [human-review inventory](human-review-v20-identity.md).
@@ -113,7 +113,7 @@ unsolicited frames are supported. No timestamp is invented to enlarge the Lab.
 ## Evidence
 
 - `tests/process_service.rs`: repeated turns on one Session; two keyed
-  resources; fresh input after quit; codec/profile refusals; independent
+  resources; fresh input after quit; codec/mode refusals; independent
   hostile-plan validation; catalogue alias refusal; mock terminal ordering.
 - Its marked Unix integration tests: a resident child across several writes,
   foreign Session token isolation, VM recovery without repeated writes,

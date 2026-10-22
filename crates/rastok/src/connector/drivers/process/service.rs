@@ -56,13 +56,13 @@ fn failure(failure: ProcessFailure) -> EnvelopeDraft {
 }
 
 pub(super) fn prepare(
-    bindings: &ProcessRequestSettings,
+    request_settings: &ProcessRequestSettings,
     connector: &node::Path,
     data: &Data,
     settings: &BTreeMap<String, Value>,
     opening: bool,
 ) -> RequestPreparation {
-    let resolved = bindings
+    let resolved = request_settings
         .get(connector)
         .ok_or_else(|| "unbound Process service".to_owned())
         .and_then(|binding| binding.resolve(settings).map_err(|e| e.to_string()));
@@ -74,7 +74,7 @@ pub(super) fn prepare(
             );
         }
     };
-    let prepared = match bindings.prepare_request(connector, data) {
+    let prepared = match request_settings.prepare_request(connector, data) {
         RequestPreparation::Prepared(prepared) => prepared,
         rejected => return rejected,
     };
@@ -181,10 +181,10 @@ impl DriverFactory for ProcessServiceFactory {
                 "resident Process requires the qualified Unix process-group Driver",
             ));
         }
-        let bindings = ProcessRequestSettings::try_bind(plan, nodes)
+        let request_settings = ProcessRequestSettings::try_bind(plan, nodes)
             .map_err(|e| DriverFactoryError::new(e.to_string()))?;
         Ok(Box::new(Service {
-            bindings,
+            request_settings,
             resources: BTreeMap::new(),
             retiring: Vec::new(),
             events: Vec::new(),
@@ -195,7 +195,7 @@ impl DriverFactory for ProcessServiceFactory {
 }
 
 struct Service {
-    bindings: ProcessRequestSettings,
+    request_settings: ProcessRequestSettings,
     resources: BTreeMap<SessionId, Resource>,
     retiring: Vec<std::thread::JoinHandle<()>>,
     events: Vec<SessionObservation>,
@@ -245,7 +245,7 @@ impl Session for Service {
         data: &Data,
         settings: &BTreeMap<String, Value>,
     ) -> RequestPreparation {
-        prepare(&self.bindings, connector, data, settings, true)
+        prepare(&self.request_settings, connector, data, settings, true)
     }
     fn scheduler_session_completion(
         &mut self,
@@ -261,7 +261,7 @@ impl Session for Service {
         data: &Data,
         settings: &BTreeMap<String, Value>,
     ) -> RequestPreparation {
-        prepare(&self.bindings, connector, data, settings, false)
+        prepare(&self.request_settings, connector, data, settings, false)
     }
     fn open_session(&mut self, intent: &SessionOpen, _: &Envelope) -> SessionStart {
         if self.resources.contains_key(&intent.session_id) {
@@ -814,7 +814,7 @@ mod tests {
             .unwrap();
         let (writes, _input) = mpsc::sync_channel(FRAME_SLOTS);
         let mut service = Service {
-            bindings: ProcessRequestSettings::try_bind(&compiled.plan, &[]).unwrap(),
+            request_settings: ProcessRequestSettings::try_bind(&compiled.plan, &[]).unwrap(),
             resources: BTreeMap::from([(
                 reference,
                 Resource {
@@ -861,7 +861,7 @@ mod tests {
             finished.store(true, Ordering::Release);
         });
         let service = Service {
-            bindings: ProcessRequestSettings::try_bind(&compiled.plan, &[]).unwrap(),
+            request_settings: ProcessRequestSettings::try_bind(&compiled.plan, &[]).unwrap(),
             resources: BTreeMap::new(),
             retiring: vec![worker],
             events: Vec::new(),

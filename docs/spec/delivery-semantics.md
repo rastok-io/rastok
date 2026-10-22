@@ -509,7 +509,7 @@ boundary feeds `execution.outputs()` without a duplicate emission or anonymous
 observation.
 
 A required input which can never be fed receives `W-DEAD-INPUT`. A missing
-return half required by an inbound Call `respond` profile is an error because
+return half required by an inbound Call `respond` mode is an error because
 it would strand an already-admitted protocol obligation.
 
 

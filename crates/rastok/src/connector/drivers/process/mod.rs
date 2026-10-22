@@ -214,7 +214,7 @@ pub(super) fn bind_scripted_protocol(
     _boot: &crate::deployment::BootBindings,
 ) -> Result<Box<dyn super::CallProtocol>, super::DriverFactoryError> {
     ProcessRequestSettings::try_bind(plan, nodes)
-        .map(|bindings| Box::new(bindings) as Box<dyn super::CallProtocol>)
+        .map(|request_settings| Box::new(request_settings) as Box<dyn super::CallProtocol>)
         .map_err(|error| super::DriverFactoryError::new(error.to_string()))
 }
 
@@ -499,7 +499,7 @@ pub struct Process<'plan> {
     /// Every Process connector's binding. Plan rows resolve before the
     /// journal exists; instance rows arrive as already-evaluated values on the
     /// intent and are converted once per logical instance.
-    bindings: ProcessRequestSettings,
+    request_settings: ProcessRequestSettings,
     runs: Vec<Run>,
     answers: Vec<CallResponse>,
 }
@@ -769,17 +769,17 @@ impl<'plan> Process<'plan> {
         plan: &'plan crate::plan::ValidatedExecutionPlan,
         nodes: &[crate::node::Path],
     ) -> Result<Self, ProcessBindError> {
-        let bindings = ProcessRequestSettings::try_bind(plan, nodes)?;
+        let request_settings = ProcessRequestSettings::try_bind(plan, nodes)?;
         Ok(Self {
             _plan: plan,
-            bindings,
+            request_settings,
             runs: Vec::new(),
             answers: Vec::new(),
         })
     }
 
     fn launch(&mut self, intent: &CallOpen, request: &Envelope) -> Result<Run, Completion> {
-        let Some(binding) = self.bindings.get(&intent.connector_path) else {
+        let Some(binding) = self.request_settings.get(&intent.connector_path) else {
             return Err(ProcessFailure::SpawnFailed {
                 message: "no Process binding serves this connector (unknown path, or another \
                           contract this specialized Driver does not carry)"
@@ -1081,7 +1081,7 @@ impl OutboundCall for Process<'_> {
         data: &Data,
         _resolved_settings: &std::collections::BTreeMap<String, Value>,
     ) -> RequestPreparation {
-        self.bindings.prepare_request(connector, data)
+        self.request_settings.prepare_request(connector, data)
     }
 
     fn scheduler_completion(

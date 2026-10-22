@@ -444,5 +444,5 @@ pub(crate) fn bind_scripted_protocol(
     boot: &crate::deployment::BootBindings,
 ) -> Result<Box<dyn super::CallProtocol>, super::DriverFactoryError> {
     HttpClientRequestSettings::try_bind_with_boot(plan, nodes, boot)
-        .map(|bindings| Box::new(bindings) as Box<dyn super::CallProtocol>)
+        .map(|request_settings| Box::new(request_settings) as Box<dyn super::CallProtocol>)
 }

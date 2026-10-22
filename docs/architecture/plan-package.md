@@ -128,7 +128,7 @@ the compiler surfaces that refusal as the user diagnostic
 no gap at the boundary.
 
 The package re-derives expression/Dispatch types, the exact seven built-in
-Connector Contracts (including the two Process profiles), port tables, routed narrowing, composition, productibility,
+Connector Contracts (including the two Process modes), port tables, routed narrowing, composition, productibility,
 Extensions, Loop control/measure and Retry safety evidence without the hosted
 ContractCatalog. Unknown contracts or unsupported execution profiles refuse.
 Checksums do not substitute for these proofs. Refusals are typed and total;

@@ -25,7 +25,7 @@ file paths, file order, declaration order (top-level declarations are
 sorted by (kind, name) before hashing) ; sugar spelling (a form hashes as
 its desugared equivalent) ; **omission of a contract default**
 (D-2026-08-12-1: the checker injects every omitted `Defaulted`
-attribute — the profile selector's word included — into the
+attribute — the mode selector's word included — into the
 effective HIR BEFORE canonicalization, so `mode` omitted and
 `mode = job` are one identity ; this merges only the EXACT spelling
 of the default — `duration("60s")` and `duration("1m")` keep two

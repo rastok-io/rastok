@@ -52,12 +52,12 @@ impl DriverFactory for Factory {
         plan: &'a ValidatedExecutionPlan,
         nodes: &[node::Path],
     ) -> Result<Box<dyn Driver + 'a>, DriverFactoryError> {
-        let bindings = ProcessRequestSettings::try_bind(plan, nodes)
+        let request_settings = ProcessRequestSettings::try_bind(plan, nodes)
             .map_err(|e| DriverFactoryError::new(e.to_string()))?;
         let protocol = ProcessRequestSettings::try_bind(plan, nodes)
             .map_err(|e| DriverFactoryError::new(e.to_string()))?;
         Ok(Box::new(World {
-            bindings,
+            request_settings,
             evaluator: MockOutboundDriver {
                 plan,
                 mocks: Rc::clone(&self.mocks),
@@ -74,7 +74,7 @@ impl DriverFactory for Factory {
     }
 }
 struct World<'plan> {
-    bindings: ProcessRequestSettings,
+    request_settings: ProcessRequestSettings,
     evaluator: MockOutboundDriver<'plan>,
     resources: BTreeMap<SessionId, node::Path>,
     terminating: std::collections::BTreeSet<SessionId>,
@@ -140,7 +140,8 @@ impl Session for World<'_> {
         data: &Data,
         settings: &BTreeMap<String, Value>,
     ) -> RequestPreparation {
-        self.bindings.prepare_service(path, data, settings, true)
+        self.request_settings
+            .prepare_service(path, data, settings, true)
     }
     fn prepare_session_write(
         &mut self,
@@ -149,7 +150,8 @@ impl Session for World<'_> {
         data: &Data,
         settings: &BTreeMap<String, Value>,
     ) -> RequestPreparation {
-        self.bindings.prepare_service(path, data, settings, false)
+        self.request_settings
+            .prepare_service(path, data, settings, false)
     }
     fn scheduler_session_completion(
         &mut self,

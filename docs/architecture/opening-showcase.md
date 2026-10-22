@@ -680,7 +680,7 @@ interpret the conversation protocol. Several turns may use one resident child,
 and `exit` remains the child's terminal rather than a turn-completion signal.
 The unused Process-owned `correlate`/RPC and protocol-resume promises have been
 superseded in stdlib and the composition sketch. Other Contracts' correlators
-and the executable job profile are unchanged.
+and the executable job mode are unchanged.
 
 The subsequent D-2026-09-10-3 fixes fresh opening: child death produces its exit
 without automatic respawn; a new input may open a new child in the same

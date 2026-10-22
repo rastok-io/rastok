@@ -1536,7 +1536,7 @@ instance; its sole terminal fact is an ordinary `l:reply` transaction, not a
 second outbound call. Every session has a causal
 logical session reference independent of its socket, negotiated transport and
 physical placement. A Process job or database operation is a call; a
-WebSocket connection and the resident Process service profile are sessions.
+WebSocket connection and the resident Process service mode are sessions.
 Neither automatically invents a Node-instance key.
 
 For WebSocket, one server Driver owns many logical SessionIds and one client
@@ -1559,7 +1559,7 @@ per-message exit. No output may follow the corresponding terminal `exit`.
 For a `Process`, `Exited { exit_code, signal }`, `TimeoutExpired`,
 `SpawnFailed` and the former typed error codes are cases of `ProcessExit`.
 `out` stays the data stream and `Process.err` stays stderr; a graph reacting
-to termination wires `process.exit -> …`. The resident Process profile uses
+to termination wires `process.exit -> …`. The resident Process service mode uses
 one Session per child incarnation: new input may open a fresh child after
 death, but automatic restart and request replay are not implied. `meta.sys`
 stays closed while call, resource, and Node-instance identities remain causal

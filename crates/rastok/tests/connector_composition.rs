@@ -250,7 +250,7 @@ graph websocket_only : App {
 "#;
     let compilation = compile_one(source);
     let Err(error) = RuntimeDrivers::prepare(&compilation.plan, &process_registry()) else {
-        panic!("a Process-only image cannot create bindings for WebSocketClient")
+        panic!("a Process-only image cannot create Drivers for WebSocketClient")
     };
     assert!(
         error.to_string().contains("std/websocket-client@3"),

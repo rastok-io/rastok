@@ -383,7 +383,7 @@ monomorphic. Its port rules may be:
 - a fixed logical type;
 - a type variable inferred from an attached edge;
 - the same type as another port;
-- a type selected by a profile or attribute;
+- a type selected by a mode or attribute;
 - a variable constrained by a codec capability.
 
 Examples:

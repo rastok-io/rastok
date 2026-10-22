@@ -197,7 +197,7 @@ pressure, neither changes identity nor acknowledges. If the current injection
 cannot settle, the sequential scenario reports pending admission and does not
 skip to the next authored action. A refused proposal produces no source
 observation or terminal. Source `exit` cannot be injected directly; Operator
-ports, outgoing Connector outputs and unmodeled source profiles refuse at check.
+ports, outgoing Connector outputs and unmodeled source modes refuse at check.
 
 The fixture [lab-http-source.rkg](../../crates/rastok/tests/fixtures/lab-http-source.rkg)
 executes without network features and without any App input. Its Lab changes

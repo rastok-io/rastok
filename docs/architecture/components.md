@@ -271,7 +271,7 @@ resolved constructor/narrowing forms their canonical package ids.
 
 | Component | Owns | Interface | Spec | Status |
 |---|---|---|---|---|
-| **`plan::ValidatedExecutionPlan`** | private validated plan with total ports, one Node table, Operator-owned Dispatch, Graph-owned wiring, derived execution indexes, Contract profiles, Extensions, Loop proof/host terminals and sparse policy tables | produced by `compiler` or `plan::decode`; consumed by `runtime`, `lab`, and `plan::encode` | [types.md](../spec/types.md); [observability.md](../spec/observability.md); [identity.md](../spec/identity.md); [instances.md](../spec/instances.md); [extensions.md](../spec/extensions.md); [plan-package.md](plan-package.md) | current format executable; unknown versions/tags refuse |
+| **`plan::ValidatedExecutionPlan`** | private validated plan with total ports, one Node table, Operator-owned Dispatch, Graph-owned wiring, derived execution indexes, Contract modes, Extensions, Loop proof/host terminals and sparse policy tables | produced by `compiler` or `plan::decode`; consumed by `runtime`, `lab`, and `plan::encode` | [types.md](../spec/types.md); [observability.md](../spec/observability.md); [identity.md](../spec/identity.md); [instances.md](../spec/instances.md); [extensions.md](../spec/extensions.md); [plan-package.md](plan-package.md) | current format executable; unknown versions/tags refuse |
 | **`plan::Manifest`** | the append-only ledger `SemanticHash → GraphVersions` — plural: a rollback allocates a **new** version for the same hash; a version is never renumbered, never reused | allocated at boot | [identity.md §2](../spec/identity.md) | M0 (minimal) |
 
 `ExecutionPlan` remains the whitepaper's domain term and the private data

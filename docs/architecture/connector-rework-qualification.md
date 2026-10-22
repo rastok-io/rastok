@@ -572,3 +572,30 @@ The final digest comparison finds all **73 protected artifacts byte-identical
 to `590d070`**; no witness was regenerated. The independent reviewer replay
 and external opening gates are not claimed here. No push, tag or publication
 is authorized by this pass.
+
+### A-T5-8 — applied
+
+22 October 2026, against `20086f6`. File, Process, resident Process and
+HttpClient Driver fields/parameters, the resident Process Lab twin and the
+three scripted-protocol factory closures now call their `*RequestSettings`
+values `request_settings`; the File/Process name-to-binding maps, BootBindings
+and expression bindings remain unchanged. The composition-test panic says
+Drivers, and the eleven specified prose passages use Contract mode vocabulary.
+The compound subject in `opening-showcase.md` keeps the plural `are unchanged`.
+RustRover performed the symbol renames; the approved patch fallback covered
+verified same-name map/Driver field ambiguity. No behavior or serialized
+identity changed. The complete gate passes: fmt; strict all-target/all-feature
+Clippy with `--locked` and `-D warnings`; workspace all-feature tests with
+`--locked --no-fail-fast -- --test-threads=1` (**1,623 passed in 61 groups,
+zero failed or ignored**); rustdoc with `RUSTDOCFLAGS='-D warnings'`; separate
+`site_content` **12/12**; and all three `no_std` targets
+(`thumbv8m.main-none-eabihf`, `thumbv7m-none-eabi`,
+`riscv32imac-unknown-none-elf`). An initial run was interrupted after two
+network-listener startup timeouts; a separate CLI launch was observed blocked
+in `_dyld_start`, and Yoann reproduced the startup stall in his terminal.
+The complete rerun passed without source, test-timeout or system-setting
+changes. All **73 protected artifacts remain byte-identical to `20086f6`**;
+the diff contains only Rust/Markdown and no 64-hexadecimal literal. The two
+human-review registers and decisions are untouched. The four empty untracked
+former `connectors` directories were removed. QEMU was not rerun, as allowed
+for this lot: the spike sources are unchanged. No push or tag was made.

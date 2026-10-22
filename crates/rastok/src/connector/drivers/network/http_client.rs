@@ -285,7 +285,7 @@ type H2Pool = std::sync::Arc<tokio::sync::Mutex<BTreeMap<String, H2Sender>>>;
 #[derive(Debug)]
 struct HttpClient<'plan> {
     _plan: &'plan crate::plan::ValidatedExecutionPlan,
-    bindings: HttpClientRequestSettings,
+    request_settings: HttpClientRequestSettings,
     boot_secrets: BTreeMap<crate::deployment::SecretName, crate::deployment::SecretMaterial>,
     plans: BTreeMap<crate::node::Path, HttpClientPlanBinding>,
     config: HttpClientConfig,
@@ -324,17 +324,17 @@ impl<'plan> HttpClient<'plan> {
         config: HttpClientConfig,
         boot: &crate::deployment::BootBindings,
     ) -> Result<Self, String> {
-        let bindings = HttpClientRequestSettings::try_bind_with_boot(plan, nodes, boot)
+        let request_settings = HttpClientRequestSettings::try_bind_with_boot(plan, nodes, boot)
             .map_err(|error| error.to_string())?;
         let mut boot_secrets = BTreeMap::new();
-        for reference in bindings.secret_references() {
+        for reference in request_settings.secret_references() {
             let material = boot.secret(reference).ok_or_else(|| {
                 format!("secret `{}` disappeared during binding", reference.as_str())
             })?;
             boot_secrets.insert(reference.clone(), material.clone());
         }
         let expected: BTreeSet<_> = nodes.iter().cloned().collect();
-        let actual: BTreeSet<_> = bindings.specs.keys().cloned().collect();
+        let actual: BTreeSet<_> = request_settings.specs.keys().cloned().collect();
         if expected != actual {
             return Err(String::from(
                 "the HttpClient binder received an incomplete connector family",
@@ -342,7 +342,7 @@ impl<'plan> HttpClient<'plan> {
         }
         let mut plans = BTreeMap::new();
         for path in nodes {
-            let binding = bindings.plan_binding(path).ok_or_else(|| {
+            let binding = request_settings.plan_binding(path).ok_or_else(|| {
                 format!("the HttpClient plan settings at `{path}` are unresolved")
             })?;
             let body = usize::try_from(binding.max_body).map_err(|_| {
@@ -426,7 +426,7 @@ impl<'plan> HttpClient<'plan> {
         .map_err(|error| error.to_string())?;
         Ok(Self {
             _plan: plan,
-            bindings,
+            request_settings,
             boot_secrets,
             plans,
             config,
@@ -442,8 +442,8 @@ impl<'plan> HttpClient<'plan> {
         resolved: &BTreeMap<String, Value>,
         name: &str,
     ) -> Option<Value> {
-        let spec = self.bindings.specs.get(connector)?;
-        self.bindings.value(connector, spec, resolved, name)
+        let spec = self.request_settings.specs.get(connector)?;
+        self.request_settings.value(connector, spec, resolved, name)
     }
 
     fn tls_material(
@@ -496,7 +496,10 @@ impl OutboundCall for HttpClient<'_> {
         data: &Data,
         resolved_settings: &BTreeMap<String, Value>,
     ) -> RequestPreparation {
-        match self.bindings.prepare(connector, data, resolved_settings) {
+        match self
+            .request_settings
+            .prepare(connector, data, resolved_settings)
+        {
             Ok(prepared) => {
                 let Some(request) = decode_request(&prepared) else {
                     return RequestPreparation::Rejected(Completion::http_client_exit(
@@ -2108,13 +2111,13 @@ graph app : App {
         let catalogue = crate::connector::contract::ContractCatalog::try_m0().unwrap();
         let compilation = crate::compiler::compile(&[source], &catalogue).unwrap();
         let path = crate::node::Path::new(["model"]).unwrap();
-        let bindings = HttpClientRequestSettings::try_bind_with_boot(
+        let request_settings = HttpClientRequestSettings::try_bind_with_boot(
             &compilation.plan,
             std::slice::from_ref(&path),
             &crate::deployment::BootBindings::empty(),
         )
         .unwrap();
-        let binding = bindings.plan_binding(&path).unwrap();
+        let binding = request_settings.plan_binding(&path).unwrap();
         let schema = binding.response_type.as_ref().unwrap();
         let mut request = request(String::from("https://example.test/model"), b"{}");
         request.codec = String::from("json");
