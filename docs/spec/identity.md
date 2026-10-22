@@ -1,8 +1,9 @@
 # Identity and canonical form
 
-> **Format 21, diagnostic recording 4.** The [Node realignment inventory](../architecture/node-realignment-identity.md)
-> records the package-only representation change; semantic hashes, journal
-> records and causal traces are unchanged.
+> **Format 22, diagnostic recording 4.** The [Process identity inventory](../architecture/connector-rework-identity.md)
+> records one Process Contract for job and service modes. Process semantic
+> hashes and Process Retry causal records change; unrelated semantic hashes
+> and causal traces do not. The package body schema and record codec are unchanged.
 > Only this format is readable. The registry is now extend-only: no
 > renumbering or reuse of an allocated key, tag or domain.
 > Changing the public version label to 1 remains a pre-publication TODO.

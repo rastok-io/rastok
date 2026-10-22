@@ -66,8 +66,11 @@ reorganization, shared standard definitions and per-Node implementation
 selection, with its actual Rust/browser/no_std gates and Cortex-M33 heap/code
 measurements. Package and recording formats remain those named in
 [identity.md](../spec/identity.md); no protected witness changes in the neutral
-series. The [Process identity proposal](connector-rework-identity.md) remains
-unapproved. These implementation checks do not close the independent browser,
+series. The separate [Process identity movement](connector-rework-identity.md)
+is approved and qualified: 1,623 Rust tests, 35 browser tests, three no_std
+targets and both QEMU workloads pass. Retry with recovery leaves 1,884 B
+of heap and 5,124 B of code under the unchanged gates. These implementation
+checks do not close the independent browser,
 protocol or release-distribution gates below. Stack was not remeasured in T5/T9.
 
 **15 October dated qualification:** package 21 and diagnostic recording 4

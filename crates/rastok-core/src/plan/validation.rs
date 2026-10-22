@@ -292,14 +292,21 @@ pub enum PlanValidationError {
         /// Missing port.
         port: &'static str,
     },
-    /// A built-in Connector claims runtime roles that its stable contract id
-    /// does not define.
+    /// An exact standard Contract is absent from this core's declarations.
+    UnknownStandardContract {
+        /// Connector node.
+        node: node::OwnerPath,
+        /// Unsupported standard identity.
+        contract: crate::connector::ContractId,
+    },
+    /// A built-in Connector claims runtime roles that its Contract and mode
+    /// do not define.
     ContractRoleMismatch {
         /// Connector node.
         node: node::OwnerPath,
     },
-    /// A built-in Connector claims an exchange lifecycle that its stable
-    /// contract id does not define.
+    /// A built-in Connector claims an exchange lifecycle that its Contract
+    /// and mode do not define.
     ContractExchangeMismatch {
         /// Connector node.
         node: node::OwnerPath,
@@ -781,6 +788,10 @@ impl core::fmt::Display for PlanValidationError {
             Self::MissingContractPort { node, port } => write!(
                 f,
                 "invalid plan: `{node}` omits resolved contract port `{port}`"
+            ),
+            Self::UnknownStandardContract { node, contract } => write!(
+                f,
+                "invalid plan: `{node}` names unsupported standard Contract `{contract}`"
             ),
             Self::ContractRoleMismatch { node } => write!(
                 f,

@@ -3088,7 +3088,34 @@ impl Checker<'_, '_> {
                         return None;
                     }
                 };
-                (contract_id, contract.roles, contract.exchange)
+                // A selector is a plan-time bare word. Resolve its protocol
+                // before constructing the Node; `contract` below still checks
+                // missing, invalid, duplicate and deferred declarations.
+                let protocol = contract.selector.as_ref().and_then(|selector| {
+                    let written = decl.body.iter().find_map(|item| match item {
+                        OperatorItem::Attribute(attribute)
+                            if attribute.target.segments.len() == 1
+                                && attribute.target.segments[0].text == selector.attribute =>
+                        {
+                            Some(&attribute.value)
+                        }
+                        _ => None,
+                    });
+                    let word = match written {
+                        Some(SynValue::Expr(source)) if is_bare_word(&source.text) => {
+                            Some(source.text.as_str())
+                        }
+                        None => selector.default,
+                        Some(_) => None,
+                    };
+                    word.and_then(|word| contract.profile(word))
+                        .and_then(|mode| mode.protocol)
+                });
+                (
+                    contract_id,
+                    protocol.map_or(contract.roles, |protocol| protocol.roles),
+                    protocol.map_or(contract.exchange, |protocol| protocol.exchange),
+                )
             }
             contract::Availability::Declared => {
                 self.bag.push(
@@ -3736,43 +3763,26 @@ impl Checker<'_, '_> {
         if let NodeSemantics::Connector { attributes, .. } = &mut node.semantics {
             attributes.extend(injected);
         }
-        if let Some(protocol) = profile.and_then(|profile| profile.protocol) {
-            if let NodeSemantics::Connector {
-                contract,
-                roles,
-                exchange,
-                ..
-            } = &mut node.semantics
-            {
-                match crate::connector::ContractId::parse(protocol.id) {
-                    Ok(id) => *contract = id,
-                    Err(error) => {
-                        refuse(self.bag, "mode", decl.span, error.to_string());
-                        return;
+        if contract.id == crate::connector::stdlib::PROCESS_CONNECTOR_ID
+            && profile.is_some_and(|mode| mode.word == "service")
+        {
+            for attribute in node.attributes() {
+                let rejected = match attribute.name.as_str() {
+                    "codec" | "err_codec" => {
+                        matches!(&attribute.value, AttrValue::Word(w) if w == "bytes")
                     }
-                }
-                *roles = protocol.roles;
-                *exchange = protocol.exchange;
-            }
-            if protocol.id == crate::connector::stdlib::PROCESS_SERVICE_CONNECTOR_ID {
-                for attribute in node.attributes() {
-                    let rejected = match attribute.name.as_str() {
-                        "codec" | "err_codec" => {
-                            matches!(&attribute.value, AttrValue::Word(w) if w == "bytes")
-                        }
-                        "timeout" => true,
-                        _ => false,
-                    };
-                    if rejected {
-                        refuse(
-                            self.bag,
-                            &attribute.name,
-                            span_of(&attribute.name),
-                            String::from(
-                                "Process(service) uses bounded lines/jsonl frames and instance lifetime/closing; raw bytes and per-request timeout are not defined",
-                            ),
-                        );
-                    }
+                    "timeout" => true,
+                    _ => false,
+                };
+                if rejected {
+                    refuse(
+                        self.bag,
+                        &attribute.name,
+                        span_of(&attribute.name),
+                        String::from(
+                            "Process(service) uses bounded lines/jsonl frames and instance lifetime/closing; raw bytes and per-request timeout are not defined",
+                        ),
+                    );
                 }
             }
         }

@@ -349,20 +349,15 @@ impl ProcessFailure {
 impl ProcessSettings {
     fn try_from(spec: &rastok_core::plan::ConnectorSpec) -> Result<Self, ProcessSettingsError> {
         use ProcessSettingsError as E;
-        if !matches!(
-            spec.contract.as_str(),
-            crate::connector::stdlib::PROCESS_CONNECTOR_ID
-                | crate::connector::stdlib::PROCESS_SERVICE_CONNECTOR_ID
-        ) {
+        if spec.contract.as_str() != crate::connector::stdlib::PROCESS_CONNECTOR_ID {
             return Err(E::NotProcess(spec.contract.clone()));
         }
-        let service =
-            spec.contract.as_str() == crate::connector::stdlib::PROCESS_SERVICE_CONNECTOR_ID;
-        match spec.attribute("mode") {
-            Some(AttrSetting::Word(word)) if word == if service { "service" } else { "job" } => {}
+        let service = match spec.attribute("mode") {
+            Some(AttrSetting::Word(word)) if word == "service" => true,
+            Some(AttrSetting::Word(word)) if word == "job" => false,
             Some(AttrSetting::Word(word)) => return Err(E::UnknownMode(word.clone())),
             _ => return Err(E::Unresolved("mode")),
-        }
+        };
         match spec.attribute("on_timeout") {
             None if service => {}
             Some(AttrSetting::Word(word)) if word == "kill" => {}
@@ -677,7 +672,7 @@ enum Chunk {
     ReadFailed,
 }
 
-/// Statically linked factory for `std/process@4`.
+/// Statically linked job factory for `std/process@6`.
 #[derive(Debug)]
 pub struct ProcessFactory {
     id: crate::connector::ContractId,
@@ -740,7 +735,7 @@ impl crate::connector::driver::Driver for Process<'_> {
 }
 
 impl<'plan> Process<'plan> {
-    /// Binds a specialized Driver to every `Process` connector of one
+    /// Binds a specialized Driver to every Process job of one
     /// validated plan, resolving all settings up front: a
     /// configuration defect refuses HERE — before any journaled
     /// open — and `SpawnFailed` is reserved for the OS actually
@@ -762,6 +757,7 @@ impl<'plan> Process<'plan> {
                 node.connector()
                     .filter(|spec| {
                         spec.contract.as_str() == crate::connector::stdlib::PROCESS_CONNECTOR_ID
+                            && spec.exchange == crate::connector::ExchangeKind::Call
                     })
                     .and_then(|_| node.executor_path().cloned())
             })

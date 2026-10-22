@@ -4663,7 +4663,7 @@ impl<'plan> Execution<'plan> {
     ) -> Result<Option<SessionId>, ExecutionFault> {
         // The resident child belongs to this exact Node instance. An upstream
         // socket's session_id is provenance, not an address for this resource.
-        if spec.contract.as_str() == crate::connector::stdlib::PROCESS_SERVICE_CONNECTOR_ID {
+        if spec.contract.as_str() == crate::connector::stdlib::PROCESS_CONNECTOR_ID {
             return Ok(None);
         }
         if spec.attribute("correlate").is_some() {

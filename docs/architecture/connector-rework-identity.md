@@ -1,11 +1,12 @@
-# Connector rework — proposed Process identity inventory
+# Connector rework — Process identity inventory
 
 Date: 22 October 2026. Baseline measured on 21 October.
-Status: **proposal, not implemented or approved**.
-This is the A-T5-4 review boundary of the T5/T9 series. The mechanical
-Connector reorganization does not authorize this identity movement.
+Status: **approved by Yoann, implemented and qualified on 22 October**.
+This is the A-T5-4 identity boundary of the T5/T9 series. Yoann explicitly
+approved `std/process@6`, package format 22 and the amendment below; the
+mechanical Connector reorganization alone did not authorize this movement.
 
-## Decision requested
+## Approved decision
 
 Use one exact Process Contract, `std/process@6`. The statically selected
 `mode = job | service` determines the resolved direction, exchange and
@@ -13,17 +14,17 @@ lifecycle. Omission still materializes `mode = job` before semantic hashing.
 Neither `std/process@4` nor `std/process@5` is reassigned or accepted as an
 alias. Old artifacts must be regenerated, not converted.
 
-The open format choice is independent of the Contract major:
+The package choice is independent of the Contract major. Yoann chose format
+22; the alternative is recorded here as the rejected proposal:
 
 | Choice | Consequence |
 |---|---|
-| Package format 22, recommended in the brief | One new approval line; format 21 refuses before body decoding. Every package checksum changes, including pure gauge, because the version is covered. The body schema and key allocation do not change. |
-| Reapprove package format 21 | No version-only movement for non-Process packages, but the prior once-per-format approval rule needs an explicit exception. Old Process packages refuse by unsupported Contract rather than package version. |
+| Package format 22, approved | One new approval line; format 21 refuses before body decoding. Every package checksum changes, including pure gauge, because the version is covered. The body schema and key allocation do not change. |
+| Reapprove package format 21, rejected | No version-only movement for non-Process packages, but the prior once-per-format approval rule would need an explicit exception. Old Process packages would refuse by unsupported Contract rather than package version. |
 
 Neither choice renumbers the public format to 1 now. That remains the
 separate pre-publication TODO. Diagnostic recording remains version 4:
-no record tuple changes. Its embedded package must satisfy whichever
-package version Yoann approves.
+no record tuple changes. Its embedded package must satisfy format 22.
 
 ## What remains exactly the same
 
@@ -178,9 +179,9 @@ The implementation commit must replace this proposal's candidate columns
 with measured old/new values, one semantic reason for each movement.
 No functional assertion is weakened and no test is ignored.
 
-## Proposed normative amendment
+## Approved normative amendment
 
-After Yoann's approval, add D-2026-10-22-1 to `decisions.md` and align
+Yoann approved D-2026-10-22-1 in `decisions.md` and the alignment of
 `stdlib.md` §1.1 and §3.3 and the status heading of `identity.md`:
 
 > Yoann decides that Process is one versioned Contract, `std/process@6`.
@@ -190,24 +191,118 @@ After Yoann's approval, add D-2026-10-22-1 to `decisions.md` and align
 > the mode-specific identity clauses of D-2026-09-14-1. It does not change
 > either mode's codecs, ports, terminal obligations, instance closure,
 > timeout rules, Loop/Retry restrictions or external-effect ordering.
-> The package-format choice is the option explicitly approved by Yoann
-> in this inventory. No old Contract alias or compatibility reader is added.
+> Package format 22 records this movement once. No old Contract alias or
+> compatibility reader is added.
 
-This quoted text is a proposal, not an addition to the settled-decision
-registry. Until approval, runtime code keeps `@4`/`@5` and format 21.
+The settled-decision registry records the approval. The completed
+[qualification](connector-rework-qualification.md#final-checks-and-embedded-measurements)
+records the implementation checks and measured witness movements.
 
 ## Approval and measurement gate
 
-First obtain approval of the Contract id, amendment text and format number.
-Then change the implementation and measure candidates without overwriting
-witnesses. Add their actual identities and reasons here before the single
-regeneration pass. Finally run the complete workspace, site, no_std and
-Cortex-M33 gates, including code and peak heap for echo and Retry recovery.
-The existing 128 KiB heap and 1 MiB code gates do not move.
+Approval of the Contract id, amendment text and format number preceded the
+implementation. Candidates were measured without overwriting witnesses;
+their actual identities and reasons were entered below before the single
+regeneration pass. The complete workspace, site, browser, no_std and
+Cortex-M33 gates now pass, including code and peak heap for echo and Retry
+recovery. The existing 128 KiB heap and 1 MiB code gates did not move.
 
 No push, tag or publication belongs to this operation.
 
-## Qualification of this proposal
+## Measured format-22 candidates — before regeneration
+
+Measured on 22 October after the approved implementation, without replacing
+a tracked witness. The old values are the **Baseline witnesses** tables
+above; each row below names the same source. Every source independently
+round-trips through the format-22 reader, including chat with its asset root.
+
+Reasons: **P** replaces the exact Process Contract text by `std/process@6`,
+moving canonical HIR identity and the Connector body, not behavior.
+**V** changes the package version from 21 to 22, moving the container
+checksum even when its body and semantic hash are unchanged.
+All body lengths are unchanged. Gauge's complete body is byte-identical.
+
+| Source below `examples/` | Body bytes, old → new | New semantic hash | New package checksum | Reason |
+|---|---:|---|---|---|
+| `echo` | 934 → 934 | `7106f3226fe8df3a74a453377d62e3a11e14e869ed6b2280fe95ccc7c7c94037` | `669d3e79dec2097567d15a706a0f5fc5db56f74f909714a200b7d6d10baa7df1` | P + V |
+| `jsonl` | 979 → 979 | `6c58b687269df20e5bd5c468a88bf59eac4c67dda528f77890dc6937bd1dbc81` | `4b261c5c57ed625c133968be8f34306263ca17147c8cde9261bf6ef4d6309cf1` | P + V |
+| `gauge` | 230 → 230 | `0d3ad43d9fb09c8626146342f6a50d1f4c387a8de52a47a3134a408cf74cb22e` | `3f6cb93b512e68642942d9bd84d0feed9f2ee01e78e9fc05c5f83b8c9de08d10` | V only |
+| `csv-count` | 1311 → 1311 | `4b00c8333fa4b86283f1862a7cf238a44b74476545a73e4b6e4cfaf469a0a9ea` | `3c136e459e8efc7f378e5533ccff70b65133ac40b99d3c3841f303e0adb35f77` | P + V |
+| `keyed-retry` | 2008 → 2008 | `e0091a67cd4992a8b0a8788b2989acf28fb70c60bf9339763c470105aff9b857` | `a118ad25f5504f1c7f422ae42a33aa53d24adb05c9a27b51cf6cc8c104bcd11e` | P + V |
+| `agent-gateway` | 2903 → 2903 | `d9e11453c094d8e9fc0d9c425eb3cfb35b003c3d083f572ff418db7044e1caa2` | `895be110f7cc4bf610ec7b54998ec3a3f04319e90a0d08bf4e6bcbb510ddd11a` | P + V |
+| `agent-dialogue` | 2625 → 2625 | `edf2fe3942fd5f6629408deafd892b66b195adc86d2cb8990f3646c13c399484` | `ae2d617e6c835152b21fffecf4111b433b1f41ba5528e9f470baeabddff38067` | P + V |
+| `agent-chat` | 17090 → 17090 | `7ac3687ecb813e375ae39cca69370b939483c40d2d13aa30c0b0f11e0d341744` | `31d7f2279202697fa51215b16710407031e9c2c7fc721d5a4f86ec8986f37d10` | P + V |
+| `file-pipeline` | 2261 → 2261 | `3a440d6a3fcb13bc30bb5d7bb97f7062db6cbdf579d4dcae2196a77ce6b9232b` | `d08b3cc0f5cf45735097642e8653b24494a5a7f7902cd01fa16492dec84ad045` | V only |
+| `webhook-to-partner` | 7370 → 7370 | `0f71ef3c737707827fc6d48add0b392f8743bce594a8ea0a530ae3820220680c` | `148fd541a3941db29efe0ca8d35857f3120db975870e75649a0fa705ab0ebba4` | V only |
+| `sensor-alarm` | 1193 → 1193 | `2b7994353b59abd40ccbb012e61b97011d377c86555e575fdc7c18c8c20caf04` | `5020a0722400a7f5326c3282622264be08a8cea9834519d01bc38de439a59871` | V only |
+| `agent-http` | 7280 → 7280 | `b34ca7e9fe4a2943fc89774968ae3cf99d9fcc6d692d459c76f778f5b96a248c` | `a9e515570c5b391f6cc592690adc1b482304e87f33798fb6d7c2c93d6ba2b71b` | V only |
+
+The tracked echo/JSONL/gauge package fixtures take these exact source values;
+the binary spike echo takes the same candidate as the hex echo fixture.
+For gauge, File, HTTP and sensor sources, the semantic hash above equals
+the baseline hash: only the container checksum moves.
+
+### Causal movement
+
+All 28 gallery scenarios passed before any trace replacement. Their record
+counts are unchanged. Exactly two seals move:
+
+| Trace | Records | Old causal seal | New causal seal | Reason |
+|---|---:|---|---|---|
+| `two-tenants/ui_tour.two_tenants.trace` | 29 | `11bea6acfff27b4efc59dfe320694aa10462091bf30357b4f3b7472820c7f8b6` | `2196320c0b04a809c649fae143c58e061402e5612134ecbf031e14a80378d67e` | Retry opening binds the Process Contract and originating semantic hash |
+| `two-tenants/ui_tour.lifetime.trace` | 30 | `1be7011e12b84ce812cfb2a85d255da66df4a73825dded8ac8e138eaf99a21fd` | `38ebdd9a3109af18a9ba565de0a5f1a8b0aee7e4313f06fd02572814b618bbdb` | Same Retry identity rule |
+
+The other 26 gallery traces keep the exact seals in the baseline table,
+including Process Call/Session traces and the non-Process Retry traces.
+The independent JSONL and gauge scenarios also reproduce their baseline
+8/4 records and causal seals. No unchanged trace needs regeneration.
+
+### Additional pins
+
+Package-version assertions in `plan_fields.rs`, `retry_plan.rs` and
+`instance_stop.rs`, and the canonical header bytes in `plan_package.rs`,
+move from 21 to 22 for reason V. Their hostile-plan and canonicality
+assertions stay unchanged; these files were included in the pre-movement
+pin inventory above.
+
+Browser qualification exposed two additional textual Contract pins in
+`ui/browser.test.cjs`: the node hover and keyboard-accessible explanation
+still expected `std/process@4`, while the actual tooltip correctly shows
+`std/process@6`. Record this old/new expectation before updating it, for
+reason P. The surrounding direction, instance-count and keyboard assertions
+stay unchanged; no UI implementation or causal artifact changes.
+
+| Pin | Old | New | Reason |
+|---|---|---|---|
+| M0 compiler probe semantic hash | `6a49eb768c73af74cff64dc40bd08009e711fc1456c2b92e9e5f4f71e2508433` | `99e54e680230e6f01914b6c16f81dfd36dcc79d3e22bab61debd1162854da35a` | P: the probe contains a Process job |
+| Generated Retry spike semantic hash | `d8e89d6dc345e7c6199ee5ffc5664b682e09040a8589c6e934016bbe1c32581f` | `3cad77eff37f7a658254c3855d92b084a12150a9cb3cd440051db864660f67e9` | P: its three-attempt operation uses Process |
+| CI echo semantic hash | `562396de22b068ef874b8d7273bf972ee1b08b8dcb6dab8902d6b816b1c90813` | `7106f3226fe8df3a74a453377d62e3a11e14e869ed6b2280fe95ccc7c7c94037` | Same source as the echo package |
+| JSONL integration-test semantic hash | `0aeff047b9efde5c6dc4efd6f411c5541a786fb24f816108e110eb29d00e026f` | `6c58b687269df20e5bd5c468a88bf59eac4c67dda528f77890dc6937bd1dbc81` | Same source as the JSONL package |
+
+The final gate confirms the echo recording tuple's unchanged baseline digest;
+the pin was not replaced. Newly captured recordings
+embed format 22 under recording version 4; there is no stored recording
+to convert. Functional expectations, record counts and deadlines are not
+changed to obtain these identities.
+
+## Applied identity movement — 22 October
+
+The implementation and its qualification are in the identity commit that
+adds this entry, following the neutral series at `3ca0867`. The complete
+Rust suite passes 1,623 tests in 61 groups, with zero failures or ignored
+tests; formatting, strict Clippy, rustdoc, site content, browser tests and
+all three no_std targets pass. Both Cortex-M33 images finish with `SPIKE_OK`.
+The [qualification report](connector-rework-qualification.md#final-checks-and-embedded-measurements)
+records commands, intermediate failed expectations and final measurements.
+
+Six of 73 protected artifacts change: the three package fixtures, the
+binary echo spike package, and the two Process Retry traces. The other
+67 remain byte-identical. Gauge's body and semantic hash stay unchanged.
+Echo heap/code are 111,404/971,428 B; Retry with recovery is
+129,188/1,043,452 B, leaving 1,884 B of heap and 5,124 B of code. The
+independent-review handoff remains separate; no public operation occurred.
+
+## Qualification of the documentation-only proposal
 
 This documentation-only checkpoint passed formatting, strict all-target and
 all-feature Clippy, rustdoc with warnings denied, and **1,598 tests in 61

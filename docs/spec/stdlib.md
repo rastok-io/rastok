@@ -1,10 +1,11 @@
 # Standard library contracts
 
-> **Status: normative; [current format](identity.md).** Process job uses `@4`,
-> Process service `@5`, and File/HTTP/WebSocket use `@3`. Their exact roles,
+> **Status: normative; [current format](identity.md).** Process uses `@6` for
+> both job and service modes; File/HTTP/WebSocket use `@3`. Their exact roles,
 > cardinality, terminal visibility and idempotence profiles are independently
 > checked. [C4 qualification](../architecture/retry-c4-qualification.md) records
-> the single cutover from the earlier Contracts. HttpClient and
+> the native-Retry base; the [Process inventory](../architecture/connector-rework-identity.md)
+> records its single-Contract identity amendment. HttpClient and
 > HttpServer are live over HTTP/1.1–3, including bounded `ack` and `respond`;
 > WebSocketClient and WebSocketServer are live over HTTP/1.1 Upgrade and
 > HTTP/2–3 Extended CONNECT. M1.8 A4 adds versioned boot binding for
@@ -108,7 +109,7 @@ Executable Contracts carry two mandatory kinds of evidence:
 These facts are Registry-free validation material, productibility evidence
 and Loop/Retry host qualification. The standard namespace is `std/`;
 external namespaces must contain a dot. Current ids are
-`std/process@4` (job), `std/process@5` (service), `std/file@3`,
+`std/process@6` (job and service), `std/file@3`,
 `std/http-client@3`, `std/http-server@3`, `std/websocket-client@3`
 and `std/websocket-server@3`. Only these exact Contracts execute in M1.
 Source names such as `Process` remain unchanged.
@@ -293,8 +294,8 @@ weaken verification or reinterpret the plan bytes.
 
 | Case | Contract |
 |---|---|
-| Stable identity | `job`: `std/process@4`; `service`: `std/process@5`; both use the [current package format](identity.md) |
-| Role / Direction | Job: outbound Call. Service: both roles, resident Session. Selecting a profile resolves its exact Contract before lowering. |
+| Stable identity | `std/process@6` for both modes, using the [current package format](identity.md) |
+| Role / Direction | Job: outbound Call. Service: both roles, resident Session. The mode resolves direction, exchange and resource lifecycle before lowering; the Contract id does not change. |
 | Ports | `in` → stdin; `out` ← decoded/framed stdout; `err` ← framed stderr data; `exit` ← `ProcessExit` |
 | idempotent / behavior | job: `idempotent: bool = false`; service has no idempotence attribute. `behavior` required for both profiles, plan-evaluated |
 | Attributes | the normative table below (D-2026-08-12-1, amended by D-2026-08-14-1) — every attribute is `name = value`, presence and defaults are the CONTRACT's, and the checker injects every omitted default into the effective HIR |

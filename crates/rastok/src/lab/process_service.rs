@@ -23,7 +23,7 @@ pub(super) struct Factory {
 impl Factory {
     pub(super) fn new(mocks: SharedMocks, faults: MockFaults) -> Result<Self, String> {
         Ok(Self {
-            id: ContractId::parse(crate::connector::stdlib::PROCESS_SERVICE_CONNECTOR_ID)
+            id: ContractId::parse(crate::connector::stdlib::PROCESS_CONNECTOR_ID)
                 .map_err(|e| e.to_string())?,
             mocks,
             faults,

@@ -1,11 +1,12 @@
 # Checked examples and historical sketches
 
-The checkout uses **format-21 / diagnostic-recording-4**.
-Its package-only movement is tracked in the
-[Node realignment inventory](../architecture/node-realignment-identity.md),
-with verification in the [qualification report](../architecture/node-realignment-qualification.md).
-Only package witnesses are regenerated for that representation change;
-semantic hashes, journal identities and causal traces remain unchanged. The
+The checkout uses **format-22 / diagnostic-recording-4**.
+Its single Process Contract identity is tracked in the
+[Connector identity inventory](../architecture/connector-rework-identity.md),
+with verification in the [qualification report](../architecture/connector-rework-qualification.md).
+Both Process modes use `std/process@6`. Their semantic hashes change;
+Process Retry traces also seal that changed identity. Other semantic hashes
+and causal traces stay fixed. The
 [C4 qualification ledger](../architecture/retry-c4-qualification.md) is dated
 evidence for the native-Retry base. External opening gates remain separate.
 Author against the live

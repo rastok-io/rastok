@@ -1,8 +1,8 @@
 # Component blueprint
 
-> Current implementation blueprint — non-normative, updated 2026-10-07.
+> Current implementation blueprint — non-normative, updated 2026-10-22.
 > The [format registry](../spec/identity.md) is the authority for current
-> package and record shapes. Process job/service use `std/process@4` / `@5`;
+> package and record shapes. Process job/service share `std/process@6`;
 > File and network Contracts use `std/…@3`. Loop extends an existing terminal;
 > Retry repeats a pinned Call without adding a port. Earlier milestone names below identify when a responsibility
 > landed; they are not current package versions or pending-work claims.
@@ -449,8 +449,8 @@ whatever its execution format.
 | **`connector::drivers::DriverRegistry`** | `(ContractId, DriverName)` → factory; duplicate pairs refuse. A Node selects an explicit compatible implementation, or the only compatible one. Registration order never selects | [decisions.md D-2026-08-22-1](../spec/decisions.md) | M1.5 C1 |
 | **`connector::drivers::DriverManifest`** | data-only ordered Contract id, implementation name, mode, direction and exchange claims; no factory, artifact locator, ABI or trust policy | [decisions.md D-2026-08-22-1](../spec/decisions.md); [connector-drivers.md](connector-drivers.md) | M1.5 C6 |
 | **`connector::drivers::RuntimeDrivers`** | all Node selections checked before any Driver is created; exact role-view checks, then private object-index ownership of Calls, inbound Calls and Sessions. Recovery restores routing under the same deployment selection without invoking a Driver | [decisions.md D-2026-08-22-1](../spec/decisions.md) | M1.5 C2 |
-| **`connector::drivers::ProcessFactory` / `Process`** | the explicit `std/process@4` factory and real job-mode Outbound Driver: pre-binds every effective setting before the Execution/journal exists, spawns asynchronously, captures under one aggregate budget, and supports `lines` / `jsonl` / `bytes` | [stdlib.md §3.3](../spec/stdlib.md) | M1.2 behavior; contract-specific module C0; registry binding C2 |
-| **`connector::drivers::ProcessServiceFactory`** | `std/process@5`, one resident Session per exact instance; framed streaming, bounded writes, Unix supervision, no application RPC | [stdlib.md §3.3](../spec/stdlib.md) | [Resident qualification](process-service.md); pure Lab substitution and no package move |
+| **`connector::drivers::ProcessFactory` / `Process`** | the `std/process@6` job factory and real outbound Call Driver: pre-binds every effective setting before the Execution/journal exists, spawns asynchronously, captures under one aggregate budget, and supports `lines` / `jsonl` / `bytes` | [stdlib.md §3.3](../spec/stdlib.md) | M1.2 behavior; shared Contract identity in A-T5-4 |
+| **`connector::drivers::ProcessServiceFactory`** | the `std/process@6` service factory, one resident Session per exact instance; framed streaming, bounded writes, Unix supervision, no application RPC | [stdlib.md §3.3](../spec/stdlib.md) | [Resident qualification](process-service.md); shared Contract identity in A-T5-4 |
 | **`connector::stdlib::FILE` contract** | shared compiler and Registry-free validation definition for `std/file@3`: `read`/`replace`, exact pins and `FileExit`, invocation-bound path, read budget | [stdlib.md §3.7](../spec/stdlib.md); D-2026-08-22-1 | M1.5 C3 |
 | **`connector::drivers::FileFactory` / `File`** | explicit physical-root binding and real one-file Outbound Driver: seals mode/path/budget-or-payload before open; performs complete bounded reads or native atomic replace after open; cooperates with generic cancel/close-once/replay rules | [stdlib.md §3.7](../spec/stdlib.md); D-2026-08-22-1 C4 checkpoint | M1.5 C4 |
 | **Network contract sheets** | exact `std/http-client@3`, `std/http-server@3`, `std/websocket-client@3`, and `std/websocket-server@3` roles/exchanges, codec-selected ports, phased settings, lossless HTTP metadata and portable terminal unions; the same portable definitions reject forged rows without consulting the hosted catalogue | [stdlib.md §3.1–3.2, §3.8–3.9](../spec/stdlib.md); D-2026-08-25-2 | M1.6 H2 |

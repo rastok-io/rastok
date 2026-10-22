@@ -2,8 +2,10 @@
 
 Status: 22 October 2026, diagnostic format **4**, embedding the
 [current plan package](../spec/identity.md). The
-[Node realignment inventory](node-realignment-identity.md) records the
-package-only change; journal tuples and causal seals are unchanged.
+[Connector identity inventory](connector-rework-identity.md) records the
+Process Contract movement. The record codec is unchanged; Process Retry
+records seal the changed plan hash and Contract, while other causal traces
+remain unchanged.
 There is no reader or converter for another
 recording format. Exact-instance closure packets travel on INGRESS and
 TRANSACTION; unused packets are absent from the causal seal.

@@ -5,10 +5,10 @@
 This is not a released tag. Public release and crate publication await
 5 November 2026 and Yoann's explicit instruction.
 
-The current checkout uses **format 20 / diagnostic recording 4**, to be
+The current checkout uses **format 22 / diagnostic recording 4**, to be
 labelled public format 1 at publication. The
-[identity inventory](docs/architecture/human-review-v20-identity.md) records the
-single witness update, preserved causal witnesses and verification.
+[identity inventory](docs/architecture/connector-rework-identity.md) records
+the single Process Contract, its measured identity changes and verification.
 External opening gates remain open; these capabilities are not a release claim.
 
 - Typed Graph scopes, Operator/Connector execution, explicit destinations,
@@ -33,8 +33,9 @@ External opening gates remain open; these capabilities are not a release claim.
 - Typed HttpClient JSON responses, strict by default, with an explicit
   projected profile for nullable omissions and extra response members.
   Mistyped present values still refuse; missing usage is never invented as zero.
-- Resident Process Sessions (`process@5`), exact-child shutdown and a native
-  JSONL WebSocket agent bridge; finite jobs use `process@4`.
+- Resident Process Sessions, exact-child shutdown and a native JSONL
+  WebSocket agent bridge. Both finite jobs and resident services share
+  `std/process@6`; their modes retain distinct Call and Session lifecycles.
 - Unit-global and lexical `val` constants; pure `has(object.member)` tests
   optional JSON members without conflating absence, null and observed zero.
 - Independently inspectable logical-time advances, original App-output

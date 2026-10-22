@@ -1,14 +1,14 @@
 # Rastok — White Paper
 
-> **Format-21 (2026-10-14), diagnostic recording 4.**
+> **Format-22 (2026-10-22), diagnostic recording 4.**
 > The Node/Executor/Extension model, host-terminal Loop, exact-instance closure,
 > native outbound Call Retry and typed measurement retention are executable.
 > The [C4 qualification](docs/architecture/retry-c4-qualification.md) records
-> the qualified native-Retry base. The current package-only movement is in the
-> [Node realignment inventory](docs/architecture/node-realignment-identity.md),
-> with measured verification in the [qualification report](docs/architecture/node-realignment-qualification.md); external
+> the qualified native-Retry base. The current Process identity movement is in the
+> [Connector inventory](docs/architecture/connector-rework-identity.md),
+> with verification in the [qualification report](docs/architecture/connector-rework-qualification.md); external
 > [opening gates](docs/architecture/opening-showcase.md) remain separate.
-> Process jobs use `std/process@4`; resident Sessions use `std/process@5`.
+> Process uses `std/process@6`: job is an outbound Call, service a resident Session.
 > Earlier [R9](docs/architecture/rework-r9-qualification.md),
 > [host-terminal](docs/architecture/loop-host-terminal-v17.md) and
 > [exact-instance closure](docs/architecture/instance-stop-command.md) ledgers
@@ -1416,7 +1416,7 @@ exactly what makes replay deterministic (envelope.md §2.0/§8). The
 Connector draws the boundary; the journal captures what crosses it.
 
 **The Contract is not the Driver.** Source names resolve through a compiler
-catalogue to a stable versioned contract id such as `std/process@4`. The
+catalogue to a stable versioned contract id such as `std/process@6`. The
 Contract declares inbound/outbound roles, typed ports, attributes and
 lifecycle rules. A physical Driver supplies real I/O; a Lab model supplies
 scripted arrivals and outcomes through the same pure protocol and admission
@@ -2746,13 +2746,14 @@ ledgers are evidence for Rastok; future design sections are not.
 ## 10. Status
 
 Rastok is experimental, not production-ready. The current format is
-**package 21 / diagnostic recording 4**, with one Node table and Graph-owned wiring.
-Process job/service Contracts are `std/process@4` / `std/process@5`;
+**package 22 / diagnostic recording 4**, with one Node table and Graph-owned wiring.
+Process job/service modes share the Contract `std/process@6`;
 File and the four HTTP/WebSocket Contracts use `@3`. These version registers
-are independent. The [Node realignment inventory](docs/architecture/node-realignment-identity.md)
-records the package-only movement; semantic hashes, journal records and causal
-traces are unchanged. No public release
-or compatibility reader is implied.
+are independent. The [Connector identity inventory](docs/architecture/connector-rework-identity.md)
+records the Process-dependent semantic hashes and Retry traces that change.
+The earlier [Node realignment inventory](docs/architecture/node-realignment-identity.md)
+records a package-only movement with unchanged causal identities. No public
+release or compatibility reader is implied.
 
 | Executable today | Qualification / exact limit |
 |---|---|
@@ -2771,7 +2772,7 @@ or compatibility reader is implied.
 The [example catalogue](docs/examples/README.md) distinguishes passing programs,
 isolated illustrative fragments and historical future-surface sketches.
 The [9 September documentation audit](docs/architecture/documentation-audit-2026-09-09.md)
-is historical evidence. The [current identity ledger](docs/architecture/node-realignment-identity.md)
+is historical evidence. The [current identity ledger](docs/architecture/connector-rework-identity.md)
 and [opening checklist](docs/architecture/opening-showcase.md) distinguish local
 qualification from remaining external evidence.
 

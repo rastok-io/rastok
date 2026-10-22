@@ -1,13 +1,14 @@
 # Connector rework — qualification
 
 21–22 October 2026. Branch: `realign/node-ontology`. This report records the
-T5/T9 implementation checks; it does not approve the separate Process
-Contract identity proposal. Package format 21, Process `std/process@4`
-(job) and `std/process@5` (service) remain current at this checkpoint.
+T5/T9 implementation checks. The neutral checkpoints below used package
+21 and the two Process ids. Yoann subsequently approved the separate
+`std/process@6` / package-22 identity movement; its completed qualification
+is recorded at the end of this report.
 
 **Status: the byte-neutral T5/T9 series (A-T5-1, A-T5-2, A-T5-3,
-A-T5-5 and A-T5-6) is qualified. A-T5-4 has its committed identity inventory
-and proposed amendment, but no Process id or format change is authorized yet.**
+A-T5-5 and A-T5-6) and the separately approved A-T5-4 identity movement
+are qualified. Independent review and public-opening gates remain separate.**
 
 ## Reference after A-T5-1
 
@@ -366,3 +367,131 @@ Yoann's approval. The identity-moving commit is therefore absent, not silently
 deferred or folded into this catalogue commit. Current ids and formats remain
 those in identity.md and stdlib.md. No public push, tag or publication occurs.
 This report records Astra's checks; it does not claim a new Fable replay.
+
+## A-T5-4 — one Process Contract, checked job and service modes
+
+Yoann approved the identity inventory, `std/process@6` and package format
+22 on 22 October. D-2026-10-22-1 records that approval. The compiler resolves
+direction and exchange before constructing the Node; a mode no longer
+overrides its Contract id. The independent core validator derives those
+same facts from the shared Process mode declaration. Job and service keep
+their ports, codecs, defaults, terminal obligations and Loop/Retry rules.
+
+Physical and Lab implementations use the same Contract id and remain
+separate objects selected by their advertised mode/direction/exchange.
+The specialized job Driver binds only Call Nodes; it does not attempt to
+bind resident Sessions because they now share its Contract id. The catalogue
+shows one id with distinct mode capabilities, not two aliases.
+
+Hostile-package coverage refuses an absent, unknown or non-word mode,
+contradictory direction/exchange and unsupported standard Contract ids.
+`UnknownStandardContract` prevents an unknown `std/` major from falling
+through to the generic external-Contract validation path. It is not an
+old-id blacklist or compatibility reader. The current reader rejects every
+other package version, including 21, before interpreting its body.
+
+Two focused checks completed before reference updates: the Process suite
+passed 11/11, including the real resident-process and Unix-closure probes;
+the new hostile-package test passed. Two added regressions prove omitted
+`mode = job` has the explicit default's identity and that one graph can
+select job and service implementations without ambiguity, with two Calls
+and one Session for two inputs. The first focused run had a duplicated
+`mode` in that new default-equivalence fixture; the fixture was corrected,
+then all 11 tests passed. No existing behavior assertion was weakened.
+
+### Identity evidence
+
+The [identity inventory](connector-rework-identity.md#measured-format-22-candidates--before-regeneration)
+contains measured old/new source identities, body lengths, checksums and
+causal seals, written before the single regeneration pass. Twelve source
+packages round-trip independently. All 28 gallery scenarios pass with the
+same record counts. Only the two Process Retry traces change their seals:
+their opening facts bind the new Contract and originating semantic hash.
+Ordinary Process Call/Session traces and all non-Process traces are unchanged.
+
+Exactly six of the 73 protected artifacts move: echo/JSONL/gauge packages,
+the binary echo spike package, and the two `two-tenants` traces. The other
+67 digests match the pre-series baseline. Gauge's body and semantic hash
+are byte-identical; its package checksum changes only because of version 22.
+No example source or recorded tuple is regenerated. The echo recording
+tuple's existing digest remains asserted, and recording version stays 4.
+
+The completed workspace, browser and embedded checks below supplement these
+focused regressions; the focused checks alone do not constitute qualification.
+
+### Qualification attempts
+
+The first full attempt passed formatting and strict Clippy but was
+interrupted while macOS delayed the start of successive test executables;
+it is not counted as a complete passing suite. A fresh sequential run in
+the IDE terminal exposed an overlooked package-version assertion in
+`instance_stop.rs`: the encoded value was 22, while the test still expected
+21. Its preceding lexical-scope rejection assertion passed. Only the
+version expectation was updated, as inventoried above; the functional
+assertion and test deadlines were not changed. The same run found a unit
+test that still listed 22 among the versions to reject. Its rejection set
+now covers every prior version, the next version and `u64::MAX`, derived
+from the current constant rather than a stale literal. That completed
+run counted 1,621 passed, two failed and zero ignored in 61 groups. The
+complete final gate is rerun on both corrections, with automatic golden
+writing disabled.
+
+The public-document sweep also found the unreleased CHANGELOG still naming
+format 20 and the two former Process ids. Its current-status paragraph now
+points to this identity inventory and names format 22 and `std/process@6`.
+A read-only consistency assertion failed before that correction and passed
+after it. The existing diagram sources describe job/Call and service/Session
+without an old id or format number, so this identity change needs no diagram
+or SVG edit. Dated qualification reports and decisions remain intact apart
+from the newly approved D-2026-10-22-1 entry.
+
+The first browser pass finished with 33 successes and two failures: both
+tooltip assertions still expected `std/process@4`, while the page correctly
+displayed `std/process@6`. These two textual expectations are recorded in
+the identity inventory and updated without changing UI code, keyboard
+behavior, other assertions or timeouts. The complete browser suite is rerun.
+
+### Final checks and embedded measurements
+
+The fresh sequential gate passes formatting, strict all-target/all-feature
+Clippy and **1,623 tests in 61 groups, zero failures and zero ignored
+tests**, including both corrected version checks. Rustdoc passes with
+`-D warnings`; the separate site-content check passes 12/12. All three
+no_std targets pass: `thumbv8m.main-none-eabihf`, `thumbv7m-none-eabi` and
+`riscv32imac-unknown-none-elf`. The workspace suite uses
+`--no-fail-fast -- --test-threads=1`; no test deadline changes. MacOS delayed
+successive executable starts before Rust code, including in the IDE terminal;
+no system security setting was changed to complete the checks.
+
+After the two Contract-id expectations were corrected, the complete browser
+suite passes **35/35**, with zero failures, skips or cancellations. No Rust
+or UI implementation changed after the successful Rust gate. The rustdoc-link
+lint checks 238 Rust files and finds no relative Markdown links. The browser
+rerun uses the same local Playwright and Chrome setup as the neutral gate,
+with `RASTOK_SAVE_GOLDENS` unset. The earlier 33/35 browser pass is not counted
+as qualification.
+
+Both Cortex-M33 images end in `SPIKE_OK`, with the same commands, toolchain,
+release profile and Retry workload as the neutral checkpoint above:
+
+| Workload | Decode peak heap | Total peak heap | `.text` | `.rodata` | Code total | Heap margin | Code margin |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Echo | 36,160 B | 111,404 B | 897,420 B | 74,008 B | 971,428 B | 19,668 B | 77,148 B |
+| Retry and recovery | 30,684 B | 129,188 B | 958,676 B | 84,776 B | 1,043,452 B | 1,884 B | 5,124 B |
+
+Against `3ca0867`, heap peaks are unchanged; code decreases by 288 B for
+echo and 264 B for Retry. Retry still records one operation, three Calls,
+16 frames per channel, four bytes per frame and 17 records. Live and
+recovered peaks are both 129,188 B. Its regenerated package hash is exactly
+`3cad77eff37f7a658254c3855d92b084a12150a9cb3cd440051db864660f67e9`, as
+measured before regeneration. The 128 KiB heap and 1 MiB code gates remain
+unchanged. Stack was not remeasured in this identity change.
+
+The unchanged echo recording-tuple digest also passes its existing test:
+`6130123972daf8e882d56c726361a0ca26a4b6ac320613e697848e6bca6abb4d`.
+
+The final digest comparison again finds exactly six changed protected
+artifacts and 67 unchanged. Each change has its old/new value and reason in
+the identity inventory. The T5/T9 implementation is ready for independent
+review; this report does not claim a new Fable replay, completion of external
+release gates, or any push, tag or publication.

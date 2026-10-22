@@ -221,7 +221,7 @@ impl core::fmt::Display for DecodeError {
 
 impl core::error::Error for DecodeError {}
 
-/// The format-21 reader's nesting budget, independent of expression and type
+/// The canonical reader's nesting budget, independent of expression and type
 /// depth. The Cortex-M33 release measurement is 240 bytes per `decode_at`
 /// frame: 256 levels require 61,440 bytes for the reader frames alone. The
 /// complete package path is measured separately in the embedded qualification.

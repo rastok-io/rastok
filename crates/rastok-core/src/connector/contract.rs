@@ -212,16 +212,6 @@ impl ConnectorContract {
         Err(PortResolutionError::UnresolvedDependency(initial.name))
     }
 
-    /// Exact Contract identities represented by this definition and its modes.
-    pub fn protocol_ids(&self) -> impl Iterator<Item = &'static str> + '_ {
-        core::iter::once(self.id).chain(
-            self.selector
-                .iter()
-                .flat_map(|selector| selector.profiles)
-                .filter_map(|profile| profile.protocol.map(|protocol| protocol.id)),
-        )
-    }
-
     /// The spec of one attribute within the given resolved profile:
     /// the common sheet first, then the profile's own.
     #[must_use]
@@ -352,8 +342,8 @@ pub struct ModeSelector {
 /// support for it, and its own attributes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContractMode {
-    /// A profile may select a different exact exchange contract. Omission
-    /// preserves the sheet's contract, roles and exchange byte for byte.
+    /// A mode may change direction and interaction lifecycle within the same
+    /// Contract. Omission preserves the definition's roles and exchange.
     pub protocol: Option<ProfileProtocol>,
     /// The selector word (`job`).
     pub word: &'static str,
@@ -370,8 +360,6 @@ pub struct ContractMode {
 /// sheet's default (for example a resident Process versus a finite job).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProfileProtocol {
-    /// Exact versioned contract, not an alias for the default protocol.
-    pub id: &'static str,
     /// Required Driver views.
     pub roles: crate::connector::ConnectorDirection,
     /// Interaction cardinality.

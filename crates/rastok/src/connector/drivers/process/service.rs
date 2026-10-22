@@ -133,21 +133,22 @@ pub(super) fn prepare(
     }
 }
 
-/// The resident, both-role Process contract. Binding performs no effects.
+/// The resident Session implementation of Process's service mode.
+/// Binding performs no effects.
 #[derive(Debug)]
 pub struct ProcessServiceFactory {
     id: crate::connector::ContractId,
 }
 
 impl ProcessServiceFactory {
-    /// Parses the built-in resident contract id.
+    /// Parses the shared Process Contract id.
     ///
     /// # Errors
     /// Returns an invalid built-in identity error.
     pub fn try_new() -> Result<Self, crate::connector::ContractIdError> {
         Ok(Self {
             id: crate::connector::ContractId::parse(
-                crate::connector::stdlib::PROCESS_SERVICE_CONNECTOR_ID,
+                crate::connector::stdlib::PROCESS_CONNECTOR_ID,
             )?,
         })
     }

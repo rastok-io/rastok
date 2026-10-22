@@ -1,7 +1,7 @@
 //! The plan package — the transportable, verifiable serialization
 //! of an [`ExecutionPlan`], per `docs/architecture/plan-package.md`.
 //!
-//! Format v21: the 4-byte magic `RKPB`, then one canonical CBOR map —
+//! Format v22: the 4-byte magic `RKPB`, then one canonical CBOR map —
 //! format version, the plan's semantic hash, the body as an embedded
 //! byte string, and a blake3 checksum over the domain-framed
 //! association `domain ‖ version ‖ semantic_hash ‖ body`, so a
@@ -54,7 +54,7 @@ pub const MAGIC: [u8; 4] = *b"RKPB";
 /// explicit Extensions and dispositions, and exact `std/` Contracts. The
 /// compact registry and ccbor values have one reading; every other package
 /// version refuses before its body can be interpreted.
-pub const FORMAT_VERSION: u32 = 21;
+pub const FORMAT_VERSION: u32 = 22;
 
 /// The checksum domain — fixed-width framing, so the covered fields
 /// cannot slide into one another.
@@ -3163,7 +3163,9 @@ mod tests {
         else {
             panic!("map envelope");
         };
-        for version in [19, 20, 22, u64::MAX] {
+        for version in
+            (0..u64::from(FORMAT_VERSION)).chain([u64::from(FORMAT_VERSION) + 1, u64::MAX])
+        {
             envelope.insert(1, Cbor::Uint(version));
             let mut previous = MAGIC.to_vec();
             previous.extend_from_slice(&canonical_cbor::encode(&Cbor::Map(envelope.clone())));

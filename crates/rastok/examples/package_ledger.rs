@@ -67,6 +67,12 @@ fn main() -> Result<(), String> {
     {
         return gallery(manifest);
     }
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|arg| arg == "--sources")
+    {
+        return sources(manifest);
+    }
     let candidate_dir = std::env::args_os().nth(1);
     if let Some(directory) = &candidate_dir
         && !Path::new(directory).is_dir()
@@ -109,6 +115,50 @@ fn main() -> Result<(), String> {
             std::fs::write(Path::new(directory).join(format!("{name}.rkp")), &candidate)
                 .map_err(|error| error.to_string())?;
         }
+    }
+    Ok(())
+}
+
+/// Inventory complete candidate sources, including chat assets, without
+/// accepting a previous package or replacing any tracked witness.
+fn sources(manifest: &Path) -> Result<(), String> {
+    let catalogue = ContractCatalog::try_m0().map_err(|error| error.to_string())?;
+    let examples = manifest.join("../../examples");
+    for name in [
+        "echo",
+        "jsonl",
+        "gauge",
+        "csv-count",
+        "keyed-retry",
+        "agent-gateway",
+        "agent-dialogue",
+        "agent-chat",
+        "file-pipeline",
+        "webhook-to-partner",
+        "sensor-alarm",
+        "agent-http",
+    ] {
+        let source = std::fs::read_to_string(examples.join(format!("{name}.rkg")))
+            .map_err(|error| error.to_string())?;
+        let compiled = compiler::compile_with_assets(&[&source], &catalogue, Some(&examples))
+            .map_err(|error| format!("{name}: {error:?}"))?;
+        let bytes = plan::encode(&compiled.plan, &compiled.hash);
+        let decoded = plan::decode(&bytes).map_err(|error| error.to_string())?;
+        if decoded != (compiled.plan, compiled.hash) {
+            return Err(format!("{name}: candidate does not round-trip"));
+        }
+        describe(name, "candidate", &bytes)?;
+        let contracts: std::collections::BTreeSet<_> = decoded
+            .0
+            .plan()
+            .nodes
+            .iter()
+            .filter_map(|node| node.connector().map(|spec| spec.contract.as_str()))
+            .collect();
+        println!(
+            "{name} Contracts: {}",
+            contracts.into_iter().collect::<Vec<_>>().join(", ")
+        );
     }
     Ok(())
 }

@@ -24,9 +24,7 @@ pub fn process_port_type(
     codec_word: Option<&str>,
     err_codec_word: Option<&str>,
 ) -> Option<DataType> {
-    if !PROCESS.protocol_ids().any(|id| id == contract.as_str())
-        || !matches!(codec_word, Some("lines" | "jsonl" | "bytes"))
-    {
+    if PROCESS.id != contract.as_str() || !matches!(codec_word, Some("lines" | "jsonl" | "bytes")) {
         return None;
     }
     PROCESS
@@ -48,10 +46,7 @@ pub fn process_attribute_site(
     contract: &crate::connector::ContractId,
     attribute: &str,
 ) -> Option<crate::plan::EvaluationSite> {
-    if !PROCESS.protocol_ids().any(|id| id == contract.as_str()) {
-        return None;
-    }
-    if attribute == "idempotent" && contract.as_str() != PROCESS_CONNECTOR_ID {
+    if PROCESS.id != contract.as_str() {
         return None;
     }
     definition_attribute_site(&PROCESS, attribute)
@@ -430,7 +425,6 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
             },
             ContractMode {
                 protocol: Some(crate::connector::contract::ProfileProtocol {
-                    id: crate::connector::stdlib::PROCESS_SERVICE_CONNECTOR_ID,
                     roles: ConnectorDirection::InboundAndOutbound,
                     exchange: ExchangeKind::Session,
                 }),
@@ -449,13 +443,26 @@ pub const PROCESS: ConnectorContract = ConnectorContract {
 
 /// Checks the resolved Process mode and its exact protocol restrictions.
 pub(super) fn validate(node: &Node, spec: &ConnectorSpec) -> Result<(), PlanValidationError> {
-    let service = spec.contract.as_str() == crate::connector::stdlib::PROCESS_SERVICE_CONNECTOR_ID;
-    let mode = PROCESS.profile(if service { "service" } else { "job" });
+    let mode = match spec.attribute("mode") {
+        Some(crate::plan::AttrSetting::Word(word)) => PROCESS.profile(word),
+        None => {
+            return Err(PlanValidationError::MissingContractAttribute {
+                node: node.path.clone(),
+                attribute: "mode",
+            });
+        }
+        Some(_) => None,
+    }
+    .ok_or_else(|| PlanValidationError::ContractAttributeMismatch {
+        node: node.path.clone(),
+        attribute: String::from("mode"),
+    })?;
+    let service = mode.word == "service";
     let roles = mode
-        .and_then(|mode| mode.protocol)
+        .protocol
         .map_or(PROCESS.roles, |protocol| protocol.roles);
     let exchange = mode
-        .and_then(|mode| mode.protocol)
+        .protocol
         .map_or(PROCESS.exchange, |protocol| protocol.exchange);
     if spec.roles != roles {
         return Err(PlanValidationError::ContractRoleMismatch {
@@ -466,22 +473,6 @@ pub(super) fn validate(node: &Node, spec: &ConnectorSpec) -> Result<(), PlanVali
         return Err(PlanValidationError::ContractExchangeMismatch {
             node: node.path.clone(),
         });
-    }
-    match spec.attribute("mode") {
-        Some(crate::plan::AttrSetting::Word(word))
-            if word == if service { "service" } else { "job" } => {}
-        Some(_) => {
-            return Err(PlanValidationError::ContractAttributeMismatch {
-                node: node.path.clone(),
-                attribute: String::from("mode"),
-            });
-        }
-        None => {
-            return Err(PlanValidationError::MissingContractAttribute {
-                node: node.path.clone(),
-                attribute: "mode",
-            });
-        }
     }
     match spec.attribute("on_timeout") {
         None if service => {}
@@ -636,7 +627,7 @@ pub(super) fn validate(node: &Node, spec: &ConnectorSpec) -> Result<(), PlanVali
         }
     };
     for (name, _) in &spec.attributes {
-        if name != "mode" && (name == "behavior" || PROCESS.attribute(mode, name).is_none()) {
+        if name != "mode" && (name == "behavior" || PROCESS.attribute(Some(mode), name).is_none()) {
             return Err(PlanValidationError::ContractAttributeMismatch {
                 node: node.path.clone(),
                 attribute: name.clone(),

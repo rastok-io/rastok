@@ -6,7 +6,7 @@
 //! satisfy them, but may not reinterpret them.
 
 use self::stdlib::{
-    PROCESS_SERVICE_CONNECTOR_ID, WEBSOCKET_CLIENT_CONNECTOR_ID, WEBSOCKET_SERVER_CONNECTOR_ID,
+    PROCESS_CONNECTOR_ID, WEBSOCKET_CLIENT_CONNECTOR_ID, WEBSOCKET_SERVER_CONNECTOR_ID,
 };
 
 use alloc::boxed::Box;
@@ -289,7 +289,7 @@ pub(crate) fn session_opening(
     }
     match contract.as_str() {
         WEBSOCKET_SERVER_CONNECTOR_ID => Some(SessionOpening::Peer),
-        WEBSOCKET_CLIENT_CONNECTOR_ID | PROCESS_SERVICE_CONNECTOR_ID => Some(SessionOpening::Local),
+        WEBSOCKET_CLIENT_CONNECTOR_ID | PROCESS_CONNECTOR_ID => Some(SessionOpening::Local),
         _ => None,
     }
 }
@@ -306,8 +306,7 @@ mod tests {
         for (id, opening) in [
             (WEBSOCKET_SERVER_CONNECTOR_ID, Some(SessionOpening::Peer)),
             (WEBSOCKET_CLIENT_CONNECTOR_ID, Some(SessionOpening::Local)),
-            (PROCESS_SERVICE_CONNECTOR_ID, Some(SessionOpening::Local)),
-            (PROCESS_CONNECTOR_ID, None),
+            (PROCESS_CONNECTOR_ID, Some(SessionOpening::Local)),
             (HTTP_CLIENT_CONNECTOR_ID, None),
             (HTTP_SERVER_CONNECTOR_ID, None),
             (FILE_CONNECTOR_ID, None),

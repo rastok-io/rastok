@@ -560,7 +560,7 @@ graph g : App {
 #[test]
 fn the_example_package_matches_its_golden() {
     // Package and trace movements are separately inventoried before the
-    // single approval in docs/architecture/human-review-v20-identity.md.
+    // single approval in docs/architecture/connector-rework-identity.md.
     let (_, _, bytes) = packaged_example();
     let rendered: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/echo.rkp");
@@ -829,6 +829,59 @@ fn connector_identity_roles_and_exchange_are_categorical_plan_facts() {
 }
 
 #[test]
+fn the_process_contract_and_mode_cannot_be_forged_in_a_current_package() {
+    use rastok::plan::PlanValidationError;
+    let (_, _, bytes) = packaged_example();
+    for id in ["std/process@4", "std/process@5", "std/process@99"] {
+        let forged = reframe_body(&bytes, |body| {
+            let Cbor::Map(spec) = connector_spec_mut(body) else {
+                panic!("the connector spec is a map");
+            };
+            spec.insert(1, Cbor::Text(id.into()));
+        });
+        assert!(matches!(plan::decode(&forged), Err(DecodeError::Invalid(
+            PlanValidationError::UnknownStandardContract { contract, .. }
+        )) if contract.as_str() == id));
+    }
+    for mode in [Some("service"), Some("unknown"), None] {
+        let forged = reframe_body(&bytes, |body| {
+            let Cbor::Map(spec) = connector_spec_mut(body) else {
+                panic!("the connector spec is a map");
+            };
+            let Cbor::Array(attributes) = spec.get_mut(&3).unwrap() else {
+                panic!("attributes");
+            };
+            if let Some(mode) = mode {
+                let Cbor::Array(pair) = attributes.iter_mut().find(|item| {
+                    matches!(item, Cbor::Array(pair) if pair[0] == Cbor::Text("mode".into()))
+                }).unwrap() else { panic!("attribute pair"); };
+                pair[1] = Cbor::Array(vec![Cbor::Uint(1), Cbor::Text(mode.into())]);
+            } else {
+                attributes.retain(|item| {
+                    !matches!(item,
+                        Cbor::Array(pair) if pair[0] == Cbor::Text("mode".into())
+                    )
+                });
+            }
+        });
+        let expected = match mode {
+            Some("service") => PlanValidationError::ContractRoleMismatch {
+                node: rastok::node::OwnerPath::new(["shell"]).unwrap(),
+            },
+            Some(_) => PlanValidationError::ContractAttributeMismatch {
+                node: rastok::node::OwnerPath::new(["shell"]).unwrap(),
+                attribute: "mode".into(),
+            },
+            None => PlanValidationError::MissingContractAttribute {
+                node: rastok::node::OwnerPath::new(["shell"]).unwrap(),
+                attribute: "mode",
+            },
+        };
+        assert_eq!(plan::decode(&forged), Err(DecodeError::Invalid(expected)));
+    }
+}
+
+#[test]
 fn every_refusal_is_typed() {
     let (_, _, bytes) = packaged_example();
 
@@ -1023,11 +1076,11 @@ fn a_non_canonical_envelope_refuses() {
     // Reordered header keys: same fields, same checksum coverage,
     // different bytes — not the canonical encoding. Raw splice,
     // because the canonical encoder itself refuses to write an
-    // unsorted map: entry (1, uint 21) is bytes 5..7, entry
+    // unsorted map: entry (1, uint 22) is bytes 5..7, entry
     // (2, bytes32) is the 35 bytes after it; swap them.
     assert_eq!(
         &bytes[4..7],
-        &[0xa4, 0x01, 0x15],
+        &[0xa4, 0x01, 0x16],
         "the envelope head is stable"
     );
     assert_eq!(&bytes[7..10], &[0x02, 0x58, 0x20], "the hash entry follows");
@@ -1042,16 +1095,16 @@ fn a_non_canonical_envelope_refuses() {
         DecodeError::Read(rastok::canonical_cbor::DecodeError::NonCanonical(_))
     ));
 
-    // A non-minimal integer in the header: uint 21 written on two
-    // bytes (0x18 0x15) instead of one. The checksum still holds —
+    // A non-minimal integer in the header: uint 22 written on two
+    // bytes (0x18 0x16) instead of one. The checksum still holds —
     // the VALUE is unchanged — so only the canonicity check refuses.
     assert_eq!(
         &bytes[4..7],
-        &[0xa4, 0x01, 0x15],
+        &[0xa4, 0x01, 0x16],
         "the envelope head is stable"
     );
     let mut widened = bytes.clone();
-    widened.splice(6..7, [0x18, 0x15]);
+    widened.splice(6..7, [0x18, 0x16]);
     assert!(matches!(
         plan::decode(&widened).unwrap_err(),
         DecodeError::Read(rastok::canonical_cbor::DecodeError::NonCanonical(_))

@@ -5,6 +5,36 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-10-22-1 — One Process Contract, two interaction modes, package format 22
+
+Yoann approves (2026-10-22) the Process identity amendment and package format
+22 inventoried in `connector-rework-identity.md`.
+
+1. Process has one exact Contract id, `std/process@6`. Its statically selected
+   `mode` determines direction, exchange and resource lifecycle, not another
+   Contract id. Omission materializes `mode = job` before semantic hashing:
+   job remains an outbound Call; service remains a resident Session. This
+   supersedes the mode-specific identity clauses of D-2026-09-14-1.
+2. Neither mode changes its codecs, ports, terminal obligations, instance
+   closure, timeout rules, Loop/Retry restrictions or external-effect
+   ordering. Physical Driver selection remains deployment configuration.
+   The compiler and independent core validator resolve the same mode from
+   the shared standard Contract definition.
+3. Package format 22 records this identity movement once. Its body schema
+   and key allocation do not change. Format 21 refuses by version; the old
+   Process ids are not aliases. Artifacts are regenerated from source, not
+   converted. Reapproving format 21 is rejected because its identity witnesses
+   have already been approved. The registry remains extend-only.
+4. Diagnostic recording remains version 4: no record tuple changes. A new
+   recording embeds the current package. Process semantic hashes change;
+   Process Retry records also change because they seal the originating plan
+   hash and Contract. Unrelated semantic hashes and causal traces do not
+   change. The identity inventory records actual old/new values and reasons
+   before the single witness regeneration.
+
+The separate TODO to label the first public format 1 remains for publication
+preparation. This decision authorizes no push, tag or publication.
+
 ## D-2026-10-14-1 — Separate the format reader budget from expression and type bounds
 
 Yoann decides (2026-10-14) that format 21 fixes its own reader budget, while

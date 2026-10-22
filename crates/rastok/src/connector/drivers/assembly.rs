@@ -106,7 +106,7 @@ mod tests {
     #[test]
     fn the_manifest_is_the_exact_projection_of_the_static_image() {
         let registry = hosted_registry(None).expect("the built-in ids are canonical");
-        let manifest = registry.manifest().expect("registry ids are unique");
+        let manifest = registry.manifest().expect("manifest declarations agree");
         let ids = manifest
             .entries()
             .iter()
@@ -127,10 +127,10 @@ mod tests {
 
     #[cfg(feature = "hosted-network")]
     #[test]
-    fn the_full_hosted_image_composes_all_six_families_once() {
+    fn the_full_hosted_image_lists_each_implementation_once() {
         let registry = hosted_registry(Some(std::path::Path::new("unused-file-root")))
             .expect("the full static image composes");
-        let manifest = registry.manifest().expect("registry ids are unique");
+        let manifest = registry.manifest().expect("manifest declarations agree");
         let ids = manifest
             .entries()
             .iter()
@@ -143,7 +143,7 @@ mod tests {
                 crate::connector::stdlib::HTTP_CLIENT_CONNECTOR_ID,
                 crate::connector::stdlib::HTTP_SERVER_CONNECTOR_ID,
                 crate::connector::stdlib::PROCESS_CONNECTOR_ID,
-                crate::connector::stdlib::PROCESS_SERVICE_CONNECTOR_ID,
+                crate::connector::stdlib::PROCESS_CONNECTOR_ID,
                 crate::connector::stdlib::WEBSOCKET_CLIENT_CONNECTOR_ID,
                 crate::connector::stdlib::WEBSOCKET_SERVER_CONNECTOR_ID,
             ]

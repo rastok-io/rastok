@@ -136,12 +136,10 @@ impl Checker<'_, '_> {
             None
         };
         let profile = mode.and_then(|word| sheet.profile(word));
-        let (id, roles, exchange) = profile
+        let (roles, exchange) = profile
             .and_then(|p| p.protocol)
-            .map_or((sheet.id, sheet.roles, sheet.exchange), |p| {
-                (p.id, p.roles, p.exchange)
-            });
-        let Ok(id) = crate::connector::ContractId::parse(id) else {
+            .map_or((sheet.roles, sheet.exchange), |p| (p.roles, p.exchange));
+        let Ok(id) = crate::connector::ContractId::parse(sheet.id) else {
             self.retry_refusal(
                 E_RETRY_HOST,
                 symbol.span,

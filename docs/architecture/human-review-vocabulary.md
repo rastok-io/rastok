@@ -1192,6 +1192,33 @@ commit, compatibility alias, public push, tag or publication is included.
 No new Fable review is claimed by this Applied entry; the existing review
 and Yoann's 21 October decisions above remain intact.
 
+### Applied — 22 October (Astra), approved Process identity amendment
+
+Yoann approved A-T5-4's inventory (`eabdee9`), `std/process@6`, package
+format 22 and the proposed amendment after the neutral series (`3ca0867`).
+D-2026-10-22-1 records that decision. This identity commit implements it:
+one Contract, with job/Call and service/Session resolved from the shared
+mode definition by both the compiler and independent core validator.
+Implementation selection still distinguishes the two physical resources;
+neither mode gains new ports, codecs or Loop/Retry behavior.
+
+The [identity inventory](connector-rework-identity.md) records measured
+old/new values and reasons before the single regeneration pass. Six of
+73 protected artifacts move; 67 remain identical. Gauge's body and semantic
+hash are unchanged. The only causal trace changes are the two Process
+Retry scenarios, whose opening facts bind the originating plan and Contract.
+Recording remains version 4. There is no old-id alias or package-21 reader.
+
+The complete Rust suite passes **1,623 tests in 61 groups, zero failures and
+zero ignored**; fmt, strict Clippy and rustdoc pass. Site: 12/12; browser:
+35/35; three no_std targets and both QEMU workloads pass. Echo peak heap/code:
+111,404/971,428 B. Retry with recovery: 129,188/1,043,452 B, leaving
+1,884 B heap and 5,124 B code. Commands, intermediate failures and final
+measurements are in the [qualification](connector-rework-qualification.md).
+This entry supersedes the neutral checkpoint's pending approval, not its
+historical measurements. It claims no new Fable replay and authorizes no
+push, tag or publication.
+
 ## What validation produces
 
 For each **⟂**: keep / rename / merge, with the chosen word. The answers

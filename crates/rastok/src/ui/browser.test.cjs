@@ -492,7 +492,7 @@ test('explanatory hovers expose types, capacity, command disposition, queued dat
   await page.locator('.graph-scope-type[aria-label*="Loop"]').first().focus();
   assert.match(await page.locator('#graph-tooltip').innerText(), /Commands:.*Loop.next.*Fuel: 2/s);
   await page.locator('.graph-node-name').filter({ hasText: /^model$/ }).focus();
-  assert.match(await page.locator('#graph-tooltip').innerText(), /connector.*std\/process@4.*open instances/);
+  assert.match(await page.locator('#graph-tooltip').innerText(), /connector.*std\/process@6.*open instances/);
   await seek(page, (await bothRunsWaiting(page))[0]);
   await page.locator('.graph-loop-dial').focus();
   assert.match(await page.locator('#graph-tooltip').innerText(), /applications remaining.*waiting until.*exhaustion: failed/s);
@@ -633,7 +633,7 @@ test('the explanatory path is reachable with Tab and keyboard alone', { timeout:
     [page.locator('.graph-edge-path[aria-label*="capacity"]'), /capacity 1024/],
     [page.locator('.edge-counter').filter({ hasText: /≡ 1/ }), /messages waiting/],
     [page.locator('.graph-scope-type[aria-label*="Loop"]'), /Commands:.*Loop.next/s],
-    [page.locator('.graph-node-name').filter({ hasText: /^model$/ }), /std\/process@4/],
+    [page.locator('.graph-node-name').filter({ hasText: /^model$/ }), /std\/process@6/],
   ]) {
     await tabTo(target);
     assert.match(await page.locator('#graph-tooltip').innerText(), explanation);

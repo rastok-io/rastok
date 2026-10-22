@@ -1,10 +1,11 @@
 # The plan package — the transportable, verifiable ExecutionPlan
 
-> **Current package format 21, diagnostic recording 4.**
-> This is the only readable format. The [Node realignment inventory](node-realignment-identity.md)
-> records the representation change and the package-only reference updates.
-> There is no compatibility reader or converter. Publication freezes this registry
-> as extend-only; changing the public version label remains a pre-publication task.
+> **Current package format 22, diagnostic recording 4.**
+> This is the only readable format. The [Connector identity inventory](connector-rework-identity.md)
+> records the single Process Contract and the approved witness updates.
+> The Node-table representation and field allocation are unchanged.
+> There is no compatibility reader or converter. The registry remains
+> extend-only; changing the public version label remains a pre-publication task.
 
 The package transports a validated plan, not compiler internals or Driver state.
 One Node table retains the lexical Graph tree, instance policies and Extensions.
@@ -143,7 +144,7 @@ effective claim. A3 follows the canonical operation graph and requires that
 claim to equal its independent derivation exactly. It never rewrites the raw
 row or recovers meaning from payload strings.
 
-## Body tables (format 21)
+## Body tables (format 22)
 
 The body is one canonical CBOR value encoding the `ExecutionPlan`.
 Compound values use fixed-shape arrays with a leading numeric

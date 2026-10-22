@@ -171,18 +171,18 @@ fn session_mock_frames_need_no_terminal_but_nothing_may_follow_one() {
 }
 
 #[test]
-fn the_service_profile_cannot_alias_a_job_or_another_catalogue_entry() {
+fn process_modes_share_one_identity_without_aliasing_another_catalogue_entry() {
     use rastok::connector::{contract::*, stdlib::*, *};
     let mut alias = rastok::connector::stdlib::PROCESS;
     alias.name = "Alias";
-    alias.id = PROCESS_SERVICE_CONNECTOR_ID;
+    alias.id = PROCESS_CONNECTOR_ID;
     alias.selector = None;
     assert!(matches!(
         ContractCatalog::try_m0().unwrap().try_with(alias),
         Err(ContractValidationError::ConnectorIdCollision { .. })
     ));
-    let mut broken = rastok::connector::stdlib::PROCESS;
-    broken.selector = Some(ModeSelector {
+    let mut service_default = rastok::connector::stdlib::PROCESS;
+    service_default.selector = Some(ModeSelector {
         attribute: "mode",
         default: Some("service"),
         profiles: &[ContractMode {
@@ -190,26 +190,28 @@ fn the_service_profile_cannot_alias_a_job_or_another_catalogue_entry() {
             support: ModeSupport::Available,
             attributes: &[],
             protocol: Some(ProfileProtocol {
-                id: PROCESS_CONNECTOR_ID,
                 roles: ConnectorDirection::InboundAndOutbound,
                 exchange: ExchangeKind::Session,
             }),
         }],
     });
-    assert!(matches!(
-        ContractCatalog::default().try_with(broken),
-        Err(ContractValidationError::ConnectorIdCollision { .. })
-    ));
+    let catalogue = ContractCatalog::default()
+        .try_with(service_default)
+        .unwrap();
+    let id = ContractId::parse(PROCESS_CONNECTOR_ID).unwrap();
+    let sheet = catalogue.connector_by_id(&id).unwrap();
+    assert_eq!(sheet.id, PROCESS_CONNECTOR_ID);
+    assert_eq!(
+        sheet.profile("service").unwrap().protocol.unwrap().exchange,
+        ExchangeKind::Session
+    );
 }
 
 #[test]
 fn independent_core_validation_rejects_forged_service_profiles() {
-    use rastok::{
-        connector::{stdlib::PROCESS_CONNECTOR_ID, *},
-        plan::*,
-    };
+    use rastok::{connector::*, plan::*};
     let compiled = compile(&[SERVICE], &ContractCatalog::try_m0().unwrap()).unwrap();
-    for sabotage in 0..4 {
+    for sabotage in 0..10 {
         let mut plan = compiled.plan.clone().into_inner();
         let NodeKind::Connector(spec) = &mut plan.nodes[1].body else {
             panic!("connector");
@@ -217,14 +219,164 @@ fn independent_core_validation_rejects_forged_service_profiles() {
         match sabotage {
             0 => spec.roles = ConnectorDirection::Outbound,
             1 => spec.exchange = ExchangeKind::Call,
-            2 => spec.contract = ContractId::parse(PROCESS_CONNECTOR_ID).unwrap(),
-            _ => spec.attributes.retain(|(name, _)| name != "max_frame"),
+            2 => {
+                spec.attributes
+                    .iter_mut()
+                    .find(|(name, _)| name == "mode")
+                    .unwrap()
+                    .1 = AttrSetting::Word("job".into())
+            }
+            3 => spec.attributes.retain(|(name, _)| name != "max_frame"),
+            4 => spec.attributes.retain(|(name, _)| name != "mode"),
+            5 => {
+                spec.attributes
+                    .iter_mut()
+                    .find(|(name, _)| name == "mode")
+                    .unwrap()
+                    .1 = AttrSetting::Word("unknown".into())
+            }
+            6 => {
+                spec.attributes
+                    .iter_mut()
+                    .find(|(name, _)| name == "mode")
+                    .unwrap()
+                    .1 = AttrSetting::Value(rastok::value::Value::Text("service".into()))
+            }
+            7 => spec.contract = ContractId::parse("std/process@4").unwrap(),
+            8 => spec.contract = ContractId::parse("std/process@5").unwrap(),
+            _ => {
+                spec.idempotent = Some(PlanConstant {
+                    resolved: rastok::value::Value::Bool(true),
+                    expr: rastok::expr::compile("true", &rastok::expr::Signature::new()).unwrap(),
+                })
+            }
         }
         assert!(
             ValidatedExecutionPlan::try_new(plan).is_err(),
             "sabotage {sabotage}"
         );
     }
+}
+
+#[test]
+fn job_and_service_resolve_one_contract_with_distinct_checked_protocols() {
+    use rastok::connector::{ConnectorDirection, ExchangeKind, stdlib::PROCESS_CONNECTOR_ID};
+    let catalogue = ContractCatalog::try_m0().unwrap();
+    let job_source = include_str!("../../../examples/echo.rkg");
+    let job = compile(&[&job_source.replace("mode = job ;", "")], &catalogue).unwrap();
+    let explicit = compile(&[job_source], &catalogue).unwrap();
+    assert_eq!(
+        job.hash, explicit.hash,
+        "omitting the default mode changes no identity"
+    );
+    let service = compile(&[SERVICE], &catalogue).unwrap();
+    for (compilation, direction, exchange) in [
+        (&job, ConnectorDirection::Outbound, ExchangeKind::Call),
+        (
+            &service,
+            ConnectorDirection::InboundAndOutbound,
+            ExchangeKind::Session,
+        ),
+    ] {
+        let (decoded, hash) =
+            rastok::plan::decode(&rastok::plan::encode(&compilation.plan, &compilation.hash))
+                .unwrap();
+        assert_eq!(hash, compilation.hash);
+        let spec = decoded
+            .plan()
+            .nodes
+            .iter()
+            .find_map(|node| node.connector())
+            .unwrap();
+        assert_eq!(spec.contract.as_str(), PROCESS_CONNECTOR_ID);
+        assert_eq!(spec.roles, direction);
+        assert_eq!(spec.exchange, exchange);
+    }
+}
+
+#[test]
+fn one_graph_selects_job_and_service_models_by_mode_without_ambiguity() {
+    let source = r#"
+graph mixed : App {
+  input in: text
+  output job: text
+  output service: text
+  connector once : Process { command = "cat"; codec = lines; behavior = deterministic }
+  connector resident : Process {
+    mode = service; command = "cat"; codec = lines; behavior = deterministic
+    closing = { drain_for = duration("1s"); settle_for = duration("1s") }
+  }
+  in -> once
+  in -> resident
+  once.out -> job
+  resident.out -> service
+  once.err -> nothing
+  once.exit -> nothing
+  resident.err -> nothing
+  resident.exit -> nothing
+}
+lab mixed {
+  simulation modes on app {
+    mock once { on in { out = data; exit = Exited { exit_code = 0; signal = null } } }
+    mock resident { on in { out = data } }
+    scenario interleaved "one Call per input, one shared Session" {
+      app.in = "first"
+      expect app.job where data == "first"
+      expect app.service where data == "first"
+      app.in = "second"
+      expect app.job where data == "second"
+      expect app.service where data == "second"
+    }
+  }
+}
+"#;
+    let compilation = compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
+    let registry = rastok::connector::drivers::hosted_registry(None).unwrap();
+    for spec in compilation
+        .plan
+        .plan()
+        .nodes
+        .iter()
+        .filter_map(|node| node.connector())
+    {
+        let Some(rastok::plan::AttrSetting::Word(mode)) = spec.attribute("mode") else {
+            panic!("the compiler materializes the mode");
+        };
+        let (name, _) = registry
+            .require(&spec.contract, spec.roles, spec.exchange, Some(mode), None)
+            .unwrap();
+        assert_eq!(
+            name.as_str(),
+            if mode == "job" {
+                "process-job"
+            } else {
+                "process-service"
+            }
+        );
+    }
+    let runs = rastok::lab::run(
+        &compilation.plan,
+        rastok::plan::GraphVersion(1),
+        &compilation.labs[0],
+    );
+    assert_eq!(runs.len(), 1);
+    let run = &runs[0];
+    assert!(run.report.failures.is_empty(), "{:?}", run.report.failures);
+    use rastok::journal::{CallStatus, EgressRecord, Record, SessionStatus};
+    let calls = run
+        .records
+        .iter()
+        .filter(|record| {
+            matches!(record,
+                Record::Egress(EgressRecord::Call(call)) if matches!(call.status, CallStatus::Open)
+            )
+        })
+        .count();
+    let sessions = run.records.iter().filter(|record| matches!(record,
+        Record::Egress(EgressRecord::Session(session)) if matches!(session.status, SessionStatus::Opening(_))
+    )).count();
+    assert_eq!(calls, 2);
+    assert_eq!(sessions, 1);
 }
 
 #[cfg(unix)]

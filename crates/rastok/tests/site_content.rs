@@ -223,15 +223,13 @@ fn current_public_status_matches_the_package_and_contracts() {
     assert!(paper.contains(&format!("Format-{version} (")));
     assert!(paper.contains(&format!("**package {version} / diagnostic recording 4**")));
     assert!(!paper.contains("blessing pending review"));
-    for contract in [
-        rastok_core::connector::stdlib::PROCESS_CONNECTOR_ID,
-        rastok_core::connector::stdlib::PROCESS_SERVICE_CONNECTOR_ID,
-    ] {
-        assert!(paper.contains(contract), "whitepaper names {contract}");
-    }
+    let contract = rastok_core::connector::stdlib::PROCESS_CONNECTOR_ID;
+    assert!(paper.contains(contract), "whitepaper names {contract}");
     for stale in [
         "process@2",
         "process@3",
+        "process@4",
+        "process@5",
         "`effect` make repetition safe",
         "effect is `none`",
         "port-type, effect, behavior",
@@ -241,7 +239,7 @@ fn current_public_status_matches_the_package_and_contracts() {
 
     let catalogue = std::fs::read_to_string(root().join("docs/examples/README.md")).unwrap();
     assert!(catalogue.contains(&format!("**format-{version} / diagnostic-recording-4**")));
-    assert!(catalogue.contains("node-realignment-identity.md"));
+    assert!(catalogue.contains("connector-rework-identity.md"));
     assert!(!catalogue.contains("unblessed v19 candidate"));
     assert!(!catalogue.contains("v18 is the last qualified"));
 
@@ -272,7 +270,7 @@ fn current_public_status_matches_the_package_and_contracts() {
             status.contains("[current plan package](../spec/identity.md)"),
             "{path}: the live status must refer to the current registry"
         );
-        assert!(status.contains("node-realignment-identity.md"), "{path}");
+        assert!(status.contains("connector-rework-identity.md"), "{path}");
     }
 }
 

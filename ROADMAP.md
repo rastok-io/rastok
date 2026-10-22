@@ -61,9 +61,10 @@ records the shared standard definitions, per-Driver interfaces, hosted Driver
 modules and deterministic per-Node implementation selection. The contributor
 path is [catalogue → File → conformance](docs/architecture/connector-drivers.md).
 Lab models remain substitutions, not selectable physical providers. The separate
-[Process identity proposal](docs/architecture/connector-rework-identity.md)
-still requires Yoann's approval; no new Contract id or package version follows
-from module reorganization or implementation selection. This update changes no
+[Process identity movement](docs/architecture/connector-rework-identity.md)
+is approved separately by Yoann: `std/process@6`, package format 22,
+diagnostic recording 4. Both modes retain their interaction and lifecycle;
+the identity inventory tracks their measured witness changes. This update changes no
 opening date and authorizes no public operation.
 
 ### Human-review follow-up — 5 October
@@ -76,11 +77,12 @@ Fable's review; the cutover needs Fable's review and Yoann's approval before
 reference update. Pre-public registries compact once; the public extend-only contract
 starts after that reference update. Keep the chantier numbered v20 for now, and record
 the switch to public format 1 as a pre-publication TODO. The approved cutover
-now uses package 20 and recording 4; no publication is authorized here.
+used package 20 and recording 4; current formats are named in
+[identity.md](docs/spec/identity.md). No publication is authorized here.
 
-### Current close-out — 15 October
+### Node realignment close-out — 15 October
 
-The Node-ontology realignment uses **package 21 / diagnostic recording 4**.
+The Node-ontology realignment qualified **package 21 / diagnostic recording 4**.
 Its [identity inventory](docs/architecture/node-realignment-identity.md) records
 the package-only movement: one Node table, Graph-owned wiring and
 Operator-owned handlers. Execution indexes do not enter journal identities;

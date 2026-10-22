@@ -5,7 +5,7 @@ Opening: **5 November 2026**, freeze **24 October**, per the 5 October
 checklist. **Release TODO:** relabel the first public package as format 1 before
 publication. No public operation is authorized by this update. The
 [current plan package](../spec/identity.md) and diagnostic recording **4**
-are qualified in the [Node realignment inventory](node-realignment-identity.md).
+are tracked in the [Connector identity inventory](connector-rework-identity.md).
 Exact-instance
 closure, resident Process, native Retry, flat annotation types and bounded
 typed HTTP deserialization keep their execution semantics. The
@@ -62,7 +62,7 @@ opening gates remain separate; the calendar stays with Yoann.
 
 | Item | State | Evidence / next gate |
 |---|---|---|
-| Connector T5/T9 rework | Partial — neutral series implemented; separate identity approval pending | Shared standard definitions, Driver interfaces/modules, per-Node named implementation selection and ownership recovery; read-only human/JSON catalogue and File contributor guide. [Qualification](connector-rework-qualification.md) records the executed gates. The proposed Process Contract id and package version in the [identity inventory](connector-rework-identity.md) are not yet approved. |
+| Connector T5/T9 rework | Done — implemented and locally qualified; independent review next | Shared standard definitions, Driver interfaces/modules, per-Node named implementation selection and ownership recovery; read-only human/JSON catalogue and File contributor guide. The approved `std/process@6` / package-22 movement is [inventoried](connector-rework-identity.md). [Qualification](connector-rework-qualification.md) records 1,623 Rust tests, 35 browser tests, three no_std targets and both QEMU workloads, all passing. Public-opening gates remain separate. |
 | Bounded-join expiry productibility | Done | 14 destination tests; 9 September combined baseline: 1,297 Rust tests passed |
 | `run --record`, `replay [--ui]` | Done within the diagnostic contract | CLI and real-Chrome tests prove read-only prefix navigation and no Driver on replay; `@personal` and boot-dependent profiles still refuse persistence, as documented |
 | Readable golden divergence | Done | Expected/actual labels, first record and field, retained causal context; shared CLI/UI path; classified values hidden; byte/seal comparison unchanged |

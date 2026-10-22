@@ -224,7 +224,7 @@ mod tests {
 
     #[test]
     fn a_manifest_describes_capabilities_without_loading_driver_code() {
-        let process = entry("process-job", "std/process@4", &["job"]);
+        let process = entry("process-job", "std/process@6", &["job"]);
         let file = entry("file", "std/file@3", &["replace", "read"]);
         let manifest = DriverManifest::try_new([process, file]).expect("distinct capabilities");
         assert_eq!(manifest.entries()[0].connector().as_str(), "std/file@3");
@@ -233,7 +233,7 @@ mod tests {
         assert_eq!(manifest.entries()[0].exchange(), ExchangeKind::Call);
         assert_eq!(manifest.entries()[0].mode_attribute(), Some("mode"));
         assert_eq!(manifest.entries()[0].modes(), ["read", "replace"]);
-        assert_eq!(manifest.entries()[1].connector().as_str(), "std/process@4");
+        assert_eq!(manifest.entries()[1].connector().as_str(), "std/process@6");
         assert_eq!(manifest.entries()[1].modes(), ["job"]);
         assert!(
             !manifest
@@ -245,7 +245,7 @@ mod tests {
 
     #[test]
     fn duplicate_manifest_claims_never_gain_an_ordering_policy() {
-        let first = entry("process-job", "std/process@4", &["job"]);
+        let first = entry("process-job", "std/process@6", &["job"]);
         let mut second = first.clone();
         second.roles = ConnectorDirection::Inbound;
         let expected = DriverManifestError::Duplicate {

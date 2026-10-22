@@ -142,7 +142,7 @@ fn port_rule_view(rule: PortTypeRule) -> Result<Json, String> {
 
 fn mode_view(definition: &ConnectorContract, mode: Option<&ContractMode>) -> Result<Json, String> {
     let protocol = mode.and_then(|mode| mode.protocol);
-    let id = protocol.map_or(definition.id, |protocol| protocol.id);
+    let id = definition.id;
     let direction = protocol.map_or(definition.roles, |protocol| protocol.roles);
     let exchange = protocol.map_or(definition.exchange, |protocol| protocol.exchange);
     let attributes: Vec<_> = definition
@@ -293,7 +293,7 @@ fn catalogue(
                 .into_iter()
                 .map(|mode| {
                     let protocol = mode.and_then(|mode| mode.protocol);
-                    let id = protocol.map_or(definition.id, |protocol| protocol.id);
+                    let id = definition.id;
                     let direction = protocol.map_or(definition.roles, |protocol| protocol.roles);
                     let exchange =
                         protocol.map_or(definition.exchange, |protocol| protocol.exchange);
@@ -720,11 +720,8 @@ mod tests {
             });
             for declared in modes {
                 let actual = mode(&view, definition.name, declared.map(|mode| mode.word));
+                assert_eq!(actual["contract"], definition.id);
                 let protocol = declared.and_then(|mode| mode.protocol);
-                assert_eq!(
-                    actual["contract"],
-                    protocol.map_or(definition.id, |protocol| protocol.id)
-                );
                 let expected_names: Vec<_> = definition
                     .common
                     .iter()
@@ -882,6 +879,11 @@ mod tests {
         assert_eq!(job["lab_models"][0]["name"], "lab-call");
         assert_eq!(service["lab_models"][0]["name"], "lab-process-service");
         assert_ne!(job["exchange"], service["exchange"]);
+        assert_eq!(job["contract"], service["contract"]);
+        assert_eq!(
+            job["contract"],
+            rastok::connector::stdlib::PROCESS_CONNECTOR_ID
+        );
         assert_eq!(job["outbound_call_cardinality"]["terminal"]["count"], 1);
         assert!(service["outbound_call_cardinality"].is_null());
         assert_eq!(service["interaction"]["terminal_count"], 1);

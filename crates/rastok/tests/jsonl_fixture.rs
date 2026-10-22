@@ -29,7 +29,7 @@ fn compilation() -> rastok::compiler::Compilation {
 
 // The standard Contract namespace movement is approved and inventoried in
 // docs/architecture/human-review-v20-identity.md.
-const JSONL_HASH: &str = "0aeff047b9efde5c6dc4efd6f411c5541a786fb24f816108e110eb29d00e026f";
+const JSONL_HASH: &str = "6c58b687269df20e5bd5c468a88bf59eac4c67dda528f77890dc6937bd1dbc81";
 
 #[test]
 fn the_semantic_hash_is_pinned() {

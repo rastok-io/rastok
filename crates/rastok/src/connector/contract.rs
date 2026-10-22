@@ -394,22 +394,8 @@ pub fn validate_sheet(contract: &ConnectorContract) -> Result<(), ContractValida
             ));
         }
         let mut words = std::collections::BTreeSet::new();
-        let mut identities = std::collections::BTreeSet::from([contract.id]);
         for profile in selector.profiles {
             if let Some(protocol) = profile.protocol {
-                if !identities.insert(protocol.id) {
-                    return Err(ContractValidationError::ConnectorIdCollision {
-                        id: protocol.id,
-                        existing: contract.name,
-                        incoming: profile.word,
-                    });
-                }
-                crate::connector::ContractId::parse(protocol.id).map_err(|reason| {
-                    ContractValidationError::InvalidConnectorId {
-                        id: protocol.id,
-                        reason,
-                    }
-                })?;
                 let exits = contract
                     .ports
                     .iter()
@@ -662,17 +648,14 @@ impl ContractCatalog {
                 reason,
             }
         })?;
-        for protocol_id in contract.protocol_ids() {
-            if let Some(existing) = self.connectors.values().find(|existing| {
-                existing.name != contract.name
-                    && existing.protocol_ids().any(|id| id == protocol_id)
-            }) {
-                return Err(ContractValidationError::ConnectorIdCollision {
-                    id: protocol_id,
-                    existing: existing.name,
-                    incoming: contract.name,
-                });
-            }
+        if let Some(existing) = self.connectors.get(&id)
+            && existing.name != contract.name
+        {
+            return Err(ContractValidationError::ConnectorIdCollision {
+                id: contract.id,
+                existing: existing.name,
+                incoming: contract.name,
+            });
         }
         self.connectors
             .retain(|_, existing| existing.name != contract.name);
@@ -710,16 +693,6 @@ impl ContractCatalog {
     /// Resolves the exact stable identity carried by a categorical plan.
     #[must_use]
     pub fn connector_by_id(&self, id: &crate::connector::ContractId) -> Option<&ConnectorContract> {
-        self.connectors.get(id).or_else(|| {
-            self.connectors.values().find(|contract| {
-                contract.selector.as_ref().is_some_and(|selector| {
-                    selector.profiles.iter().any(|profile| {
-                        profile
-                            .protocol
-                            .is_some_and(|protocol| protocol.id == id.as_str())
-                    })
-                })
-            })
-        })
+        self.connectors.get(id)
     }
 }

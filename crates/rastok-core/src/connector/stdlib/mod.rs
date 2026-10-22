@@ -90,10 +90,7 @@ pub fn connector_attribute_site(
     id: &crate::connector::ContractId,
     attribute: &str,
 ) -> Option<crate::plan::EvaluationSite> {
-    if matches!(
-        id.as_str(),
-        PROCESS_CONNECTOR_ID | PROCESS_SERVICE_CONNECTOR_ID
-    ) {
+    if id.as_str() == PROCESS_CONNECTOR_ID {
         return process_attribute_site(id, attribute);
     }
     definition_attribute_site(contract(id)?, attribute)
@@ -304,10 +301,7 @@ pub fn prepare_lines(data: &envelope::Data) -> Result<PreparedRequest, String> {
 }
 
 /// The standard Process contract's stable major-version identity.
-pub const PROCESS_CONNECTOR_ID: &str = "std/process@4";
-
-/// Resident stdio Session, distinct from the finite job Contract.
-pub const PROCESS_SERVICE_CONNECTOR_ID: &str = "std/process@5";
+pub const PROCESS_CONNECTOR_ID: &str = "std/process@6";
 
 /// The standard single-file contract's stable major-version identity.
 pub const FILE_CONNECTOR_ID: &str = "std/file@3";
@@ -367,7 +361,7 @@ pub fn contract(id: &crate::connector::ContractId) -> Option<&'static ConnectorC
     CONTRACTS
         .iter()
         .copied()
-        .find(|definition| definition.protocol_ids().any(|known| known == id.as_str()))
+        .find(|definition| definition.id == id.as_str())
 }
 
 fn effective_contract_port(
@@ -407,9 +401,22 @@ pub(crate) fn validate(
 ) -> Result<(), PlanValidationError> {
     http_server::validate_response_path(plan, index, node, spec, receives_inbound_call_response)?;
     match spec.contract.as_str() {
-        PROCESS_CONNECTOR_ID | PROCESS_SERVICE_CONNECTOR_ID => process::validate(node, spec),
+        PROCESS_CONNECTOR_ID => process::validate(node, spec),
         FILE_CONNECTOR_ID => file::validate(node, spec),
-        _ => network::validate(node, spec, node.loop_spec()).map(|_| ()),
+        _ => {
+            if network::validate(node, spec, node.loop_spec())?
+                || !spec.contract.as_str().starts_with("std/")
+            {
+                Ok(())
+            } else {
+                // The std namespace is owned by this registry. An absent major
+                // cannot fall through to the generic external-Contract rules.
+                Err(PlanValidationError::UnknownStandardContract {
+                    node: node.path.clone(),
+                    contract: spec.contract.clone(),
+                })
+            }
+        }
     }
 }
 
