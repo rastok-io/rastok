@@ -1,5 +1,15 @@
 # Resident Process — implementation and qualification
 
+> **Current implementation pointer — 22 October 2026.** The dated design and
+> evidence below are preserved. Current Connector interfaces are under
+> `connector::{exchange,driver,stdlib}`; hosted implementations are under
+> `connector::drivers`. See the [File contributor guide](connector-drivers.md),
+> [module map](components.md) and [T5/T9 qualification](connector-rework-qualification.md).
+> Process job/service still use their current exact ids in
+> [stdlib.md](../spec/stdlib.md); the separate [identity proposal](connector-rework-identity.md)
+> is not an implemented change.
+
+
 Current implementation, updated 7 October 2026; format authority:
 [identity.md](../spec/identity.md). D-2026-09-14-1 implements the approved resident transport,
 following the [contract review](process-contract-review.md). The visible

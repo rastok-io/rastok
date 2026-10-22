@@ -46,6 +46,15 @@ validated controller identity. One client owns control; observers may inspect
 and explicitly take control. A stale controller cannot mutate the simulation.
 Capability and ownership enter no graph, journal, diagnostic or accounting fact.
 
+### Read-only Connector catalogue
+
+`rastok connectors` and `rastok connectors --json` are CLI documentation views,
+not debugger controls. They project the checked standard Contracts and modes,
+resolved default port types and alternative type rules, attributes and phases,
+terminal cases, linked implementations, Lab bindings and named conformance gaps.
+They do not create a Driver, inspect a running deployment or execute a fixture.
+No catalogue data is a new execution command or journal fact.
+
 ## 2. Stepping and playback
 
 Every selection starts paused at B0, before admission. Controls are:

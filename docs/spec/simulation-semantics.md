@@ -106,6 +106,13 @@ digest, weaken a port type, construct an envelope, or write a journal record. On
 simulation may mock several Connectors with different Contracts; this does not create a second
 machine or a second plan.
 
+Deployment selection of a named physical implementation does not select a Lab
+model. Simulation uses its own explicit scripted registry and the same checked
+Contract. The catalogue reports physical and Lab bindings separately. A Lab
+binding alone does not enable every authored action: an HttpServer `respond`
+Node may remain silent beside the simulated flow, but source injection still
+requires `ack`. No response model is inferred from a successful binding.
+
 **Executable Contract, not physical Driver** (D-2026-09-09-3). Checking needs
 the Contract's types and rules; simulation additionally needs an effectless
 exchange model; real execution needs a physical Driver. Pure framing and

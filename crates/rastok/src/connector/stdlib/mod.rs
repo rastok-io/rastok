@@ -24,16 +24,16 @@ impl ContractCatalog {
             frontends: Vec::new(),
         };
         // Standard definitions must satisfy the same checks as additions.
-        M0_FRONTENDS
+        let base = M0_FRONTENDS
             .iter()
             .cloned()
-            .try_fold(base, Self::try_with_frontend)?
-            .try_with(PROCESS)?
-            .try_with(FILE)?
-            .try_with(HTTP_CLIENT)?
-            .try_with(HTTP_SERVER)?
-            .try_with(WEBSOCKET_CLIENT)?
-            .try_with(WEBSOCKET_SERVER)
+            .try_fold(base, Self::try_with_frontend)?;
+        CONTRACTS
+            .iter()
+            .copied()
+            .try_fold(base, |catalogue, contract| {
+                catalogue.try_with(contract.clone())
+            })
     }
 }
 

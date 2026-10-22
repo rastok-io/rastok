@@ -205,7 +205,7 @@ fn tables(plan: &ExecutionPlan, inventory: &[rastok_core::plan::RouteRule]) -> T
 
 // Compare all retained declaration fields, not just a byte count. Validation
 // occurs after sampling, so temporary comparison copies are not attributed
-// to candidate construction. The original plan never leaves the running VM.
+// to candidate construction. The original plan never leaves the running Execution.
 fn check_inline(
     plan: &ExecutionPlan,
     nodes: &[Node<InlineBody>],

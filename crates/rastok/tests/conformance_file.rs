@@ -135,28 +135,7 @@ fn file_passes_the_connector_neutral_battery() {
                 input: "ignored",
             },
         ],
-        untestable: vec![
-            (
-                "PermissionDenied",
-                "no portable fixture can force host permission denial across supported systems",
-            ),
-            (
-                "AtomicReplaceUnavailable",
-                "the conformance host may provide the required same-directory atomic rename",
-            ),
-            (
-                "IoFailed",
-                "portable filesystem APIs expose no deterministic generic I/O fault fixture",
-            ),
-            (
-                "TimeoutExpired",
-                "a bounded one-file operation cannot be made portably and deterministically mute",
-            ),
-            (
-                "OutcomeUnknown",
-                "bounded Closing, not the File Driver, produces this case after settlement expires",
-            ),
-        ],
+        untestable: rastok::connector::drivers::conformance::FILE_READ_UNTESTABLE.to_vec(),
         mute_source: None,
         interleave: Some(InterleaveProbe {
             source: pair_probe(),

@@ -26,7 +26,9 @@ use rastok::{connector, lab, node};
 use std::io::{BufRead, Write as _};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: rastok new <name>\n       rastok check <file.rkg>...\n       rastok run <file.rkg>... [--file-root <dir>] [--deployment <profile.json>] [--json-logs] [--record <file.rkrec>]\n       rastok replay <file.rkrec> [--ui [--ui-port <port>]]\n       rastok simulate <file.rkg>... [--deployment <profile.json>] [--compare <dir> | --save <dir>] [--ui [--ui-port <port>]]\n       rastok --resolve-open-api <project-dir> [--check]";
+mod connector_catalogue;
+
+const USAGE: &str = "usage: rastok new <name>\n       rastok connectors [--json]\n       rastok check <file.rkg>...\n       rastok run <file.rkg>... [--file-root <dir>] [--deployment <profile.json>] [--json-logs] [--record <file.rkrec>]\n       rastok replay <file.rkrec> [--ui [--ui-port <port>]]\n       rastok simulate <file.rkg>... [--deployment <profile.json>] [--compare <dir> | --save <dir>] [--ui [--ui-port <port>]]\n       rastok --resolve-open-api <project-dir> [--check]";
 
 /// Comparing is read-only; saving explicitly creates or replaces reference traces.
 enum GoldenAction {
@@ -78,7 +80,9 @@ impl UiOptions {
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let (command, paths) = match args.split_first() {
-        Some((command, paths)) if !paths.is_empty() => (command.as_str(), paths),
+        Some((command, paths)) if !paths.is_empty() || command == "connectors" => {
+            (command.as_str(), paths)
+        }
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);
@@ -86,6 +90,7 @@ fn main() -> ExitCode {
     };
     match command {
         "new" => new_graph(paths),
+        "connectors" => connector_catalogue::run(paths),
         "replay" => replay(paths),
         "--resolve-open-api" => resolve_open_api(paths),
         "check" => {

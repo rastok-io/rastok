@@ -1,6 +1,6 @@
 # Specification-to-implementation map
 
-> Non-normative implementation map, updated 2026-10-21. Current format:
+> Non-normative implementation map, updated 2026-10-22. Current format:
 > [identity.md](../spec/identity.md).
 > The first table describes current ownership; subsequent milestone tables
 > preserve dated landing evidence, including superseded types and ids. They
@@ -17,7 +17,9 @@
 | [Exact-instance closure](../spec/instances.md#73-explicit-closure-commands) | core `journal::instance_stop`, `runtime::execution::instance_stop`; compiler routing; diagnostic recording | `instance_stop.rs`, hostile protocol/plan/prefix tests; [v18 ledger](instance-stop-command.md) |
 | [Dispatch / where / multi-emission](../spec/execution-model.md) | compiler syntax/HIR/check/lower; core `plan/dispatch*`, `plan/emit_value`, `runtime/dispatch`, `TransactionPreparer` | `where_dispatch.rs`, `transaction_preparer.rs`, core emission tests |
 | [Routing / destinations](../spec/grammar.md) | compiler `check/routing`; Graph-owned `RouteRule` wiring with indexed `Endpoint` and explicit `Destination`; core `plan::{composition,routing_validation,productibility}` derives private execution routes. `runtime::DeliveryRoutes` resolves queued `EdgeIndex` values to canonical paths and ports. | `v16_destinations.rs`, route/Dispatch sabotage; `transaction_preparer.rs` proves journal equality under different internal indexes and per-source cursors; bounded JoinExpired remains a mandatory producer |
-| [Contract profiles](../spec/stdlib.md) | `connector::contract::ContractCatalog`, `stdlib`, core mirrors; `std/process@4` job / `std/process@5` service and File/network `std/…@3` | `connector_composition.rs`, `contracts.rs`, Driver conformance |
+| [Contract profiles](../spec/stdlib.md) | `connector::contract::ContractCatalog` consumes the shared core `connector::stdlib` definitions; `std/process@4` job / `std/process@5` service and File/network `std/…@3` | `connector_composition.rs`, `contracts.rs`, Driver conformance |
+| [Connector implementations](connector-drivers.md) | hosted `connector::drivers::{DriverRegistry,RuntimeDrivers}` selects by Contract, resolved mode and optional deployment Driver name; private object indexes own Calls, inbound Calls and Sessions. `restore_ownership` reconstructs routing from the recovered prefix under the same deployment selection, without calling a Driver. | named two-implementation Call/Session tests, pre-effect absence/ambiguity/incompatibility refusals, recovery ownership and no cross-object responses/writes/cancellation |
+| [Connector catalogue](connector-drivers.md#1-find-the-contract) | CLI `connector_catalogue` projects shared declarations, physical/Lab manifests and conformance-fixture metadata; it is not a second Contract schema. | projection tests against definitions; File guide example compiled by the real compiler |
 | [Resident Process](process-service.md) | profile-selected Contract; `connector/drivers/process/service.rs`, Lab Session world, shared core lifecycle | `process_service.rs`, framing/cleanup tests, two dialogue scenarios and new goldens |
 | [Loop](../spec/loop.md) | compiler `check/loop_control`; core `plan::{call_loop,graph_loop}`, `journal::loop_protocol`, `runtime/execution/loop_manager` | `v16_loop*`, `v16_graph_calls.rs`, `loop_host_exit.rs` |
 | [Recovery / deadlines](../spec/delivery-semantics.md) | `runtime/execution/recovery`, `journal::{DeadlineKind, deadline::Deadline, deadline::Deadlines}`, sealed `deadline_ids` and unsealed `deadlines`; lossless `journal::codec::{encode, Decoder}`; no public `RecoveryFold` type | `v16_recovery.rs`, `v16_exchange_recovery.rs`; exhaustive kind-byte and codec round-trip tests; no disk-backend claim |

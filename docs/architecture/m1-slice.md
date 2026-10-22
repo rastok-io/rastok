@@ -1,5 +1,15 @@
 # The M1 slice — the public-opening milestone
 
+> **Current implementation pointer — 22 October 2026.** The dated design and
+> evidence below are preserved. Current Connector interfaces are under
+> `connector::{exchange,driver,stdlib}`; hosted implementations are under
+> `connector::drivers`. See the [File contributor guide](connector-drivers.md),
+> [module map](components.md) and [T5/T9 qualification](connector-rework-qualification.md).
+> Process job/service still use their current exact ids in
+> [stdlib.md](../spec/stdlib.md); the separate [identity proposal](connector-rework-identity.md)
+> is not an implemented change.
+
+
 > **Later scope amendment — D-2026-09-16-7:** CostReport, automatic pricing
 > and subset arithmetic are removed from M1. References below preserve the
 > earlier design/qualification history; [observability.md](../spec/observability.md)

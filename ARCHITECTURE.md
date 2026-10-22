@@ -110,7 +110,7 @@ promise of one crate per box:
 | Hosted Worker | one Execution, its journal and bound Drivers; continuous running, running until idle, and single stepping | an implicit clock, scenario assertions, presentation or new parallelism |
 | Read-only execution inspection | detached instance, mailbox, Call and Session views, with execution indexes resolved to paths | journal authority, mutation, formatting or debugger navigation |
 | Journal boundary | ordered typed inputs and outcomes | hidden semantic decisions |
-| Runtime Connector binding | exact-id and role association before VM/journal construction | compiler catalogue or first-registration-wins selection |
+| Runtime Connector binding | Contract/mode-compatible implementation selection per Node before Execution/journal construction; exact Driver-object exchange ownership | compiler catalogue or first-registration-wins selection |
 | Process, File and network Drivers | physical external interactions behind typed Contracts; flat contract-specific modules own binding and private `network` owns sockets/TLS/protocol engines | general runtime semantics, compiler schema projection or journal authority |
 | Project schema tooling | strict OpenAPI discovery/projection and deterministic generated Rastok source | a second runtime type system or authored-source mutation |
 | Lab runner | controlled Driver scripts, virtual inputs, time and assertions; authored crash/restart remains deferred | a second execution engine |
@@ -155,7 +155,7 @@ presentation boundary.
    external responses cannot enter through ambient APIs.
 4. **Identity is canonical.** Stable identifiers and hashes derive only
    from the canonical forms defined by the specification.
-5. **Recovery is journal-relative.** The VM reconstructs retained routes,
+5. **Recovery is journal-relative.** The Execution reconstructs retained routes,
    state, exchanges, deadlines and Loop commands without rerunning producers.
    A physical durable-journal backend remains separate future work.
 6. **Abstractions earn their place.** A trait, generic parameter, crate,
@@ -208,7 +208,7 @@ feature-selected `hosted_registry` composes Process, optional File and the
 linked HTTP/WebSocket Connector implementations. HttpClient/HttpServer remain Calls;
 WebSocketClient/WebSocketServer use the generic Session fold over H1 Upgrade
 and H2/H3 Extended CONNECT. Tokio and every protocol-library type remain
-private to `rastok::connectors::network`; the same core still builds for the
+private to `rastok::connector::drivers::network`; the same core still builds for the
 three established no-std targets.
 
 M1.7 proved temporal recursion on that deterministic boundary using the v14
@@ -223,9 +223,9 @@ Next/Again/Done into durable manager commands outside the spatial DAG. See the
 [R1 host contracts](docs/architecture/rework-r1-host-contracts.md).
 
 The optional `hosted-ui` feature embeds one loopback HTTP/SSE debugger for
-simulation. Next transition invokes existing VM work or an authored Lab action,
+simulation. Next transition invokes existing Execution work or an authored Lab action,
 never a second execution model. An authored `advance` retains individually
-inspectable intermediate VM transitions through the same advance cursor as
+inspectable intermediate Execution transitions through the same advance cursor as
 batch execution; it does not compress ready transactions into one UI frame.
 Immutable snapshots retain history, current
 mailbox contents, instances, Loop-run dependencies and redacted values.

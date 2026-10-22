@@ -38,7 +38,7 @@ pub trait DriverFactory {
     /// Binds all selected plan Nodes of this contract into one implementation
     /// object. Runtime Driver preparation is the sole caller. Creation may reserve
     /// passive host resources whose availability must be proved atomically
-    /// for the family (for example, all listener sockets of an inbound
+    /// for all selected Nodes (for example, all listener sockets of an inbound
     /// server). It must not acknowledge input, create causal facts, or perform
     /// an outbound effect; those actions remain behind the bound role views.
     ///
@@ -55,9 +55,9 @@ pub trait DriverFactory {
     ) -> Result<Box<dyn Driver + 'plan>, DriverFactoryError>;
 
     /// Binds with deployment inputs already resolved and attested. The
-    /// default keeps every existing family honest: it delegates only when no
-    /// selected Node carries a boot reference. A family opens a boot setting
-    /// by overriding this method and consuming it before returning.
+    /// default delegates only when no selected Node carries a boot reference.
+    /// An implementation that accepts boot settings must override this method
+    /// and resolve those settings before returning the bound Driver.
     fn create_with_boot<'plan>(
         &self,
         plan: &'plan ValidatedExecutionPlan,

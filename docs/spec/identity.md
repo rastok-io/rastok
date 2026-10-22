@@ -31,6 +31,12 @@ of the default — `duration("60s")` and `duration("1m")` keep two
 trees) ; **the entire lab** (a lab never alters the
 production graph).
 
+Physical Driver implementation names and per-Node deployment selection are
+also outside the semantic hash and journal identities. They choose an
+implementation of the already-resolved Contract, not another Contract or
+execution model. Equal causal inputs and outcomes keep equal identities;
+this is not a claim that different external providers return equal outcomes.
+
 **Sensitive to** : topology (the parent-linked Graph/Operator/Connector owner
 tree, scoped PhysicalEdges, RouteRules, ports, edge configs), resolved
 `instance.key` and `lifetime` attributes; owner `val` expressions and every

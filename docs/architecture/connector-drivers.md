@@ -1,415 +1,270 @@
 # Contributing a Connector Driver
 
-> Current implementation, updated 2026-10-07; version authority:
-> [format registry](../spec/identity.md).
-> D-2026-09-05-1 established the model implemented by R3–R9: Connector is
-> one of the two Executor forms, its semantic transition comes from a
-> versioned Contract, all productible outcomes have explicit
-> dispositions. Process job/service use `std/process@4` / `@5`; File and
-> network Contracts use `std/…@3`.
-> Loop extends a Call's existing terminal type; it creates
-> neither a new Contract id nor a contributed port.
-> The normative contract lives in
-> [`../spec/stdlib.md`](../spec/stdlib.md) and
-> [D-2026-08-22-1 through D-2026-08-27-3](../spec/decisions.md). This guide
-> explains how the pieces meet in the implementation; it does not define a
-> second Connector model.
+> Current contributor path, updated 2026-10-22.
+> Current format and exact standard Contract ids: [identity.md](../spec/identity.md)
+> and [stdlib.md](../spec/stdlib.md).
 
-## The four objects
+A Connector is a Node in the program. Its Contract specifies the observable
+behavior: ports, data types, attributes, evaluation phases, exchange protocol
+and terminal obligations. A Driver implements that Contract using a process,
+filesystem or network service. Deployment selects an implementation; it does
+not change the Contract or the program's semantic identity.
 
-- A **Connector** is the Executor Node written in an RKG graph.
-- Its **Contract** is compiler data: stable id, required roles, ports, types,
-  attributes, evaluation phases and lifecycle rules.
-- A **Driver** is physical code that performs the external interaction.
-- A **Binding** proves, before the VM and journal exist, which real or
-  effectless Driver object serves each active Connector Node.
+Start with the catalogue. Then choose an existing Contract or define a new
+one, implement only the required interfaces, register the implementation,
+and qualify its real and simulated behavior.
 
-An inbound binding may reserve every passive listener governed by its Contract so a
-partial bind cannot expose a half-live service. This is fail-fast host
-provisioning, not causal execution: it cannot acknowledge a request, identify a
-fact, or perform an outbound effect. Any arrival in the short pre-Worker gap
-remains pending under the Driver's ordinary finite capacities.
+## 1. Find the Contract
 
-No Rust crate name, Cargo feature, library path, Host, Worker or concrete
-Driver version enters the semantic plan. The meeting key is the canonical
-Contract id, for example `std/file@3`.
-
-```text
-                         compile time
-
-  RKG Connector ──symbol──▶ ContractCatalog ──check/lower──▶ validated plan
-                                 │                    id + roles + exchange
-                                 │
-                                 └── declarative sheet; no Driver code
-
-                         runtime assembly
-
-  static factories ─┐
-                    ├──▶ DriverRegistry ──bind exact id/roles──▶ RuntimeDrivers
-  future loader ────┘             ▲                                │
-       │                          │                                │
-       └─ DriverManifest           │                      ┌─────────┴─────────┐
-          (data only)              │                      │                   │
-                                                   INGRESS facts       committed outbound intents
-                                                           │                   │
-                                                           └──── VM + journal ┘
-
-                         simulation
-
-  Lab mock factory ──same id/roles/binding/protocol──▶ same VM + journal
-                                      only the external world is scripted
+```sh
+rastok connectors
+rastok connectors --json
 ```
 
-### Simulation does not require the physical implementation
+Both views come from the same definitions. The machine view includes the
+complete resolved type tree, not only a display name such as `struct`.
+When a type depends on a required attribute such as `codec`, the catalogue
+lists the alternatives and the required choice; it does not invent a default.
 
-The Contract and its pure protocol rules must be executable independently of
-the physical Driver. `check` needs those rules; `simulate` binds a Lab model;
-`run` binds real I/O. Request framing affecting a digest is shared pure code,
-not reimplemented in the mock and not hidden behind a networking feature.
-Port types alone do not describe an exchange's lifecycle or cardinality.
+The catalogue must distinguish four facts:
 
-The HttpServer ack Lab model owns one bounded decoded-request proposal and one
-acknowledgement slot. It uses `RuntimeDrivers::poll_inbound` and the generic
-inbound Call terminal queue; the core still assigns the root identity, Call reference,
-routes and journal records. The scenario selects `listener.out`, not an extra
-test-only App input. Pending admission cannot acknowledge or overwrite the
-request. HttpServer respond and Session source scripting remain check-time
-gates; passive role binding is not proof of a complete simulation model.
+- The Contract is known to the compiler.
+- Its selected mode is executable, rather than a named deferral.
+- The Lab supports its exchange and fixtures.
+- A physical implementation is installed and can satisfy its deployment
+  requirements.
 
-This model scripts a successful fixed ACK after a decoded request. It does not
-claim to test the wire decoder, TLS, auth, body limits or real 202 delivery.
-Those are physical Driver conformance obligations. See
-[simulation-semantics §2](../spec/simulation-semantics.md#2-the-fixture-is-the-journals-world-half)
-and D-2026-09-09-3 for the separation.
+One fact does not imply the others. In particular, simulation does not need
+the physical implementation. File's `watch` mode is declared but not an
+executable mode; an available File Driver does not enable it.
 
-## Two roles, three exchange shapes
+A listed implementation matches the Contract, mode, direction and exchange.
+Preparation still validates the deployment's resolved settings and host
+capabilities; for example, the Contract's protocol-version choices do not mean
+every version is linked into this particular binary.
 
-`Ingress` retains and proposes one bounded external arrival at
-a time. This world-originated fact enters the Connector instance's ordinary
-mailbox only after INGRESS admission. The Driver does not assign root identities:
-sequencing, routing, admission, identity and journal commit remain runtime authorities. The runtime answers
-accepted only after commit, pending without a callback under pressure, or a
-portable rejection. A proposal also names the exact Connector Node that owns
-its source output through its single `IngressProvenance` authority.
-Registry binding proves that path belongs to the Contract; the VM proves the
-output row. An App-boundary injection remains a separate explicit API
-category, never a provenance-string heuristic.
+A Lab binding is also narrower than a complete scripted exchange. An
+HttpServer `respond` Node can remain silent beside the flow exercised by a
+scenario, as in the chat example. Authored source injection still supports
+`ack` only; the binding does not supply a graph-response simulation model.
 
-For a Call-shaped inbound contract, the same bound object also exposes
-`InboundCall`. The accepting INGRESS fact returns an
-`InboundCallId` only after it has committed the root and exact source
-instance. For fixed acknowledgement, the terminal view later reports one
-correlated `Completion`; the VM validates it and commits one zero-cursor
-`l:reply` Connector transaction with exactly one final `exit`.
+Portable definitions live in `crates/rastok-core/src/connector/stdlib/`, one file
+per standard Contract. The compiler and independent package validator read
+those same definitions. Human explanations and the compiler catalogue are
+hosted; they do not enter the embedded package.
 
-For a graph response, the same view first receives an `InboundCallResponse`
-through `start_response`. Its envelope and destination were already committed
-by the producing graph transaction. `Pending` means no protocol bytes were
-written and leaves the exact response behind the Connector's ordinary claimed
-mailbox; `Started` transfers the bounded attempt and obliges the Driver to
-report its one terminal event through `events`. The resulting `l:reply`
-consumes that real delivery cursor. Neither form is an outbound Call, and the
-Driver never manufactures a mailbox delivery or writes a causal record.
+Use the same Contract for another implementation only when its actual
+guarantees match. A provider-specific operation or weaker atomicity guarantee
+cannot be hidden behind an implementation choice.
 
-`Outbound` exposes exactly one exchange-specific outbound view:
-`OutboundCall` prepares/starts calls and reports correlated typed
-completions; `Session` prepares/starts an opening and its
-individual writes, then reports correlated open/write/terminal observations.
-A correlated result for an existing outbound exchange is not a second
-world-originated INGRESS root: it settles the already committed obligation and
-then enables the Connector's ordinary core-owned transition. Neither Driver
-writes records or manufactures scheduler outcomes such as timeouts.
+## 2. Read the interfaces for the selected exchange
 
-Session shutdown has three separate handoffs: `close_session` requests
-cooperative protocol closure during bounded Closing; `abort_session` requests
-forced local cleanup at its retained settlement deadline; `release_session`
-notifies the Driver after the sole terminal transaction has committed. The
-last two must not wait for peer cooperation, allocate an unbounded cleanup
-queue or start another grace period. They are fenced by the exact `SessionId`
-and cannot affect its successor. Aborting does not fabricate a normal exit or
-forget correlation early. Resource-free Lab Drivers may use the no-op defaults;
-physical shutdown needs separate qualification. In particular, these common
-seams alone do not qualify physical signals or a hosted WebSocket abort.
-The [resident Process tests](process-service.md) separately qualify Unix
-signal handoff, frame ordering and cleanup under backpressure.
-The hosted WebSocket Driver still uses its existing protocol-close path and
-the new callbacks' no-op defaults, not a newly implemented forced-close path.
+The shared interfaces are in `connector::driver`; the data they exchange is
+in `connector::exchange`. Hosted implementations and their conformance harness
+are under `rastok::connector::drivers`.
 
-A contract may require either role or both. A both-role factory returns one
-bound object exposing both views over shared protocol state; registering two
-unrelated objects is not equivalent. Event is exactly inbound; Session is
-outbound or both-role because its open/write/terminal observations use the
-exchange-specific outbound view.
-
-Roles describe direction across the Rastok boundary. M1.6 adds an orthogonal
-closed exchange fact describing lifecycle and cardinality:
-
-```text
-Event      : one spontaneous fact ──▶ one inbound root; no per-event exit
-Call       : one admitted request ──▶ ordered outputs ──▶ one typed exit
-Session    : one open ──▶ messages in both directions* ──▶ one typed exit
-```
-
-H1 makes all three exchange shapes explicit and lands the generic Session
-fold plus two-phase accepted/pending/rejected admission. H5 completes the
-generic inbound Call half with its source-instance opening and close-once
-terminal transaction, then attaches ack/respond H1/H2/H3 Drivers. H5.2's
-direct-lineage response return includes exact pre-commit selection for a keyed
-source and consume-only orphan handling. H6 attaches both WebSocket Contracts
-to the existing Session view. None adds `DuplexConnectorDriver` or makes the
-VM aware of HTTP or WebSocket.
-
-## The hosted network seam
-
-Network Drivers do not each choose a runtime or expose an async interface to
-the VM. H3 gives client and server implementations one private physical pump
-interface; each bound engine owns its current-thread runtime:
-
-```text
- synchronous Driver / VM
-          │
-          ├── bounded work queue ───────────────┐
-          ├── bounded control queue (priority)  │
-          │                                     ▼
-          │                          current-thread Tokio pump
-          │                           ┌────────┼─────────┐
-          │                        Hyper H1  Hyper H2  quiche H3
-          │                           └────────┼─────────┘
-          │                                  sockets
-          │                                     │
-          └── bounded fact queue ◀───────────────┘
-                    shared byte budget
-```
-
-The control lane is separate so saturation by calls/messages cannot starve a
-cancel. Queue slots and bytes are both finite. Work bytes remain charged while
-queued and while the runtime owns the work; fact bytes remain charged until
-the synchronous side drains them. An inbound Driver that retains a proposal
-after that drain must move the reservation into the retained proposal, as
-HttpServer does, so a pending causal admission cannot make memory appear free.
-Protocol receive windows must not exceed the same per-engine physical budget.
-Dropping the synchronous handle cancels and joins its pump. These rules apply
-equally to inbound and outbound Drivers; they do not change the two semantic
-roles.
-
-For Call Drivers, finite outbound pressure is expressed by the closed
-`CallStart::Pending` verdict. The already-journaled intent stays open, no
-effect starts and the DriverPoller offers it again after capacity returns.
-`Started` transfers ownership exactly once. A Driver must never translate a
-full local queue or byte semaphore into a domain result such as
-`ConnectFailed`; backpressure changes pacing only.
-
-Static features select physical code only: `hosted-http12` supplies
-Hyper/Rustls, `hosted-http3` supplies quiche/BoringSSL,
-`hosted-websocket` supplies Tungstenite plus its H1/H2 transport, and
-`hosted-network` combines them. `connector::drivers::assembly::hosted_registry` is the
-one shipped composition function: Process is always present, File requires an
-explicit physical root, and each network Contract follows those linked
-capabilities. A missing Contract refuses during global binding before VM or
-journal construction. No library type leaves `connector/drivers/network`, enters a
-plan, or enters `rastok-core`. HTTP/1.1 Upgrade and HTTP/2–3 Extended CONNECT
-are separately proved physical adapters over the same Session protocol; the
-shared message codec alone is never transport evidence.
-
-H4 is the first live consumer of this seam. The hosted HttpClient uses H1
-origin-form requests, a pooled multiplexed H2 sender and verified quiche H3
-while preserving one semantic request descriptor and one Call completion
-shape. Request/response bodies and headers are finite, and the selected wire
-version appears only in `meta.ext.http_version`. The flat contract-specific module
-`connector::drivers::http_client` owns semantic request binding; the private
-`connector::drivers::network::http_client` owns sockets and protocol engines.
-
-H5.1 is the first live inbound consumer. The flat
-`connector::drivers::http_server` module resolves the complete ack-mode listener and
-route contract before a socket opens; private `network::http_server` owns Hyper,
-Rustls, connection/stream permits and byte reservations. HTTP/1.1 and HTTP/2
-both retain the request until the VM answers the same proposal. Only an
-accepted-after-commit decision permits 202, and the fixed terminal observation
-returns through the bounded fact lane rather than a detached task. Final H5
-adds HTTP/3 and the live graph-driven `respond` profile above H5.2's generic
-direct-lineage response handoff. All three versions retain the same Call and
-bounded close-once rules.
-
-H6 is the live Session consumer. WebSocketClient and WebSocketServer use the
-same `Session` fold over H1 Upgrade, RFC 8441 and RFC 9220.
-Opening, each write and terminal publication are separately correlated by
-journal-derived `SessionId`/`SessionWriteId`; pending work stays within the
-ordinary mailbox bound. A server object owns a multi-session table, while a
-client Node instance owns at most one active connection. The contract-specific modules
-own settings and portable outcomes; private `network::websocket` owns sockets,
-handshakes, fragmentation, control frames and transport progress.
-
-H4.1 makes the header boundary contributor-facing and typed. A Contract sheet
-declares well-known request fields in the sparse `headers` struct and leaves
-extensions in `custom_headers: map<text,array<text>>`; the Contract binder must
-combine and validate them before EGRESS open. Exact peer response bytes stay
-in `meta.ext.http_headers`, while valid standard observations such as
-`content_type: media_type` receive their typed projection. Shared modules are
-named after the responsibility they own (`websocket_protocol`, `network`), not
-after the vague fact that several Contracts happen to use them.
-
-The model covers the intended catalogue without new role kinds:
-
-| Contract | Typical role |
+| Interface | Responsibility |
 |---|---|
-| `Process(job)`, `File(read/replace)`, HTTP client, LLM, database call | outbound call |
-| HTTP server | inbound call |
-| Timer, Calendar | inbound event |
-| Process service, WebSocket client/server, queue consumer/producer, future `File.watch` plus writes | both-role session, when one contract really shares one protocol state |
+| `Driver` | Expose inbound/outbound views over the same implementation object. |
+| `Ingress` | Retain and propose an external arrival; receive the admission result. |
+| `InboundCall` | Return graph responses or scheduler timeouts to an inbound caller and report their completion. |
+| `Outbound` | Expose the implemented outbound Call or Session interface. |
+| `OutboundCall` | Prepare, start and cancel Calls; poll their correlated responses. |
+| `Session` | Open, write, close and observe a resident exchange. |
 
-Whether `File.watch` widens File's Contract again or becomes a separate
-contract is
-deliberately unresolved; the role model does not decide contract versioning.
+`OutboundDrivers` is different: it routes execution to all selected Driver
+objects and checks exchange ownership. An individual Driver does not implement
+that routing table. `RuntimeDrivers` supplies the hosted implementation.
 
-## The contribution path
+A bidirectional Driver returns views of one object, not two independent
+objects that happen to have the same Contract id. Role-view availability must
+not change after preparation.
 
-### 1. Publish the Contract
+Execution retains control over identities, admission, ordering, timeouts and
+journal commits. A Driver reports observations, not journal records.
 
-Add or extend one `ConnectorContract` sheet and give it one canonical
-`ContractId`.
-Declare exact roles, exchange shape and all effective ports.
-Also declare application profile, frame cardinality, terminal cases,
-effect-visibility stage, and productibility evidence. These fields are what
-move the six shipped Contracts to `@2`; removing implicit `unwired` policy does
-not erase the old `@1` meaning.
-Attribute defaults, domains and their latest evaluation phase belong to the
-sheet; a Driver never chooses a semantic default.
+## 3. Worked example: File
 
-If decoded plans must be validated without the compiler catalogue, add the
-small Registry-free core mirror and a product test proving every sheet row
-agrees with it. Unsupported modes refuse by name rather than executing a
-nearby behavior.
+Read these files in order:
 
-When a boundary returns a provider quantity or amount, expose it as ordinary
-typed payload data and annotate the exact field with `@measure`. A monetary
-amount carries currency and basis, for example `@measure(id = amount,
-currency = USD, basis = provider_reported)`; `@cost` is retired. The approved
-business model uses simple author-chosen ids, not an OTel naming requirement;
-the [annotation handoff](annotation-types-m1.md) distinguishes that target
-from the still-closed numerical registry. Cache/reasoning token subsets must
-remain separate fields with their inclusion relation, never a second charge.
-Never put a credential value in such a payload: Connector
-authentication consumes a `secret()` reference at its declared setting, and
-raw `@secret` envelope fields refuse at source check and remain fail-closed at
-VM boot for foreign packages. Physical price rows belong
-to the deployment `PriceBook`, keyed by the exact Connector path, rather
-than to Driver code or graph identity.
+1. `crates/rastok-core/src/connector/stdlib/file.rs`: the Contract declaration,
+   portable exit cases and independent validation.
+2. `crates/rastok/src/connector/drivers/file/mod.rs`: request preparation, factory,
+   Driver interfaces and filesystem implementation.
+3. `crates/rastok/tests/conformance_file.rs`: the shared conformance fixture.
+4. `examples/file-pipeline.rkg`: a complete executable Lab example.
 
-### 2. Separate pure exchange protocol from the effect
+File is an outbound Call. Its real Driver implements `Driver` and
+`OutboundCall`; it has no ingress view and no resident Session protocol.
+The common outbound view exposes that Call interface.
+The core supplies this per-object `Outbound` view for every `OutboundCall`
+implementation; this is not the execution-wide `OutboundDrivers` routing table.
 
-Put the Connector implementation under `crates/rastok/src/connector/drivers/<connector>/`. Binding resolves
-and validates every plan/boot/instance fact before external work. Call-time
-settings arrive as typed values (the plan names this evaluation site
-`Invocation`). Pure request preparation produces the exact
-sealed request or a typed pre-open rejection.
+```rkg
+graph read_one : App {
+  input in: text
+  output out: bytes
+  connector file : File {
+    mode = read
+    path = "input.txt"
+    max_read = "32B"
+  }
+  in -> file
+  file.out -> out
+  file.exit -> nothing
+}
+```
 
-Keep that protocol callable by both the real Driver and the Lab mock. For a
-call it prepares one request and projects one completion. For a session
-it prepares open/write facts, correlates inbound messages to one logical
-`SessionId`, and projects one terminal exit. Only the operation after the
-journal boundary — filesystem access, process spawn, socket open/write —
-differs between those worlds.
+The logical `path` belongs to the program. The physical root is supplied
+when constructing `FileFactory`. Root selection does not reinterpret the
+logical operation or grant directory traversal.
 
-### 3. Implement the Driver roles
+### Preparation is pure
 
-Implement only the required role interfaces and keep host-specific details at
-their edge. Translate OS/library outcomes to the contract's portable tagged
-union; do not leak raw errno, host paths or library error types into causal
-values unless the contract explicitly declares them.
+`FileRequestSettings` validates the selected mode and resolved settings,
+checks the logical path, and produces a `PreparedRequest`. Its sealed bytes
+describe the complete operation: path and read limit, or path and replacement
+bytes. It holds no physical root and cannot observe the filesystem.
 
-A hosted network implementation uses the shared bounded pump. Async work,
-socket handles, Hyper/quiche/Tungstenite values and TLS contexts remain below
-that module. The Driver-facing side is synchronous and exchanges owned Rastok
-facts because queued or asynchronous boundaries must own their data.
+The real Driver and its Lab substitute share these request rules through
+the private `CallProtocol` interface. They also share the projection of
+scheduler outcomes to portable terminal cases. The Lab substitutes the
+external result, not request framing or timeout semantics.
 
-The Driver answers an outbound Call, proposes an INGRESS fact, reports an
-inbound Call terminal or Session observation, or stays silent. The runtime
-owns envelope birth, backpressure, journal ordering, timeout, close-once,
-bounded Closing and typed port validation. An HTTP response, successful
-upgrade or explicit application acknowledgement cannot precede the runtime's
-acceptance callback. Transport ACK/window progress is only pacing and stays
-within the Driver's bounded intake; WebSocket has no built-in per-message
-application acknowledgement.
+### Effects start after the journal open
 
-### 4. Register one factory
+Execution resolves invocation settings and commits the Call opening before
+calling `OutboundCall::start`. File then starts bounded filesystem work.
+No file is opened or replaced during request preparation.
 
-Implement `DriverFactory` with the exact id and roles. `bind` validates
-settings and may reserve passive listeners as described above; it must not
-admit an external fact, acknowledge a request or launch an outbound effect.
-`RuntimeDrivers::try_new` calls each
-required Contract factory once before execution and rejects missing, incomplete
-or lying implementations.
+An implementation that returns `Pending` must have performed no effect for
+that attempted start. `Started` transfers responsibility for that invocation
+and its eventual observation. Finite internal capacities remain visible as
+backpressure, not dropped messages or unbounded work queues.
 
-Static builds explicitly construct the desired `DriverRegistry`. Minimal,
-embedded and full standalone binaries may therefore link different Connector implementations
-without changing the plan model or adding VM branches.
+The physical worker reports a `CallResponse` with the original `CallId`.
+`Completion` contains ordered output drafts and exactly one final `exit`
+draft. Execution validates those drafts, assigns envelope identities, and
+commits the Connector transaction. The Driver does not manufacture envelopes
+or routing facts.
 
-The shipped standalone CLI is one such assembly: `rastok run` always registers
-Process, and `--file-root <dir>` additionally registers File with an explicit
-physical root. A graph never selects or discovers that root.
+### Cancellation is scoped to the exact exchange
 
-### 5. Supply a conformance profile
+File indexes active work by `CallId`. Cancellation sets the flag of that
+operation only. A completed or cancelled operation must not affect another
+Call or a successor instance.
 
-Run the real factory through the shared conformance battery. Select the
-call or session profile and provide:
+The scheduler decides timeouts. A late physical answer cannot add a second
+causal completion after closure. `OutcomeUnknown` is not a fabricated normal
+success when bounded shutdown cannot establish the external outcome.
 
-- one minimal source and happy terminal case;
-- one deterministic provocation for every portably forceable terminal case;
-- a written reason for every case that cannot be forced portably;
-- a silence/timeout probe when applicable;
-- an interleaving probe that makes crossed concurrent replies observable.
+## 4. Register and select an implementation
 
-A session additionally proves open/close exactly once, bidirectional message
-correlation, bounded pressure, post-exit silence, and recovery without blind
-message replay. Fragmentation and control frames are Contract integration tests,
-not application outputs. An event profile proves sequence/admission and has no
-fabricated completion or per-event exit.
+`DriverRegistry` describes available implementations. `RuntimeDrivers::prepare`
+checks the plan's requirements and establishes Node and exchange ownership
+before execution. Registration order is not a selection policy.
 
-Add Contract-focused integration tests for physical behavior the generic battery
-cannot force. A new Connector and its Contract are not complete merely because their happy path runs.
+The selected object must expose the views it advertised. A factory may reserve
+bounded passive resources, such as a listener, while preparing the complete
+binding. It must not acknowledge input or perform an outbound effect before
+admission. Failed preparation must release partial reservations.
 
-### 6. Prove the Lab twin
+The implementation name belongs to deployment configuration. It is not a DSL
+attribute, a Contract alias, a new journal identity or an automatic provider
+fallback. Multiple compatible implementations require an explicit selection.
 
-Register a mock factory under the same id and roles. Reuse the Contract's pure
-request preparation and scheduler-completion projection. Script only the
-external outcome after the journal has opened the call. Prove malformed mock
-outputs fail the ordinary resolved-port gate and that adding Lab source changes
-neither semantic hash nor validated plan.
+For example, a deployment profile can select the implementation independently
+for two Nodes using the same Contract:
 
-Put the pure scripted-protocol binder beside the real contract-specific module. The Lab
-registry composes these Contract-owned binders; it must not grow a parallel
-string match that re-implements the Connector catalogue.
+```json
+{
+  "drivers": [
+    { "connector": "incoming_files", "implementation": "local-file" },
+    { "connector": "outgoing_files", "implementation": "audited-file" }
+  ]
+}
+```
 
-### 7. Prove composition
+These example implementation names require their factories to be registered.
+The standard binary does not acquire another implementation by reading its
+name. With exactly one compatible registered implementation, selection may
+be omitted. Missing, incompatible and ambiguous selections refuse before
+any factory is invoked. `simulate` continues to substitute Lab behavior;
+this deployment field cannot make a simulation call a physical provider.
 
-Bind the Contract alone, in a reduced build that intentionally omits it, and
-beside at least one unrelated Contract. The combined graph must need no concrete
-Contract match in the VM. Replaying an already closed call must never repeat the
-external observation or effect.
+After Execution has recovered a journal prefix, `restore_ownership` rebuilds
+routing from that prefix and the same deployment selection, without calling
+any Driver method. Implementation names are not in the journal, so the caller
+must supply that selection unchanged. This restores routing, not sockets or
+processes. Unsupported recovery situations keep their named refusal.
 
-## Static builds and future plugins
+## 5. Supply Lab and conformance fixtures
 
-Static registration is the only implementation shipped today. Cargo features
-may offer build presets, but explicit registry contents remain the testable
-authority.
+A fixture is prepared test material: a graph, inputs, expected results and
+the reasons some terminal cases cannot be forced by that fixture.
 
-`DriverManifest` is the data-only capability projection available to a future
-plugin host: canonically ordered stable ids plus closed role claims, with
-duplicates refused. A sidecar can be inspected before implementation code is
-loaded. Its serialized file syntax, artifact locator, signature/trust policy,
-loader protocol and native ABI are intentionally not frozen.
+For File, `DriverTestFixture` covers successful reads, invalid paths, non-file
+targets, missing files and read limits. Its interleaving probe has two Calls
+with different paths and expected bytes, so crossed responses fail visibly.
+Host-dependent cases remain explicitly listed as untestable by that portable
+fixture; an absent test is not reported as a qualified guarantee.
 
-A future in-process loader or out-of-process host must ultimately provide an
-ordinary `DriverFactory` to the same `DriverRegistry`. Discovery is a
-physical assembly choice, never an alternate VM, plan or simulation model.
+The shared harness checks the Contract shape, effective port and terminal
+types, silence before start, correlation, commit-before-effect, closure and
+late-result handling. Driver-specific tests still cover the filesystem or
+wire protocol. A Lab scenario does not qualify TLS, HTTP framing, permissions
+or physical cancellation.
+
+Hosted network implementations keep async work and library types under
+`connector/drivers/network`. Work, control and result queues have finite slot
+and byte bounds; a full queue is backpressure, not a transport-failure case.
+Cargo features select the physical stacks. Independent ngtcp2 server evidence
+and the Autobahn suite remain open in the
+[release qualification](release-qualification.md); the catalogue does not
+turn related integration tests into those missing proofs.
+
+Provider quantities are ordinary typed payload fields, with explicit metadata
+such as `@measure(id = amount, unit = "USD")`. Preserve each observation and
+leave missing quantities unknown; Driver code does not infer a price or a
+charge. Credentials use the Contract's permitted `secret()` setting, never a
+payload field or diagnostic. See the [annotation contract](../spec/annotations.md)
+and [data-policy rules](../spec/observability.md).
+
+Session implementations additionally distinguish cooperative closure,
+forced abort and resource release. Each operation is scoped to one exact
+`SessionId`; none may cancel a successor or silently discard an unresolved
+terminal obligation.
+
+## 6. Adding a new Contract still requires core work
+
+Another Driver for an existing Contract does not require another semantic
+schema. A new standard Contract does: add its portable declaration and
+protocol rules under core `connector/stdlib`, connect independent validation,
+document its normative semantics and identity consequences, and add the
+hosted catalogue entry, Lab support and conformance fixtures.
+
+There is no plugin loader or native ABI in this contribution path. A future
+loader must provide the same checked capabilities; it cannot bypass them.
 
 ## Review checklist
 
-- No external observation occurs before the corresponding journal boundary.
-- No Driver writes journal records or assigns envelope identities.
-- No semantic default or type decision is duplicated in Driver code.
-- No concrete Connector id is matched in the VM.
-- Binding is complete before execution and registration order never selects.
-- Real and mocked worlds share the same plan, request protocol and result gate.
-- Every terminal case is proven or explicitly untestable in conformance.
-- Any semantic/package/causal identity move is declared before goldens change.
+- Contract id, modes, ports, defaults and evaluation phases match the
+  specification and independent validator.
+- Preparation is pure; effects and acknowledgements follow the relevant
+  journal commit.
+- Every reported result carries the exact owning Call or Session identity.
+- Backpressure, cancellation, close-once and late results have focused tests.
+- Real and Lab implementations share protocol rules, not copied variants.
+- Every terminal case is tested or has a named qualification limit.
+- The registry refuses missing, incompatible and ambiguous implementations
+  before effects; recovery never recalls an external operation.
+- No dependency leaks hosted I/O into `rastok-core`.
+- All four repository checks, the required `no_std` builds and embedded
+  gates pass; any witness movement has a reviewed semantic reason.
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-features
+cargo doc --workspace --no-deps
+```

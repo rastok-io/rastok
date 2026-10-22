@@ -429,16 +429,7 @@ fn http_client_passes_the_connector_neutral_call_battery() {
                 input: "request",
             },
         ],
-        untestable: vec![
-            (
-                "DnsFailed",
-                "a portable test cannot replace the host resolver through the public Driver",
-            ),
-            (
-                "OutcomeUnknown",
-                "bounded Closing, not the HttpClient Driver, produces this case after settlement",
-            ),
-        ],
+        untestable: rastok::connector::drivers::conformance::HTTP_CLIENT_UNTESTABLE.to_vec(),
         mute_source: Some(probe("mute", &server.url("/mute"), "text", "50ms", "1KiB")),
         interleave: Some(InterleaveProbe {
             source: pair_probe(&server),

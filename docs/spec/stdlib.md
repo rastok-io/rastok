@@ -36,6 +36,22 @@ syntax; the id and effective roles are the semantic facts transported by the
 plan. Rust names this value `ContractId`. Physical crates, features, libraries, Hosts and Workers are never
 contract identity.
 
+Several physical implementations may satisfy the same Contract. The hosted
+deployment configuration selects by Connector Node path and implementation
+name. Without an explicit selection, exactly one registered implementation
+must match the resolved Contract, mode, direction and exchange. Missing,
+incompatible or ambiguous selections refuse before external work; registration
+order never chooses. Implementation names and ownership indexes are deployment
+material, not new DSL attributes or causal fields. Calls and Sessions belong
+to the exact selected Driver object throughout their lifecycle.
+
+The read-only `rastok connectors [--json]` view derives Contract and mode
+descriptions from the checked standard definitions, then joins physical and
+Lab capability manifests. It distinguishes checker support, Lab bindings,
+installed implementations and named conformance gaps. Listing a fixture does
+not mean the command executed it. See the
+[Driver contribution guide](../architecture/connector-drivers.md).
+
 | # | Case | Why it is mandatory |
 |---|---|---|
 | 1 | **Role** | what it bridges (a protocol, a process, time) |

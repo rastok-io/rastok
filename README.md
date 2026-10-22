@@ -160,18 +160,23 @@ The current executable proof is one continuous path:
 Rastok DSL source
   -> validated executable plan
   -> deterministic state machine
-  -> state-machine execution in a native in-memory VM
+  -> Execution driven by one hosted Worker and an in-memory journal
   -> mixed real Process and File boundaries selected through one Driver registry
   -> journaled, auditable multi-Contract Lab scenarios with useful golden diffs
   -> optional paused simulation debugger with recorded-transition inspection
 ```
 
-Connector contracts have stable semantic ids and inbound/outbound roles.
-Current binaries compose Drivers explicitly at build/assembly time; minimal,
-embedded and full builds may select different sets without changing the plan
-model. A future plugin host can use the same registry boundary, but Rastok does
-not yet ship a plugin loader or freeze a native ABI. Contributors follow the
-[Connector Driver guide](docs/architecture/connector-drivers.md).
+Connector Contracts have stable semantic ids and inbound/outbound directions.
+Current binaries compose Drivers explicitly at build/assembly time. A deployment
+selects an implementation by Connector Node path; when exactly one compatible
+implementation is registered, it is selected without an explicit name. Missing,
+incompatible or ambiguous implementations refuse before any effect. Minimal,
+embedded and full builds may link different sets without changing plan identity.
+Run `rastok connectors` (or `rastok connectors --json`) to inspect the standard
+Contracts, modes, ports, attributes, installed implementations, Lab support and
+named conformance gaps without starting a Driver. Contributors follow the
+[File-based Connector Driver guide](docs/architecture/connector-drivers.md).
+Rastok does not yet ship a plugin loader or freeze a native ABI.
 
 M1.6 is closed. Four exact HTTP/WebSocket sheets cross source, Registry-free
 plan validation, Lab and live Drivers. HttpClient and HttpServer execute the
@@ -287,7 +292,7 @@ never invented ports or spatial edges. Replay presents recorded transitions at
 one or four events per second. Decisions, causal links, pending obligations
 and assertion evidence explain the selected journal prefix. The canvas
 pans/zooms and the inspector resizes. An authored `advance` exposes its
-intermediate recorded VM states. Transitions and journal records remain
+intermediate recorded Execution states. Transitions and journal records remain
 distinct: an authored action can also reach an effect without a new record.
 
 `run --ui` and `check --ui` refuse before effects. Editing, simulation

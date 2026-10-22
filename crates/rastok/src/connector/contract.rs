@@ -15,7 +15,7 @@ pub enum Availability<'registry> {
     /// is the build's wiring (the Lab mocks need none); the sheet
     /// claims the contract, not the implementation.
     Available(&'registry ConnectorContract),
-    /// The name is in the catalogue; its Driver is not in this build.
+    /// The name is declared, but no executable Contract declaration is available.
     Declared,
     /// The name is not a known connector type.
     Unknown,
@@ -679,6 +679,16 @@ impl ContractCatalog {
         self.declared.retain(|declared| *declared != contract.name);
         self.connectors.insert(id, contract);
         Ok(self)
+    }
+
+    /// Checked declarations in deterministic Contract-id order.
+    pub fn connectors(&self) -> impl Iterator<Item = &ConnectorContract> {
+        self.connectors.values()
+    }
+
+    /// Names declared without an executable Contract, in catalogue order.
+    pub fn declared_names(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.declared.iter().copied()
     }
 
     /// Resolves a connector type name.

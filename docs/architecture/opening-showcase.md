@@ -62,6 +62,7 @@ opening gates remain separate; the calendar stays with Yoann.
 
 | Item | State | Evidence / next gate |
 |---|---|---|
+| Connector T5/T9 rework | Partial — neutral series implemented; separate identity approval pending | Shared standard definitions, Driver interfaces/modules, per-Node named implementation selection and ownership recovery; read-only human/JSON catalogue and File contributor guide. [Qualification](connector-rework-qualification.md) records the executed gates. The proposed Process Contract id and package version in the [identity inventory](connector-rework-identity.md) are not yet approved. |
 | Bounded-join expiry productibility | Done | 14 destination tests; 9 September combined baseline: 1,297 Rust tests passed |
 | `run --record`, `replay [--ui]` | Done within the diagnostic contract | CLI and real-Chrome tests prove read-only prefix navigation and no Driver on replay; `@personal` and boot-dependent profiles still refuse persistence, as documented |
 | Readable golden divergence | Done | Expected/actual labels, first record and field, retained causal context; shared CLI/UI path; classified values hidden; byte/seal comparison unchanged |

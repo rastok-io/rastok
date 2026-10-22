@@ -1133,6 +1133,33 @@ fn mock_bindings<'plan>(
 ) -> Result<(RuntimeDrivers<'plan>, MockFaults), String> {
     let faults = Rc::new(RefCell::new(Vec::new()));
     let mocks = share_mocks(mocks);
+    let registry = mock_registry(mocks, Rc::clone(&faults), source_input)?;
+    let bindings = RuntimeDrivers::prepare_with_boot(plan, &registry, boot)
+        .map_err(|error| error.to_string())?;
+    Ok((bindings, faults))
+}
+
+/// Describes the same Lab model registry used by simulation, without binding a
+/// Driver or running a scenario. Physical implementation selection does not
+/// select these scripted models.
+///
+/// # Errors
+/// Contradictory built-in registry or model capability metadata.
+pub fn driver_manifest() -> Result<crate::connector::drivers::DriverManifest, String> {
+    mock_registry(
+        Rc::new(BTreeMap::new()),
+        Rc::new(RefCell::new(Vec::new())),
+        Rc::new(RefCell::new(HttpServerLabInput::default())),
+    )?
+    .manifest()
+    .map_err(|error| error.to_string())
+}
+
+fn mock_registry(
+    mocks: SharedMocks,
+    faults: MockFaults,
+    source_input: Rc<RefCell<HttpServerLabInput>>,
+) -> Result<DriverRegistry, String> {
     let mut registry = DriverRegistry::default();
     registry = registry
         .try_with(Box::new(process_service::Factory::new(
@@ -1176,9 +1203,7 @@ fn mock_bindings<'plan>(
             .try_with(factory)
             .map_err(|error| error.to_string())?;
     }
-    let bindings = RuntimeDrivers::prepare_with_boot(plan, &registry, boot)
-        .map_err(|error| error.to_string())?;
-    Ok((bindings, faults))
+    Ok(registry)
 }
 
 fn share_mocks(mocks: BTreeMap<node::Path, Mock>) -> SharedMocks {

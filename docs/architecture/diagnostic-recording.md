@@ -1,6 +1,6 @@
 # Diagnostic recording and read-only replay
 
-Status: 15 October 2026, diagnostic format **4**, embedding the
+Status: 22 October 2026, diagnostic format **4**, embedding the
 [current plan package](../spec/identity.md). The
 [Node realignment inventory](node-realignment-identity.md) records the
 package-only change; journal tuples and causal seals are unchanged.
@@ -17,7 +17,7 @@ rastok replay echo.rkrec
 rastok replay echo.rkrec --ui
 ```
 
-The first command runs the real Process and records its recorded facts. The
+The first command runs the real Process and records its journal facts. The
 second prints the same App outputs and reports the same causal seal without
 starting that Process. The third opens the existing loopback debugger over
 immutable prefixes. `--ui-port PORT` selects its port; `hosted-ui` must be
@@ -30,12 +30,15 @@ binding/effects. The recording is sensitive diagnostic evidence, not a file
 to commit or publish indiscriminately.
 
 `replay` is **recorded-state reconstruction**, not a second execution of the
-DSL and not a generated Lab scenario. Journal acceptance and existing VM
+DSL and not a generated Lab scenario. Journal acceptance and existing Execution
 recovery validate and reconstruct the prefix. Pure Contract projections
 reconstruct scheduler completions; physical Drivers, handlers and guests
 never run. This proves preservation of the recorded facts, not authenticity
 of an arbitrary file or correctness of a freshly re-executed producer.
 The production-to-Lab extraction in simulation-semantics §9 remains deferred.
+Physical Driver names and deployment implementation selection are not captured
+as causal fields. Diagnostic replay does not select, bind or restart a physical
+Driver; it reconstructs the recorded Execution state only.
 
 ## What is recorded
 

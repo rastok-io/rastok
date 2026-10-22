@@ -225,18 +225,7 @@ fn process_profile() -> DriverTestFixture {
                 input: "salut",
             },
         ],
-        untestable: vec![
-            (
-                "CaptureFailed",
-                "a pipe READ error cannot be provoked portably from a real child; \
-                 the pump seam is unit-tested with an injected failing reader",
-            ),
-            (
-                "OutcomeUnknown",
-                "bounded Closing, not the Process Driver, produces this case after \
-                 cancellation remains unobserved through settlement",
-            ),
-        ],
+        untestable: rastok::connector::drivers::conformance::PROCESS_UNTESTABLE.to_vec(),
         mute_source: Some(MUTE.into()),
         interleave: Some(InterleaveProbe {
             source: PAIR.into(),

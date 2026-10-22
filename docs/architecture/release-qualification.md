@@ -60,7 +60,17 @@ rewriting. These gates must close before public participation opens.
 
 ## Open qualification inventory
 
-**Current representation — 15 October:** package 21 and diagnostic recording 4
+**Current Connector implementation — 22 October:** the
+[T5/T9 qualification](connector-rework-qualification.md) records the module
+reorganization, shared standard definitions and per-Node implementation
+selection, with its actual Rust/browser/no_std gates and Cortex-M33 heap/code
+measurements. Package and recording formats remain those named in
+[identity.md](../spec/identity.md); no protected witness changes in the neutral
+series. The [Process identity proposal](connector-rework-identity.md) remains
+unapproved. These implementation checks do not close the independent browser,
+protocol or release-distribution gates below. Stack was not remeasured in T5/T9.
+
+**15 October dated qualification:** package 21 and diagnostic recording 4
 are described by the [Node realignment inventory](node-realignment-identity.md).
 Only the package representation changes; semantic hashes, journal identities,
 causal traces and recording tuples remain unchanged. The

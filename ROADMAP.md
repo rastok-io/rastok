@@ -11,7 +11,7 @@ end? It can — the evidence is recorded in
 
 - Parse and check the smallest useful `.rkg` subset.
 - Lower it to an executable plan.
-- Execute it in a one-worker in-memory VM.
+- Execute it with one Worker and an in-memory Execution.
 - Run one scenario with a mock, virtual time, and a golden trace.
 - Cross one real `Process` boundary.
 - Produce a useful diff at the first divergence.
@@ -35,7 +35,7 @@ Consolidated what M0 proved before widening it
   with typed refusals.
 - The embedded spike run emulated against its written go/no-go —
   provisional GO, silicon confirmation pending hardware.
-- The connector conformance harness over the outbound Connector Driver seam —
+- The Connector conformance harness over the outbound Call Driver interface —
   the M0 subset of the ten contract cases made executable (error-set,
   journal, timeout, cancel, silence, and interleaved-correlation
   disciplines; the declarative cases as sheet checks), with every
@@ -53,6 +53,18 @@ built, simulated, and shown end to end, before its real systems
 exist? Scope, order, and evidence:
 [`docs/architecture/m1-slice.md`](docs/architecture/m1-slice.md).
 Public opening is **5 November 2026**.
+
+### Connector reorganization — 22 October
+
+The [T5/T9 qualification](docs/architecture/connector-rework-qualification.md)
+records the shared standard definitions, per-Driver interfaces, hosted Driver
+modules and deterministic per-Node implementation selection. The contributor
+path is [catalogue → File → conformance](docs/architecture/connector-drivers.md).
+Lab models remain substitutions, not selectable physical providers. The separate
+[Process identity proposal](docs/architecture/connector-rework-identity.md)
+still requires Yoann's approval; no new Contract id or package version follows
+from module reorganization or implementation selection. This update changes no
+opening date and authorizes no public operation.
 
 ### Human-review follow-up — 5 October
 
@@ -292,7 +304,9 @@ in `docs/site/`; the separate site consumes it and the examples at one tag.
   one-worker reference remains the only runtime claimed; cluster leases and
   recovery are later work.
 - M1.5 is closed: contracts have stable versioned identities, compiler
-  `ContractCatalog` and runtime `DriverRegistry` become separate authorities,
+  `ContractCatalog` describes semantics while runtime `DriverRegistry` describes
+  available implementations; these are separate responsibilities, not two
+  semantic authorities,
   and one pre-journal binder serves Connectors with different Contracts through explicit
   inbound/outbound Driver roles. Static composition is first-class and keeps
   the same registry boundary available to future plugin hosts. `File` is the

@@ -93,9 +93,13 @@ Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
 - [`release-qualification.md`](release-qualification.md) for the single
   inventory of executed third-party interoperability evidence and external
   qualifications still required before a public release;
-- [`connector-drivers.md`](connector-drivers.md) for the current contribution
-  path from semantic Contract through real/Lab Driver conformance and static
-  composition, plus the deliberately narrow future-plugin seam;
+- [`connector-drivers.md`](connector-drivers.md) for the File-based contribution
+  path: catalogue, Contract, required interfaces, implementation selection, Lab
+  substitution and conformance;
+- [`connector-rework-qualification.md`](connector-rework-qualification.md) for
+  the T5/T9 module, implementation-selection and catalogue checks;
+- [`connector-rework-identity.md`](connector-rework-identity.md) for the separate
+  proposed Process Contract identity change, which requires explicit approval;
 - [`build-order.md`](build-order.md) for the dependency-driven stage
   sequence used to build the M0 modules;
 - [`components.md`](components.md) for the component blueprint: owned
@@ -149,6 +153,11 @@ tools/diagrams/render.sh
 The initial views were checked with PlantUML 1.2026.6. The source should
 remain compatible with the bundled C4 standard library rather than rely
 on a machine-specific include path.
+
+The 22 October Connector series updates views 03, 04 and 06 and regenerates
+their SVGs from the reviewed sources. They show the shared Contract definitions,
+implementation selection and execution-owned polling; no format change follows
+from these module names.
 
 The 7 October documentation sweep refreshes views 03–07 against the current
 format registry and regenerates their SVG with the installed PlantUML renderer.

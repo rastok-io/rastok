@@ -1581,3 +1581,36 @@ components:
     assert!(checked.status.success(), "{checked:?}");
     std::fs::remove_dir_all(root).expect("the project root is removable");
 }
+
+#[test]
+fn connectors_describes_capabilities_without_a_program_or_driver_start() {
+    let machine = rastok().args(["connectors", "--json"]).output().unwrap();
+    assert!(machine.status.success(), "{machine:?}");
+    let view: serde_json::Value = serde_json::from_slice(&machine.stdout).unwrap();
+    let contracts = view["contracts"].as_array().unwrap();
+    assert!(contracts.iter().any(|contract| contract["name"] == "File"));
+    assert!(
+        contracts
+            .iter()
+            .any(|contract| contract["name"] == "Process")
+    );
+    assert_eq!(
+        view["scope"],
+        "compiled capabilities, not a deployment or a live probe"
+    );
+
+    let human = rastok().arg("connectors").output().unwrap();
+    assert!(human.status.success(), "{human:?}");
+    let output = String::from_utf8(human.stdout).unwrap();
+    assert!(output.contains("Standard Connectors"));
+    assert!(output.contains("Lab bindings"));
+    assert!(output.contains("--file-root"));
+
+    let invalid = rastok().args(["connectors", "--unknown"]).output().unwrap();
+    assert_eq!(invalid.status.code(), Some(2));
+    assert!(
+        String::from_utf8(invalid.stderr)
+            .unwrap()
+            .contains("usage: rastok connectors [--json]")
+    );
+}

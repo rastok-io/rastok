@@ -8,25 +8,26 @@ title Rastok — current Rust modules and crate boundary (registry: identity.md)
 package "rastok — hosted / compiler crate" as HOSTED {
   rectangle "main / render / diagnostics\nCLI assembly, source spans, named errors" as ENTRY
   rectangle "compiler\nsyntax / HIR / check / lower\nDispatch, routing, Extension checks" as COMP
-  rectangle "contract / stdlib\nContractCatalog / ConnectorContract\nProcess job @4 / service @5; File and network @3" as CATALOG
+  rectangle "connector/contract / connector/stdlib\nContractCatalog; shared core declarations\nconnector_catalogue: human and JSON projection" as CATALOG
+  rectangle "contract / stdlib\ntagged frontends, annotations and media types" as LANGUAGE
   rectangle "schema_projection / openapi\nstrict JSON Schema, Avro, Arrow, OpenAPI\ngenerated-source ownership" as SCHEMA
-  rectangle "connectors\nDriverRegistry / RuntimeBindings\nProcess job / service, File, HTTP, WebSocket\nbounded Driver polling; no DSL in Drivers" as DRIVERS
-  rectangle "deployment_config\nprofile JSON; explicit environment/provider input\nno clear credentials in semantic artifacts" as CONFIG
-  rectangle "lab / conformance\nScenarioRun; controlled Drivers\nsame Execution and exact Contracts" as LAB
+  rectangle "connector/drivers\nDriverRegistry / RuntimeDrivers\nProcess job / service, File, HTTP, WebSocket\nregistry / runtime / conformance; no DSL in Drivers" as DRIVERS
+  rectangle "deployment_config\nprofile JSON; per-Node implementation selection\nexplicit environment/provider input\nno clear credentials in semantic artifacts" as CONFIG
+  rectangle "lab\nSimulator; controlled Drivers\nsame Execution and exact Contracts" as LAB
   rectangle "worker\nWorker: Execution + journal + bound Drivers\nrun / run_until_idle / step\nexplicit time; no new parallelism" as WORKER
   rectangle "ui / observability\nsimulation / recorded-history debugger\nread-only prefix; never-block structured logs" as UI
   rectangle "golden / recording\nTrace / Divergence; diagnostic record/replay\nimmutable capture, not durable recovery" as GOLDEN
 }
 
 package "rastok-core — no_std + alloc" as CORE {
-  rectangle "node / connector\nPath, Port, Kind, Extension, Trigger\nContractId, roles, exchange profiles" as NODE
+  rectangle "node / connector\nPath, Port, Kind, Extension, Trigger\nContractId, direction, ExchangeKind, modes" as NODE
   rectangle "datatype / value / envelope\nDataType, Value, Envelope, Data\none logical type/value authority" as DATA
   rectangle "expr / json / trivia\nTree, Signature, EvalValue\nbounded pure evaluation and exact readers" as EXPR
   rectangle "instance / canonical / canonical_cbor\nInstanceAddress, Segment, Generation\ncanonical registry and byte discipline" as IDENTITY
   rectangle "plan / loop_proof\nValidatedExecutionPlan, Node / NodeIndex\nGraph wiring; Operator Dispatch; Connector Contract\nExtensionSpec, LoopSpec/LoopExpiredOutput, RetrySpec\nderived execution routes; independent validation" as PLAN
-  rectangle "runtime\nExecution, TransactionPreparer, Mailboxes, Scheduler\nDeliveryRoutes; Loop / Retry managers; recovery\nGraph has no application handler" as VM
+  rectangle "runtime\nExecution, TransactionPreparer, Mailboxes, Scheduler\nDeliveryRoutes; Loop / Retry managers; recovery\nexecution/driver_polling: poller and completion checks\nGraph has no application handler" as EXECUTION
   rectangle "runtime / execution / inspection\nExecutionInspection, EnvelopeView\nread-only instances, mailboxes, Calls, Sessions\nno presentation or scheduling authority" as INSPECTION
-  rectangle "boundary\nInbound/Outbound Driver traits\nCallOpen, Completion, CallId, SessionId\nDriverPoller and Contract completion checks" as BOUNDARY
+  rectangle "connector/driver / connector/exchange / connector/stdlib\nper-Driver interfaces and OutboundDrivers routing\nCallOpen, Completion, CallId, SessionId\nshared portable Contract definitions" as CONNECTOR
   rectangle "journal / deadline / codec / loop_protocol / retry_protocol / instance_stop\nJournal, MemJournal, Record\nruns, Held/Consumed/Published and instance commands\nunsealed original deadlines; no disk backend" as JOURNAL
   rectangle "schema_annotation / data_policy\nSchemaPath; four standard annotations, typed metadata\nindependent propagation and redaction" as POLICY
   rectangle "deployment\nBootReference, BootBindings, SecretName\nrun-scoped privacy/price attestations" as DEPLOY
@@ -35,6 +36,7 @@ package "rastok-core — no_std + alloc" as CORE {
 
 ENTRY -[hidden]right-> COMP
 COMP -[hidden]right-> CATALOG
+CATALOG -[hidden]right-> LANGUAGE
 ENTRY -[hidden]down-> CONFIG
 CONFIG -[hidden]right-> DRIVERS
 DRIVERS -[hidden]right-> LAB
@@ -47,11 +49,11 @@ NODE -[hidden]right-> DATA
 DATA -[hidden]right-> EXPR
 NODE -[hidden]down-> IDENTITY
 IDENTITY -[hidden]right-> PLAN
-PLAN -[hidden]right-> VM
-IDENTITY -[hidden]down-> BOUNDARY
-BOUNDARY -[hidden]right-> JOURNAL
+PLAN -[hidden]right-> EXECUTION
+IDENTITY -[hidden]down-> CONNECTOR
+CONNECTOR -[hidden]right-> JOURNAL
 JOURNAL -[hidden]right-> POLICY
-BOUNDARY -[hidden]down-> DEPLOY
+CONNECTOR -[hidden]down-> DEPLOY
 DEPLOY -[hidden]right-> REPORT
 REPORT -[hidden]right-> INSPECTION
 

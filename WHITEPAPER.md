@@ -21,8 +21,20 @@
 > optional-access expressions, jq/SQL guests, Timer, Calendar,
 > Saga, experiment and coverage generation remain named gates.
 
-> **Rastok is a simulation-first integration platform.**
+<!-- Public narrative: rastok-strategy/NARRATIF.md, "Version anglaise de référence".
+     Keep this copy verbatim; propose wording changes in the source. -->
+
+> Rastok is a simulation-first integration platform. A flow and its
+> failure scenarios are written together, in a dedicated, typed language
+> versioned in Git. The same program runs against a simulated world,
+> virtual time and faults included, or against the real systems: you build
+> and prove an integration before its partner systems are available.
 >
+> Every run leaves a replayable journal. An incident becomes a scenario
+> that protects the next changes, and a record an auditor can read. The
+> language is constrained enough for code written or driven by AI to be
+> checked by the compiler and the simulation before it reaches production.
+
 > **Rastok is the boxes-and-arrows paradigm, rebuilt as an engineering
 > discipline.** The flows that organizations already draw —
 > integrations, sessions, agents — are written in a dedicated, typed
@@ -136,7 +148,7 @@ difficult operational properties:
 | Events arriving out of order | Each flow grows its own correlation state machine and locking rules. | Bounded joins correlate typed envelopes by key. |
 | External side effects | HTTP calls, processes, files, payments, and retries are hidden inside application code. | Every external interaction crosses a declared Connector. |
 | Probabilistic components | An LLM may return different answers for the same request, with variable latency and cost. | The journal records each boundary outcome; the graph isolates and measures the probabilistic surface. |
-| Time-dependent behavior | Code reads the host clock or sleeps, so tests wait in real time and cannot reproduce the same timeout race. | The VM owns an explicit logical timeline: `now()` observes one transaction-fixed instant; internal deadlines execute today, while Timer/Calendar source Contracts remain future work. |
+| Time-dependent behavior | Code reads the host clock or sleeps, so tests wait in real time and cannot reproduce the same timeout race. | The Execution owns an explicit logical timeline: `now()` observes one transaction-fixed instant; internal deadlines execute today, while Timer/Calendar source Contracts remain future work. |
 | Recovery and audit | Effects and state updates leave separate, incomplete records. | Transactions and boundary outcomes form one causal journal. |
 | Operational policy | Every team reimplements retries, timeouts, supervision, backpressure, and cost metering. | The graph declares shared runtime policy once. |
 | Change control | Visual canvases and custom glue are difficult to review, compare, and generate safely. | Typed text is versioned in Git, checked before execution, and projected into a diagram. |
@@ -150,7 +162,7 @@ Three questions summarize the intended result:
 Time matters in all three. Reading the operating-system clock inside an
 expression is an external observation, just like reading an API response. If
 that value appears in neither the fixture nor the journal, a test must wait and
-a replay may take a different branch. Rastok therefore makes the VM timeline
+a replay may take a different branch. Rastok therefore makes the Execution timeline
 explicit: `now()` reads one injected transaction instant, never the host
 clock, and the journal seals that instant whenever it can affect behavior
 (§5).
@@ -242,7 +254,7 @@ The platform of §1.2 follows from four decisions:
    cannot be tested, replayed, or proved.
 2. **All contact with an external system crosses a declared Connector**
    (§2.7) — HTTP, processes and databases. Logical time is a separate,
-   explicit VM input; `Timer` and `Calendar` are Connectors only when elapsed
+   explicit Execution input; `Timer` and `Calendar` are Connectors only when elapsed
    or civil time must itself enter the graph as an event (§5). Mock the
    Connectors and control the timeline, and the graph becomes a closed,
    deterministic system. That makes simulation (§6) a first-class artifact
@@ -572,7 +584,7 @@ runtime itself is interpreted or requires a separate managed runtime.
 The plan boundary leaves room for future execution forms:
 
 - a self-contained native bundle that packages a plan with the runtime;
-- the same VM compiled for a browser or edge environment;
+- the same Execution compiled for a browser or edge environment;
 - a Wasm artifact for constrained deployment targets;
 - ahead-of-time lowering for a proven need.
 
@@ -922,7 +934,7 @@ operator settle {
 }
 ```
 
-The simulator controls the VM timeline directly. A call to `now()` receives
+The simulator controls the Execution timeline directly. A call to `now()` receives
 that timeline's one fixed value for the whole firing, and a declared `Timer`
 turns selected instants into ordinary INGRESS roots. Neither Operators nor
 mocks read the host clock. A real Connector may observe time in an external
@@ -1409,10 +1421,14 @@ Contract declares inbound/outbound roles, typed ports, attributes and
 lifecycle rules. A physical Driver supplies real I/O; a Lab model supplies
 scripted arrivals and outcomes through the same pure protocol and admission
 seams. Simulation needs the latter, not a linked physical implementation.
-Before execution, a runtime registry binds every active Connector Node by the
-exact id and proves that the implementation exposes every required role.
-Neither crate names, shared-library paths, build features, Hosts nor Workers
-enter the plan or causal identity.
+Before execution, the runtime selects one implementation for each active
+Connector Node. The deployment may name it explicitly; otherwise exactly one
+registered implementation must match the resolved Contract, mode, direction and
+exchange. Absence, incompatibility and ambiguity refuse before any Driver is
+created. Registration order never chooses an implementation. Neither Driver
+names, crate names, shared-library paths, build features, Hosts nor Workers
+enter the plan or causal identity. Calls and Sessions remain owned by the exact
+selected Driver object, not merely by a shared Contract id.
 
 For example, the HttpServer ack model accepts decoded fixture requests at
 `listener.out`, without opening a socket or adding an App input. Only committed
@@ -1421,30 +1437,41 @@ under those assumptions; wire decoding, authentication and successful delivery
 of a real response remain separate Driver conformance obligations.
 
 ```text
-RKG Connector ──▶ Contract catalogue ──▶ validated plan
-                                                (id + roles + exchange + facts)
-                                                │
-static factories ──▶ Driver registry ──bind─────┘
-future plugin host ─┘                    │
-                                        ▼
-                               one VM + one journal
+RKG Connector ──▶ checked Contract definitions ──▶ validated plan
+                                                 (id + mode + direction + exchange)
+                                                          │
+static factories ──▶ available implementations ────────────┤
+deployment ────────▶ selection by Connector Node path ─────┤
+                                                          ▼
+                                      RuntimeDrivers: exact object ownership
+                                                          │
+                                                          ▼
+                                        Worker: Execution + journal + Drivers
 ```
 
 Static composition is the implementation available today: embedded, minimal
 and full standalone builds may link different Driver sets while consuming the
 same plan model. A future plugin sidecar can publish a data-only capability
-manifest — canonical contract ids and roles — before code is loaded, then
+manifest — Contract ids, implementation names, modes and exchange capabilities —
+before code is loaded, then
 register an ordinary factory through the same boundary. Rastok does not yet
 freeze a native plugin ABI, artifact format, trust policy or hot-reload
 lifecycle. Discovery is physical assembly, not a second execution model.
 The reference CLI makes that assembly visible: Process is linked by default,
 an explicit `--file-root` adds File and supplies deployment data that never
 enters the graph or plan identity, and hosted feature presets add the selected
-HTTP/WebSocket Connector implementations without changing their Contract ids. The full hosted
-image registers each supported Contract/profile id exactly once; a reduced image
-refuses a missing required Driver before VM construction.
+HTTP/WebSocket Connector implementations without changing their Contract ids.
+The full hosted image currently supplies one compatible physical implementation
+per executable standard mode. The registry also accepts multiple named
+implementations of one Contract, with explicit deployment selection when needed.
+A reduced image refuses a missing required Driver before Execution construction.
+The read-only `rastok connectors [--json]` catalogue projects the shared standard
+definitions, the linked Driver manifest and the Lab manifest; it does not run
+the conformance fixtures or perform I/O. The
+[contribution guide](docs/architecture/connector-drivers.md) follows File from
+its Contract through registration and conformance.
 
-Hosted network Drivers use the same separation. The synchronous Driver/VM
+Hosted network Drivers use the same separation. The synchronous Driver/Execution
 edge feeds one bounded private pump: finite work and result queues, a separate
 priority control lane, and a shared byte budget. HTTP/1.1 and HTTP/2 currently
 target Hyper with Rustls; HTTP/3 targets quiche with BoringSSL; WebSocket
@@ -1486,7 +1513,7 @@ check and commit generated types while preserving a textual review boundary.
 
 The Lab follows the same rule. A mock Driver binds under the same id and roles,
 uses the same contract-specific request protocol and resolved result types, and replaces
-only the post-journal external interaction. It never replaces the VM or its
+only the post-journal external interaction. It never replaces the Execution or its
 bookkeeping. Each Connector's Contract owns that shared pure request protocol;
 the Lab composes contract-provided binders instead of dispatching on contract
 names.
@@ -1783,7 +1810,7 @@ source remaining portable across them:
 | Mode | Use case | Process model |
 |---|---|---|
 | `embedded` | edge AI, IoT, mobile, CLI tools | Single process, RAM only |
-| `standalone` | single VM/container, small SaaS | One Host with Coordinator + Workers, local persistence available |
+| `standalone` | single process/container, small SaaS | One Host with Coordinator + Workers, local persistence available |
 | `clustered` | multi-tenant SaaS, enterprise | N Hosts, key-sharded, replicated persistence |
 
 A `.rkg` App should not encode assumptions about one of these modes;
@@ -1985,7 +2012,7 @@ orthogonal mechanisms.
 | Concept | Definition | Where it appears |
 |---|---|---|
 | **Sequence** | FIFO order of envelopes on one input | Stateful reads (`x` carries history) |
-| **Logical instant** | The VM timeline; one fixed value per firing | `now()`, timeout/lifetime/deadline arithmetic |
+| **Logical instant** | The Execution timeline; one fixed value per firing | `now()`, timeout/lifetime/deadline arithmetic |
 | **Timer event** | Elapsed time itself triggers one root envelope | Future `Timer` Connector |
 | **Civil schedule** | Calendar date/time in an explicit zone | Future `Calendar` Connector |
 | **Causality** | Happens-before partial order on the global trace | Journal and theorem reasoning |
@@ -1993,7 +2020,7 @@ orthogonal mechanisms.
 Instance lifetimes combine a declared duration with journaled supervision
 events.
 The duration is a pure value. Expiration occurs only when the caller advances
-the explicit VM timeline to the relevant deadline.
+the explicit Execution timeline to the relevant deadline.
 
 ### 5.1 Sequence
 
@@ -2014,7 +2041,7 @@ can diverge, replay cannot reproduce the branch, and a test can only wait.
 One ambient clock read is enough to break reproducibility.
 
 Rastok closes that hole without pretending that time is absent. The host gives
-the VM an explicit logical timeline. At the start of a firing the VM fixes one
+the Execution an explicit logical timeline. At the start of a firing the Execution fixes one
 instant; `now()` returns that `timestamp` throughout guard selection and body
 execution. The expression evaluator only reads a reserved binding. It never
 calls an OS API. If a checked handler can observe `now()`, the TRANSACTION
@@ -2022,7 +2049,7 @@ record seals that value, so replay consumes the same input rather than asking
 either clock again.
 
 Hosted execution observes civil time once at boot and advances from a
-monotonic timer, so wall-clock corrections cannot move a running VM backward.
+monotonic timer, so wall-clock corrections cannot move a running Execution backward.
 The Lab chooses an origin and advances instantly. A microcontroller without an
 RTC can still advance from a hardware timer with origin zero (or an origin
 provided by its host); it can enforce durations without claiming knowledge of
@@ -2738,7 +2765,7 @@ or compatibility reader is implied.
 | Process job/service, File read/replace, HttpClient/HttpServer, WebSocketClient/WebSocketServer | Exact Contracts; HTTP/1.1–3 and complete-message Sessions; resident Process [qualification](docs/architecture/process-service.md), not a model-specific protocol or token-streaming SSE |
 | Strict logical types and JSON Schema / Avro / Arrow / OpenAPI projections | Unsupported/lossy cases refuse by path; guest-language execution remains deferred |
 | Data annotations, exact HttpClient boot references, privacy attestations, redaction, structured logs and individual typed measurement retention | [Observability contract](docs/spec/observability.md); no measurement report, automatic pricing, subset arithmetic, raw-secret payload, legal-compliance certificate, budget enforcement, FX, FOCUS/OpenCost or OTLP exporter |
-| `simulate --ui`: recorded transitions, source, mailboxes, instances, Loop dials, Retry attempts, decisions, causal links, assertion evidence and comparisons | [UI contract](docs/spec/ui.md); read-only source-authored scenarios, no `run --ui`, editing or branches; intermediate VM transitions within an authored `advance` are individually inspectable |
+| `simulate --ui`: recorded transitions, source, mailboxes, instances, Loop dials, Retry attempts, decisions, causal links, assertion evidence and comparisons | [UI contract](docs/spec/ui.md); read-only source-authored scenarios, no `run --ui`, editing or branches; intermediate Execution transitions within an authored `advance` are individually inspectable |
 | `new`, readable golden divergence, `run --record` and `replay [--ui]` | [Diagnostic recording](docs/architecture/diagnostic-recording.md); immutable restitution without a Driver, not durable recovery; classified/boot-dependent recording limits remain explicit |
 
 The [example catalogue](docs/examples/README.md) distinguishes passing programs,
@@ -2853,7 +2880,7 @@ the target architecture; the status table above bounds the shipped subset.
     proofs.**
 20. **A Connector contract names semantics; a Driver supplies one physical
     implementation. Exact ids and roles meet once at binding. Static builds and
-    future plugin hosts must feed the same registry, while the VM remains
+    future plugin hosts must feed the same registry, while the Execution remains
     ignorant of concrete Connector contracts and implementations.**
 21. **Data policy is orthogonal to logical type. Canonical annotations beside
     the resolved schema govern sensitivity, secrets, measures and exact cost

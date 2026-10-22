@@ -65,7 +65,7 @@ pub struct RoutedInboundProposal {
     proposal: PendingIngress,
 }
 
-/// Failure of one inbound Driver/Execution boundary round.
+/// Failure of one inbound Driver polling pass through Execution admission.
 #[derive(Debug, Clone, PartialEq)]
 pub enum InboundPollError {
     /// The bound Driver registry contradicted its retained routing state.
@@ -352,7 +352,7 @@ impl<'plan> RuntimeDrivers<'plan> {
         })
     }
 
-    /// Polls runnable inbound families in deterministic Contract/name order.
+    /// Polls runnable inbound Driver objects in deterministic Contract/name order.
     ///
     /// # Errors
     ///

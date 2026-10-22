@@ -21,7 +21,8 @@ A typed DSL and runtime for stateful, effectful integration graphs. The same
 validated program runs against real Drivers or scripted Lab outcomes, with
 explicit causal records and deterministic simulation.
 
-The CLI provides `check`, `simulate`, `run`, diagnostic `replay`, and `new`.
+The CLI provides `check`, `simulate`, `run`, diagnostic `replay`, `new`, and
+the read-only `connectors [--json]` capability catalogue.
 Build with `hosted-ui,hosted-websocket` for the simulation debugger and hosted
 HTTP/1.1–2/WebSocket Drivers. HTTP/3 is an independent, optional capability.
 

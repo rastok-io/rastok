@@ -1164,6 +1164,34 @@ specification remains authoritative until a reviewed amendment lands;
 the mechanical phase cannot silently perform the Process Contract
 movement. The action ledger owns the pre-freeze sequence and its gates.
 
+### Applied — 22 October (Astra), byte-neutral T5/T9 series
+
+| Action | Commit | Applied result |
+|---|---|---|
+| A-T5-1 | `491e397` | Execution terminology in specification, code comments and UI. |
+| A-T5-2 | `55155ca`, `e2d980c` | Shared portable Contract definitions; exchange and Driver interfaces; execution-owned polling; hosted `connector/drivers` modules and split registry/runtime responsibilities. |
+| A-T5-3 | `958d0bb` | One outbound routing interface; per-object Call/Session views retained; no global blanket Call-to-routing implementation. |
+| A-T5-4, preparation only | `eabdee9` | Decoded identity inventory and proposed amendment; current Process ids and package format unchanged. |
+| A-T5-5 | `0b0ad9d` | Named implementations selected per Node, unique-compatible default, exact object ownership and routing reconstruction from a recovered prefix. |
+| A-T5-6 | This catalogue/documentation commit | Human/JSON catalogue from checked definitions and manifests, File contributor guide, live-document and diagram updates. |
+
+The final gate records **1,620 passed, 0 failed, 0 ignored in
+61 groups**; fmt, strict Clippy and rustdoc pass. Site: 12/12;
+browser: 35/35; all three no_std targets and both QEMU workloads pass.
+Echo peak heap/code: 111,404/971,716 B. Retry with
+recovery: 129,188/1,043,716 B, leaving
+1,884 B heap and 4,860 B code.
+All 73 protected artifacts remain byte-identical. Commands, intermediate
+failures and exact measurements are in
+[connector-rework-qualification.md](connector-rework-qualification.md).
+
+**Open, not implemented:** A-T5-4's Process Contract id, proposed decision
+and package-version choice require Yoann's approval of
+[the identity inventory](connector-rework-identity.md). No identity-moving
+commit, compatibility alias, public push, tag or publication is included.
+No new Fable review is claimed by this Applied entry; the existing review
+and Yoann's 21 October decisions above remain intact.
+
 ## What validation produces
 
 For each **⟂**: keep / rename / merge, with the chosen word. The answers

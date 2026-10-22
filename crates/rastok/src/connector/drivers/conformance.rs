@@ -43,6 +43,59 @@ use crate::plan::{GraphVersion, ValidatedExecutionPlan};
 use crate::runtime::execution::Execution;
 use std::collections::BTreeSet;
 
+/// Portable gaps declared by the real Process job conformance fixture.
+/// Shared with the fixture and catalogue; this is not a successful test result.
+pub const PROCESS_UNTESTABLE: &[(&str, &str)] = &[
+    (
+        "CaptureFailed",
+        "a pipe READ error cannot be provoked portably from a real child; \
+         the pump seam is unit-tested with an injected failing reader",
+    ),
+    (
+        "OutcomeUnknown",
+        "bounded Closing, not the Process Driver, produces this case after \
+         cancellation remains unobserved through settlement",
+    ),
+];
+
+/// Portable gaps declared by the real File read conformance fixture.
+/// Shared with the fixture and catalogue; this is not a successful test result.
+pub const FILE_READ_UNTESTABLE: &[(&str, &str)] = &[
+    (
+        "PermissionDenied",
+        "no portable fixture can force host permission denial across supported systems",
+    ),
+    (
+        "AtomicReplaceUnavailable",
+        "the conformance host may provide the required same-directory atomic rename",
+    ),
+    (
+        "IoFailed",
+        "portable filesystem APIs expose no deterministic generic I/O fault fixture",
+    ),
+    (
+        "TimeoutExpired",
+        "a bounded one-file operation cannot be made portably and deterministically mute",
+    ),
+    (
+        "OutcomeUnknown",
+        "bounded Closing, not the File Driver, produces this case after settlement expires",
+    ),
+];
+
+/// Portable gaps declared by the real HttpClient conformance fixture.
+/// Shared with the fixture and catalogue; this is not a successful test result.
+pub const HTTP_CLIENT_UNTESTABLE: &[(&str, &str)] = &[
+    (
+        "DnsFailed",
+        "a portable test cannot replace the host resolver through the public Driver",
+    ),
+    (
+        "OutcomeUnknown",
+        "bounded Closing, not the HttpClient Driver, produces this case after settlement",
+    ),
+];
+
 /// Graph source and input chosen to produce one declared Driver exit case.
 #[derive(Debug, Clone)]
 pub struct ExitCaseTest {

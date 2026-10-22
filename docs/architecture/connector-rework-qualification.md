@@ -5,9 +5,9 @@ T5/T9 implementation checks; it does not approve the separate Process
 Contract identity proposal. Package format 21, Process `std/process@4`
 (job) and `std/process@5` (service) remain current at this checkpoint.
 
-**Status: A-T5-1, A-T5-2, A-T5-3 and A-T5-5 are qualified. The separate
-Process identity proposal awaits Yoann's approval; the final catalogue and
-documentation are the next action.**
+**Status: the byte-neutral T5/T9 series (A-T5-1, A-T5-2, A-T5-3,
+A-T5-5 and A-T5-6) is qualified. A-T5-4 has its committed identity inventory
+and proposed amendment, but no Process id or format change is authorized yet.**
 
 ## Reference after A-T5-1
 
@@ -285,3 +285,84 @@ golden, package, trace or recording was regenerated. Process ids and package
 format remain unchanged. Several local executables again paused before their
 first output; the qualified run uses the original tests and deadlines. No
 security setting was changed and no public operation was performed.
+
+## A-T5-6 — checked catalogue and the contributor path
+
+The binary exposes `rastok connectors` and `rastok connectors --json`.
+Both project the same checked standard definitions, default resolved port types
+and alternative type rules, attribute phases/defaults, terminal cases and
+outbound Call cardinalities. Physical and Lab capability manifests are joined
+without constructing a Driver. Full conformance fixtures share their named
+untestable cases with the catalogue; other modes explicitly name the missing
+fixture rather than treating related integration tests as complete qualification.
+File.watch remains deferred. A silent HttpServer.respond Lab binding is not
+presented as support for graph-response simulation or authored source injection.
+
+Catalogue tests compare the projection with the real declarations and resolved
+ports, separate checker/Lab/installed support, keep missing capabilities visible,
+and check human and JSON presentation. A CLI regression exercises both commands
+and rejects unknown options. The worked File source in the rewritten contributor
+guide compiles under the same catalogue. There is no dependency or new execution
+command; no catalogue field enters an embedded plan or journal.
+
+The first focused catalogue run exposed required codec attributes without a
+default: resolving all ports using defaults alone correctly refused. The
+projection now reports the required choice and the declared alternatives,
+without inventing a default. A new regression covers this case. Its first
+assertion incorrectly assumed HttpServer.out carried its own alternatives;
+the declaration instead makes it follow in. The assertion now checks that
+relationship and independently resolves each input codec. All six focused
+catalogue tests and the separate CLI regression then passed; no existing
+functional assertion was removed or relaxed.
+
+README, WHITEPAPER and the living architecture/specification pages describe
+the new module paths and per-Node selection. The strategy repository's English
+reference narrative is copied verbatim in both READMEs and WHITEPAPER; the
+whitepaper's missing full quotation is restored, not rewritten. PlantUML views
+03, 04 and 06 and their SVGs are regenerated together
+and visually checked. Dated design evidence keeps its historical text, with
+current-path pointers where requested. The two review ledgers receive Applied
+sections; their existing Fable review and Yoann decisions are unchanged.
+
+Final source scans find no old Connector interface/type names from the rename
+table, no boundary/connectors module paths, and no standalone VM word in
+crates or the current specification (dated decisions excluded). The same
+current-name checks cover README, WHITEPAPER, ARCHITECTURE, the contributor
+guide, component map and refreshed diagram sources. Historical review tables
+are intentionally not rewritten. ProfileProtocol's overriding id remains
+until the separately authorized identity change; unrelated HTTP Response types
+and the new connectors CLI word are not obsolete module/type references.
+
+### Final checks and measurements
+
+The sequential CLI gate (workspace tests use `--test-threads=1`) passes
+formatting, strict all-target/all-feature Clippy,
+**1,620 tests in 61 groups, zero failures and zero ignored
+tests**, and rustdoc with `-D warnings`. Separate site checks pass 12/12,
+browser checks 35/35, and all three no_std targets and the rustdoc-link lint
+pass. Existing functional assertions and test deadlines are unchanged. The catalogue is also
+invoked directly in human and JSON forms; it performs no physical operation.
+
+Both Cortex-M33 workloads end in `SPIKE_OK`, using the exact commands and
+Retry parameters recorded above:
+
+| Workload | Decode peak heap | Total peak heap | `.text` | `.rodata` | Code total | Heap margin | Code margin |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Echo | 36,160 B | 111,404 B | 897,668 B | 74,048 B | 971,716 B | 19,668 B | 76,860 B |
+| Retry and recovery | 30,684 B | 129,188 B | 958,892 B | 84,824 B | 1,043,716 B | 1,884 B | 4,860 B |
+
+The catalogue and selection metadata are hosted; this action adds no embedded
+payload. Stack is not remeasured here. All **73 protected artifacts are
+byte-identical**, including the three package witnesses, the spike package
+and reference traces. No witness is regenerated; recording tests remain green
+and the recording format is unchanged.
+
+### Remaining approval and scope
+
+The identity inventory is commit `eabdee9`; named implementation selection is
+`0b0ad9d`. The Process proposal (`std/process@6`, proposed decision and
+choice between format 22 and an explicit format-21 exception) still needs
+Yoann's approval. The identity-moving commit is therefore absent, not silently
+deferred or folded into this catalogue commit. Current ids and formats remain
+those in identity.md and stdlib.md. No public push, tag or publication occurs.
+This report records Astra's checks; it does not claim a new Fable replay.
