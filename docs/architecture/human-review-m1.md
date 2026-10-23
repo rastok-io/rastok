@@ -1525,7 +1525,8 @@ selectable implementation. The registry file of 3 112 lines became
   beside `E-LOOP`. **Applied by Astra in `2a1cd11` and `3736817`, replayed
   by Fable on 23 October** with the same gate; QEMU Retry `.rodata` +32 B of
   `Debug` strings, hash and heap unchanged, code margin 5 084 B. Left to
-  Yoann: `l:next` against `l:retry`, a `retry.md`, the tense of the UI
+  Yoann: `l:next` against `l:retry` (the spelling is in the Emission recipe,
+  so not zero bytes), a `retry.md`, the tense of the UI
   transport labels, the placements and test names listed in the record.
   Status: applied, reviewed.
 - Four public names are outside the vocabulary tables and are recorded there:

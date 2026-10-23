@@ -1470,8 +1470,13 @@ lot above.
 beside `OperationId` and `CommandId`, bare in their protocols: kept by the
 11 October table. `l:next` (`Lifecycle::Next = 3`) for the Loop manager
 transaction against `l:retry` (`Lifecycle::Retry = 10`): a command's name
-against an Extension's; the bytes are sealed, the word is registry, Yoann's
-call. The UI transport labels `l:open`, `l:admit`, `l:advance`, `l:close`,
+against an Extension's. Correction, 23 October midday: the spelling is the
+sealed material, not the byte. The trigger enters the Emission recipe as
+UTF-8 text (`identity.md` §2 and `envelope.md` §1.1, `id = blake3(node_path
+‖ trigger ‖ parent_id ‖ port ‖ index)`) and the TRANSACTION record's key 19 as
+text; the `Lifecycle` byte serves only the plan stream's `HandlerActivation`,
+where only `start` and `stop` occur. Renaming `l:next` is therefore a format
+change, not zero bytes; Yoann's call for v21 or never. The UI transport labels `l:open`, `l:admit`, `l:advance`, `l:close`,
 `l:expired` and `retry-advance` carry the former tenses; they are asserted by
 `browser.test.cjs` and described in `ui.md`, T10. `LoopRepeatWarning` lives
 in `plan/retry.rs`; Loop runs are projected inline in `ui/view.rs::loop_runs`
