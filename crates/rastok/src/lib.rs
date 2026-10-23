@@ -10,7 +10,8 @@
 // module adds hosted definitions and Drivers without duplicating core types.
 pub use rastok_core::{
     accounting, canonical, canonical_cbor, data_policy, datatype, deployment, envelope, expr,
-    instance, journal, loop_proof, node, observation, plan, runtime, schema_annotation, value,
+    instance, journal, loop_proof, node, observation, plan, runtime, schema_annotation, time,
+    value,
 };
 
 pub mod compiler;

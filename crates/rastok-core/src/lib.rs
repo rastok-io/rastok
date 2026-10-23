@@ -35,5 +35,6 @@ pub mod observation;
 pub mod plan;
 pub mod runtime;
 pub mod schema_annotation;
+pub mod time;
 pub mod trivia;
 pub mod value;

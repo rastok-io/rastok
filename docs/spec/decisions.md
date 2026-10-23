@@ -5,6 +5,53 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-10-23-2 — Implement the relative logical timeline before opening, in format 24
+
+Yoann decides (2026-10-23) that A-T1-12, specified by D-2026-10-10-1,
+lands before the 5 November opening, after the Supervision rename and the
+Retry specification extraction. The reasoning is D-2026-10-11-1's: changing
+an unpublished format costs less than changing a public one. Work remains
+on the work branch; integration into `main` requires Yoann's order after
+review. This decision does not set a new freeze date.
+
+1. The logical timeline is signed i64 nanoseconds, relative to first boot
+   at zero and monotone across recovery. It bounds execution duration, not
+   civil dates. `LogicalTime` represents instants; a signed `Duration`
+   represents differences. Instant plus duration and instant minus instant
+   saturate at the signed i64 bounds. Adding two instants is not defined.
+   These Rust types introduce neither a DSL type nor an encoding change.
+2. One immutable civil `origin` identifies logical zero. The hosted runner
+   supplies it separately from monotonic elapsed time; the Lab defaults to
+   the Unix epoch or uses the scenario's explicit `origin`. The journal's
+   existing unsealed header and the diagnostic recording header retain it.
+   This specifies the earlier decision's “boot fact”: there is no fourth
+   record kind and no per-run origin in a static plan package.
+3. `now()` observes `origin + logical instant` as a civil timestamp. The
+   observing transaction seals that civil value, including when only a
+   guard observes it. An unobserved origin does not change a causal trace.
+   Tumbling boxes align on `origin + k·every`, and their civil starts enter
+   instance identity. This supersedes the contradictory `epoch + k·every`
+   wording in D-2026-10-10-1's rejection paragraph: the anchor is the fixed
+   journal origin, never the arrival of the first envelope.
+4. Civil `timestamp` and `timestamp_ntz` use `[seconds, nanoseconds]`, with
+   signed i64 seconds and an unsigned fraction strictly below one billion.
+   Equal instants have one normalized representation. Value tags 22 and 23
+   replace 10 and 11; retired tags are never reused or decoded as aliases.
+   Duration keeps tag 14 and signed i64 nanoseconds. Date, time and interval
+   are unchanged. Civil arithmetic is checked rather than saturated.
+5. Package format 24 records the changed value and box representations;
+   format 23 refuses by version. Diagnostic recording 5 adds the immutable
+   origin to its header; recording 4 refuses by version. Artifacts are
+   regenerated, never converted. An identity inventory names every actual
+   movement before witness regeneration; Fable reviews it and Yoann
+   approves it. Types can land first without changing wire forms; a changed
+   wire form must never be emitted under the old version during staging.
+
+The later work described by D-2026-10-10-1 no longer includes time carriers.
+The separate TODO to label the first public format 1 remains. No i128,
+timezone dependency, wider logical timeline, first-arrival-relative box,
+compatibility reader, push, tag or publication is authorized by this decision.
+
 ## D-2026-10-23-1 — One rule for the `l:` registry, `l:loop` and `l:close`, package format 23
 
 Yoann decides (2026-10-23) that the word after `l:` names the emitting
