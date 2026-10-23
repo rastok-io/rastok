@@ -710,7 +710,7 @@ fn type_resolution_diagnostic(error: &PlanValidationError) -> Diagnostic {
             .with_field("detail", reason.to_string())
         }
         PlanValidationError::InvalidRetryPolicy { owner, detail } => Diagnostic::new(
-            check::E_RETRY_ATTRIBUTE, Phase::Check, format!("invalid Retry `{owner}`: {detail}"),
+            check::E_RETRY, Phase::Check, format!("invalid Retry `{owner}`: {detail}"),
         ).with_field("owner", owner).with_field("detail", detail),
         PlanValidationError::InvalidLoopControl {
             owner,

@@ -112,7 +112,7 @@ impl Checker<'_, '_> {
                 .join(".");
             if attributes.insert(name.clone(), attribute).is_some() {
                 self.retry_refusal(
-                    E_RETRY_ATTRIBUTE,
+                    E_RETRY,
                     attribute.span,
                     &format!("`{name}` is declared twice"),
                 );
@@ -177,8 +177,8 @@ impl Checker<'_, '_> {
                     if let Some(value) = self.retry_constant(attribute, &signature, &consts) {
                         match value.value {
                             crate::value::Value::Bool(value) if !fixed_guarantee || value => idempotent = value,
-                            crate::value::Value::Bool(_) => self.retry_refusal(E_RETRY_ATTRIBUTE, attribute.span, "File fixes idempotent = true; a contradictory override is not admitted"),
-                            _ => self.retry_refusal(E_RETRY_ATTRIBUTE, attribute.span, "`idempotent` must be a plan-constant boolean"),
+                            crate::value::Value::Bool(_) => self.retry_refusal(E_RETRY, attribute.span, "File fixes idempotent = true; a contradictory override is not admitted"),
+                            _ => self.retry_refusal(E_RETRY, attribute.span, "`idempotent` must be a plan-constant boolean"),
                         }
                     }
                 }
@@ -189,20 +189,14 @@ impl Checker<'_, '_> {
                         {
                             attempts = Some(value);
                         } else {
-                            self.retry_refusal(E_RETRY_ATTRIBUTE, attribute.span,
-                                "`Retry.attempts` must be a positive integer, first attempt included");
+                            self.retry_refusal(E_RETRY, attribute.span,
+                                               "`Retry.attempts` must be a positive integer, first attempt included");
                         }
                     }
                 }
                 "Retry.on" if owns_retry => {}
                 "Retry.delay" if owns_retry => {
-                    delay = self.extension_delay(
-                        attribute,
-                        &signature,
-                        &consts,
-                        "Retry",
-                        E_RETRY_ATTRIBUTE,
-                    );
+                    delay = self.extension_delay(attribute, &signature, &consts, "Retry", E_RETRY);
                 }
                 "timeout" if owns_retry => {
                     // C3 must also prove dynamic instance-bound timeouts. The
@@ -211,7 +205,7 @@ impl Checker<'_, '_> {
                         && !matches!(value.value, crate::value::Value::Duration(n) if n > 0)
                     {
                         self.retry_refusal(
-                            E_RETRY_ATTRIBUTE,
+                            E_RETRY,
                             attribute.span,
                             "Retry requires a positive Call timeout",
                         );
@@ -225,7 +219,7 @@ impl Checker<'_, '_> {
                             "unknown `{name}`; expected Retry.attempts, Retry.on or Retry.delay; Retry has no command, port or state binding"
                         )
                     };
-                    self.retry_refusal(E_RETRY_ATTRIBUTE, attribute.span, &detail);
+                    self.retry_refusal(E_RETRY, attribute.span, &detail);
                 }
                 _ => {}
             }
@@ -234,7 +228,7 @@ impl Checker<'_, '_> {
             for required in ["Retry.attempts", "Retry.on", "timeout"] {
                 if !attributes.contains_key(required) {
                     self.retry_refusal(
-                        E_RETRY_ATTRIBUTE,
+                        E_RETRY,
                         decl.name.span,
                         &format!("Retry requires `{required}`"),
                     );

@@ -178,7 +178,7 @@ pub const E_LOOP_CARDINALITY: Code = Code::new("E-LOOP-CARDINALITY");
 /// An authored Again can repeat a visible Call without an idempotence guarantee.
 pub const W_LOOP_REPEAT: Code = Code::new("W-LOOP-REPEAT");
 /// A Retry policy value or contribution contradicts its Contract.
-pub const E_RETRY_ATTRIBUTE: Code = Code::new("E-RETRY-ATTRIBUTE");
+pub const E_RETRY: Code = Code::new("E-RETRY");
 /// A second Operator handler names the same activation.
 pub const E_HANDLER_DUPLICATE: Code = Code::new("E-HANDLER-DUPLICATE");
 /// A Graph body tries to own application code; move it into an Operator.

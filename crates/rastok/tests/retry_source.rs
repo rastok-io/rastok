@@ -147,12 +147,12 @@ fn retry_attributes_fail_by_name_and_exact_source_span() {
     for (attributes, code, fragment) in [
         (
             "Retry.attempts = 0; Retry.on = [SpawnFailed]",
-            "E-RETRY-ATTRIBUTE",
+            "E-RETRY",
             "positive",
         ),
         (
             "Retry.attempts = 2; Retry.cases = [SpawnFailed]",
-            "E-RETRY-ATTRIBUTE",
+            "E-RETRY",
             "Retry.on",
         ),
         (
@@ -167,7 +167,7 @@ fn retry_attributes_fail_by_name_and_exact_source_span() {
         ),
         (
             "idempotent = \"true\"; Retry.attempts = 2; Retry.on = [SpawnFailed]",
-            "E-RETRY-ATTRIBUTE",
+            "E-RETRY",
             "boolean",
         ),
     ] {
@@ -277,7 +277,7 @@ fn retry_distinguishes_absent_false_true_and_fixed_idempotence() {
         "File",
         "mode = read; idempotent = false; Retry.attempts = 2; Retry.on = []; timeout = duration(\"1s\")",
     ));
-    assert_code(&bag, "E-RETRY-ATTRIBUTE", "File fixes");
+    assert_code(&bag, "E-RETRY", "File fixes");
 }
 
 #[test]
@@ -307,7 +307,7 @@ fn retry_attributes_require_their_owner_and_do_not_supply_a_port_or_command() {
         assert_code(&refuse(source), "E-RETRY-HOST", "outbound Call");
     }
     let source = graph("Process", "Retry.attempts = 2; Retry.on = []").replace(" + Retry", "");
-    assert_code(&refuse(&source), "E-RETRY-ATTRIBUTE", "+ Retry");
+    assert_code(&refuse(&source), "E-RETRY", "+ Retry");
     for field in [
         "cases",
         "next",
@@ -323,7 +323,7 @@ fn retry_attributes_require_their_owner_and_do_not_supply_a_port_or_command() {
                 "Retry.attempts = 2; Retry.on = []; Retry.{field} = 1; timeout = duration(\"1s\")"
             ),
         ));
-        assert_code(&bag, "E-RETRY-ATTRIBUTE", &format!("Retry.{field}"));
+        assert_code(&bag, "E-RETRY", &format!("Retry.{field}"));
     }
     let source = graph("Process + Retry", "Retry.attempts = 2; Retry.on = []");
     assert_code(&refuse(&source), "E-NODE-ANNOTATION", "twice");
@@ -368,7 +368,7 @@ fn retry_bounds_and_delays_use_the_closed_positive_domains() {
             "Process",
             &format!("Retry.attempts = {attempts}; Retry.on = []; timeout = duration(\"1s\")"),
         ));
-        assert_code(&bag, "E-RETRY-ATTRIBUTE", "positive integer");
+        assert_code(&bag, "E-RETRY", "positive integer");
     }
     for (delay, fragment) in [
         ("duration(\"1s\")", "composite"),
@@ -395,7 +395,7 @@ fn retry_bounds_and_delays_use_the_closed_positive_domains() {
                 "Retry.attempts = 2; Retry.on = []; Retry.delay = {delay}; timeout = duration(\"1s\")"
             ),
         ));
-        assert_code(&bag, "E-RETRY-ATTRIBUTE", fragment);
+        assert_code(&bag, "E-RETRY", fragment);
         assert!(
             !bag.diagnostics()
                 .iter()
@@ -418,7 +418,7 @@ fn retry_bounds_and_delays_use_the_closed_positive_domains() {
         "Process",
         "Retry.attempts = 2; Retry.on = []; timeout = duration(\"0s\")",
     ));
-    assert_code(&bag, "E-RETRY-ATTRIBUTE", "positive Call timeout");
+    assert_code(&bag, "E-RETRY", "positive Call timeout");
 }
 
 #[test]
