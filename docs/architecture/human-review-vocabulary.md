@@ -1406,6 +1406,135 @@ own notice.
 [actions register](human-review-m1.md); whether it joins a lot before the
 freeze or waits for v21 is Yoann's decision.
 
+### Applied and replayed — 23 October (Astra, three commits; Fable)
+
+Astra delivered three commits on top of `20086f6` during the night of 22 to
+23 October; Fable replayed the gate on the resulting `3736817` in the same
+checkout on the morning of 23 October. Neither review register was edited by
+those commits; this entry is Fable's replay.
+
+**The three commits.**
+
+- `ff0227d` "Align request settings and Contract mode vocabulary" is A-T5-8:
+  17 files, +84 / −52. The 39 `bindings` lines holding `*RequestSettings`
+  values become `request_settings` (File 6, the scripted-protocol factory
+  closure of `drivers/http_client.rs` 1, HttpClient 11, Process 6, resident
+  Process 9, the Lab twin 5, the panic text 1), and the eleven sentences read
+  "mode" (twelve lines, `process-service.md` spanning two). The fields are
+  `request_settings`, not the table's `settings`, because `prepare` in
+  `drivers/process/service.rs` already takes a `settings` parameter. Astra
+  kept "are unchanged" in `opening-showcase.md:683`: the subject is compound
+  ("Other Contracts' correlators and the executable job mode"), and the
+  brief's singular was wrong. The empty `connectors` directories are gone.
+  Astra's qualification:
+  [A-T5-8 — applied](connector-rework-qualification.md#a-t5-8--applied).
+- `2a1cd11` "Align Loop and Retry fact and manager names": 31 files,
+  +230 / −227. Facts in the past participle in both protocols (`Opened`,
+  `Advanced`, `Admitted`, `Closed`; `Expired`, `Held`, `Consumed` and
+  `Published` already were), `loop_view::RunState` → `Run`,
+  `check_node_manager` → `check_loop_manager`, `retry_admission_load`
+  extracted from `recurrence_admission_load`, which is now the sum of the
+  three loads, `retry_attribute` → `is_retry_attribute`. The specification's
+  words follow in `identity.md:280`, `:315` and `:331`, `loop.md` and
+  `ui.md`. Integer tags, canonical forms, the UI transport labels and the
+  dated documents are untouched.
+- `3736817` "Use E-RETRY for general Retry diagnostics": `E-RETRY-ATTRIBUTE`
+  → `E-RETRY`, the general Retry policy code now named like `E-LOOP`; five
+  files; zero residue of the old code in `crates/`, `docs/`, README,
+  WHITEPAPER and CHANGELOG. Fable had listed this public-code asymmetry as
+  outside the lot; Yoann took it directly, so the commit carries Astra's
+  trailer alone.
+
+**Why Loop and Retry, and what the reading found.** On the evening of
+22 October Yoann asked whether the two temporal Extensions were symmetric in
+types and names. Layer by layer they are: `node::Extension`;
+`ExtensionSpec::{Loop, Retry}` with `Node::loop_spec()` and `retry_spec()`;
+`hir::LoopSpec` and `hir::RetrySpec`; the shared `DelayPolicy` and
+`PlanConstant` bounds; the `IdKind` pairs `0x03`/`0x04` and `0x08`/`0x0a`;
+the `loop_protocol` and `retry_protocol` modules with `LoopRecord` and
+`RetryRecord`, `Fact`, `CloseReason`, `Phase`, `Error`, `LoopView` and
+`RetryView`, `run_ref` and `operation_ref`; `loop_manager.rs` and
+`retry_manager.rs` with `step_*_manager`, `*_manager_ready` and
+`manager_record`; the three `plan/{call_loop, graph_loop, retry}.rs::validate`;
+`check/loop_control.rs` and `check/retry_control.rs`; `Obligation::LoopDelay`
+and `RetryDelay`. The content differences are the specification's: Loop has
+commands (`LoopCommand`, `LoopCommandTarget`, `LoopCommandKind`,
+`Destination::LoopCommand`, `CommandId`, `CommandValue`, `CommandProduced`,
+`DoneKind`, `IdKind::LoopCommand`, the three statements) and Retry none;
+Retry has `Pin`, `Policy`, `Batch`, `AttemptId`, `Opening` and `Settlement`
+and Loop none; run / application / iteration from zero against operation /
+attempt / ordinal from one, both specified. The naming asymmetries were the
+lot above.
+
+**Left in place, deliberately.** `LoopRunId`, prefixed and in `journal.rs`,
+beside `OperationId` and `CommandId`, bare in their protocols: kept by the
+11 October table. `l:next` (`Lifecycle::Next = 3`) for the Loop manager
+transaction against `l:retry` (`Lifecycle::Retry = 10`): a command's name
+against an Extension's; the bytes are sealed, the word is registry, Yoann's
+call. The UI transport labels `l:open`, `l:admit`, `l:advance`, `l:close`,
+`l:expired` and `retry-advance` carry the former tenses; they are asserted by
+`browser.test.cjs` and described in `ui.md`, T10. `LoopRepeatWarning` lives
+in `plan/retry.rs`; Loop runs are projected inline in `ui/view.rs::loop_runs`
+while Retry has `ui/view/retry.rs`; the tests are `v16_loop*.rs` against
+`retry_*.rs`: placement, T10. `UiCommand::RetryStep` and `ui.md:74` use
+"retry" for re-executing a faulting transaction, a homonym of the Extension
+that the 11–12 October tables did not see. Loop has `loop.md`; Retry's
+contract is one paragraph of `extensions.md`, key 43 of `identity.md` and the
+operation algebra in `retry-c1-algebra.md`, and the four `E-RETRY*` rows of
+`diagnostics.md` link to `retry-extension-refactor.md` where the `E-LOOP*`
+rows link to `loop.md`. That last asymmetry is documentation, the largest,
+and Yoann's; a `retry.md` would be an extraction, not new writing.
+
+**Replay, same checkout, `3736817`.** `cargo fmt --check`, strict Clippy and
+rustdoc pass. A first `cargo test --workspace --all-features` stopped after
+29 groups when `tests/member_presence.rs` returned neither a result nor a
+failure, the start-up stall Astra recorded in the A-T5-8 qualification; run
+alone it passes 4/4, and the complete suite with `--no-fail-fast` gives
+61 groups, 1 623 passed, 0 failed, 0 ignored, `site_content` 12/12 among
+them. The three `no_std` targets check. Browser suite 35/35 against the
+cached Chromium headless shell 1243 driven by the Playwright core that `npx`
+cached (revision 1248 expected); the globally installed Playwright 1.49
+expects revision 1148, and driving the installed Chrome with it fails six
+tests on `page.waitForFunction` with a string predicate, refused by the page's
+`default-src 'self'` policy, which is tooling, not code. QEMU Cortex-M33: echo
+heap 111 404 B, code 971 428 B (`.text` 897 420 + `.rodata` 74 008), hash
+`7106f322…`, output identical to `819a2ff`; Retry with recovery heap
+129 188 B, code 1 043 492 B (`.text` 958 676 + `.rodata` 84 816), hash
+`3cad77ef…`, output identical, the package regenerated on `3736817`
+byte-identical to the `819a2ff` and `974f85f` ones. Against `819a2ff`:
+`.rodata` +32 B, the `Debug` strings of the renamed variants linked into the
+spike, as the brief anticipated. Margins: heap 1 884 B, code 5 084 B.
+
+**Byte neutrality.** `20086f6..3736817` touches `.rs` and `.md` files only;
+no 64-hex literal appears on any line of the diff.
+
+**How the diff was read.** The 22 October token normalization was extended
+with the new pairs (`bindings` / `request_settings`, the four fact tenses,
+`RunState` / `Run`, `check_node_manager` / `check_loop_manager`,
+`retry_attribute` / `is_retry_attribute`, `E_RETRY_ATTRIBUTE` / `E_RETRY`).
+Over 36 Rust files what remains is: thirteen refusal and assertion strings
+that spell the new fact names ("a Loop Opened has no exact queued admission",
+"Retry Advanced must name the following attempt", "Advanced is not
+Admitted"), six comments reworded for the participle, the
+`retry_admission_load` extraction, the `E-RETRY` literals, the panic text and
+rustfmt brace moves. No executable change beyond the extraction, which keeps
+the saturating sum.
+
+**Sweep re-run.** Against the `819a2ff` detail, ignoring line shifts:
+`bindings` −39 / +1, the 39 being exactly the inventory's sites and the one
+addition the prose of Astra's qualification paragraph; `profile` −12 / +0,
+the eleven sentences; old fact names, `RunState`, `check_node_manager`, bare
+`retry_attribute`, `E-RETRY-ATTRIBUTE` and `bindings` typed `*RequestSettings`:
+0. The remaining upper-case `VM` lines in living documents were read:
+`spec-to-code.md`'s historical rows and B9 narrative, `build-order.md` and
+`process-service.md` under their 22 October current-implementation notices,
+and the two qualification reports narrating the retired word. Kept.
+
+**Status.** A-T5-8 applied and reviewed. The Loop/Retry lot is A-T2-12 in
+the [actions register](human-review-m1.md), applied and reviewed. Open for
+Yoann: `l:next`, a `retry.md`, the UI transport labels and the placements,
+all listed above.
+
 ## What validation produces
 
 For each **⟂**: keep / rename / merge, with the chosen word. The answers

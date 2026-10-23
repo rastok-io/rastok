@@ -1504,7 +1504,30 @@ selectable implementation. The registry file of 3 112 lines became
   `types.md`, `simulation-semantics.md`, `WHITEPAPER.md` (body, twice),
   `components.md`, `plan-package.md`, `opening-showcase.md`,
   `process-service.md`. The table with lines and proposed wording is in the
-  record above. Lot before the freeze or v21: Yoann decides.
+  record above. Lot before the freeze or v21: Yoann decides. **Yoann chose
+  before the freeze; applied by Astra in `ff0227d` on 22 October evening and
+  replayed by Fable on 23 October**: four checks, 1 623 tests in 61 groups,
+  `site_content` 12/12, browser 35/35, three `no_std` targets, QEMU output
+  identical; the 39 renamed lines are the inventory's and the eleven
+  sentences read "mode". The fields are named `request_settings`, not
+  `settings`, because `prepare` in `drivers/process/service.rs` already takes
+  a `settings` parameter. Record:
+  [Applied and replayed — 23 October](human-review-vocabulary.md#applied-and-replayed--23-october-astra-three-commits-fable).
+  Status: applied, reviewed.
+- A-T2-12 (zero bytes, owner Astra; numbered under T2 because the journal
+  protocols own the facts): Loop/Retry naming symmetry, from Yoann's
+  22 October question. Facts in the past participle in both protocols
+  (`Opened`, `Advanced`, `Admitted`, `Closed`), `loop_view::RunState` →
+  `Run`, `check_node_manager` → `check_loop_manager`, `retry_admission_load`
+  beside `loop_admission_load`, `is_retry_attribute` beside
+  `is_loop_attribute`, the specification's words in `identity.md`, `loop.md`
+  and `ui.md`; and, at Yoann's own decision, `E-RETRY-ATTRIBUTE` → `E-RETRY`
+  beside `E-LOOP`. **Applied by Astra in `2a1cd11` and `3736817`, replayed
+  by Fable on 23 October** with the same gate; QEMU Retry `.rodata` +32 B of
+  `Debug` strings, hash and heap unchanged, code margin 5 084 B. Left to
+  Yoann: `l:next` against `l:retry`, a `retry.md`, the tense of the UI
+  transport labels, the placements and test names listed in the record.
+  Status: applied, reviewed.
 - Four public names are outside the vocabulary tables and are recorded there:
   `RuntimeDrivers::prepare_with_selection`, `RuntimeDrivers::restore_ownership`,
   `OutboundDrivers::forget_session`, `DriverRecoveryError`. The names are
