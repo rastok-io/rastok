@@ -1624,8 +1624,111 @@ causes (a specification choice, `parent_id` distinguishes them); the
 Closing-named Rust identifiers, which name the phase; the dated documents;
 `retry.md`; `UiCommand::RetryStep`.
 
-**Status.** A-T2-13 in the [actions register](human-review-m1.md): decided,
-briefed. Fable replays the gate on delivery.
+**Status.** A-T2-13 in the [actions register](human-review-m1.md): applied by
+Astra in `0413fdf` the same afternoon and replayed by Fable; the record follows.
+
+### Applied and replayed — 23 October afternoon (Astra `0413fdf`; Fable)
+
+Astra delivered one commit, `0413fdf` "Align lifecycle triggers with their
+emitting mechanisms", on top of `d38ff9f` on the afternoon of 23 October:
+49 files, +531 / −173, both trailers, signed off. Fable replayed the gate on
+it in the same checkout the same afternoon. Neither review register was
+edited by the commit; this entry is Fable's replay.
+
+**What the commit does.** `node::Lifecycle::Next` → `Loop` and `Closing` →
+`Close`, the variants now declared in byte order; `Display` and the codec's
+text table follow (`codec.rs:778–787`); the wire-registry test pins the word
+and the `l:` form beside the ten bytes and the 246 refused ones. Every Rust
+site moves with it: `execution.rs` (the close request), `graph_loop.rs`,
+`loop_manager.rs` (the `LoopExpired` emission id and `manager_record`),
+`recovery.rs`, `instance_stop.rs`, `loop_view.rs`, `golden.rs`, nine test
+files. A new codec test round-trips the ten current words through the record
+tuple and refuses `l:next`, `l:closing` and the four former UI pseudo-triggers
+as `Invalid("transaction trigger")`; its Retry fixture carries the carrier the
+decoder also checks. `FORMAT_VERSION` 22 → 23, the three version pins and
+`plan_package.rs`'s header byte `0x16` → `0x17`; the older-version refusal
+loop covers 22 by construction. Debugger: Loop fact labels `opened`,
+`admitted`, `advanced`, `closed`, `expired` in history and in the future list,
+kind `loop-next` → `loop-manager`, verb "Loop continued" → "Loop manager",
+the future lifetime deadline spelled `l:close`; `browser.test.cjs:500`
+asserts `admitted`. Specification: `envelope.md` §3.1 is the table with the
+byte column, the `l:retry` row and the rule stated above it; §1.1's list,
+`execution-model.md` §10 (retitled, with a Retry row and a pointer to §3.1),
+`loop.md:233` ("no re-admission is created. The manager's `l:loop`
+transaction retains Expired"), `instances.md`, `identity.md` header and
+key 35, `extensions.md`, `simulation-semantics.md`, `ui.md`. Living
+documents: CHANGELOG, ROADMAP (a new 23 October paragraph; the 22 October
+one keeps "format 22" as history), WHITEPAPER header and §10,
+`plan-package.md` (whose diagram said 21), `diagnostic-recording.md`,
+`opening-showcase.md`, `docs/examples/README.md`, `spec-to-code.md` rows R5
+and L5 with "then `l:closing`, `l:close` since format 23". D-2026-10-23-1 in
+`decisions.md`, the inventory `lifecycle-registry-identity.md` written
+before regeneration with old and new seals, and `site_content.rs` requiring
+the inventory's name in the catalogue and the status pages.
+
+**Normalized diff.** With `Next` / `Loop`, `Closing` / `Close`,
+`l:next` / `l:loop` and `l:closing` / `l:close` folded, what remains over the
+Rust files is: the version constant and its four pins, the enum reorder,
+three doc comments, the new codec test, the two `site_content` assertions and
+the UI label strings. No executable change beyond the renames.
+
+**Byte audit, inverted control.** The repository tracks 36 traces and
+packages. Exactly eight change between `d38ff9f` and `0413fdf`, the eight
+the brief named: `app_server.two_conversations`,
+`scripted_model.alice_and_bob`, `ui_tour.lifetime` and `webhook.duplicate`,
+each by one record (key 19 `l:closing` → `l:close`, text length 9 → 7) and
+its seal, no emission id and no other record touched; `echo`, `gauge`,
+`jsonl` and the spike's `echo.rkp` by the header byte and the checksum,
+bodies and semantic hashes unchanged, the spike binary byte-for-byte the hex
+`echo.rkp`. Each changed trace holds one close request and no Loop manager
+record; the `l:loop` identity change is exercised by the protocol and
+runtime tests, not by a gallery fixture. The 28 other witnesses are
+byte-identical. The Retry spike package regenerated on `0413fdf` differs
+from the `3736817` one by the header byte and the checksum
+only, 33 bytes; its semantic hash `3cad77ef…` is
+unchanged.
+
+**Residue sweep.** `l:next`, `l:closing`, `Lifecycle::Next`,
+`Lifecycle::Closing`, `loop-next`, "Loop continued" and the five
+pseudo-triggers: zero in `crates/` outside the new test's refusal list; in
+`docs/`, only the dated documents (`instance-stop-command.md`,
+`m1-slice.md`, `m1.4-instances-backlog.md`, `m1.7-*`, `retry-c1-identity.md`,
+`retry-c3-implementation.md`, `rework-r0-*`, `rework-r2-supersession.md`),
+the historical `sim-03` derivation under its pre-v16 notice, the two
+`spec-to-code.md` history rows, and twelve lines of `decisions.md` before
+today's entry. Kept, by the rule for historical sections.
+
+**Two precision remarks on the new authority.** The Loop row's cause column
+in `envelope.md` §3.1 says "the consumed Next/Again command (Advanced,
+recurrent Admitted, Expired …)". In the code the recurrent Admitted
+(`loop_manager.rs:541`, `graph_loop.rs:573`) takes as cause the re-admitted
+state envelope's id, whose `parent_id` is the command's cause
+(`loop_view.rs:393`); only Advanced and Expired (`loop_manager.rs:764`) take
+`command.value.cause()` directly. And the Graph Loop manager also commits a
+command-production record with no fact (`graph_loop.rs:877`, `produced`
+only, cause the current state), which the row does not list. Neither moves
+a byte; both are one sentence each in the table, for the next documentation
+touch. Also noted, as at lot 2: the inventory ends on a machine path
+(`/tmp/rastok-lifecycle-v23.JSj1ey/`).
+
+**Replay, same checkout, `0413fdf`.** `cargo fmt --check`, strict Clippy and
+strict rustdoc pass. `cargo test --workspace --all-features`: 61 groups,
+1 624 passed, 0 failed, 0 ignored, `site_content` 12/12 among them; the one
+added test is the codec round trip. The three `no_std` targets check (`thumbv8m.main-none-eabihf`,
+`thumbv7m-none-eabi`, `riscv32imac-unknown-none-elf`). Browser suite 35/35
+with the cached Chromium headless shell 1243 driven by the `npx` Playwright
+core. QEMU Cortex-M33: echo heap 111 404 B, code 971 432 B (`.text`
+897 420 + `.rodata` 74 012), hash `7106f322…`, 67 records, stdout identical
+to `3736817`; Retry with recovery heap 129 188 B, code 1 043 488 B
+(`.text` 958 676 + `.rodata` 84 812), hash `3cad77ef…`,
+17 records, stdout identical. Against `3736817`: `.rodata` +4 B on
+echo and −4 B on Retry, `.text` unchanged, the string table moved by the
+shorter words. Margins: heap 1 884 B, code 5 088 B. Astra's
+figures in the inventory are the same.
+
+**Status.** A-T2-13 applied and reviewed; the two §3.1 precision remarks
+open. Left to Yoann from this morning: `retry.md`, the tense of the UI
+transport labels and the placements (T10), `UiCommand::RetryStep`.
 
 ## What validation produces
 

@@ -72,6 +72,28 @@ cross-check of the three documents found two stale sentences, the ledger
 header still saying "nothing here is decided" and the disposition row below
 placing lot 1 "after the opening"; both are corrected in this touch.
 
+**Reading — 23 October.** The review resumed on the reorganized tree with
+Fable's reading of the `l:` registry, from Yoann's three questions at midday
+(what `l` stands for, whether `l:next` serves Loop and Retry alike, how Next
+differs from Again). The reading found the trigger of every Loop manager
+transaction spelled after one command, a `l:retry` row allocated but never
+specified, two stale "tag" numbers in dated texts, and debugger labels
+imitating the registry. Yoann decided one rule for the word after `l:` and
+ratified the findings as an immediate lot, A-T2-13, with package format 23
+because the word is sealed in TRANSACTION key 19 and in the Emission recipe:
+[Decided — 23 October midday](human-review-vocabulary.md#decided--23-october-midday-yoann-the-l-registry).
+Astra applied it in `0413fdf` the same afternoon, with D-2026-10-23-1 and the
+[lifecycle identity inventory](lifecycle-registry-identity.md); Fable replayed
+the gate and the byte audit the same day:
+[Applied and replayed — 23 October afternoon](human-review-vocabulary.md#applied-and-replayed--23-october-afternoon-astra-0413fdf-fable).
+Exactly eight tracked witnesses move: the four traces that embed a close
+request, by one record and their seal; the four packages, by header byte and
+checksum. Semantic hashes, record counts and record order are unchanged. Two
+precision remarks on the new §3.1 cause column are recorded there for a
+documentation touch. The human reading continues where the 12 October entry
+left it, on a tree whose words are now the specification's: the reorganized
+T5 skeleton, then T4 blocks 2, 3, 5, 6 and 7, then the T10 first hour.
+
 Rastok promises that the same validated plan and the same journaled inputs
 produce the same execution, identities and trace. The review reads what
 carries that promise first (identity, journal, validated plan, VM), then what
@@ -1560,7 +1582,16 @@ selectable implementation. The registry file of 3 112 lines became
   Closing-named Rust identifiers (`instance::Phase::Closing`,
   `ClosingStage`, `instance_closing_id`: the phase, not the trigger), the
   dated documents, `retry.md`, `UiCommand::RetryStep`. Brief handed to Astra
-  on 23 October. Status: decided, briefed.
+  on 23 October. **Applied by Astra in `0413fdf` the same afternoon and
+  replayed by Fable**: four checks, 1 624 tests in 61 groups (one codec test
+  added), `site_content` 12/12, three `no_std` targets, browser 35/35,
+  QEMU echo and Retry outputs identical to `3736817` with `.rodata` +4 B and
+  −4 B; exactly the eight named witnesses move, the traces by one trigger
+  field and their seal, the packages by header byte and checksum. Two
+  precision remarks on the §3.1 cause column of the Loop row are open for a
+  documentation touch. Record:
+  [Applied and replayed — 23 October afternoon](human-review-vocabulary.md#applied-and-replayed--23-october-afternoon-astra-0413fdf-fable).
+  Status: applied, reviewed.
 - Four public names are outside the vocabulary tables and are recorded there:
   `RuntimeDrivers::prepare_with_selection`, `RuntimeDrivers::restore_ownership`,
   `OutboundDrivers::forget_session`, `DriverRecoveryError`. The names are
