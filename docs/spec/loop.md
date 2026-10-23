@@ -13,7 +13,7 @@
 > **Loop/Retry distinction — D-2026-09-14-4:** Loop advances authored state;
 > Retry repeats one prepared Call under its own hard safety gate. Global
 > `effect` classification is removed. §§11–12 distinguish the advisory Loop
-> warning from Retry admission. See the [refactor contract](../architecture/retry-extension-refactor.md)
+> warning from Retry admission. See the [Retry specification](retry.md)
 > and [common qualification](../architecture/retry-c4-qualification.md).
 
 `Loop` is a temporal Extension which applies one finite host application,

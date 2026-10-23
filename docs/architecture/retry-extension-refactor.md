@@ -1,5 +1,8 @@
 # Loop, Retry, Call and Saga — refactor contract
 
+> Current specification text now lives in [retry.md](../spec/retry.md).
+> This dated document preserves the design and implementation handoff.
+
 14 September 2026, implementation status updated 18 September.
 **Executable in v19 / recording v3; local qualification in the C4 ledger.**
 [D-2026-09-14-4](../spec/decisions.md#d-2026-09-14-4--separate-loop-retry-and-saga-over-one-recurrence-engine)

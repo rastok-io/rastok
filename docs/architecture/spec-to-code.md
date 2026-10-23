@@ -1,6 +1,6 @@
 # Specification-to-implementation map
 
-> Non-normative implementation map, updated 2026-10-22. Current format:
+> Non-normative implementation map, updated 2026-10-23. Current format:
 > [identity.md](../spec/identity.md).
 > The first table describes current ownership; subsequent milestone tables
 > preserve dated landing evidence, including superseded types and ids. They
@@ -22,6 +22,7 @@
 | [Connector catalogue](connector-drivers.md#1-find-the-contract) | CLI `connector_catalogue` projects shared declarations, physical/Lab manifests and conformance-fixture metadata; it is not a second Contract schema. | projection tests against definitions; File guide example compiled by the real compiler |
 | [Resident Process](process-service.md) | mode-selected Session of the Process Contract; `connector/drivers/process/service.rs`, Lab Session world, shared core lifecycle | `process_service.rs`, framing/cleanup tests, dialogue scenarios and causal goldens |
 | [Loop](../spec/loop.md) | compiler `check/loop_control`; core `plan::{call_loop,graph_loop}`, `journal::loop_protocol`, `runtime/execution/loop_manager` | `v16_loop*`, `v16_graph_calls.rs`, `loop_host_exit.rs` |
+| [Retry](../spec/retry.md) | compiler `check/retry_control`; core `plan/retry`, `journal::retry_protocol`, `runtime/execution/retry_manager` and `runtime/execution/recovery/retries` | `retry_source.rs`, `retry_plan.rs`, `retry_runtime.rs`, `retry_showcase.rs` |
 | [Recovery / deadlines](../spec/delivery-semantics.md) | `runtime/execution/recovery`, `journal::{DeadlineKind, deadline::Deadline, deadline::Deadlines}`, sealed `deadline_ids` and unsealed `deadlines`; lossless `journal::codec::{encode, Decoder}`; no public `RecoveryFold` type | `v16_recovery.rs`, `v16_exchange_recovery.rs`; exhaustive kind-byte and codec round-trip tests; no disk-backend claim |
 | [Package / identity](../spec/identity.md) | core `plan::ExecutionPlan` owns one Node table; `NodeKind` contains boxed Graph/Operator/Connector bodies, with handlers in the Operator. `plan::{serialization,validation}` checks transport independently of compiler canonicalization. | `plan_package.rs`, `plan_validation.rs`, echo/JSONL/gauge witnesses; [representation inventory](node-realignment-identity.md) and [qualification](node-realignment-qualification.md) |
 | [Admission / commit](../spec/delivery-semantics.md) | `runtime::execution::admission`: `admit_proposal` prepares without mutation, commits once, then applies without a fallible post-commit step; typed source/exchange cases share instance reservation | inbound Call, Session, instance-capacity and journal-failure regressions; A-T4-4 in the [qualification report](node-realignment-qualification.md) |

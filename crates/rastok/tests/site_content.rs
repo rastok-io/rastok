@@ -250,6 +250,7 @@ fn current_public_status_matches_the_package_and_contracts() {
         "docs/spec/execution-model.md",
         "docs/spec/delivery-semantics.md",
         "docs/spec/loop.md",
+        "docs/spec/retry.md",
     ] {
         let source = std::fs::read_to_string(root().join(path)).unwrap();
         let status = source
@@ -309,6 +310,41 @@ fn live_loop_diagnostics_do_not_reintroduce_retired_codes() {
     }
     assert!(codes > 0);
     assert!(table.contains("W-LOOP-REPEAT"));
+}
+
+#[test]
+fn live_retry_diagnostics_do_not_reintroduce_retired_codes() {
+    let source = std::fs::read_to_string(root().join("docs/spec/retry.md")).unwrap();
+    let registry = std::fs::read_to_string(root().join("docs/spec/diagnostics.md")).unwrap();
+    let table = source
+        .split_once("## 7. Named diagnostics")
+        .unwrap()
+        .1
+        .split_once("## 8.")
+        .unwrap()
+        .0;
+    let codes: Vec<_> = table
+        .lines()
+        .filter_map(|row| row.split('|').nth(1))
+        .map(|code| code.trim().trim_matches('`'))
+        .filter(|code| code.starts_with("E-") || code.starts_with("W-"))
+        .collect();
+    assert_eq!(
+        codes,
+        ["E-RETRY-HOST", "E-RETRY", "E-RETRY-CASES", "E-RETRY-EFFECT"]
+    );
+    for code in codes {
+        let registered = registry
+            .lines()
+            .find(|line| line.starts_with(&format!("| {code} |")))
+            .unwrap_or_else(|| panic!("unregistered Retry diagnostic {code}"));
+        assert_ne!(
+            registered.split('|').nth(2).unwrap().trim(),
+            "retired",
+            "retry.md still presents retired {code} as an active diagnostic"
+        );
+    }
+    assert!(table.contains("`E-RETRY-ATTRIBUTE` was retired"));
 }
 
 #[test]

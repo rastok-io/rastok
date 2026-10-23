@@ -64,9 +64,9 @@ Lab: scenarios, mocks, golden traces, experiments, and the reserved
 theorem surface) → [identity.md](identity.md) (semantic hash,
 `graph_version`, canonical record form) → [stdlib.md](stdlib.md) (the
 six Connectors and guest languages) →
-[extensions.md](extensions.md) / [loop.md](loop.md) /
+[extensions.md](extensions.md) / [loop.md](loop.md) / [retry.md](retry.md) /
 [effects-and-sagas.md](effects-and-sagas.md) (Extensions, finite recurrence,
-and future compensation) →
+safe repetition, and future compensation) →
 [example catalogue](../examples/README.md) (runnable graphs and separately
 labelled historical derivations).
 
@@ -87,6 +87,7 @@ labelled historical derivations).
 | [stdlib.md](stdlib.md) | Connector contracts, the six initial Connectors, `behavior`, pure guest programs, observability, MCP |
 | [extensions.md](extensions.md) | Node / Graph / Executor / Connector / Extension taxonomy, the Connector-owned `Contract` plus canonical Extension mechanism, admission tests, qualified names |
 | [loop.md](loop.md) | finite temporal recursion over Operator, Graph, and outbound Call hosts; manager commands, fuel, delay, recovery, and proofs |
+| [retry.md](retry.md) | bounded repetition of one prepared outbound Call operation; terminal safety, held batches, closure-based delay, Closing, and recovery |
 | [effects-and-sagas.md](effects-and-sagas.md) | effect classes and the deferred Saga Extension direction |
 | [identity.md](identity.md) | semantic hash, `graph_version` allocation and manifest, canonical record form |
 | [diagnostics.md](diagnostics.md) | diagnostic-code registry, stability contract, lazy assignment |

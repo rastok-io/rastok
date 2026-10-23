@@ -11,7 +11,8 @@
 > remain distinct from executable support.
 
 This document owns Rastok's structural and extension taxonomy. Loop's temporal
-protocol lives in [loop.md](loop.md); Saga's future contract lives in
+protocol lives in [loop.md](loop.md), Retry's in [retry.md](retry.md);
+Saga's future contract lives in
 [effects-and-sagas.md](effects-and-sagas.md).
 
 ## 1. Node has two structural forms
@@ -148,7 +149,7 @@ not wrapped. Every attempt's original typed measurements remain retained.
 A Loop Graph may contain a Retry Connector: a Loop application waits for the
 whole operation, including its backoff. Same-owner `Loop + Retry`, Graph and
 Operator Retry, inbound Calls, Events, Sessions and Process service Retry
-remain refused by name. The [operation algebra](../architecture/retry-c1-algebra.md)
+remain refused by name. The [Retry specification](retry.md)
 specifies Closing and recovery without effect recall.
 
 "No contributed port" does not mean "no contributed interface": Loop exposes
@@ -310,6 +311,7 @@ suggestion that the id names a Node rather than its Contract.
   Dispatch;
 - [instances.md](instances.md) — addressing, lifetime, lifecycle, Closing;
 - [loop.md](loop.md) — Loop manager, commands, proof, and recovery;
+- [retry.md](retry.md) — bounded Call repetition, safety, delay, and recovery;
 - [effects-and-sagas.md](effects-and-sagas.md) — effects and future Saga;
 - [delivery-semantics.md](delivery-semantics.md) — routes, journal, boundary,
   recovery.
