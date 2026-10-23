@@ -1476,7 +1476,9 @@ UTF-8 text (`identity.md` §2 and `envelope.md` §1.1, `id = blake3(node_path
 ‖ trigger ‖ parent_id ‖ port ‖ index)`) and the TRANSACTION record's key 19 as
 text; the `Lifecycle` byte serves only the plan stream's `HandlerActivation`,
 where only `start` and `stop` occur. Renaming `l:next` is therefore a format
-change, not zero bytes; Yoann's call for v21 or never. The UI transport labels `l:open`, `l:admit`, `l:advance`, `l:close`,
+change, not zero bytes; Yoann's call for v21 or never — decided on 23 October at
+midday, see [the `l:` registry](#decided--23-october-midday-yoann-the-l-registry)
+below. The UI transport labels `l:open`, `l:admit`, `l:advance`, `l:close`,
 `l:expired` and `retry-advance` carry the former tenses; they are asserted by
 `browser.test.cjs` and described in `ui.md`, T10. `LoopRepeatWarning` lives
 in `plan/retry.rs`; Loop runs are projected inline in `ui/view.rs::loop_runs`
@@ -1539,6 +1541,91 @@ and the two qualification reports narrating the retired word. Kept.
 the [actions register](human-review-m1.md), applied and reviewed. Open for
 Yoann: `l:next`, a `retry.md`, the UI transport labels and the placements,
 all listed above.
+
+### Decided — 23 October midday (Yoann), the `l:` registry
+
+At midday on 23 October Yoann asked what the `l` stood for, then whether
+`l:next` served Loop and Retry alike, then the difference between Next and
+Again, then for a cleaner registry independent of the freeze. He ratified the
+proposal and the findings below as a rework lot for now; the brief is Astra's.
+This section records what the reading established and what was decided.
+
+**What the reading established.**
+
+- `l` is lifecycle. The TRANSACTION `trigger` is `p:<port>` or
+  `l:<lifecycle>` so that port and lifecycle names never collide
+  (`envelope.md` §1.1). The word enters the Emission recipe as UTF-8 and key
+  19 as text; the `repr(u8)` byte serves only the plan stream's
+  `HandlerActivation`, where only `start` and `stop` occur. Only `on start`
+  and `on stop` are authored (grammar `trigger ::= "start" | "stop"`); the
+  other eight are internal runtime triggers.
+- `l:next` is not the re-admission trigger but the trigger of every Loop
+  manager transaction. The eight `manager_record` calls
+  (`loop_manager.rs:193, 244, 510, 541, 764`, `graph_loop.rs:467, 573, 877`)
+  carry Opened at opening, initial and recurrent Admitted, Advanced, Closed
+  and Expired, and the `LoopExpired` emission takes `l:next` in its id recipe
+  (`loop_manager.rs:734`). `envelope.md:356` titles the row "Loop
+  re-admission" and `loop.md:233` says "no re-admission and no `l:next` are
+  created" at expiry: the prose is narrower than the code. The code matches
+  `l:retry`, which already means "the Retry manager acted" (`carriers.rs:11`).
+- Next and Again are both necessary and both stay. Next carries a typed value
+  that becomes the next state; Again carries nothing, retains `Loop.state`,
+  accepts any causal source, and is the one `W-LOOP-REPEAT` watches. Both
+  consume one fuel unit. `CommandValue::{Next, Again}` and `Advanced.command`
+  already record which one was consumed, so a separate `l:again` would
+  duplicate the journal and break the rule `l:stop` and `l:closing` already
+  follow: one word per mechanism, `parent_id` discriminates the cause.
+- `l:retry` is allocated (`envelope.md:168`) but no specification table has a
+  row for it. Its allocation lives in `retry-c1-identity.md` ("future
+  activation tag 11"); D-2026-08-27-2 says "`l:exit` (tag 10)"; the code has
+  carried Exit = 9 and Retry = 10 since `8bc54fd` (format 20, D-2026-10-07-1).
+  No artifact is affected: the specification simply published no byte table.
+- The debugger's `l:open`, `l:admit`, `l:advance`, `l:close` and `l:expired`
+  imitate the registry (`ui/view.rs:1043–1047`, `ui.md:192`); `l:close`
+  collides with the new word below.
+- `node::Lifecycle` declares its variants out of byte order (`Retry` first).
+
+**Decided (Yoann, 23 October).** One rule: the word after `l:` names the
+emitting mechanism as the specification names it, in one bare word; never a
+command, a fact or a phase; `parent_id` carries the cause; the `l:` prefix is
+reserved to the registry.
+
+| Byte | Before | After | Emitting mechanism |
+|---|---|---|---|
+| 1 | `l:start` | `l:start` | handler `on start` |
+| 2 | `l:stop` | `l:stop` | handler `on stop` |
+| 3 | `l:next` | **`l:loop`** | the Loop manager, every transaction |
+| 4 | `l:timeout` | `l:timeout` | Call budget expiry, the DSL word `timeout =` |
+| 5 | `l:evict` | `l:evict` | join-buffer eviction |
+| 6 | `l:recover` | `l:recover` | recovery resolution |
+| 7 | `l:closing` | **`l:close`** | durable instance close request |
+| 8 | `l:reply` | `l:reply` | inbound Call terminal |
+| 9 | `l:exit` | `l:exit` | Session terminal |
+| 10 | `l:retry` | `l:retry` | the Retry manager, every transaction |
+
+Bytes do not move; the registry remains extend-only. `envelope.md` §3.1
+becomes the single authority with a byte column and the `l:retry` row;
+`execution-model.md:702` is retitled; `loop.md:233` is corrected. Debugger
+labels for Loop facts drop their `l:` and show `opened`, `admitted`,
+`advanced`, `closed`, `expired`. The spelling is sealed material, so the lot
+carries package format 23 (D-2026-10-23-1, written by Astra); diagnostic
+recording stays 4. Exactly four tracked artifacts embed either word and move
+by content: `gallery/agent-gateway/app_server.two_conversations.trace`,
+`gallery/agent-gateway/scripted_model.alice_and_bob.trace`,
+`gallery/two-tenants/ui_tour.lifetime.trace`,
+`gallery/webhook-to-partner/webhook.duplicate.trace`; the four `.rkp`
+(`echo`, `gauge`, `jsonl`, the spike's `echo`) move by header only.
+
+Rejected: `l:again` (above); `l:recur`, because "recurrence" is the umbrella
+of both managers in `recurrence_admission_load`; a third namespace for the
+internal triggers, because the authored/internal distinction lives in the
+grammar, not in the name. Not touched: the seven other words; `l:stop`'s two
+causes (a specification choice, `parent_id` distinguishes them); the
+Closing-named Rust identifiers, which name the phase; the dated documents;
+`retry.md`; `UiCommand::RetryStep`.
+
+**Status.** A-T2-13 in the [actions register](human-review-m1.md): decided,
+briefed. Fable replays the gate on delivery.
 
 ## What validation produces
 

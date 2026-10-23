@@ -1529,6 +1529,38 @@ selectable implementation. The registry file of 3 112 lines became
   so not zero bytes), a `retry.md`, the tense of the UI
   transport labels, the placements and test names listed in the record.
   Status: applied, reviewed.
+- A-T2-13 (format change, owner Astra; numbered under T2 because the `l:`
+  registry lives in the TRANSACTION record's key 19 and in the Emission
+  recipe): the lifecycle registry, decided by Yoann on 23 October at midday
+  from Fable's reading, closing the `l:next` item A-T2-12 left open. One
+  rule: the word after `l:` names the emitting mechanism as the specification
+  names it, in one bare word (the handler for `start` and `stop`, the
+  Extension for `loop` and `retry`, the event for `timeout`, `reply`, `exit`,
+  `evict`, `recover` and `close`); never a command, a fact or a phase;
+  `parent_id` carries the cause; the prefix is reserved to the registry.
+  `l:next` → `l:loop`, because the reading found it on every Loop manager
+  transaction, not on the re-admission alone: the eight `manager_record`
+  calls carry Opened, Admitted, Advanced, Closed and Expired, and the
+  `LoopExpired` emission id uses it (`loop_manager.rs:734`), where
+  `envelope.md:356` and `loop.md:233` say "re-admission" only. `l:closing`
+  → `l:close`, the registry's only participle. Bytes 3 and 7 do not move.
+  `envelope.md` §3.1 becomes the single authority, with a byte column and
+  the `l:retry` row that `retry-c1-identity.md` allocated but no
+  specification table carried; the stale "tag 10" (D-2026-08-27-2) and
+  "tag 11" (`retry-c1-identity.md`) stay as history and are named by the
+  decision. Debugger labels for Loop facts drop their `l:` (`ui/view.rs:1046`
+  already spelled `l:close` for `Closed`, a collision with the new word) and
+  show `opened`, `admitted`, `advanced`, `closed`, `expired`. The spelling is
+  sealed material, so the lot carries package format 23 and D-2026-10-23-1,
+  written by Astra; diagnostic recording stays 4. The only artifacts whose
+  content moves are the four gallery traces that embed either word
+  (`app_server.two_conversations`, `scripted_model.alice_and_bob`,
+  `ui_tour.lifetime`, `webhook.duplicate`); the four `.rkp` move by header
+  only. Not in the lot: the seven other words, `l:stop`'s two causes, the
+  Closing-named Rust identifiers (`instance::Phase::Closing`,
+  `ClosingStage`, `instance_closing_id`: the phase, not the trigger), the
+  dated documents, `retry.md`, `UiCommand::RetryStep`. Brief handed to Astra
+  on 23 October. Status: decided, briefed.
 - Four public names are outside the vocabulary tables and are recorded there:
   `RuntimeDrivers::prepare_with_selection`, `RuntimeDrivers::restore_ownership`,
   `OutboundDrivers::forget_session`, `DriverRecoveryError`. The names are
