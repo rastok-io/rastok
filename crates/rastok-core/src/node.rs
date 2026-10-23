@@ -403,35 +403,37 @@ impl fmt::Display for Behavior {
 }
 
 /// Lifecycle transaction kind — the closed `l:` registry of
-/// [`envelope.md`] §3.
+/// [`envelope.md`] §3.1. Its table is the authority for the word, byte,
+/// cause and emitter of each kind.
 ///
 /// [`envelope.md`]: https://github.com/rastok-io/rastok/blob/main/docs/spec/envelope.md
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum Lifecycle {
-    /// Internal Retry manager fact; never an authored handler activation.
-    Retry = 10,
     /// Instance start.
     Start = 1,
     /// Instance stop.
     Stop = 2,
-    /// Durable request that enters bounded Closing. This is an internal
-    /// runtime trigger, never a source handler activation.
-    Closing = 7,
-    /// Terminal observation of an admitted inbound Call. This is an internal
-    /// Connector transaction trigger, never a source handler activation.
-    Reply = 8,
-    /// Sole terminal observation of one Session. This is an internal
-    /// Connector transaction trigger, never a source handler activation.
-    Exit = 9,
-    /// Loop continuation transaction.
-    Next = 3,
+    /// Loop manager transaction: opening, admission, advance, close, expiry.
+    /// Internal runtime trigger, never a source handler activation.
+    Loop = 3,
     /// Expired per-call timeout budget.
     Timeout = 4,
     /// Instance-state eviction.
     Evict = 5,
     /// Post-crash recovery transaction.
     Recover = 6,
+    /// Durable request that enters bounded Closing. This is an internal
+    /// runtime trigger, never a source handler activation.
+    Close = 7,
+    /// Terminal observation of an admitted inbound Call. This is an internal
+    /// Connector transaction trigger, never a source handler activation.
+    Reply = 8,
+    /// Sole terminal observation of one Session. This is an internal
+    /// Connector transaction trigger, never a source handler activation.
+    Exit = 9,
+    /// Internal Retry manager transaction; never an authored handler activation.
+    Retry = 10,
 }
 
 impl From<Lifecycle> for u8 {
@@ -459,11 +461,11 @@ impl TryFrom<u8> for Lifecycle {
         match value {
             1 => Ok(Self::Start),
             2 => Ok(Self::Stop),
-            3 => Ok(Self::Next),
+            3 => Ok(Self::Loop),
             4 => Ok(Self::Timeout),
             5 => Ok(Self::Evict),
             6 => Ok(Self::Recover),
-            7 => Ok(Self::Closing),
+            7 => Ok(Self::Close),
             8 => Ok(Self::Reply),
             9 => Ok(Self::Exit),
             10 => Ok(Self::Retry),
@@ -475,16 +477,16 @@ impl TryFrom<u8> for Lifecycle {
 impl fmt::Display for Lifecycle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::Retry => "retry",
             Self::Start => "start",
             Self::Stop => "stop",
-            Self::Closing => "closing",
-            Self::Reply => "reply",
-            Self::Exit => "exit",
-            Self::Next => "next",
+            Self::Loop => "loop",
             Self::Timeout => "timeout",
             Self::Evict => "evict",
             Self::Recover => "recover",
+            Self::Close => "close",
+            Self::Reply => "reply",
+            Self::Exit => "exit",
+            Self::Retry => "retry",
         })
     }
 }
@@ -658,22 +660,27 @@ mod tests {
     fn lifecycle_wire_bytes_are_explicit_and_unknown_bytes_refuse() {
         use super::{Lifecycle, UnknownLifecycle};
         let registry = [
-            (1, Lifecycle::Start),
-            (2, Lifecycle::Stop),
-            (3, Lifecycle::Next),
-            (4, Lifecycle::Timeout),
-            (5, Lifecycle::Evict),
-            (6, Lifecycle::Recover),
-            (7, Lifecycle::Closing),
-            (8, Lifecycle::Reply),
-            (9, Lifecycle::Exit),
-            (10, Lifecycle::Retry),
+            (1, Lifecycle::Start, "start"),
+            (2, Lifecycle::Stop, "stop"),
+            (3, Lifecycle::Loop, "loop"),
+            (4, Lifecycle::Timeout, "timeout"),
+            (5, Lifecycle::Evict, "evict"),
+            (6, Lifecycle::Recover, "recover"),
+            (7, Lifecycle::Close, "close"),
+            (8, Lifecycle::Reply, "reply"),
+            (9, Lifecycle::Exit, "exit"),
+            (10, Lifecycle::Retry, "retry"),
         ];
         for byte in 0..=u8::MAX {
-            match registry.iter().find(|(tag, _)| *tag == byte) {
-                Some((_, kind)) => {
+            match registry.iter().find(|(tag, _, _)| *tag == byte) {
+                Some((_, kind, word)) => {
                     assert_eq!(u8::from(*kind), byte);
                     assert_eq!(Lifecycle::try_from(byte), Ok(*kind));
+                    assert_eq!(kind.to_string(), *word);
+                    assert_eq!(
+                        Trigger::Lifecycle(*kind).to_string(),
+                        alloc::format!("l:{word}")
+                    );
                 }
                 None => assert_eq!(Lifecycle::try_from(byte), Err(UnknownLifecycle(byte))),
             }

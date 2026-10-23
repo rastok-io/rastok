@@ -55,7 +55,7 @@ pub(super) fn future(inspection: &ExecutionInspection, records: &[Record]) -> Js
             InstancePhaseInspection::Open => vec![(
                 DeadlineKind::InstanceLifetime,
                 crate::journal::ids::instance_lifetime_id(&instance.reference),
-                "l:closing",
+                "l:close",
             )],
             InstancePhaseInspection::Draining => vec![
                 (
@@ -101,7 +101,7 @@ pub(super) fn future(inspection: &ExecutionInspection, records: &[Record]) -> Js
                     .iter()
                     .find(|instance| instance.reference == run.instance)
                     .map(|instance| instance.owner.to_string());
-                result.push(json!({ "kind": "l:admit", "owner": owner, "due_at_ns": due.to_string(), "run": reference.to_string(), "envelope_id": run.state.meta().sys().id().to_string() }));
+                result.push(json!({ "kind": "admitted", "owner": owner, "due_at_ns": due.to_string(), "run": reference.to_string(), "envelope_id": run.state.meta().sys().id().to_string() }));
             }
         }
     }

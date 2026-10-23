@@ -36,7 +36,7 @@ Node
 
 A Graph owns no application mailbox, `var`, handler, or application
 transaction. The generic lifecycle controller still commits `l:start`,
-`l:closing`, and `l:stop` transaction records attributed to the Graph owner;
+`l:close`, and `l:stop` transaction records attributed to the Graph owner;
 those records are instance facts, not Graph code.
 
 The approved [annotation-type model](annotations.md#7-extensions-can-consume-metadata-without-becoming-annotations)

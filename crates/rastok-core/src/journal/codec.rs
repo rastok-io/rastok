@@ -777,10 +777,10 @@ impl Decoder {
             Trigger::Lifecycle(match trigger {
                 "l:start" => Lifecycle::Start,
                 "l:stop" => Lifecycle::Stop,
-                "l:closing" => Lifecycle::Closing,
+                "l:close" => Lifecycle::Close,
                 "l:reply" => Lifecycle::Reply,
                 "l:exit" => Lifecycle::Exit,
-                "l:next" => Lifecycle::Next,
+                "l:loop" => Lifecycle::Loop,
                 "l:timeout" => Lifecycle::Timeout,
                 "l:evict" => Lifecycle::Evict,
                 "l:recover" => Lifecycle::Recover,

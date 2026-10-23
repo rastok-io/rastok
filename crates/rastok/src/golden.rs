@@ -1039,7 +1039,7 @@ mod tests {
         let Record::Transaction(mut admit) = record else {
             unreachable!("the fixture is a transaction")
         };
-        admit.trigger = crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Next);
+        admit.trigger = crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Loop);
         admit.loop_record = Some(Box::new(LoopRecord {
             facts: vec![Fact::Admitted {
                 run,

@@ -3201,7 +3201,7 @@ impl<'plan> Execution<'plan> {
                     consumed: Some(id),
                 })
             }),
-            trigger: node::Trigger::Lifecycle(node::Lifecycle::Closing),
+            trigger: node::Trigger::Lifecycle(node::Lifecycle::Close),
             cause: Some(cause.meta().sys().id()),
             consumed: vec![],
             join_inputs: vec![],

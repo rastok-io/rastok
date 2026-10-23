@@ -1,10 +1,12 @@
 # Rastok — White Paper
 
-> **Format-22 (2026-10-22), diagnostic recording 4.**
+> **Format-23 (2026-10-23), diagnostic recording 4.**
 > The Node/Executor/Extension model, host-terminal Loop, exact-instance closure,
 > native outbound Call Retry and typed measurement retention are executable.
 > The [C4 qualification](docs/architecture/retry-c4-qualification.md) records
-> the qualified native-Retry base. The current Process identity movement is in the
+> the qualified native-Retry base. The current lifecycle trigger movement is in the
+> [lifecycle inventory](docs/architecture/lifecycle-registry-identity.md).
+> The preceding Process identity movement is in the
 > [Connector inventory](docs/architecture/connector-rework-identity.md),
 > with verification in the [qualification report](docs/architecture/connector-rework-qualification.md); external
 > [opening gates](docs/architecture/opening-showcase.md) remain separate.
@@ -884,7 +886,7 @@ chosen the value (D-2026-08-10-2). Single-input handlers copy each
 zone from their one parent; `meta.ext.content_type` follows the
 payload, not the merge (D-2026-08-10-4).
 
-**Lifecycle.** Lazy `l:start`, `l:closing` and `l:stop` facts exist for every
+**Lifecycle.** Lazy `l:start`, `l:close` and `l:stop` facts exist for every
 owner, including Graph, but only an Operator may author `on start` or `on
 stop`. A lifetime deadline or bare `stop` requests Closing after the current
 transaction commits. Contained Executors close inner-first; an Operator
@@ -1751,7 +1753,7 @@ The exact policy is
 `closing = { drain_for = <positive duration>; settle_for = <positive duration> }`.
 Both fields are required whenever a finite owner's subtree can hold a Process
 call; there is no hidden action, kill, grace period, or timeout default.
-The first close request is a durable `l:closing` fact. Arrivals from outside
+The first close request is a durable `l:close` fact. Arrivals from outside
 that closing scope reserve the exact successor generation in its ordinary
 bounded mailbox; no second queue exists. At the drain deadline, remaining
 internal deliveries are recorded as consumed by the eventual stop and calls
@@ -1767,7 +1769,7 @@ reference because the logical address intentionally omits ancestor
 generations. New arrivals wait under normal bounded backpressure and start a
 fresh generation after reclamation.
 
-Obligation scope matters: a pending Loop `l:next` wakeup is generation-bound
+Obligation scope matters: a pending Loop `l:loop` wakeup is generation-bound
 and becomes stale when its instance closes; Saga compensation debt is a fold
 over the journal and survives instance closure, restart, and shard movement.
 
@@ -2746,7 +2748,7 @@ ledgers are evidence for Rastok; future design sections are not.
 ## 10. Status
 
 Rastok is experimental, not production-ready. The current format is
-**package 22 / diagnostic recording 4**, with one Node table and Graph-owned wiring.
+**package 23 / diagnostic recording 4**, with one Node table and Graph-owned wiring.
 Process job/service modes share the Contract `std/process@6`;
 File and the four HTTP/WebSocket Contracts use `@3`. These version registers
 are independent. The [Connector identity inventory](docs/architecture/connector-rework-identity.md)

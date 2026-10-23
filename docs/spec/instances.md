@@ -480,7 +480,7 @@ has an active direct ancestor, this enforces the whole inner-first tree.
 
 A child creation racing with parent close is decided by the journal:
 
-- admitted before the durable `l:closing` fact: it exists and joins the close
+- admitted before the durable `l:close` fact: it exists and joins the close
   cascade;
 - observed after: it cannot start under the closing parent generation and is
   routed, subject to ordinary bounded-mailbox capacity, to the exact successor
@@ -489,7 +489,7 @@ A child creation racing with parent close is decided by the journal:
 The same close-once arbitration governs every route. **Admission** means the
 producer has reserved destination capacity and atomically committed the route
 with the returned instance reference; it is not the later instant at which a
-worker happens to poll the mailbox. A route admitted before `l:closing`
+worker happens to poll the mailbox. A route admitted before `l:close`
 names that generation, counts as work in its drain, and can never be delivered
 to its successor. A route attempted after the close won reserves the exact
 successor generation and commits into that generation's ordinary bounded
@@ -519,7 +519,7 @@ ends. The runtime actions are fixed by this contract; authors do not select
 budgets.
 
 The first causal close request wins once in the journal. The committed
-`l:closing` transaction names the root instance reference of the closing
+`l:close` transaction names the root instance reference of the closing
 scope, seals the two dated obligations, and closes external admission to that
 generation. A Graph scope includes every currently live descendant. Its one
 policy bounds the whole subtree; child policies govern independent child
@@ -623,7 +623,7 @@ instance closure separately; the resource's observed `exit` and the Node's
 `l:stop` remain distinct. See D-2026-09-10-4 and [Process](stdlib.md#33-process--child-processes-two-modes).
 
 The bounded command is retained with the producing transaction. The existing
-lifecycle controller commits the winning `l:closing` for its own target and
+lifecycle controller commits the winning `l:close` for its own target and
 performs §7.1's Closing sequence. It does not wait for the resource to end
 before requesting its closure. Recovery preserves pending commands and the
 disposition of redundant/stale ones. No Graph gains application execution,

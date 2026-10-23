@@ -240,6 +240,7 @@ fn current_public_status_matches_the_package_and_contracts() {
     let catalogue = std::fs::read_to_string(root().join("docs/examples/README.md")).unwrap();
     assert!(catalogue.contains(&format!("**format-{version} / diagnostic-recording-4**")));
     assert!(catalogue.contains("connector-rework-identity.md"));
+    assert!(catalogue.contains("lifecycle-registry-identity.md"));
     assert!(!catalogue.contains("unblessed v19 candidate"));
     assert!(!catalogue.contains("v18 is the last qualified"));
 
@@ -271,6 +272,7 @@ fn current_public_status_matches_the_package_and_contracts() {
             "{path}: the live status must refer to the current registry"
         );
         assert!(status.contains("connector-rework-identity.md"), "{path}");
+        assert!(status.contains("lifecycle-registry-identity.md"), "{path}");
     }
 }
 

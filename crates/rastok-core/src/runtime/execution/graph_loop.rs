@@ -1032,7 +1032,7 @@ impl Execution<'_> {
             }
             return Ok(());
         }
-        if record.trigger != node::Trigger::Lifecycle(node::Lifecycle::Next)
+        if record.trigger != node::Trigger::Lifecycle(node::Lifecycle::Loop)
             || record.parent_instance.is_some()
             || record.close_scope.is_some()
             || !record.state_delta.is_empty()

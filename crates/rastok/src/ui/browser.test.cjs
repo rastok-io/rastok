@@ -497,7 +497,7 @@ test('explanatory hovers expose types, capacity, command disposition, queued dat
   await page.locator('.graph-loop-dial').focus();
   assert.match(await page.locator('#graph-tooltip').innerText(), /applications remaining.*waiting until.*exhaustion: failed/s);
   await page.locator('#future summary').click();
-  assert.match(await page.locator('#future-items').innerText(), /l:admit/);
+  assert.match(await page.locator('#future-items').innerText(), /admitted/);
   assert.doesNotMatch(await page.locator('#future-items').innerText(), /l:timeout/, 'a closed Call has no future timeout');
   await capture(page, 'both-runs-waiting');
 });

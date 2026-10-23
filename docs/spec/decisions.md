@@ -5,6 +5,46 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-10-23-1 — One rule for the `l:` registry, `l:loop` and `l:close`, package format 23
+
+Yoann decides (2026-10-23) that the word after `l:` names the emitting
+mechanism of a transaction that no port arrival triggers, as the
+specification names it, in one bare word: the handler for authored
+lifecycles (`start`, `stop`), the Extension for its manager (`loop`,
+`retry`), the event for Connector- and Operator-owned transactions
+(`timeout`, `reply`, `exit`, `evict`, `recover`, `close`). Never a
+command, a fact or a phase. `parent_id` carries the cause; the protocol
+facts carry the detail. The `l:` prefix is reserved to this registry.
+
+1. `l:next` becomes `l:loop`: it is the trigger of every Loop manager
+   transaction (opening, admission, advance, close, expiry and the
+   `LoopExpired` emission), not of one command. `l:closing` becomes
+   `l:close`. The other eight spellings already follow the rule and do
+   not move. The wire bytes do not move: Loop keeps 3, Close keeps 7;
+   the registry remains extend-only.
+2. `envelope.md` §3.1 is the single authority for the registry: word,
+   byte, mechanism, cause and emitter, with the `l:retry` row that was
+   allocated in `retry-c1-identity.md` but never specified. The byte
+   serves only the plan stream's `HandlerActivation`, where only `start`
+   and `stop` occur. The numbers "tag 10" for `l:exit`
+   (D-2026-08-27-2) and "tag 11" for `l:retry` (`retry-c1-identity.md`)
+   are historical; the code has carried Exit = 9 and Retry = 10 since
+   format 20 (D-2026-10-07-1), and the table now says so.
+3. Debugger labels for Loop facts drop the `l:` prefix and show the
+   facts' registry names (`opened`, `admitted`, `advanced`, `closed`,
+   `expired`), as `ui.md` records.
+4. The trigger text enters the Emission recipe and TRANSACTION key 19 as
+   UTF-8. Package format 23 records this identity movement once; body
+   schema and key allocation do not change; format 22 refuses by version;
+   artifacts are regenerated from source, not converted. Diagnostic
+   recording remains version 4: no record tuple shape changes. Only traces
+   that contain a Loop manager transaction or a close request change
+   content; the [identity inventory](../architecture/lifecycle-registry-identity.md)
+   records old and new values.
+
+The TODO to label the first public format 1 remains for publication
+preparation. This decision authorizes no push, tag or publication.
+
 ## D-2026-10-22-1 — One Process Contract, two interaction modes, package format 22
 
 Yoann approves (2026-10-22) the Process identity amendment and package format

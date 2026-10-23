@@ -1,12 +1,14 @@
 # Checked examples and historical sketches
 
-The checkout uses **format-22 / diagnostic-recording-4**.
-Its single Process Contract identity is tracked in the
+The checkout uses **format-23 / diagnostic-recording-4**. Its
+[lifecycle inventory](../architecture/lifecycle-registry-identity.md) records
+the `l:loop` and `l:close` trigger movement: four gallery traces change,
+while semantic hashes and package bodies remain fixed.
+The preceding single Process Contract identity is tracked in the
 [Connector identity inventory](../architecture/connector-rework-identity.md),
 with verification in the [qualification report](../architecture/connector-rework-qualification.md).
-Both Process modes use `std/process@6`. Their semantic hashes change;
-Process Retry traces also seal that changed identity. Other semantic hashes
-and causal traces stay fixed. The
+Both Process modes use `std/process@6`. That format-22 change moved their
+semantic hashes and Process Retry traces. The
 [C4 qualification ledger](../architecture/retry-c4-qualification.md) is dated
 evidence for the native-Retry base. External opening gates remain separate.
 Author against the live

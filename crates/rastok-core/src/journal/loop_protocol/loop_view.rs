@@ -212,7 +212,7 @@ impl LoopView {
                                 output.meta().sys().id()
                                     == crate::journal::ids::graph_emission_id(
                                         record.instance.address().owner(),
-                                        &Trigger::Lifecycle(Lifecycle::Next),
+                                        &Trigger::Lifecycle(Lifecycle::Loop),
                                         cause,
                                         &emission.port,
                                         0,
@@ -626,7 +626,7 @@ mod tests {
             instance: instance.clone(),
             parent_instance: None,
             close_scope: None,
-            trigger: Trigger::Lifecycle(Lifecycle::Next),
+            trigger: Trigger::Lifecycle(Lifecycle::Loop),
             cause: None,
             exchange_exit: None,
             retry_record: None,
@@ -1129,7 +1129,7 @@ mod tests {
         assert_eq!(fold, checkpoint);
         let id = crate::journal::ids::graph_emission_id(
             instance.address().owner(),
-            &Trigger::Lifecycle(Lifecycle::Next),
+            &Trigger::Lifecycle(Lifecycle::Loop),
             command.value.cause(),
             &Port::new("Loop.expired").unwrap(),
             0,

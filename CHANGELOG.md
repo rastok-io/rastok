@@ -5,10 +5,10 @@
 This is not a released tag. Public release and crate publication await
 5 November 2026 and Yoann's explicit instruction.
 
-The current checkout uses **format 22 / diagnostic recording 4**, to be
+The current checkout uses **format 23 / diagnostic recording 4**, to be
 labelled public format 1 at publication. The
-[identity inventory](docs/architecture/connector-rework-identity.md) records
-the single Process Contract, its measured identity changes and verification.
+[identity inventory](docs/architecture/lifecycle-registry-identity.md) records
+the `l:loop` and `l:close` triggers, their causal identity changes and verification.
 External opening gates remain open; these capabilities are not a release claim.
 
 - Typed Graph scopes, Operator/Connector execution, explicit destinations,

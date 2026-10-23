@@ -1040,11 +1040,11 @@ fn history_record_description(record: &Record) -> (&'static str, Option<String>,
             {
                 use crate::journal::loop_protocol::Fact;
                 let (kind, trigger) = match fact {
-                    Fact::Opened { .. } => ("loop-open", "l:open"),
-                    Fact::Admitted { .. } => ("loop-admit", "l:admit"),
-                    Fact::Advanced { .. } => ("loop-advance", "l:advance"),
-                    Fact::Closed { .. } => ("loop-close", "l:close"),
-                    Fact::Expired { .. } => ("loop-expired", "l:expired"),
+                    Fact::Opened { .. } => ("loop-open", "opened"),
+                    Fact::Admitted { .. } => ("loop-admit", "admitted"),
+                    Fact::Advanced { .. } => ("loop-advance", "advanced"),
+                    Fact::Closed { .. } => ("loop-close", "closed"),
+                    Fact::Expired { .. } => ("loop-expired", "expired"),
                 };
                 return (kind, Some(trigger.into()), transaction_summary(transaction));
             }
@@ -1052,10 +1052,10 @@ fn history_record_description(record: &Record) -> (&'static str, Option<String>,
                 crate::node::Trigger::Port(_) => "port-transaction",
                 crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Start) => "instance-opened",
                 crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Stop) => "instance-stopped",
-                crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Closing) => {
+                crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Close) => {
                     "instance-closing"
                 }
-                crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Next) => "loop-next",
+                crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Loop) => "loop-manager",
                 crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Retry) => "retry-manager",
                 crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Reply) => "call-reply",
                 crate::node::Trigger::Lifecycle(crate::node::Lifecycle::Exit) => "session-exit",
@@ -1128,8 +1128,8 @@ fn transaction_summary(transaction: &crate::journal::TransactionRecord) -> Strin
             let verb = match lifecycle {
                 crate::node::Lifecycle::Start => "Instance opened",
                 crate::node::Lifecycle::Stop => "Instance stopped",
-                crate::node::Lifecycle::Closing => "Instance closing",
-                crate::node::Lifecycle::Next => "Loop continued",
+                crate::node::Lifecycle::Close => "Instance closing",
+                crate::node::Lifecycle::Loop => "Loop manager",
                 crate::node::Lifecycle::Retry => "Retry manager",
                 crate::node::Lifecycle::Reply => "Call reply",
                 crate::node::Lifecycle::Exit => "Session exit",
@@ -2097,11 +2097,11 @@ graph inspected : App {
             };
             for fact in &packet.facts {
                 let (reference, trigger) = match fact {
-                    Fact::Opened { run, .. } => (run, "l:open"),
-                    Fact::Admitted { run, .. } => (run, "l:admit"),
-                    Fact::Advanced { run, .. } => (run, "l:advance"),
-                    Fact::Closed { run, .. } => (run, "l:close"),
-                    Fact::Expired { run, .. } => (run, "l:expired"),
+                    Fact::Opened { run, .. } => (run, "opened"),
+                    Fact::Admitted { run, .. } => (run, "admitted"),
+                    Fact::Advanced { run, .. } => (run, "advanced"),
+                    Fact::Closed { run, .. } => (run, "closed"),
+                    Fact::Expired { run, .. } => (run, "expired"),
                 };
                 assert_eq!(
                     history_record_description(record).1.as_deref(),

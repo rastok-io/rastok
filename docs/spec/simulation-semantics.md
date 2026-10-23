@@ -496,7 +496,7 @@ outcome surface of an app is **statically enumerable** :
   completion combinations form a finite declared set where the type is
   closed;
 - the lifecycle events are a **closed registry** → `l:timeout`, `l:evict`,
-  `l:closing`, `l:recover`… applicable per node, listable ;
+  `l:close`, `l:recover`… applicable per node, listable ;
 - effects are **declared** → every unconfirmed compensable recovery or
   bounded-Closing cancellation has its typed `OutcomeUnknown` case (an
   `irreversible` is always keyed and resolves by recall), every `compensable`

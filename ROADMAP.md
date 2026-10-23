@@ -67,6 +67,12 @@ diagnostic recording 4. Both modes retain their interaction and lifecycle;
 the identity inventory tracks their measured witness changes. This update changes no
 opening date and authorizes no public operation.
 
+The [23 October lifecycle inventory](docs/architecture/lifecycle-registry-identity.md)
+records the subsequent **package format 23 / diagnostic recording 4**:
+`l:loop` names every Loop-manager transaction, `l:close` the instance close
+request. Lifecycle bytes and semantic hashes stay fixed; trigger text changes
+the affected causal traces, and the version changes package checksums.
+
 ### Human-review follow-up — 5 October
 
 The review's written valve has applied: **24 October** is the real freeze.

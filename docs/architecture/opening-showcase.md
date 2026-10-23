@@ -5,7 +5,8 @@ Opening: **5 November 2026**, freeze **24 October**, per the 5 October
 checklist. **Release TODO:** relabel the first public package as format 1 before
 publication. No public operation is authorized by this update. The
 [current plan package](../spec/identity.md) and diagnostic recording **4**
-are tracked in the [Connector identity inventory](connector-rework-identity.md).
+are tracked in the [lifecycle identity inventory](lifecycle-registry-identity.md);
+the preceding Process movement is in the [Connector identity inventory](connector-rework-identity.md).
 Exact-instance
 closure, resident Process, native Retry, flat annotation types and bounded
 typed HTTP deserialization keep their execution semantics. The

@@ -1,4 +1,4 @@
-//! Exact-instance closure requests. Production and the winning `l:closing`
+//! Exact-instance closure requests. Production and the winning `l:close`
 //! are separate facts; losing requests are settled by that same close fact.
 
 use super::{IngressRecord, Record, TransactionRecord};
@@ -98,7 +98,7 @@ impl Command {
 pub struct InstanceCommands {
     /// Commands in strictly increasing identity order.
     pub produced: Vec<Command>,
-    /// Present only on the winning target-owned `l:closing` transaction.
+    /// Present only on the winning target-owned `l:close` transaction.
     pub consumed: Option<Id>,
 }
 
@@ -252,7 +252,7 @@ pub enum Disposition {
     Pending,
     /// This request caused the retained close transaction.
     Consumed {
-        /// Zero-based position of the winning `l:closing`.
+        /// Zero-based position of the winning `l:close`.
         record: usize,
     },
     /// That close fact already governs this exact instance or its ancestor.
@@ -584,7 +584,7 @@ impl InstanceCommandView {
         id: Id,
     ) -> Result<(), Error> {
         if !packet.produced.is_empty()
-            || record.trigger != Trigger::Lifecycle(Lifecycle::Closing)
+            || record.trigger != Trigger::Lifecycle(Lifecycle::Close)
             || record.close_scope.as_ref() != Some(&record.instance)
             || !record.consumed.is_empty()
             || !record.emissions.is_empty()

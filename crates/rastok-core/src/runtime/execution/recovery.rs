@@ -279,11 +279,11 @@ impl Execution<'_> {
                 node::Lifecycle::Timeout
                 | node::Lifecycle::Recover
                 | node::Lifecycle::Evict
-                | node::Lifecycle::Closing,
+                | node::Lifecycle::Close,
             ) => {}
             node::Trigger::Lifecycle(node::Lifecycle::Reply | node::Lifecycle::Exit)
                 if record.exchange_exit.is_some() => {}
-            node::Trigger::Lifecycle(node::Lifecycle::Next) if record.loop_protocol().is_some() => {
+            node::Trigger::Lifecycle(node::Lifecycle::Loop) if record.loop_protocol().is_some() => {
             }
             _ => {
                 return Err(invalid(
@@ -296,7 +296,7 @@ impl Execution<'_> {
         let slot = match self.plan.nodes[owner.index()].kind() {
             node::Kind::Graph => {
                 if record.loop_protocol().is_some()
-                    && record.trigger == node::Trigger::Lifecycle(node::Lifecycle::Next)
+                    && record.trigger == node::Trigger::Lifecycle(node::Lifecycle::Loop)
                 {
                     return self.restore_graph_manager(
                         journal, admissions, index, owner, record, resume_at,
@@ -330,7 +330,7 @@ impl Execution<'_> {
             node::Kind::Operator | node::Kind::Connector => owner,
         };
         let exchange_consumed = self.restore_exchange_exit(index, slot, record)?;
-        if record.trigger == node::Trigger::Lifecycle(node::Lifecycle::Next)
+        if record.trigger == node::Trigger::Lifecycle(node::Lifecycle::Loop)
             && record.loop_protocol().is_some()
         {
             self.check_loop_manager(journal, index, slot, record, resume_at)?;

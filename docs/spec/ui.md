@@ -189,8 +189,8 @@ remaining/initial fuel, due instant and resolved exhaustion target. History
 and replay use the selected journal prefix, never the live head. Instances
 renders runs as a table, not raw JSON.
 
-History displays r2 facts as `l:open`, `l:admit`, `l:advance`, `l:close` and
-`l:expired`. These are presentation labels, not changes to journal triggers.
+History displays r2 facts as `opened`, `admitted`, `advanced`, `closed` and
+`expired`. These are the facts' registry names, not `l:` triggers.
 Definition shows each Extension once, including the root App.
 Retry history separately names admission, holding, scheduling, final publication
 and stopping. A held batch can highlight its consumed input, never an outgoing

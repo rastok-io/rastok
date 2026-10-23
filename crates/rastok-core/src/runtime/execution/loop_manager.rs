@@ -731,7 +731,7 @@ impl Execution<'_> {
                     ));
                     let id = ids::graph_emission_id(
                         current.instance.address().owner(),
-                        &node::Trigger::Lifecycle(node::Lifecycle::Next),
+                        &node::Trigger::Lifecycle(node::Lifecycle::Loop),
                         source.meta().sys().id(),
                         &port,
                         0,
@@ -904,7 +904,7 @@ pub(super) fn manager_record(
         logical_time: None,
         deadlines: None,
         instance_commands: None,
-        trigger: node::Trigger::Lifecycle(node::Lifecycle::Next),
+        trigger: node::Trigger::Lifecycle(node::Lifecycle::Loop),
         cause: Some(cause),
         consumed: vec![],
         join_inputs: vec![],

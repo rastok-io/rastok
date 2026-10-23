@@ -2,6 +2,87 @@ use super::*;
 use crate::journal::deadline::{Deadline, Deadlines};
 use alloc::vec;
 
+#[test]
+fn lifecycle_triggers_round_trip_only_the_current_registry_words() {
+    use journal::retry_protocol::{AttemptId, CloseReason, Fact, OperationId, RetryRecord};
+    let mut record = Record::Transaction(Box::new(journal::TransactionRecord {
+        owner_path: node::OwnerPath::root(),
+        instance: instance::Generation::new(
+            instance::InstanceAddress::singleton(&node::OwnerPath::root()),
+            0,
+        ),
+        parent_instance: None,
+        close_scope: None,
+        trigger: Trigger::Lifecycle(Lifecycle::Start),
+        cause: None,
+        exchange_exit: None,
+        retry_record: None,
+        loop_record: None,
+        logical_time: None,
+        deadlines: None,
+        instance_commands: None,
+        consumed: vec![],
+        join_inputs: vec![],
+        state_delta: vec![],
+        emissions: vec![],
+        routes: vec![],
+        deadline_ids: vec![],
+    }));
+    for (kind, word) in [
+        (Lifecycle::Start, "l:start"),
+        (Lifecycle::Stop, "l:stop"),
+        (Lifecycle::Loop, "l:loop"),
+        (Lifecycle::Timeout, "l:timeout"),
+        (Lifecycle::Evict, "l:evict"),
+        (Lifecycle::Recover, "l:recover"),
+        (Lifecycle::Close, "l:close"),
+        (Lifecycle::Reply, "l:reply"),
+        (Lifecycle::Exit, "l:exit"),
+        (Lifecycle::Retry, "l:retry"),
+    ] {
+        let Record::Transaction(transaction) = &mut record else {
+            panic!("the fixture is a transaction");
+        };
+        transaction.trigger = Trigger::Lifecycle(kind);
+        if kind == Lifecycle::Retry {
+            // The decoder checks the Retry carrier as well as its trigger word.
+            transaction.cause = Some(Id::from_bytes([1; 16]));
+            transaction.retry_record = Some(Box::new(RetryRecord {
+                context: None,
+                facts: vec![Fact::Closed {
+                    attempt: AttemptId {
+                        operation: OperationId::from_id(Id::from_bytes([2; 16])),
+                        ordinal: 1,
+                    },
+                    reason: CloseReason::Stopped,
+                }],
+            }));
+        }
+        let encoded = encode(&record);
+        assert_eq!(items(&encoded).unwrap()[5], Cbor::Text(word.into()));
+        assert_eq!(Decoder::default().decode(&encoded), Ok(record.clone()));
+    }
+
+    // Removed spellings and UI fact labels are not lifecycle aliases.
+    for invalid in [
+        "l:next",
+        "l:closing",
+        "l:open",
+        "l:admit",
+        "l:advance",
+        "l:expired",
+    ] {
+        let Cbor::Array(mut fields) = encode(&record) else {
+            panic!("a record is a tuple");
+        };
+        fields[5] = Cbor::Text(invalid.into());
+        assert_eq!(
+            Decoder::default().decode(&Cbor::Array(fields)),
+            Err(Error::Invalid("transaction trigger"))
+        );
+    }
+}
+
 fn deadline(kind: u8, due_at: i64) -> Deadline {
     Deadline {
         kind: journal::DeadlineKind::try_from(kind).unwrap(),

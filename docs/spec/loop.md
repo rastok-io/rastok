@@ -230,7 +230,8 @@ run(N + 1, state) =
 ```
 
 Next and Again each consume one unit. If the final permitted application asks
-to recur, no re-admission and no `l:next` are created. The manager emits:
+to recur, no re-admission is created. The manager's `l:loop` transaction
+retains Expired and emits:
 
 ```rastok
 LoopExpired { last_state: EntryType }
@@ -287,7 +288,7 @@ There is no jitter in the current subset.
 
 No destination capacity is held during the wait. At the due instant, Admitted
 rechecks run and generation, proves the capacities selected from the
-remembered entry port, commits `l:next` and the routes, then exposes the
+remembered entry port, commits `l:loop` and the routes, then exposes the
 deliveries. Closing makes stale wake-ups inert.
 
 ## 10. Proof of finitude
@@ -361,7 +362,7 @@ this is an advisory check, not the Loop control proof.
 
 A Graph has no `on in`, `on start`, or `on stop`. Window state and
 lifecycle emissions belong in an Operator child. The generic lifecycle
-controller still writes `l:start`, `l:closing`, and `l:stop` for the
+controller still writes `l:start`, `l:close`, and `l:stop` for the
 Graph instance.
 
 ## 13. Closing and recovery

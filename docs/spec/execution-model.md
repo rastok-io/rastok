@@ -38,7 +38,7 @@ transaction because that is what it does.)*
 
 **Naming rule** : bare "transaction" in Rastok docs ALWAYS means the
 Executor/manager unit. A Graph has no application transaction. The lifecycle
-controller may still commit `l:start`, `l:closing`, and `l:stop`
+controller may still commit `l:start`, `l:close`, and `l:stop`
 TRANSACTION records attributed to any Node owner, including a Graph. Those are
 controller facts, not Graph code. Wider *graph transaction* and *cascade
 transaction* remain reserved and unspecified. Shorthand: `tx`.
@@ -189,7 +189,7 @@ cannot see the closed generation.
 
 Mailbox reservation plus the producer's route commit is the admission point.
 Reservation returns the instance reference that the route seals. A route that
-wins before the committed `l:closing` fact remains old-generation drain work
+wins before the committed `l:close` fact remains old-generation drain work
 even if an inter-shard transport arrives physically later. A post-close route
 commits to the successor's ordinary bounded mailbox and waits there until the
 predecessor stops. Scheduler or network order can therefore never leak an old
@@ -225,7 +225,7 @@ duration> }` carries two explicit budgets and no action/default field. It is
 required on every finite owner whose subtree contains a `Process`, and may be
 declared on a persistent owner for explicit `stop`.
 
-The first causal close request commits `l:closing` and wins once. For a Graph,
+The first causal close request commits `l:close` and wins once. For a Graph,
 that reference defines one closing subtree and one clipped budget; live
 descendants close inner-first. The phases are:
 
@@ -342,7 +342,7 @@ Concretely, the supervision plane maintains **one queue of dated events**:
 | per-call timeout | a Connector's `timeout` (§6) | `TimeoutExpired` on the contract's typed call-exit port (`exit` for Process) |
 | join eviction | a join's `within` / `last` (§7) | `JoinExpired` on the Operator's declared typed expiry output (conventionally `expired`) |
 | instance lifetime expiry | `lifetime = { … }` | the instance's `on stop` sequence (parent = **the envelope that created the deadline** — last admission for `idle`, creator for `fixed`, creating admission for its tumbling box) |
-| Loop re-entry delay | `Loop.delay` ([loop.md](loop.md) §9) | manager consumes a durable Next/Again command, then exactly-once `l:next` re-admits on the remembered entry when due |
+| Loop re-entry delay | `Loop.delay` ([loop.md](loop.md) §9) | manager consumes a durable Next/Again command, then exactly-once `l:loop` re-admits on the remembered entry when due |
 | saga completion budget | future Saga decision | not executable in M1; no timeout or output contract is inferred |
 
 In production the queue is advanced by the hosted time source; in simulation,
@@ -369,7 +369,7 @@ A resumed sweep preserves the unfinished dated frontier before executing
 lifecycle work queued by an expiry. Only an instance's own lifetime is fenced
 while its start is pending: a successor cannot expire before its retained
 start commits. This is not a global priority for starts. Neither a restored
-`l:closing` nor a newly admitted child permits its lifecycle transaction to
+`l:close` nor a newly admitted child permits its lifecycle transaction to
 overtake another event that the uninterrupted sweep would resolve first at
 that instant.
 
@@ -691,15 +691,17 @@ select several instances and therefore requires explicit one-to-many routing.
 
 ## 10. Trigger vocabulary
 
-Selected lifecycle triggers owned by this execution slice belong to the `l:` registry
-([envelope.md](envelope.md) §1.1/§3.1):
+Selected lifecycle triggers owned by this execution slice are summarized below.
+[envelope.md §3.1](envelope.md#31-transactions-without-a-port-arrival--trigger-and-parent)
+is the authority for the complete `l:` registry, its bytes, causes and emitters.
 
 | Transaction | `trigger` | `parent_id` (the cause) | Emitter (`owner_path` in the record) |
 |---|---|---|---|
 | Call-timeout expiry | `l:timeout` | the timed-out request envelope | the Connector node |
 | Join-buffer eviction | `l:evict` | the evicted envelope | the Operator node |
 | Inbound Call terminal | `l:reply` | the committed root request | the inbound Connector node |
-| Loop re-admission | `l:next` | the consumed Next/Again manager command | the Loop owner |
+| Loop manager transaction | `l:loop` | opening admission, consumed Next/Again command, or closing cause, according to its facts | the Loop owner |
+| Retry manager transaction | `l:retry` | opening delivery's emitting id, or the retained attempt terminal, else the operation's envelope | the Retry owner |
 
 Manager-command production and consumption are separate append-only facts in
 the Loop r2 fold. They do not invent a trigger or spatial port. All

@@ -509,14 +509,14 @@ fn single_pass_drain_never_transfers_an_operation_into_the_successor_generation(
         if journal.records().iter().any(|record| {
             matches!(record,
             Record::Transaction(record) if record.owner_path.to_string() == "call"
-                && record.trigger == node::Trigger::Lifecycle(node::Lifecycle::Closing))
+                && record.trigger == node::Trigger::Lifecycle(node::Lifecycle::Close))
         }) {
             break;
         }
     }
     assert!(journal.records().iter().any(|record| matches!(record,
         Record::Transaction(record) if record.owner_path.to_string() == "call"
-            && record.trigger == node::Trigger::Lifecycle(node::Lifecycle::Closing))));
+            && record.trigger == node::Trigger::Lifecycle(node::Lifecycle::Close))));
     inject(&mut execution, &mut journal);
     for count in 1..=2 {
         execution

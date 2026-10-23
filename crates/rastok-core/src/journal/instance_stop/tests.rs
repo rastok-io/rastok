@@ -128,7 +128,7 @@ fn production(
 }
 
 fn close(command: &Command) -> Record {
-    let mut record = transaction(&command.target, Trigger::Lifecycle(Lifecycle::Closing));
+    let mut record = transaction(&command.target, Trigger::Lifecycle(Lifecycle::Close));
     record.cause = Some(command.cause);
     record.close_scope = Some(command.target.clone());
     record.instance_commands = Some(Box::new(InstanceCommands {
@@ -313,7 +313,7 @@ fn parent_closure_settles_only_its_own_descendant_requests() {
     let (mut records, alice, worker, decide) = initial();
     let (production, child_command) = production(&decide, &alice, &worker, 1);
     records.push(production);
-    let mut close_parent = transaction(&alice, Trigger::Lifecycle(Lifecycle::Closing));
+    let mut close_parent = transaction(&alice, Trigger::Lifecycle(Lifecycle::Close));
     close_parent.close_scope = Some(alice.clone());
     records.push(Record::Transaction(Box::new(close_parent)));
     let fold = InstanceCommandView::from_records(&records).unwrap();

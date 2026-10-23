@@ -2752,7 +2752,7 @@ mod tests {
     #[test]
     fn transaction_deadlines_must_match_sealed_ids_time_and_loop_advances() {
         use deadline::{Deadline, Deadlines, Error as DeadlineError};
-        let mut record = lifecycle_transaction(instance("clocked", 0), node::Lifecycle::Next);
+        let mut record = lifecycle_transaction(instance("clocked", 0), node::Lifecycle::Loop);
         let mut deadline = Deadline {
             kind: DeadlineKind::CallTimeout,
             reference: Id::from_bytes([7; 16]),
@@ -3171,7 +3171,7 @@ mod tests {
     }
 
     fn request_close(journal: &mut MemJournal, reference: instance::Generation) {
-        let mut record = lifecycle_transaction(reference.clone(), node::Lifecycle::Closing);
+        let mut record = lifecycle_transaction(reference.clone(), node::Lifecycle::Close);
         record.close_scope = Some(reference);
         journal.commit(record).expect("Closing is durable");
     }
@@ -3319,7 +3319,7 @@ mod tests {
             record
         };
         let closing = |reference: &instance::Generation| {
-            let mut record = lifecycle_transaction(reference.clone(), node::Lifecycle::Closing);
+            let mut record = lifecycle_transaction(reference.clone(), node::Lifecycle::Close);
             record.close_scope = Some(reference.clone());
             record
         };
@@ -3435,7 +3435,7 @@ mod tests {
             0,
         );
         request_close(&mut journal, root.clone());
-        let mut duplicate_close = lifecycle_transaction(root.clone(), node::Lifecycle::Closing);
+        let mut duplicate_close = lifecycle_transaction(root.clone(), node::Lifecycle::Close);
         duplicate_close.close_scope = Some(root.clone());
         assert_eq!(
             journal.commit(duplicate_close).unwrap_err(),
@@ -3445,7 +3445,7 @@ mod tests {
             },
             "the first durable close request is the only lifecycle transition"
         );
-        let mut nested_close = lifecycle_transaction(first.clone(), node::Lifecycle::Closing);
+        let mut nested_close = lifecycle_transaction(first.clone(), node::Lifecycle::Close);
         nested_close.close_scope = Some(first.clone());
         assert_eq!(
             journal.commit(nested_close).unwrap_err(),

@@ -1,11 +1,12 @@
 # Diagnostic recording and read-only replay
 
-Status: 22 October 2026, diagnostic format **4**, embedding the
+Status: 23 October 2026, diagnostic format **4**, embedding the
 [current plan package](../spec/identity.md). The
-[Connector identity inventory](connector-rework-identity.md) records the
-Process Contract movement. The record codec is unchanged; Process Retry
-records seal the changed plan hash and Contract, while other causal traces
-remain unchanged.
+[lifecycle identity inventory](lifecycle-registry-identity.md) records the
+`l:loop` and `l:close` trigger movement. Record tuple shapes are unchanged;
+records using these triggers carry their new text and derived identities.
+The [Connector identity inventory](connector-rework-identity.md) records
+the preceding Process Contract movement.
 There is no reader or converter for another
 recording format. Exact-instance closure packets travel on INGRESS and
 TRANSACTION; unused packets are absent from the causal seal.

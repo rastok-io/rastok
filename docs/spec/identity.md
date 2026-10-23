@@ -1,9 +1,10 @@
 # Identity and canonical form
 
-> **Format 22, diagnostic recording 4.** The [Process identity inventory](../architecture/connector-rework-identity.md)
-> records one Process Contract for job and service modes. Process semantic
-> hashes and Process Retry causal records change; unrelated semantic hashes
-> and causal traces do not. The package body schema and record codec are unchanged.
+> **Format 23, diagnostic recording 4.** The [lifecycle identity inventory](../architecture/lifecycle-registry-identity.md)
+> records the `l:loop` and `l:close` trigger spellings and their causal movement.
+> Semantic hashes, package bodies, lifecycle bytes and record tuple shapes are unchanged;
+> package checksums change with the version. The [Process identity inventory](../architecture/connector-rework-identity.md)
+> records the preceding single-Contract movement.
 > Only this format is readable. The registry is now extend-only: no
 > renumbering or reuse of an allocated key, tag or domain.
 > Changing the public version label to 1 remains a pre-publication TODO.
@@ -271,7 +272,7 @@ execution-model §1) — keys `17–26`, `34–36`, `38–40`, `42–43`:
 | 25 | routes | array | target admissions made before commit, each `[delivery_id (bytes16), edge (text), target_instance_generation]`, sorted by canonical tuple; omitted only when the transaction creates no routed delivery. This is the recovery authority for a delivery not yet consumed by its target; replay never re-evaluates `instance.key` and never substitutes a later generation. |
 | 26 | cause_id | bytes(16) | causal envelope of a lifecycle transaction. Normally key 20 identifies the same cause and this field is omitted; `l:start`, `l:stop` and later `l:evict` have no consumed cursor, while a graph-response `l:reply` deliberately carries both: key 20 names the response delivery and key 26 preserves the distinct opening root as causal parent. This keeps lifecycle causality autonomous rather than relying on record order. |
 | 34 | parent_instance_generation | array | present exactly on `l:start` for a non-root owner; the fixed `[instance_address, generation]` of the enclosing Graph instance. It opens the replayable parent/child lifecycle obligation and is omitted only for the root App owner. A logical child address contains ancestor key/time segments but not ancestor generations, so this fact is not derivable from key 18. |
-| 35 | close_scope_generation | array | present exactly on the transaction whose close request wins (`l:closing`, or a handler transaction containing bare `stop`); the fixed instance reference of the root of the Closing scope. Descendant work may drain under this reference, and later external admission reserves its successor. Omitted on ordinary firings. |
+| 35 | close_scope_generation | array | present exactly on the transaction whose close request wins (`l:close`, or a handler transaction containing bare `stop`); the fixed instance reference of the root of the Closing scope. Descendant work may drain under this reference, and later external admission reserves its successor. Omitted on ordinary firings. |
 | 36 | session_exit_id | bytes(16) | present exactly on the Connector transaction that terminates a Session. That transaction emits exactly one conventional `exit`, last; its envelope projects the same reference as `meta.ext.session_id`. The fold refuses a second exit, an exit with an open write, or any later message/write. |
 | 38 | inbound_call_exit_id | bytes(16) | present exactly on the Connector `l:reply` transaction that terminates the inbound Call opened by INGRESS key 16. Its cause is the root request; fixed ack consumes zero positions, while a graph response consumes exactly its one real delivery position. Owner/instance equal the opening source and exactly one conventional `exit` is last. The fold refuses an unmatched trigger or any second terminal. |
 | 39 | logical_time | int | the signed nanosecond logical instant since the Unix epoch, present exactly when a checked firing handler can observe `now()`; fixed across guard selection and body evaluation, omitted otherwise. This is an explicit transaction input, not a scheduler due date or host `committed_at`. |

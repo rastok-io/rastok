@@ -1939,13 +1939,13 @@ graph lifecycle : App {
                 Some(root),
             ),
             (
-                node::Trigger::Lifecycle(node::Lifecycle::Closing),
+                node::Trigger::Lifecycle(node::Lifecycle::Close),
                 Some(second),
                 seven.clone(),
                 None,
             ),
             (
-                node::Trigger::Lifecycle(node::Lifecycle::Closing),
+                node::Trigger::Lifecycle(node::Lifecycle::Close),
                 Some(other),
                 nine.clone(),
                 None,
@@ -2078,7 +2078,7 @@ graph nested_lifetimes : App {
     );
     assert_eq!(
         shell_transactions[1].trigger,
-        node::Trigger::Lifecycle(node::Lifecycle::Closing)
+        node::Trigger::Lifecycle(node::Lifecycle::Close)
     );
     assert!(
         shell_transactions[2]
@@ -2505,10 +2505,10 @@ fn external_arrival_waits_for_the_clean_successor_generation() {
         root_lifecycle,
         [
             (node::Trigger::Lifecycle(node::Lifecycle::Start), 0),
-            (node::Trigger::Lifecycle(node::Lifecycle::Closing), 0),
+            (node::Trigger::Lifecycle(node::Lifecycle::Close), 0),
             (node::Trigger::Lifecycle(node::Lifecycle::Stop), 0),
             (node::Trigger::Lifecycle(node::Lifecycle::Start), 1),
-            (node::Trigger::Lifecycle(node::Lifecycle::Closing), 1),
+            (node::Trigger::Lifecycle(node::Lifecycle::Close), 1),
         ],
         "the old stop precedes the successor start; its fixed deadline still dates from admission while waiting"
     );

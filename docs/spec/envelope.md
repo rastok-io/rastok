@@ -164,8 +164,8 @@ The five components :
   - `p:<port>` — the arrival port that triggered the transaction. For a join
     `on (a, b)`, the port of the **triggering** envelope (the one that
     completed presence under mailbox-FIFO order).
-  - `l:<lifecycle>` — `l:start`, `l:closing`, `l:stop`, `l:reply`,
-    `l:exit`, `l:next`, `l:retry`, `l:timeout`, `l:evict`, `l:recover` for transactions not triggered by a
+  - `l:<lifecycle>` — `l:start`, `l:close`, `l:stop`, `l:reply`,
+    `l:exit`, `l:loop`, `l:retry`, `l:timeout`, `l:evict`, `l:recover` for transactions not triggered by a
     port arrival
     (§3.1 ; the last two are defined by
     [execution-model.md](execution-model.md) §6-§7).
@@ -334,7 +334,7 @@ Composed cases :
 - **Loop re-admission** → `Loop.next` constructs, or routing into it selects,
   one next-state envelope. The producer transaction retains a durable
   `CommandProduced` fact naming that exact cause. After a separate
-  `CommandConsumed` fact and any logical delay, `l:next` re-admits the state at
+  `CommandConsumed` fact and any logical delay, `l:loop` re-admits the state at
   the remembered entry. The run identity derives from the exact opening
   admission reference, not merely `origin_id`; a last permitted Next instead
   parents `LoopExpired` on the resolved host terminal and creates no re-admission. Again retains
@@ -342,21 +342,31 @@ Composed cases :
 
 ### 3.1 Transactions without a port arrival — trigger and parent
 
-Every transaction has a **causal envelope** ; the `l:` trigger namespace covers the
-transactions that no port arrival triggers :
+Every transaction has a **causal envelope**; the `l:` trigger namespace covers
+transactions that no port arrival triggers. This table is the single authority
+for each word, byte, mechanism, cause and emitter. The word names the emitting
+mechanism: an authored lifecycle handler, an Extension manager, or an event;
+never a command, a protocol fact or a phase. `parent_id` carries the cause and
+protocol facts carry the detail. The prefix `l:` is reserved to this registry.
 
-| Transaction | `trigger` | `parent_id` (the cause) | Emitter (`owner_path` in the record) |
-|---|---|---|---|
-| `on start` | `l:start` | the envelope whose admission created the Node instance | the node itself |
-| Instance close request | `l:closing` | the envelope whose handler requested `stop`, or the envelope that created the winning lifetime deadline | the closing owner itself |
-| `on stop` via the `stop` action | `l:stop` | the envelope being processed when `stop` ran | the node itself |
-| `on stop` via lifetime expiry | `l:stop` | **the envelope that created the deadline** — the last admitted envelope (`idle`), creator (`fixed`), or creating admission of the processing-time box (`tumbling`). Always exists; there is no phantom tick | the node itself |
-| Inbound Call terminal | `l:reply` | the committed root request that opened the Call | the inbound Connector instance that admitted it |
-| Session terminal | `l:exit` | the envelope that opened the logical Session | the Connector instance that owns the Session |
-| Loop re-admission | `l:next` | the durable Next/Again command cause selected for this run and iteration | the Loop manager, recorded at its owner path and generation |
-| Call budget expiry | `l:timeout` | the request envelope that created the budget | the Connector owner |
-| Join-buffer eviction | `l:evict` | the evicted envelope ([execution-model.md §7](execution-model.md)) | the Operator node |
-| Recovery resolution of an unknown outbound | `l:recover` | the request envelope whose outcome is unknown ([delivery-semantics.md §4.4](delivery-semantics.md)) | the Connector node |
+| Transaction | `trigger` | Byte | `parent_id` (the cause) | Emitter (`owner_path` in the record) |
+|---|---|---:|---|---|
+| `on start` | `l:start` | 1 | the envelope whose admission created the Node instance | the node itself |
+| `on stop` via the `stop` action | `l:stop` | 2 | the envelope being processed when `stop` ran | the node itself |
+| `on stop` via lifetime expiry | `l:stop` | 2 | **the envelope that created the deadline** — the last admitted envelope (`idle`), creator (`fixed`), or creating admission of the processing-time box (`tumbling`). Always exists; there is no phantom tick | the node itself |
+| Loop manager transaction | `l:loop` | 3 | the opening admission (Opened, initial Admitted), the consumed Next/Again command (Advanced, recurrent Admitted, Expired and its `LoopExpired` emission), or the closing cause (Closed) | the Loop manager, recorded at its owner path and generation |
+| Call budget expiry | `l:timeout` | 4 | the request envelope that created the budget | the Connector owner |
+| Join-buffer eviction | `l:evict` | 5 | the evicted envelope ([execution-model.md §7](execution-model.md)) | the Operator node |
+| Recovery resolution of an unknown outbound | `l:recover` | 6 | the request envelope whose outcome is unknown ([delivery-semantics.md §4.4](delivery-semantics.md)) | the Connector node |
+| Instance close request | `l:close` | 7 | the envelope whose handler requested `stop`, or the envelope that created the winning lifetime deadline | the closing owner itself |
+| Inbound Call terminal | `l:reply` | 8 | the committed root request that opened the Call | the inbound Connector instance that admitted it |
+| Session terminal | `l:exit` | 9 | the envelope that opened the logical Session | the Connector instance that owns the Session |
+| Retry manager transaction | `l:retry` | 10 | the opening delivery's emitting id (Opened), or the retained terminal of the attempt being settled, else the operation's envelope | the Retry manager, recorded at its owner path and generation |
+
+The byte is the `#[repr(u8)]` wire value of `node::Lifecycle`; it appears only
+in the plan stream's `HandlerActivation`, where only `start` and `stop` occur.
+The word is what enters the Emission recipe and TRANSACTION key 19.
+The registry is extend-only; unknown bytes refuse.
 
 The manager rows state the principle for **synthesized envelopes**: a runtime
 manager is not a Node or spatial endpoint. Its transaction is represented at

@@ -131,7 +131,7 @@ fn forged_packages_cannot_omit_the_lexical_scope_proof() {
     assert!(error.to_string().contains("instance closure"), "{error}");
     assert_eq!(
         plan::FORMAT_VERSION,
-        22,
+        23,
         "the current package requires the exact-instance closure proof"
     );
 }
@@ -274,7 +274,7 @@ fn child_and_graph_closure_preserve_the_other_tenant_and_survive_every_prefix() 
             .unwrap_or_else(|error| panic!("prefix {prefix}: {error}"));
         assert_eq!(retained.records(), &records[..prefix]);
     }
-    let stop_count = records.iter().filter(|record| matches!(record, Record::Transaction(record) if record.trigger == rastok::node::Trigger::Lifecycle(rastok::node::Lifecycle::Closing))).count();
+    let stop_count = records.iter().filter(|record| matches!(record, Record::Transaction(record) if record.trigger == rastok::node::Trigger::Lifecycle(rastok::node::Lifecycle::Close))).count();
     assert_eq!(
         stop_count, 2,
         "a repeated child stop adds no second Closing"
