@@ -71,13 +71,14 @@ impl core::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-/// The Worker's interface to services supplied by its Host during [`Worker::run`].
-/// It does not model the machine or its placement: it supplies logical time,
-/// App input, recording checkpoints and waiting policy. The CLI implements
-/// these services with OS resources; a test can supply deterministic inputs
-/// without a clock or I/O. These services stay outside the execution machinery.
-pub trait Host {
-    /// Input or presentation failure, kept in the host's own error type.
+/// The supervision plane's services to one Worker during [`Worker::run`]:
+/// logical time, non-blocking App input, a checkpoint after each successful
+/// processing pass and the waiting policy. It does not model a machine, its
+/// placement or a lease: `Host` keeps the specification's clustered meaning.
+/// The CLI implements these services with OS resources; a test supplies
+/// deterministic inputs without a clock or I/O.
+pub trait Supervision {
+    /// Input or presentation failure, kept in the supervision's own error type.
     type Error;
 
     /// Current logical time in signed nanoseconds, supplied explicitly.
@@ -88,17 +89,17 @@ pub trait Host {
     /// or its Connector sources have closed.
     ///
     /// # Errors
-    /// The host could not read its next input.
+    /// The supervision could not read its next input.
     fn poll_input(&mut self) -> Result<Poll<Option<IngressProposal>>, Self::Error>;
 
     /// Reports Driver rejections before the subsequent ready-work pass.
     fn observe_poll(&mut self, _report: &PollReport) {}
 
-    /// Observes a successful processing pass. The host may record the
+    /// Observes a successful processing pass. The supervision may record the
     /// committed prefix and display new outputs; neither is a transaction.
     ///
     /// # Errors
-    /// Recording or another host-side observation failed.
+    /// Recording or another supervision-side observation failed.
     fn checkpoint(
         &mut self,
         execution: &Execution<'_>,
@@ -110,12 +111,12 @@ pub trait Host {
     fn wait(&mut self);
 }
 
-/// The stage at which continuous host control failed. In particular,
-/// `Processing` can leave committed records which the host must still save;
+/// The stage at which continuous execution failed. In particular,
+/// `Processing` can leave committed records which the caller must still save;
 /// a failure never implies rollback of the preceding journal prefix.
 #[derive(Debug)]
 pub enum RunError<E> {
-    /// Applying the host-supplied logical instant failed.
+    /// Applying the supervision-supplied logical instant failed.
     Advance(ExecutionFault),
     /// Reading an App input failed before admission.
     Input(E),
@@ -141,7 +142,7 @@ impl<E: core::fmt::Display> core::fmt::Display for RunError<E> {
 impl<E: core::fmt::Debug + core::fmt::Display> std::error::Error for RunError<E> {}
 
 /// Distinguishes the hosted polling/wait policy from a change in available
-/// work. A pending ingress counts as activity for the existing host loop,
+/// work. A pending ingress counts as activity for the continuous run,
 /// but must not keep `run_until_idle` busy. Rejected observations, conversely,
 /// consume Driver work without necessarily appending a journal record.
 #[derive(Default)]
@@ -249,7 +250,7 @@ impl<'plan> Worker<'plan> {
     /// Drives the hosted execution continuously. Unlike [`Self::run_until_idle`],
     /// this keeps listening when App input is pending or a source Driver is
     /// bound, and waits for open Calls and Sessions after App input ends.
-    /// The host supplies time, input and the waiting policy; no thread is added.
+    /// The supervision supplies time, input and the waiting policy; no thread is added.
     ///
     /// Returns after App input ends, no source Driver needs polling and no
     /// Call or Session remains open, following the CLI's completion rule.
@@ -257,19 +258,19 @@ impl<'plan> Worker<'plan> {
     /// releases host resources explicitly.
     ///
     /// # Errors
-    /// Input, admission, time advance, execution or a host checkpoint failed.
+    /// Input, admission, time advance, execution or a supervision checkpoint failed.
     /// Earlier records remain committed and accessible through [`Self::journal`].
-    pub fn run<H: Host>(&mut self, host: &mut H) -> Result<(), RunError<H::Error>> {
+    pub fn run<S: Supervision>(&mut self, supervision: &mut S) -> Result<(), RunError<S::Error>> {
         let polls_inbound = self.has_runnable_inbound();
         let mut input_open = true;
         loop {
             let mut progressed = false;
-            let target = host.logical_time();
+            let target = supervision.logical_time();
             if target > self.execution.logical_time() {
                 self.advance_to(target).map_err(RunError::Advance)?;
             }
             while input_open {
-                match host.poll_input().map_err(RunError::Input)? {
+                match supervision.poll_input().map_err(RunError::Input)? {
                     Poll::Ready(Some(proposal)) => {
                         self.accept_input(proposal).map_err(RunError::Admission)?;
                         progressed = true;
@@ -279,16 +280,17 @@ impl<'plan> Worker<'plan> {
                 }
             }
             progressed |= self
-                .process_ready(|report| host.observe_poll(report))
+                .process_ready(|report| supervision.observe_poll(report))
                 .map_err(RunError::Processing)?
                 .host_activity;
-            host.checkpoint(&self.execution, &self.journal)
+            supervision
+                .checkpoint(&self.execution, &self.journal)
                 .map_err(RunError::Checkpoint)?;
             if !input_open && !polls_inbound && !self.execution.has_open_obligations() {
                 return Ok(());
             }
             if !progressed {
-                host.wait();
+                supervision.wait();
             }
         }
     }
@@ -303,7 +305,7 @@ impl<'plan> Worker<'plan> {
     /// or an explicit time advance. An uninterrupted source need not go idle.
     ///
     /// This public control serves embedders with their own event loop, instead
-    /// of delegating input, time and waiting to [`Self::run`] and a [`Host`].
+    /// of delegating input, time and waiting to [`Self::run`] and a [`Supervision`].
     ///
     /// # Errors
     /// Admission, execution or Driver routing failed; earlier records stand.
@@ -462,7 +464,7 @@ impl<'plan> Worker<'plan> {
         Ok(admitted || report.queued > 0)
     }
 
-    /// Ends host control and releases the physical Drivers, returning the
+    /// Ends Worker control and releases the physical Drivers, returning the
     /// journal for reporting or recording. This does not synthesize Closing,
     /// cancellation or terminal records: graph-level closure is explicit.
     #[must_use]
@@ -484,7 +486,7 @@ mod tests {
     use std::collections::VecDeque;
 
     #[derive(Default)]
-    struct TestHost {
+    struct TestSupervision {
         now: i64,
         inputs: VecDeque<Poll<Option<IngressProposal>>>,
         checkpoints: Vec<usize>,
@@ -492,7 +494,7 @@ mod tests {
         fail_checkpoint: bool,
     }
 
-    impl Host for TestHost {
+    impl Supervision for TestSupervision {
         type Error = &'static str;
 
         fn logical_time(&mut self) -> i64 {
@@ -568,13 +570,13 @@ mod tests {
             assert_eq!(scripted.accept_input(proposal.clone()).unwrap(), id);
             assert_eq!(stepped.accept_input(proposal.clone()).unwrap(), id);
             assert_eq!(idle.accept_input(proposal.clone()).unwrap(), id);
-            let mut host = TestHost {
+            let mut supervision = TestSupervision {
                 inputs: VecDeque::from([Poll::Ready(Some(proposal))]),
-                ..TestHost::default()
+                ..TestSupervision::default()
             };
-            continuous.run(&mut host).unwrap();
-            assert_eq!(host.waits, 0);
-            assert_eq!(host.checkpoints.len(), 1);
+            continuous.run(&mut supervision).unwrap();
+            assert_eq!(supervision.waits, 0);
+            assert_eq!(supervision.checkpoints.len(), 1);
             idle.run_until_idle(|_| {}).unwrap();
             reference.run_ready(&mut journal).unwrap();
             hosted
@@ -726,10 +728,10 @@ mod tests {
         assert_eq!(worker.journal().records(), records);
         assert!(worker.execution().outputs().is_empty());
 
-        let mut host = TestHost::default();
-        worker.run(&mut host).unwrap();
-        assert_eq!(host.waits, 1, "EOF must not abandon an open Call");
-        assert_eq!(host.checkpoints.len(), 2);
+        let mut supervision = TestSupervision::default();
+        worker.run(&mut supervision).unwrap();
+        assert_eq!(supervision.waits, 1, "EOF must not abandon an open Call");
+        assert_eq!(supervision.checkpoints.len(), 2);
         assert_eq!(worker.execution().logical_time(), 1_000_000_000);
         assert!(!worker.execution().has_open_obligations());
         assert_eq!(worker.execution().outputs().len(), 1);
@@ -740,7 +742,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_host_input_is_not_end_of_input() {
+    fn pending_supervision_input_is_not_end_of_input() {
         let compilation = crate::compiler::compile(
             &["graph app : App { input in: int; output out: int; in -> out }"],
             &crate::connector::contract::ContractCatalog::try_m0().unwrap(),
@@ -756,7 +758,7 @@ mod tests {
             None,
             drivers,
         );
-        let mut host = TestHost {
+        let mut supervision = TestSupervision {
             inputs: VecDeque::from([
                 Poll::Pending,
                 Poll::Ready(Some(IngressProposal {
@@ -770,11 +772,11 @@ mod tests {
                     session: None,
                 })),
             ]),
-            ..TestHost::default()
+            ..TestSupervision::default()
         };
-        worker.run(&mut host).unwrap();
-        assert_eq!(host.waits, 1);
-        assert_eq!(host.checkpoints.len(), 2);
+        worker.run(&mut supervision).unwrap();
+        assert_eq!(supervision.waits, 1);
+        assert_eq!(supervision.checkpoints.len(), 2);
         assert_eq!(worker.execution().logical_time(), 1_000_000_000);
         assert_eq!(worker.execution().outputs().len(), 1);
         assert_eq!(
@@ -809,7 +811,7 @@ mod tests {
                 None,
                 drivers,
             );
-            let mut host = TestHost {
+            let mut supervision = TestSupervision {
                 inputs: VecDeque::from([Poll::Ready(Some(IngressProposal {
                     provenance: IngressProvenance::single(node::Path::new(["lab"]).unwrap()),
                     draft: EnvelopeDraft {
@@ -821,9 +823,9 @@ mod tests {
                     session: None,
                 }))]),
                 fail_checkpoint: recording_fails,
-                ..TestHost::default()
+                ..TestSupervision::default()
             };
-            let error = worker.run(&mut host).unwrap_err();
+            let error = worker.run(&mut supervision).unwrap_err();
             if recording_fails {
                 assert!(matches!(error, RunError::Checkpoint("recording failed")));
                 assert_eq!(worker.execution().outputs().len(), 1);
@@ -832,8 +834,8 @@ mod tests {
                 assert!(worker.execution().outputs().is_empty());
                 assert!(worker.execution().has_ready_work());
             }
-            assert!(host.checkpoints.is_empty());
-            assert_eq!(host.waits, 0);
+            assert!(supervision.checkpoints.is_empty());
+            assert_eq!(supervision.waits, 0);
             assert!(
                 worker
                     .journal()
@@ -901,7 +903,7 @@ mod tests {
             assert_eq!(
                 journal.records(),
                 records,
-                "host shutdown is not instance.stop"
+                "Worker shutdown is not instance.stop"
             );
             return;
         }

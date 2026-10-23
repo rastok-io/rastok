@@ -11,6 +11,8 @@ labelled public format 1 at publication. The
 the `l:loop` and `l:close` triggers, their causal identity changes and verification.
 External opening gates remain open; these capabilities are not a release claim.
 
+- `worker::Supervision` supplies the Worker's input, time and checkpoint services;
+  `Host` retains its clustered-machine meaning, without changing execution.
 - Typed Graph scopes, Operator/Connector execution, explicit destinations,
   case routing and atomic multi-emission; exact-instance closure commands
   introduced in v18 are kept.

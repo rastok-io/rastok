@@ -426,7 +426,7 @@ impl HostedTimeSource {
 /// OS input and presentation for the shared Worker. The Worker owns the
 /// processing loop; this adapter supplies the existing clock, stdin channel,
 /// recording order and idle-wait policy.
-struct CliHost<'a> {
+struct CliSupervision<'a> {
     time: HostedTimeSource,
     input: std::sync::mpsc::Receiver<Option<std::io::Result<String>>>,
     inbound_path: node::Path,
@@ -435,7 +435,7 @@ struct CliHost<'a> {
     printed_outputs: usize,
 }
 
-impl rastok::worker::Host for CliHost<'_> {
+impl rastok::worker::Supervision for CliSupervision<'_> {
     type Error = String;
 
     fn logical_time(&mut self) -> i64 {
@@ -594,7 +594,7 @@ fn run(
         }
         let _ = lines.send(None);
     });
-    let result = worker.run(&mut CliHost {
+    let result = worker.run(&mut CliSupervision {
         time,
         input,
         inbound_path,
