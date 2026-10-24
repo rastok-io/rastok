@@ -94,6 +94,36 @@ documentation touch. The human reading continues where the 12 October entry
 left it, on a tree whose words are now the specification's: the reorganized
 T5 skeleton, then T4 blocks 2, 3, 5, 6 and 7, then the T10 first hour.
 
+**Reading — 23–24 October.** The reading did not resume; the pre-opening
+lot Yoann ordered on 23 October took the two days and closed three items
+that were "to Yoann": the word `Host` (vocabulary ⟂ 7e), the `retry.md`
+left open by A-T2-12, and the timing of A-T1-12, moved from the
+post-opening lot to before the opening together with the `LogicalTime(i64)`
+carrier of 15 October. Fable briefed Astra in three lots: A, the Worker's
+services renamed `worker::Supervision` (zero bytes); B, the Retry contract
+gathered in `docs/spec/retry.md` (zero bytes); C, the relative logical
+timeline of D-2026-10-10-1 under package format 24 and diagnostic recording
+5, inventory first. Astra delivered A as `e9492ea`, B as `21eae53`, the C
+value types as `10f91f5` and the C wire change as an uncommitted candidate
+with its [inventory](time-carriers-identity.md). Fable reviewed the
+candidate reading-only and blocked it on one point: its tumbling boxes
+aligned on `origin + k·every`, where the specification since v0.0, and
+D-2026-10-10-1's own rejection paragraph, align them on `epoch + k·every`;
+the brief had copied the ambiguous formula. Yoann kept the specification's
+rule on 24 October; Astra corrected code, test, D-2026-10-23-2 point 3 and
+the documents, regenerated the four packages, updated the nine inventoried
+pins and committed C as `9fbe8d2`. Fable replayed the whole tree the same
+afternoon:
+[Pre-opening lot — 23 and 24 October](human-review-vocabulary.md#pre-opening-lot--23-and-24-october-astra-four-commits-fable).
+Exactly four tracked witnesses move, the packages, by one version byte and
+their checksum; no trace moves. The 13 October item "bless and the missed
+derivatives" is closed as stale in the same record: `2259fd4` had replaced
+`--bless` by `simulate --compare | --save` at Yoann's decision and `beabf68`
+had applied the derivatives. The external brief below is re-anchored on
+`9fbe8d2`. The human reading continues where the 12 October entry left it,
+once `realign/node-ontology` is integrated into `main` on Yoann's order: the
+T5 skeleton, then T4 blocks 2, 3, 5, 6 and 7, then the T10 first hour.
+
 Rastok promises that the same validated plan and the same journaled inputs
 produce the same execution, identities and trace. The review reads what
 carries that promise first (identity, journal, validated plan, VM), then what
@@ -482,6 +512,30 @@ re-blesses with its reason. Owner: Astra. Lot: v21, with A-T1-6, A-T1-7 and
 A-T1-9. Before the opening, zero bytes: README "Status and known limits"
 states the V1 bound and the relative timeline, and types.md points to the
 decision [landed 10 October by Fable on the review branch].
+
+**Moved before the opening by Yoann on 23 October; applied by Astra and
+replayed by Fable on 24 October.** Value types in `10f91f5`
+(`rastok_core::time`: `LogicalTime`, signed `Duration`, `Timestamp` as
+signed seconds and a `u32` fraction; saturating instant arithmetic, checked
+civil arithmetic, no instant + instant), the wire change in `9fbe8d2` under
+package format 24 and diagnostic recording 5 (tags 22/23 as
+`[seconds, nanoseconds]`, 10/11 refused; the origin in the journal's run
+header and in the recording header; TRANSACTION key 39 `observed_time` as a
+civil pair; box segment kind 2 as a civil pair; `OriginMismatch` and
+`CivilTimeOutOfRange`; `now()` bound lazily so only the path that reads it
+refuses; Lab `origin` applied; the hosted time source split into origin and
+elapsed). One correction from Fable's review, decided by Yoann on
+24 October: tumbling boxes stay epoch-aligned and the origin only converts;
+the formula "origin + k·every" above was the ambiguity, settled by
+D-2026-10-23-2 point 3. Replay on `9fbe8d2`: four checks, 1 649 tests in
+62 groups, `site_content` 13/13, three `no_std` targets, browser
+35/35, QEMU echo and Retry `SPIKE_OK` with code margins
+75 072 B and 2 296 B and heap margins 19 388 B and
+1 804 B; exactly the four packages move, by one version byte and
+their checksum, bodies and semantic hashes unchanged; no trace moves.
+Record:
+[Pre-opening lot — 23 and 24 October](human-review-vocabulary.md#pre-opening-lot--23-and-24-october-astra-four-commits-fable).
+Status: applied before the opening, reviewed; no longer in the v21 lot.
 
 ## T2 — The journal, replayable truth
 
@@ -1550,7 +1604,10 @@ selectable implementation. The registry file of 3 112 lines became
   Yoann: `l:next` against `l:retry` (the spelling is in the Emission recipe,
   so not zero bytes), a `retry.md`, the tense of the UI
   transport labels, the placements and test names listed in the record.
-  Status: applied, reviewed.
+  Of these, `l:next` closed the same day (A-T2-13) and `retry.md` landed
+  in `21eae53` on 23 October (the pre-opening lot, see A-T1-12 and the
+  23–24 October reading note); the UI tense, placements and test names
+  remain for T10. Status: applied, reviewed.
 - A-T2-13 (format change, owner Astra; numbered under T2 because the `l:`
   registry lives in the TRANSACTION record's key 19 and in the Emission
   recipe): the lifecycle registry, decided by Yoann on 23 October at midday
@@ -1798,7 +1855,8 @@ target; `Worker::new` takes `Option<SemanticHash>` and lets a Retry plan
 without hash fail at admission, the pre-existing `Execution` behavior.
 Astra records, in the roadmap, Yoann's 15 October decision to carry the
 `LogicalTime(i64)` value type with A-T1-12; Fable did not witness it and
-did not rerun the browser suite (35 tests reported by Astra).
+did not rerun the browser suite (35 tests reported by Astra). **24 October:** carried in
+`10f91f5` and `9fbe8d2`, replayed by Fable; see A-T1-12.
 
 *Calendar.* Option 1 above was taken: lot 1 landed 14–15 October, lot 2 on
 15 October, both before the 20 October checkpoint and the 23 October
@@ -1807,8 +1865,13 @@ handoff: lot 0 two to three days, lot 1 six to nine days, lot 2 three to
 five days plus one review day. The line references of this ledger and of
 the external brief are still anchored on `fedada7`; re-anchoring them on
 the realigned code is the one-day item owed by Fable, together with the
-T4 second pass, blocks 2–7, which now reads the realigned code. Still with
-Yoann from 13 October: bless and the missed rename derivatives.
+T4 second pass, blocks 2–7, which now reads the realigned code. **24 October:**
+the external brief is re-anchored on `9fbe8d2`; the dated reading evidence
+keeps its `fedada7` anchors by the header's rule. The 13 October item "bless
+and the missed rename derivatives" was already closed when written here:
+`2259fd4` (13 October, Yoann's decision) had replaced `--bless` and
+`RASTOK_BLESS` by `simulate --compare <dir> | --save <dir>`, and `beabf68` had
+applied the derivatives; recorded as closed on 24 October.
 
 ## Implementation follow-up — 2026-10-05, lot 1
 
@@ -2314,66 +2377,84 @@ specification prose (v21 docs sweep).
 ## External Rust review (26–30 October) — priorities
 
 The reviewer reads the frozen branch. Line references in this section are
-anchored on `fedada7`; they are re-anchored once D-2026-10-11-1 lands, before
-the review starts. In order of value for the promise
+anchored on `9fbe8d2` (24 October), the tree integrated into `main` for the
+review; the earlier `fedada7` anchors were retired with the realignment
+(`runtime/vm.rs` is now `runtime/execution.rs` and `runtime/execution/*`,
+`Vm` is `Execution`, the Loop and Retry folds are `loop_view.rs` and
+`retry_view.rs`). In order of value for the promise
 (same plan, same inputs, same execution, identities and trace), with the
 question each item should answer:
 
 1. **Same-instant ordering, live and recovered.** The scheduler breaks ties
-   with a VM-local `creation_seq` that is not journaled (`vm.rs:916-937`).
-   Loop and Retry re-derive their dated head from the record order
-   (`retry_manager.rs:350-413`); every other deadline kind relies on
-   recovery re-scheduling in the same order the live VM did
-   (`recovery.rs`, `route_prepared`, `install_target`). Question: can two
-   deadlines of different kinds, due at the same instant, expire in a
-   different order after recovery, and would that change the record
-   sequence? A targeted test with a lifetime and a Call timeout due together
-   would settle it.
+   with an Execution-local `creation_seq` that is not journaled
+   (`execution.rs:816-860`, `Scheduler`). Loop and Retry re-derive their
+   dated head from the record order (`retry_manager.rs:369-430`,
+   `next_dated_recurrence`); every other deadline kind relies on recovery
+   re-scheduling in the same order the live Execution did (`recovery.rs`,
+   `route_prepared` at `execution.rs:6237-6301`, `apply_instance_admissions`
+   at `:6302-6410`). Question: can two deadlines of different kinds, due at
+   the same instant, expire in a different order after recovery, and would
+   that change the record sequence? A targeted test with a lifetime and a
+   Call timeout due together would settle it.
 2. **Facts first, then mutation — every path.** The discipline is explicit
-   in `expire` for an open Call (`vm.rs:2855-2868`) and broken once in the
-   drain expiry (A-T4-1). Question: is there any other place where a
-   fallible Driver or journal call follows a VM mutation, so a refusal
-   leaves the VM and the journal disagreeing? Candidates: `expire_closing`
-   both arms, `expire_session_handshake` (`vm.rs:3105-3261`), `settle_next`,
-   `step_retry_manager` (`retry_manager.rs:608-640`).
-3. **Every `unreachable!` and `unwrap_or_else(|| unreachable!)`.** `vm.rs`
-   uses them for reserved capacity and planned paths (`:2894, :2924, :5594,
-   :5614-5616, :6739, :6752-6754`). Question: is each one proved by a
-   reservation made in the same step, or could a recovered or
-   concurrently-mutated state reach it? A panic in the core is a correctness
-   bug under AGENTS.md.
+   in `expire` for an open Call (`execution.rs:2267-2651`) and broken once in
+   the drain expiry (A-T4-1, open, lot v21). Question: is there any other
+   place where a fallible Driver or journal call follows an Execution
+   mutation, so a refusal leaves the Execution and the journal disagreeing?
+   Candidates: `expire_closing` both arms (`:3406-3580`),
+   `expire_session_handshake` (`:2652-2809`), `settle_next` (`:3803-3907`),
+   `step_retry_manager` (`retry_manager.rs:431-661`, the commit at `:624`).
+3. **Every `unreachable!` and `unwrap_or_else(|| unreachable!)`.**
+   `execution.rs` uses them for reserved capacity and planned paths
+   (`:2422, :2452, :3812, :3975, :5003, :5119, :5139-5141, :6267, :6281,
+   :6330`; the "a literal path is valid" sites parse constant paths).
+   Question: is each one proved by a reservation made in the same step, or
+   could a recovered or concurrently-mutated state reach it? A panic in the
+   core is a correctness bug under AGENTS.md.
 4. **Recovery re-derivation has no hidden input.** Recovery recomputes
-   routes, settings and deadlines and compares them with the record
-   (`recovery.rs:441-521`, `recovery/retries.rs:80-91`,
-   `recovery/calls.rs:90-101`). Question: does any recomputation read
-   `self.now`, the boot instant, environment or an unjournaled value, so
+   routes, contexts, settings and deadlines and compares them with the
+   record (`recovery.rs:424-541`, `recovery/retries.rs:75-91`,
+   `recovery/calls.rs:85-101`). Question: does any recomputation read
+   `self.now`, the civil origin, environment or an unjournaled value, so
    that a correct journal could be refused or a wrong one accepted? Note the
-   instant handling at `recovery.rs:64-98` and `recovery/retries.rs:74`.
-5. **The Loop fold's blind spots.** A-T2-9 (`Stopped` without closing
+   instant handling at `recovery.rs:67-121`: since format 24 the TRANSACTION
+   record carries an observed civil time (key 39) that recovery converts
+   back through the journal header's origin, and `preflight`
+   (`execution.rs:1126-1145`) refuses an Execution whose origin differs from
+   the journal's.
+5. **The Loop view's blind spots.** A-T2-9 (`Stopped` without closing
    evidence) and the invariant that every enclosing run named in a manager
    record's context is still active when that record commits
-   (`fold.rs:269-282` refuses otherwise; producers at
-   `loop_manager.rs:488-504, 519-532, 615-619`). Question: can an outer run
-   close by a natural or explicit verdict while an inner run still owes a
-   manager record, so the journal refuses the VM's own record?
+   (`loop_view.rs:260-284` refuses otherwise; producers at
+   `loop_manager.rs:193, 244, 510-514, 541-545, 638, 764`). Question: can an
+   outer run close by a natural or explicit verdict while an inner run still
+   owes a manager record, so the journal refuses the Execution's own record?
 6. **Retry: three readers of one rule.** A-T2-11. Question: is there an
-   input accepted by the carrier matrix and refused by the fold, or a
-   completion whose terminal case reads differently in `closure_schedule`
-   and `closure_case`?
-7. **Arithmetic at the edges.** `u64` ordinals and `i64` nanosecond instants:
-   `saturating_add` on due instants (`vm/timing.rs`, `loop_manager.rs:649`),
-   `entry_measure_budget` (`loop_manager.rs:791-828`), the unchecked `+ 1`
-   of A-T4-2, `creation_seq.wrapping_add`. Question: does any saturation or
-   wrap silently change a journaled value?
-8. **Backpressure accounting.** `check_room_for_routes` and
-   `recurrence_admission_load` (`vm.rs:6598-6670`, `retry_manager.rs:319-348`,
-   `loop_manager.rs:16-49`) count reservations against
-   `WORKER_MAILBOX_CAPACITY`. Question: can a batch pass the pre-commit check
-   and still hit a full mailbox after commit (the `unreachable!` of item 3)?
+   input accepted by the carrier matrix (`retry_protocol/carriers.rs`) and
+   refused by the view (`retry_view.rs`), or a completion whose terminal
+   case reads differently in `closure_schedule` and `closure_case`
+   (`retry_manager.rs:684-752`)?
+7. **Arithmetic at the edges.** `u64` ordinals, `LogicalTime` and `Duration`
+   as signed i64 nanoseconds, `Timestamp` as signed seconds and a `u32`
+   fraction: saturating instant + duration (`time.rs:70-84`, behind every
+   due instant in `timing.rs` and `loop_manager.rs:588, 621, 671`), checked
+   civil arithmetic (`time.rs:160-195`; `civil_time`, `execution.rs:2851-2857`),
+   the modular reduction of the epoch-aligned box (`time_box_elapsed`,
+   `timing.rs:15-30`), `entry_measure_budget` (`loop_manager.rs:815-853`),
+   the unchecked `+ 1` of A-T4-2, `creation_seq.wrapping_add`
+   (`execution.rs:843`). Question: does any saturation or wrap silently
+   change a journaled value, and does any civil refusal reach the journal
+   after a mutation?
+8. **Backpressure accounting.** `check_room_for_routes` and the admission
+   loads (`execution.rs:6125-6201`, `retry_manager.rs:335-368`,
+   `loop_manager.rs:23-59`) count reservations against
+   `WORKER_MAILBOX_CAPACITY` (`execution.rs:816`). Question: can a batch pass
+   the pre-commit check and still hit a full mailbox after commit (the
+   `unreachable!` at `:6281`)?
 
 Out of scope for that week: tiers T3 and T5–T11, vocabulary, the dated
 review evidence, and the M2 index design (A-T4-3). Tests are evidence, not
-reading matter; the two folds' test modules name the invariants if a brief
+reading matter; the two views' test modules name the invariants if a brief
 is needed.
 
 ## Parked remarks (outside the current theme)
@@ -2449,6 +2530,7 @@ No clock representation or execution semantics changes.
   comment now says which machine it is: journal-projected state, each
   step a transaction, the host driving. The 10 ms idle poll stays with the
   CLI's `Host` implementation. Open: the word `Host` (vocabulary ⟂ 7e).
+  **23 October:** `worker::Supervision`, `e9492ea`; ⟂ 7e decided by Yoann.
 
 - **Animated PNG instead of GIF for the public tour** (raised 2026-09-25,
   during T1). Premise check: GIF's LZW patents expired in 2004, so the format

@@ -490,6 +490,14 @@ specification's word keep its meaning.
 **Proposed 15 October:** keep `Host`, and let the trait doc say it is the
 Worker's view of its Host, never a second machine model; the alternative is
 a mechanism word (`worker::Environment`). To Yoann.
+**Decided 23 October (Yoann), applied by Astra in `e9492ea`.** The mechanism
+word, and the specification's own: execution-model §5 says the supervision
+plane supplies the clock, so the trait is `worker::Supervision` (logical time,
+non-blocking App input, checkpoint after committed work, waiting policy), the
+CLI implementation `CliSupervision`, the test double `TestSupervision`. `Host`
+keeps its clustered-machine meaning; `HostedTimeSource` and `hosted-ui` keep
+"hosted" as "under std". Zero bytes, three files; record in the pre-opening
+lot below.
 ### 8. The boundary — driver, contract, binding, dispatcher, gate, pump
 
 | Code | Where | Meaning | Spec (uses) |
@@ -765,6 +773,13 @@ conflicts with rule 1; Astra applied it faithfully to 19 prose lines
 (README, ROADMAP, the golden and fixture test module docs), which now say
 "approval" for what the flag calls bless. Fable proposes to withdraw the
 "approve" line and restore "bless" in those 19 lines; the flag never moved.
+**Closed 24 October as stale.** Before this paragraph was written, `2259fd4`
+(13 October, Yoann's decision) had replaced `--bless` and `RASTOK_BLESS` by
+`rastok simulate … --compare <dir> | --save <dir>`; simulation-semantics now
+writes `--save`, and `cli.rs` refuses `--golden` and `--bless`. The "approve"
+line stands as the word for the act; nothing to restore. The missed
+derivatives below were applied in `beabf68` the same day
+(`PrivacyDeclarationName`, `PriceBookAttestation`, `hir::DelayPolicy`).
 
 **Derivatives the table missed (follow-up, mechanical, to Yoann).**
 `PrivacyProfileName` → `PrivacyDeclarationName`; `CostProfileAttestation`
@@ -854,7 +869,8 @@ changed wording with the Worker: "the machine did not settle within 64
 boundary rounds" became "execution did not become idle within 64 Driver
 polling passes", and "the boundary round faulted" became "Driver polling
 faulted", while `conformance.rs` keeps the former; no test pins either.
-Still to Yoann from 13 October: bless and the missed derivatives above.
+The 13 October items, bless and the missed derivatives, are closed as stale
+above (24 October).
 
 ### T5 — 17 October (Yoann), the effect boundary and the Driver seam
 
@@ -1729,6 +1745,127 @@ figures in the inventory are the same.
 **Status.** A-T2-13 applied and reviewed; the two §3.1 precision remarks
 open. Left to Yoann from this morning: `retry.md`, the tense of the UI
 transport labels and the placements (T10), `UiCommand::RetryStep`.
+
+### Pre-opening lot — 23 and 24 October (Astra, four commits; Fable)
+
+Yoann's brief of 23 October: implement before the opening, in this order,
+the Worker's service word (⟂ 7e), the Retry specification left open by
+A-T2-12, and A-T1-12 together with the `LogicalTime(i64)` carrier decided
+on 15 October. Fable wrote the brief to Astra in three lots; Astra delivered
+four commits on `realign/node-ontology` above `2ea41ba`; Fable reviewed the
+C candidate reading-only on the uncommitted tree on 24 October, then replayed
+the committed tree the same afternoon. Neither review register was edited by
+the commits; this entry is Fable's record.
+
+**A — `e9492ea` "Name Worker services as supervision"** (3 files). The trait
+`worker::Host` becomes `Supervision`, `CliHost` becomes `CliSupervision`, the
+test double `TestSupervision`; one test renamed with them. Zero bytes.
+Approved; ⟂ 7e closes above.
+
+**B — `21eae53` "Gather the Retry contract in its normative specification"**
+(8 files, +348). `docs/spec/retry.md`, 295 lines in eight sections (the
+contract at a glance; source and admission, with repetition safety and HTTP
+responses; one operation and bounded attempts, with held and final batches,
+delay from closure and Closing; identity and trigger; recovery and protocol
+facts; measurements and inspection; named diagnostics; related
+specifications), gathered from `extensions.md`, `loop.md`, `diagnostics.md`
+and the dated `retry-*` documents, which now point to it; a row in the
+specification `README.md` and in `spec-to-code.md`; `site_content.rs` adds
+the file to the status list and a test that the live Retry diagnostics do
+not reintroduce `E-RETRY-ATTRIBUTE`. Zero bytes. Approved; Fable's one nit,
+a commit hash cited in normative text (§7), was removed in `9fbe8d2`.
+
+**C — `10f91f5` "Separate logical instants from civil timestamp carriers"
+and `9fbe8d2` "Separate relative execution time from civil observations".**
+The first commit adds `rastok_core::time` (`LogicalTime(i64)` with `ZERO`,
+`MIN`, `MAX`; `Duration(i64)`; saturating `LogicalTime + Duration` and
+`LogicalTime − LogicalTime`; a `compile_fail` doctest for instant + instant;
+`Timestamp { seconds: i64, nanoseconds: u32 }` with `try_new`, checked
+arithmetic and `TimestampError`), re-exported as `rastok::time`, with
+D-2026-10-23-2 and the inventory's baseline. The second, 107 files
+(+4 132 / −1 005), is the wire change under `FORMAT_VERSION` 24 and recording
+`VERSION` 5 (the origin as a sixth header entry, version checked before
+shape): tags 22/23 as `[signed seconds, Uint nanoseconds]` through
+`canonical::timestamp` and `decode_timestamp`, tags 10/11 refused;
+`Value::Timestamp(Timestamp)`; `Journal::origin()` and the journal
+constructors taking it; TRANSACTION key 39 `observed_time: Option<Timestamp>`,
+checked by `acceptance` against `origin + created_at`; `CallRecord.closed_at`,
+`Deadline.due_at` and `Deadlines.created_at` as `LogicalTime`;
+`Execution { now: LogicalTime, origin: Timestamp }`, `new_at(plan, version,
+origin, LogicalTime)`, `ExecutionFault::OriginMismatch` in `preflight`,
+`CivilTimeOutOfRange`, `civil_time()`; `now` bound lazily, so only the path
+that reads an unrepresentable civil time refuses (`Bindings::get` returns
+`Result`, `ErrorKind::TimeOutOfRange`); `Segment::ProcessingTimeBox { start:
+Timestamp }`; recovery converting an observed civil time back through the
+header origin; `main.rs`'s `HostedTimeSource { origin, started }` with
+`logical_now()` as elapsed only; `Supervision::logical_time() -> LogicalTime`;
+the Lab scenario `origin` applied (`ScenarioItem::Origin`; a duplicate is
+`E-DUP-LAB-IDENTITY`, whose registry row now names it; a wrong type is
+`E-EXPR`); the UI projecting a timestamp as a decimal seconds string and a
+fraction; the ten tests of `time_carriers.rs`. Specification: `identity.md`
+(header, origin paragraph, key 39, tags 22/23, 10/11 removed with a note,
+segment kind 2), `execution-model.md` §5 and the tumbling rules,
+`instances.md` §6.5, `expressions.md`, `simulation-semantics.md` §5.3,
+`types.md`, `stdlib.md`, `ui.md`, `envelope.md`, `delivery-semantics.md`,
+`grammar.md`; living documents README, ROADMAP, WHITEPAPER, CHANGELOG,
+`plan-package.md`, `diagnostic-recording.md`, `opening-showcase.md`,
+`docs/examples/README.md`, `spec-to-code.md`, diagram 05 and its SVG.
+
+**The one correction.** Fable's reading of the candidate found its tumbling
+boxes aligned on `origin + k·every`, and D-2026-10-23-2 rewritten to say so,
+where `instances.md` §6.5 had said `epoch + k·every` since v0.0 and
+D-2026-10-10-1 had rejected boot-relative boxes explicitly; the format-23
+code was epoch-aligned because the hosted machine booted at the civil
+instant and the Lab at zero. The brief had copied D-2026-10-10-1's ambiguous
+"origin + k·every", so the ambiguity was shared. Fable put two options to
+Yoann: keep the specification's rule (recommended; the Kafka Streams and
+Flink reading; a boot at 10:17 with hourly windows closes at 11:00, not
+11:17), or keep the candidate and have the decision say that Yoann reverses
+D-2026-10-10-1's rejection, with the reason. Astra, asked, also recommended
+the first. Yoann chose option 1 on 24 October. Astra's correction:
+`timing::time_box_elapsed(origin, now, every)` reduces the wide origin
+modulo the validated period without i128 and serves both the address
+(`execution.rs:5758-5773`) and the lifetime deadline (`timing.rs:192-199`);
+the test `tumbling_boxes_are_epoch_aligned_and_recovery_keeps_their_civil_identity`
+boots at 1.25 s, 1.75 s, −0.25 s, in year 1600 and in year 9999 and expects
+box starts at 0, 0, −2 s and the period multiples, then recovers under a
+different fresh origin and finds the box restored from the header;
+D-2026-10-23-2 point 3 now says the boxes remain epoch-aligned and that the
+origin converts between the timelines. Two further nits taken: the Calendar
+warning of §5.3 keeps its normative text with the M1 status stated
+separately, and the parser's dead `_ => "a restart step"` arm is gone.
+
+**Replay (Fable, 24 October, on `9fbe8d2`).** `cargo fmt --check`, strict
+Clippy on all targets and features, rustdoc with warnings denied, and
+`cargo test --workspace --all-features --no-fail-fast`: 1 649 passed in
+62 groups, zero failed, zero ignored. `site_content` 13/13 (one test
+added by B). Three `no_std` targets. Browser 35/35. QEMU
+`mps2-an505`: echo `SPIKE_OK`, hash `7106f322…`, 67 records, code
+973 504 B (margin 75 072 B), peak heap 111 684 B (margin
+19 388 B); Retry `SPIKE_OK`, hash `3cad77ef…`, 17 records, transaction
+record 232 B, code 1 046 280 B (margin 2 296 B), peak heap
+129 268 B (margin 1 804 B). Against `2ea41ba`, echo grows by
+2 072 B of code and 280 B of peak heap, Retry by
+2 792 B and 80 B; the margins stay positive and are the
+constraint on later core changes.
+
+**Byte audit, inverted control.** Between `2ea41ba` and `9fbe8d2`, under
+`crates/rastok/tests/golden/`, `docs/examples/`, `examples/` and the spike
+package, exactly four tracked files change, the four `.rkp`: the CBOR
+version entry `17` → `18 18` (one byte more each: 1 015 → 1 016,
+1 060 → 1 061, 310 → 311, 1 015 → 1 016), the hash entry and the body
+byte-identical, the checksum at the inventoried values (`ebff7607…`,
+`8e56640f…`, `b7932998…`), the spike binary byte-for-byte the hex
+`echo.rkp`. All 32 `.trace` are unchanged; `docs/examples/README.md`
+changes text only. The regenerated Retry qualification package keeps hash
+`3cad77ef…`.
+
+**Open after the lot.** The external brief's line references are
+re-anchored on `9fbe8d2` in the actions register. The two §3.1 cause-column
+precision remarks of 23 October remain a documentation touch. The freeze
+date is written as both 23 and 24 October in the living documents and is
+Yoann's to settle once. Integration of `realign/node-ontology` into `main`
+awaits Yoann's order.
 
 ## What validation produces
 
