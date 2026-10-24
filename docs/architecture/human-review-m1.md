@@ -124,6 +124,22 @@ had applied the derivatives. The external brief below is re-anchored on
 once `realign/node-ontology` is integrated into `main` on Yoann's order: the
 T5 skeleton, then T4 blocks 2, 3, 5, 6 and 7, then the T10 first hour.
 
+**Reading — 24 October, evening.** Yoann asked whether the compiler was
+mostly what remained of the reading. Not only: T3 has never been read (its
+files are now `plan.rs`, `node.rs`, the single Node table of the
+realignment, and `plan/`, about 15 000 lines before selection), T4 blocks 2,
+3, 5, 6 and 7 remain, the T5 skeleton is to be reread on the reorganized
+tree, then tiers B and C. He set the compiler's check as tutorials before
+the opening rather than reading, T8 the same way; Fable ran twelve broken
+variants of the `rastok new` graph through `check` and `simulate` and records
+the surface findings under
+[Parked remarks](#surface-findings-from-the-compiler-tutorials--24-october-to-yoann).
+Reading `Driver`, Yoann also saw `inbound()` return `Ingress` while
+`outbound()` returned `Outbound`, set the rule that direction words qualify
+a noun, and Astra applied it the same evening as `9844a19`
+(`InboundRole`, `OutboundRole`, `inbound_role()`, `outbound_role()`):
+[Driver roles](human-review-vocabulary.md#driver-roles--24-october-evening-astra-9844a19-fable).
+
 Rastok promises that the same validated plan and the same journaled inputs
 produce the same execution, identities and trace. The review reads what
 carries that promise first (identity, journal, validated plan, VM), then what
@@ -2539,3 +2555,45 @@ No clock representation or execution semantics changes.
   `docs/site/assets/webhook-tour.gif`, its references in `README.md:58` and
   `docs/site/gallery/04-webhook-to-partner.md:117`, the capture manifest and
   the `site_content.rs:482` check. Decision pending; to settle in T10.
+
+### Surface findings from the compiler tutorials — 24 October (to Yoann)
+
+Not a reading. Fable broke the `rastok new hello` graph twelve ways and ran
+`rastok check` and `rastok simulate` on the night build of `9fbe8d2`
+(sheet and files in Fable's scratchpad). Exit codes are right (1 on error
+or FAIL, 0 otherwise). Seven messages are good: unknown type, misspelled
+Node or port in the wiring, deleted wiring, wrong emitted type, unknown name
+in an expression, unknown wiring port. The specification lists 82 `E-*`
+codes; two `.diag` goldens pin a rendering, both `E-PARSE-EXPECTED`. Items,
+by surface:
+
+- **`lab::check_expectation`** (`lab.rs:931-933`, T8): an expectation
+  without a label renders its target with `{:?}`, so the first break a
+  newcomer makes in the quickstart (`count == 2`) prints `FAIL smoke.roundtrip
+  … expect Boundary(Port { name: "out" }): 1 match(es) in a window of 1
+  deliveries`. The `rastok new` template has no label. A `Display` for the
+  target (`app.out`) and a test on the FAIL line. Fable recommends it before
+  the opening; Yoann decides the window.
+- **`render::render_all`** (`render.rs:98`, T10): diagnostics are rendered
+  in emission order, and expression diagnostics are emitted after the host
+  parse. An unterminated string inside a handler body (`out = "Hello }`)
+  prints three cascaded `E-PARSE-EXPECTED` at lines 11, 14 and 22 before its
+  `E-EXPR: unterminated string` at line 8; the same fault in a Lab
+  assignment prints the one right message. Order by source and offset at
+  render time, or carry the expression's lexical error in the parse pass.
+  After the opening.
+- **`check::infer_ports`** (`check.rs:4113`, T7): `on inn` declares an
+  inferred input port, as `grammar.md` §"Port naming and default edges"
+  allows, so a typo on the trigger surfaces as `E-PORT-TYPE` on
+  `out` ("this value is variant") or, without `data`, as "`greet.inn` has
+  no effective payload type … found: an unsolved inference variable".
+  Conformant; the wording should say the port exists only through this
+  handler and name the near declared port. After the opening.
+- **Parser, missing colon** (T7): `input in text` is reported at the next
+  line, `E-PARSE-EXPECTED` with expected `=` or a wiring arrow and found
+  `output`,
+  because `text` was read as a bare statement. A hint at the port
+  declaration. After the opening.
+- **`E-SIM-TARGET` on a typo** (T8): `simulation smoke on apx` answers "a
+  simulation closes `app`; sub-graph targets are a deferred capability".
+  Name the typo before the deferred capability. After the opening.

@@ -1867,6 +1867,44 @@ date is written as both 23 and 24 October in the living documents and is
 Yoann's to settle once. Integration of `realign/node-ontology` into `main`
 awaits Yoann's order.
 
+### Driver roles — 24 October, evening (Astra `9844a19`; Fable)
+
+Yoann, reading `connector::driver::Driver` (`driver.rs:18-26`), saw
+`inbound()` return `dyn Ingress` and `outbound()` return `dyn Outbound`: two
+vocabularies for two symmetric roles, and direction words used as nouns. The
+names came from the 21 October Connector rework (§4 above,
+`InboundConnectorDriver` → `driver::Ingress`, `OutboundConnectorDriver` →
+`driver::Outbound`), taken as a whole on 21 October. His rule, briefed to
+Astra in seven lines: both views follow one pattern, a direction word as an
+adjective qualifying a noun, pair and noun left to Astra; the specification's
+words first (inbound and outbound name the role, 173 and 134 uses; ingress
+and egress the door and the journal, 62 and 60).
+
+Astra chose **`InboundRole`** and **`OutboundRole`**, reached through
+**`inbound_role()`** and **`outbound_role()`** (`9844a19` "Name Driver roles
+and their accessors consistently"). `InboundCall`, `OutboundCall`, `Session`,
+`OutboundDrivers`, `PendingIngress`, `IngressProposal`,
+`journal::Record::Ingress` and `ConnectorDirection::{Inbound, Outbound}` keep
+their names and meanings. Eighteen files (+122 / −115): the core seam, the
+hosted Drivers and their tests, the Lab's mocks, the Worker, the Process
+conformance test, `components.md` and `connector-drivers.md`. Fable's
+normalized diff (the four renames applied to the old side) leaves only doc
+comments, rustfmt's import order and one wrap; no witness moves; the review
+registers and the dated decisions are untouched. Fable's replay on
+`9844a19`: fmt, strict all-target Clippy and rustdoc with warnings denied clean;
+`cargo test --workspace --all-features --no-fail-fast` 62 groups, 1 649
+passed, 0 failed, 0 ignored; `site_content` 13/13; the three no_std targets
+check (`thumbv8m.main-none-eabihf`, `thumbv7m-none-eabi`,
+`riscv32imac-unknown-none-elf`); the tree was clean before and after. The browser suite and the two QEMU images were not
+rerun by Fable: a trait rename changes no byte of any artifact and no
+generated code; Astra reports both unchanged (35/35; Echo 111 684 B heap /
+973 504 B code, Retry 129 268 B heap / 1 046 280 B code). One nit, not
+blocking: the `OutboundRole` doc comment dropped the sentence that the
+exchange view is categorical, "never a bag of optional operations";
+`components.md` keeps the word. The §4 rows above stay as dated evidence of
+the 21 October proposal; the names `Ingress` and `Outbound` lived from
+21 to 24 October.
+
 ## What validation produces
 
 For each **⟂**: keep / rename / merge, with the chosen word. The answers
