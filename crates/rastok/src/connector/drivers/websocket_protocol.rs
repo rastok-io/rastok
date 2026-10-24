@@ -6,8 +6,8 @@
 
 use crate::connector::ConnectorDirection;
 use crate::connector::ContractId;
-use crate::connector::driver::Ingress;
-use crate::connector::driver::Outbound;
+use crate::connector::driver::InboundRole;
+use crate::connector::driver::OutboundRole;
 use crate::connector::driver::Session;
 use crate::connector::exchange::AdmittedIngress;
 use crate::connector::exchange::IngressProposalHandle;
@@ -557,7 +557,7 @@ impl WebSocketLabDriver {
     }
 }
 
-impl Ingress for WebSocketLabDriver {
+impl InboundRole for WebSocketLabDriver {
     fn poll_proposal(&mut self) -> Option<PendingIngress> {
         None
     }
@@ -570,7 +570,7 @@ impl Ingress for WebSocketLabDriver {
     }
 }
 
-impl Outbound for WebSocketLabDriver {
+impl OutboundRole for WebSocketLabDriver {
     fn call(&mut self) -> Option<&mut dyn crate::connector::driver::OutboundCall> {
         None
     }
@@ -629,11 +629,11 @@ impl Session for WebSocketLabDriver {
 }
 
 impl crate::connector::driver::Driver for WebSocketLabDriver {
-    fn inbound(&mut self) -> Option<&mut dyn Ingress> {
+    fn inbound_role(&mut self) -> Option<&mut dyn InboundRole> {
         Some(self)
     }
 
-    fn outbound(&mut self) -> Option<&mut dyn Outbound> {
+    fn outbound_role(&mut self) -> Option<&mut dyn OutboundRole> {
         Some(self)
     }
 }

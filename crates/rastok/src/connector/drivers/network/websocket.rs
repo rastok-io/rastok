@@ -4,8 +4,8 @@
 //! Session intents. Hyper/Tokio/Tungstenite values remain on the private
 //! network thread, and every finite queue is charged by the shared pump.
 
-use crate::connector::driver::Ingress;
-use crate::connector::driver::Outbound;
+use crate::connector::driver::InboundRole;
+use crate::connector::driver::OutboundRole;
 use crate::connector::driver::Session;
 use crate::connector::drivers::network::pump::{
     EngineInput, EngineLimits, EventPoll, EventReservation, EventSender, HostedNetworkEngine,
@@ -344,16 +344,16 @@ struct HostedWebSocket<'plan> {
 }
 
 impl crate::connector::driver::Driver for HostedWebSocket<'_> {
-    fn inbound(&mut self) -> Option<&mut dyn Ingress> {
+    fn inbound_role(&mut self) -> Option<&mut dyn InboundRole> {
         Some(self)
     }
 
-    fn outbound(&mut self) -> Option<&mut dyn Outbound> {
+    fn outbound_role(&mut self) -> Option<&mut dyn OutboundRole> {
         Some(self)
     }
 }
 
-impl Ingress for HostedWebSocket<'_> {
+impl InboundRole for HostedWebSocket<'_> {
     fn poll_proposal(&mut self) -> Option<PendingIngress> {
         self.poll_events();
         self.pending.front().map(|live| live.proposal.clone())
@@ -376,7 +376,7 @@ impl Ingress for HostedWebSocket<'_> {
     }
 }
 
-impl Outbound for HostedWebSocket<'_> {
+impl OutboundRole for HostedWebSocket<'_> {
     fn call(&mut self) -> Option<&mut dyn crate::connector::driver::OutboundCall> {
         None
     }

@@ -14,8 +14,8 @@ use crate::compiler::hir::{
 use crate::connector::ConnectorDirection;
 use crate::connector::ContractId;
 use crate::connector::driver::Driver;
-use crate::connector::driver::Outbound;
 use crate::connector::driver::OutboundCall;
+use crate::connector::driver::OutboundRole;
 #[cfg(test)]
 use crate::connector::drivers::ProcessRequestSettings;
 use crate::connector::drivers::{
@@ -1544,11 +1544,11 @@ impl OutboundCall for MockOutboundDriver<'_> {
 }
 
 impl Driver for MockOutboundDriver<'_> {
-    fn inbound(&mut self) -> Option<&mut dyn crate::connector::driver::Ingress> {
+    fn inbound_role(&mut self) -> Option<&mut dyn crate::connector::driver::InboundRole> {
         None
     }
 
-    fn outbound(&mut self) -> Option<&mut dyn Outbound> {
+    fn outbound_role(&mut self) -> Option<&mut dyn OutboundRole> {
         Some(self)
     }
 }

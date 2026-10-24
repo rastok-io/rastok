@@ -8,7 +8,7 @@ use crate::connector::ContractId;
 use crate::connector::ExchangeKind;
 use crate::connector::driver::Driver;
 use crate::connector::driver::DriverRouteError;
-use crate::connector::driver::Ingress;
+use crate::connector::driver::InboundRole;
 use crate::connector::driver::OutboundCall;
 use crate::connector::driver::OutboundDrivers;
 use crate::connector::driver::Session;
@@ -301,7 +301,7 @@ impl<'plan> RuntimeDrivers<'plan> {
             }
             if requirement.required.has_inbound()
                 && exchange == ExchangeKind::Call
-                && driver.inbound().and_then(Ingress::call).is_none()
+                && driver.inbound_role().and_then(InboundRole::call).is_none()
             {
                 return Err(DriverBindingError::BoundExchangeMismatch {
                     id,
@@ -380,7 +380,7 @@ impl<'plan> RuntimeDrivers<'plan> {
             }
             let driver = bound
                 .driver
-                .inbound()
+                .inbound_role()
                 .ok_or_else(|| DriverRouteError::UnavailableInbound(bound.contract.clone()))?;
             if let Some(proposal) = driver.poll_proposal() {
                 let source = proposal.proposal.provenance.connector_path();
@@ -463,7 +463,7 @@ impl<'plan> RuntimeDrivers<'plan> {
         let bound = self.drivers.get_mut(routed.owner).ok_or_else(unknown)?;
         let driver = bound
             .driver
-            .inbound()
+            .inbound_role()
             .ok_or_else(|| DriverRouteError::UnavailableInbound(routed.connector.clone()))?;
         if let Ok(accepted) = decision {
             match accepted.exchange {
@@ -542,7 +542,7 @@ impl<'plan> RuntimeDrivers<'plan> {
             }
             let driver = family
                 .driver
-                .inbound()
+                .inbound_role()
                 .ok_or_else(|| DriverRouteError::UnavailableInbound(family.contract.clone()))?
                 .call()
                 .ok_or_else(|| DriverRouteError::UnavailableInboundCall(family.contract.clone()))?;
@@ -588,7 +588,7 @@ impl<'plan> RuntimeDrivers<'plan> {
             }
             let driver = family
                 .driver
-                .inbound()
+                .inbound_role()
                 .ok_or_else(|| DriverRouteError::UnavailableInbound(family.contract.clone()))?
                 .call()
                 .ok_or_else(|| DriverRouteError::UnavailableInboundCall(family.contract.clone()))?;
@@ -630,7 +630,7 @@ impl<'plan> RuntimeDrivers<'plan> {
                 }
                 let driver = bound
                     .driver
-                    .inbound()
+                    .inbound_role()
                     .ok_or_else(|| DriverRouteError::UnavailableInbound(bound.contract.clone()))?
                     .call()
                     .ok_or_else(|| {
@@ -683,7 +683,7 @@ impl<'plan> RuntimeDrivers<'plan> {
         };
         let outbound = family
             .driver
-            .outbound()
+            .outbound_role()
             .ok_or_else(|| DriverRouteError::UnavailableOutbound(connector.clone()))?;
         outbound
             .call()
@@ -700,7 +700,7 @@ impl<'plan> RuntimeDrivers<'plan> {
         };
         let outbound = family
             .driver
-            .outbound()
+            .outbound_role()
             .ok_or_else(|| DriverRouteError::UnavailableOutbound(connector.clone()))?;
         let driver = outbound
             .session()
@@ -795,7 +795,7 @@ impl OutboundDrivers for RuntimeDrivers<'_> {
                 };
                 let driver = bound
                     .driver
-                    .outbound()
+                    .outbound_role()
                     .ok_or_else(|| DriverRouteError::UnavailableOutbound(path.clone()))?
                     .call()
                     .ok_or_else(|| DriverRouteError::UnavailableCall(path.clone()))?;
@@ -960,7 +960,7 @@ impl OutboundDrivers for RuntimeDrivers<'_> {
                 };
                 let driver = bound
                     .driver
-                    .outbound()
+                    .outbound_role()
                     .ok_or_else(|| DriverRouteError::UnavailableOutbound(path.clone()))?
                     .session()
                     .ok_or_else(|| DriverRouteError::UnavailableSession(path.clone()))?;
@@ -1002,7 +1002,7 @@ impl OutboundDrivers for RuntimeDrivers<'_> {
             .ok_or(DriverRouteError::UncorrelatedSession(session))?;
         let driver = family
             .driver
-            .outbound()
+            .outbound_role()
             .ok_or_else(|| DriverRouteError::UnavailableOutbound(path.clone()))?
             .session()
             .ok_or_else(|| DriverRouteError::UnavailableSession(path.clone()))?;
@@ -1231,7 +1231,10 @@ fn union_roles(left: ConnectorDirection, right: ConnectorDirection) -> Connector
 }
 
 fn roles_of(driver: &mut dyn Driver) -> Option<ConnectorDirection> {
-    match (driver.inbound().is_some(), driver.outbound().is_some()) {
+    match (
+        driver.inbound_role().is_some(),
+        driver.outbound_role().is_some(),
+    ) {
         (true, true) => Some(ConnectorDirection::InboundAndOutbound),
         (true, false) => Some(ConnectorDirection::Inbound),
         (false, true) => Some(ConnectorDirection::Outbound),
@@ -1240,7 +1243,7 @@ fn roles_of(driver: &mut dyn Driver) -> Option<ConnectorDirection> {
 }
 
 fn outbound_exchange_of(driver: &mut dyn Driver) -> Option<ExchangeKind> {
-    let outbound = driver.outbound()?;
+    let outbound = driver.outbound_role()?;
     match (outbound.call().is_some(), outbound.session().is_some()) {
         (true, false) => Some(ExchangeKind::Call),
         (false, true) => Some(ExchangeKind::Session),

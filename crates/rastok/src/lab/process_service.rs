@@ -1,6 +1,6 @@
 //! Effectless resident child: the script replaces replies, not Session state.
 use super::*;
-use crate::connector::driver::Ingress;
+use crate::connector::driver::InboundRole;
 use crate::connector::driver::Session;
 use crate::connector::drivers::ProcessRequestSettings;
 use crate::connector::exchange::AdmittedIngress;
@@ -125,14 +125,14 @@ impl World<'_> {
     }
 }
 impl Driver for World<'_> {
-    fn inbound(&mut self) -> Option<&mut dyn Ingress> {
+    fn inbound_role(&mut self) -> Option<&mut dyn InboundRole> {
         Some(self)
     }
-    fn outbound(&mut self) -> Option<&mut dyn Outbound> {
+    fn outbound_role(&mut self) -> Option<&mut dyn OutboundRole> {
         Some(self)
     }
 }
-impl Outbound for World<'_> {
+impl OutboundRole for World<'_> {
     fn call(&mut self) -> Option<&mut dyn OutboundCall> {
         None
     }
@@ -227,7 +227,7 @@ impl Session for World<'_> {
         });
     }
 }
-impl Ingress for World<'_> {
+impl InboundRole for World<'_> {
     fn poll_proposal(&mut self) -> Option<PendingIngress> {
         let proposal = self.proposals.front()?;
         // The script may answer during open_session. As with the physical

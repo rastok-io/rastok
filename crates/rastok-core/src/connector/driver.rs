@@ -1,8 +1,10 @@
 //! Connector Driver interfaces.
 //!
-//! A Driver exposes the inbound and outbound interfaces required by its Contract
-//! over one implementation object. OutboundDrivers is the separate routing
-//! interface that Execution uses to reach all selected implementations.
+//! A Driver exposes [`InboundRole`](crate::connector::driver::InboundRole) and
+//! [`OutboundRole`](crate::connector::driver::OutboundRole) as required by its
+//! Contract, over one implementation object.
+//! [`OutboundDrivers`](crate::connector::driver::OutboundDrivers) is the separate
+//! routing interface that Execution uses to reach all selected implementations.
 
 use crate::connector::exchange::*;
 use crate::envelope::{self, Envelope};
@@ -19,10 +21,10 @@ pub trait Driver {
     /// The inbound role view, when implemented. Presence is immutable for the
     /// lifetime of this bound object; returning `None` after binding is an
     /// integrity fault.
-    fn inbound(&mut self) -> Option<&mut dyn Ingress>;
+    fn inbound_role(&mut self) -> Option<&mut dyn InboundRole>;
 
     /// The outbound role view under the same stable-presence invariant.
-    fn outbound(&mut self) -> Option<&mut dyn Outbound>;
+    fn outbound_role(&mut self) -> Option<&mut dyn OutboundRole>;
 }
 
 /// A route through an already-verified binding became impossible.
@@ -189,10 +191,11 @@ impl fmt::Display for DriverRouteError {
 
 impl core::error::Error for DriverRouteError {}
 
-/// Supplies bounded ingress proposals under backpressure. The Driver retains
-/// each proposal until the runtime reports acceptance or final rejection;
-/// only journal admission assigns its envelope and exchange identities.
-pub trait Ingress {
+/// The inbound Driver role: supplies bounded ingress proposals under backpressure.
+/// The Driver retains each proposal until the runtime reports acceptance or
+/// final rejection; only journal admission assigns its envelope and exchange
+/// identities.
+pub trait InboundRole {
     /// The next retained proposal, if one is waiting. Repeated polls before a
     /// decision must describe the same handle and proposal contents.
     fn poll_proposal(&mut self) -> Option<PendingIngress>;
@@ -214,7 +217,7 @@ pub trait Ingress {
 
 /// Terminal-observation half of an inbound Call Driver.
 ///
-/// Admission itself remains on [`Ingress`]. Keeping this as a
+/// Admission itself remains on [`InboundRole`]. Keeping this as a
 /// categorical view makes an Event source unable to manufacture Call exits.
 pub trait InboundCall {
     /// Starts one graph response whose producing transaction is already
@@ -231,9 +234,9 @@ pub trait InboundCall {
     fn poll_completions(&mut self) -> Vec<InboundCallObservation>;
 }
 
-/// The outbound world role. Its exchange view is categorical: a bound object
-/// exposes Call or Session mechanics, never a bag of optional operations.
-pub trait Outbound {
+/// The outbound Driver role: exposes the Call or Session interface required by
+/// the bound Contract's exchange kind.
+pub trait OutboundRole {
     /// Call protocol view, when this bound contract is Call-shaped.
     fn call(&mut self) -> Option<&mut dyn OutboundCall>;
 
@@ -282,7 +285,7 @@ pub trait OutboundCall {
     fn poll_responses(&mut self) -> Vec<CallResponse>;
 }
 
-impl<T> Outbound for T
+impl<T> OutboundRole for T
 where
     T: OutboundCall,
 {
@@ -297,7 +300,7 @@ where
 
 /// Synchronous effect boundary for one long-lived exchange.
 ///
-/// Inbound peer messages use [`Ingress`]'s retained proposal
+/// Inbound peer messages use [`InboundRole`]'s retained proposal
 /// protocol over the same bound object. These methods cover the outbound
 /// opening/write half without adding a third role or async to the core.
 pub trait Session {

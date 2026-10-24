@@ -1,5 +1,5 @@
 use crate::connector::driver::InboundCall;
-use crate::connector::driver::Ingress;
+use crate::connector::driver::InboundRole;
 use crate::connector::drivers::http_server::{HttpServerMode, bind_routes};
 use crate::connector::drivers::http_shared::{HttpVersion, decode_body};
 use crate::connector::drivers::network::pump::{
@@ -314,11 +314,11 @@ struct HttpServer<'plan> {
 }
 
 impl crate::connector::driver::Driver for HttpServer<'_> {
-    fn inbound(&mut self) -> Option<&mut dyn Ingress> {
+    fn inbound_role(&mut self) -> Option<&mut dyn InboundRole> {
         Some(self)
     }
 
-    fn outbound(&mut self) -> Option<&mut dyn crate::connector::driver::Outbound> {
+    fn outbound_role(&mut self) -> Option<&mut dyn crate::connector::driver::OutboundRole> {
         None
     }
 }
@@ -609,7 +609,7 @@ impl<'plan> HttpServer<'plan> {
     }
 }
 
-impl Ingress for HttpServer<'_> {
+impl InboundRole for HttpServer<'_> {
     fn poll_proposal(&mut self) -> Option<PendingIngress> {
         self.poll_events();
         self.pending.front().map(|pending| pending.proposal.clone())

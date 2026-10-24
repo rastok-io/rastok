@@ -5,9 +5,9 @@ use crate::connector::ContractId;
 use crate::connector::ExchangeKind;
 use crate::connector::contract::ContractCatalog;
 use crate::connector::driver::InboundCall;
-use crate::connector::driver::Outbound;
 use crate::connector::driver::OutboundCall;
 use crate::connector::driver::OutboundDrivers;
+use crate::connector::driver::OutboundRole;
 use crate::connector::driver::Session;
 use crate::connector::drivers::registry::{
     DriverFactory, DriverFactoryError, DriverRegistrationError,
@@ -149,7 +149,7 @@ fn registration_is_exact_role_aware_and_never_first_wins() {
 #[derive(Default)]
 struct EmptyInbound;
 
-impl crate::connector::driver::Ingress for EmptyInbound {
+impl crate::connector::driver::InboundRole for EmptyInbound {
     fn poll_proposal(&mut self) -> Option<PendingIngress> {
         None
     }
@@ -219,16 +219,16 @@ struct RoutingBound {
 }
 
 impl Driver for RoutingBound {
-    fn inbound(&mut self) -> Option<&mut dyn crate::connector::driver::Ingress> {
+    fn inbound_role(&mut self) -> Option<&mut dyn crate::connector::driver::InboundRole> {
         self.inbound
             .as_mut()
-            .map(|driver| driver as &mut dyn crate::connector::driver::Ingress)
+            .map(|driver| driver as &mut dyn crate::connector::driver::InboundRole)
     }
 
-    fn outbound(&mut self) -> Option<&mut dyn Outbound> {
+    fn outbound_role(&mut self) -> Option<&mut dyn OutboundRole> {
         self.outbound
             .as_mut()
-            .map(|driver| driver as &mut dyn Outbound)
+            .map(|driver| driver as &mut dyn OutboundRole)
     }
 }
 
@@ -410,7 +410,7 @@ struct DuplexDriver {
     observations: Arc<Mutex<Vec<&'static str>>>,
 }
 
-impl crate::connector::driver::Ingress for DuplexDriver {
+impl crate::connector::driver::InboundRole for DuplexDriver {
     fn poll_proposal(&mut self) -> Option<PendingIngress> {
         self.observations.lock().unwrap().push("inbound");
         None
@@ -477,11 +477,11 @@ impl OutboundCall for DuplexDriver {
 }
 
 impl Driver for DuplexDriver {
-    fn inbound(&mut self) -> Option<&mut dyn crate::connector::driver::Ingress> {
+    fn inbound_role(&mut self) -> Option<&mut dyn crate::connector::driver::InboundRole> {
         Some(self)
     }
 
-    fn outbound(&mut self) -> Option<&mut dyn Outbound> {
+    fn outbound_role(&mut self) -> Option<&mut dyn OutboundRole> {
         Some(self)
     }
 }
@@ -562,7 +562,7 @@ struct SessionDuplexDriver {
     closed: BTreeSet<SessionId>,
 }
 
-impl crate::connector::driver::Ingress for SessionDuplexDriver {
+impl crate::connector::driver::InboundRole for SessionDuplexDriver {
     fn poll_proposal(&mut self) -> Option<PendingIngress> {
         self.observations.lock().unwrap().push("inbound");
         None
@@ -690,7 +690,7 @@ impl Session for SessionDuplexDriver {
     }
 }
 
-impl Outbound for SessionDuplexDriver {
+impl OutboundRole for SessionDuplexDriver {
     fn call(&mut self) -> Option<&mut dyn OutboundCall> {
         None
     }
@@ -701,11 +701,11 @@ impl Outbound for SessionDuplexDriver {
 }
 
 impl Driver for SessionDuplexDriver {
-    fn inbound(&mut self) -> Option<&mut dyn crate::connector::driver::Ingress> {
+    fn inbound_role(&mut self) -> Option<&mut dyn crate::connector::driver::InboundRole> {
         Some(self)
     }
 
-    fn outbound(&mut self) -> Option<&mut dyn Outbound> {
+    fn outbound_role(&mut self) -> Option<&mut dyn OutboundRole> {
         Some(self)
     }
 }
@@ -960,7 +960,7 @@ struct RetainedInboundDriver {
     state: Arc<Mutex<InboundQueueState>>,
 }
 
-impl crate::connector::driver::Ingress for RetainedInboundDriver {
+impl crate::connector::driver::InboundRole for RetainedInboundDriver {
     fn poll_proposal(&mut self) -> Option<PendingIngress> {
         self.state.lock().unwrap().proposals.front().cloned()
     }
@@ -981,11 +981,11 @@ impl crate::connector::driver::Ingress for RetainedInboundDriver {
 }
 
 impl Driver for RetainedInboundDriver {
-    fn inbound(&mut self) -> Option<&mut dyn crate::connector::driver::Ingress> {
+    fn inbound_role(&mut self) -> Option<&mut dyn crate::connector::driver::InboundRole> {
         Some(self)
     }
 
-    fn outbound(&mut self) -> Option<&mut dyn Outbound> {
+    fn outbound_role(&mut self) -> Option<&mut dyn OutboundRole> {
         None
     }
 }
@@ -1012,7 +1012,7 @@ struct RetainedCallDriver {
     state: Arc<Mutex<RetainedCallState>>,
 }
 
-impl crate::connector::driver::Ingress for RetainedCallDriver {
+impl crate::connector::driver::InboundRole for RetainedCallDriver {
     fn poll_proposal(&mut self) -> Option<PendingIngress> {
         self.state.lock().unwrap().proposals.front().cloned()
     }
@@ -1075,11 +1075,11 @@ impl InboundCall for RetainedCallDriver {
 }
 
 impl Driver for RetainedCallDriver {
-    fn inbound(&mut self) -> Option<&mut dyn crate::connector::driver::Ingress> {
+    fn inbound_role(&mut self) -> Option<&mut dyn crate::connector::driver::InboundRole> {
         Some(self)
     }
 
-    fn outbound(&mut self) -> Option<&mut dyn Outbound> {
+    fn outbound_role(&mut self) -> Option<&mut dyn OutboundRole> {
         None
     }
 }

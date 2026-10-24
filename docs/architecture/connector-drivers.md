@@ -65,10 +65,10 @@ are under `rastok::connector::drivers`.
 
 | Interface | Responsibility |
 |---|---|
-| `Driver` | Expose inbound/outbound views over the same implementation object. |
-| `Ingress` | Retain and propose an external arrival; receive the admission result. |
+| `Driver` | Expose `InboundRole` through `inbound_role()` and `OutboundRole` through `outbound_role()`, over the same implementation object. |
+| `InboundRole` | Retain and propose an external arrival; receive the admission result. |
 | `InboundCall` | Return graph responses or scheduler timeouts to an inbound caller and report their completion. |
-| `Outbound` | Expose the implemented outbound Call or Session interface. |
+| `OutboundRole` | Expose the implemented outbound Call or Session interface. |
 | `OutboundCall` | Prepare, start and cancel Calls; poll their correlated responses. |
 | `Session` | Open, write, close and observe a resident exchange. |
 
@@ -95,9 +95,9 @@ Read these files in order:
 4. `examples/file-pipeline.rkg`: a complete executable Lab example.
 
 File is an outbound Call. Its real Driver implements `Driver` and
-`OutboundCall`; it has no ingress view and no resident Session protocol.
+`OutboundCall`; it has no inbound role view and no resident Session protocol.
 The common outbound view exposes that Call interface.
-The core supplies this per-object `Outbound` view for every `OutboundCall`
+The core supplies this per-object `OutboundRole` view for every `OutboundCall`
 implementation; this is not the execution-wide `OutboundDrivers` routing table.
 
 ```rkg

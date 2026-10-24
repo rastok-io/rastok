@@ -11,8 +11,8 @@ use rastok::connector::ConnectorDirection;
 use rastok::connector::ContractId;
 use rastok::connector::contract::ContractCatalog;
 use rastok::connector::driver::Driver;
-use rastok::connector::driver::Outbound;
 use rastok::connector::driver::OutboundCall;
+use rastok::connector::driver::OutboundRole;
 use rastok::connector::drivers::conformance::{
     DriverTestFixture, ExitCaseTest, InterleaveExpectation, InterleaveProbe, assert_conformant,
     verify,
@@ -317,11 +317,11 @@ impl OutboundCall for Liar {
 }
 
 impl Driver for Liar {
-    fn inbound(&mut self) -> Option<&mut dyn rastok::connector::driver::Ingress> {
+    fn inbound_role(&mut self) -> Option<&mut dyn rastok::connector::driver::InboundRole> {
         None
     }
 
-    fn outbound(&mut self) -> Option<&mut dyn Outbound> {
+    fn outbound_role(&mut self) -> Option<&mut dyn OutboundRole> {
         Some(self)
     }
 }
@@ -448,11 +448,11 @@ impl OutboundCall for Swapper {
 }
 
 impl Driver for Swapper {
-    fn inbound(&mut self) -> Option<&mut dyn rastok::connector::driver::Ingress> {
+    fn inbound_role(&mut self) -> Option<&mut dyn rastok::connector::driver::InboundRole> {
         None
     }
 
-    fn outbound(&mut self) -> Option<&mut dyn Outbound> {
+    fn outbound_role(&mut self) -> Option<&mut dyn OutboundRole> {
         Some(self)
     }
 }

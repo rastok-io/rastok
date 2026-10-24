@@ -12,7 +12,7 @@ use std::rc::Rc;
 use crate::connector::ConnectorDirection;
 use crate::connector::ContractId;
 use crate::connector::driver::InboundCall;
-use crate::connector::driver::Ingress;
+use crate::connector::driver::InboundRole;
 use crate::connector::exchange::AdmittedIngress;
 use crate::connector::exchange::Completion;
 use crate::connector::exchange::InboundCallObservation;
@@ -298,7 +298,7 @@ struct HttpServerLabDriver {
     input: Rc<RefCell<HttpServerLabInput>>,
 }
 
-impl Ingress for HttpServerLabDriver {
+impl InboundRole for HttpServerLabDriver {
     fn poll_proposal(&mut self) -> Option<PendingIngress> {
         self.input.borrow().pending.clone()
     }
@@ -421,11 +421,11 @@ impl super::DriverFactory for HttpServerLabFactory {
 }
 
 impl crate::connector::driver::Driver for HttpServerLabDriver {
-    fn inbound(&mut self) -> Option<&mut dyn Ingress> {
+    fn inbound_role(&mut self) -> Option<&mut dyn InboundRole> {
         Some(self)
     }
 
-    fn outbound(&mut self) -> Option<&mut dyn crate::connector::driver::Outbound> {
+    fn outbound_role(&mut self) -> Option<&mut dyn crate::connector::driver::OutboundRole> {
         None
     }
 }

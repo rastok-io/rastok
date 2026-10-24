@@ -53,10 +53,10 @@ impl DriverFactory for NamedCallFactory {
 struct NamedCallDriver(Arc<Mutex<CallState>>);
 
 impl Driver for NamedCallDriver {
-    fn inbound(&mut self) -> Option<&mut dyn crate::connector::driver::Ingress> {
+    fn inbound_role(&mut self) -> Option<&mut dyn crate::connector::driver::InboundRole> {
         None
     }
-    fn outbound(&mut self) -> Option<&mut dyn Outbound> {
+    fn outbound_role(&mut self) -> Option<&mut dyn OutboundRole> {
         Some(self)
     }
 }
@@ -658,14 +658,14 @@ struct NamedSessionDriver {
 }
 
 impl Driver for NamedSessionDriver {
-    fn inbound(&mut self) -> Option<&mut dyn crate::connector::driver::Ingress> {
+    fn inbound_role(&mut self) -> Option<&mut dyn crate::connector::driver::InboundRole> {
         Some(self)
     }
-    fn outbound(&mut self) -> Option<&mut dyn Outbound> {
+    fn outbound_role(&mut self) -> Option<&mut dyn OutboundRole> {
         Some(self)
     }
 }
-impl Outbound for NamedSessionDriver {
+impl OutboundRole for NamedSessionDriver {
     fn call(&mut self) -> Option<&mut dyn OutboundCall> {
         None
     }
@@ -673,7 +673,7 @@ impl Outbound for NamedSessionDriver {
         Some(self)
     }
 }
-impl crate::connector::driver::Ingress for NamedSessionDriver {
+impl crate::connector::driver::InboundRole for NamedSessionDriver {
     fn poll_proposal(&mut self) -> Option<PendingIngress> {
         self.state.lock().unwrap().proposals.front().cloned()
     }

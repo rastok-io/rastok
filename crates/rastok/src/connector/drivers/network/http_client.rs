@@ -1,5 +1,5 @@
-use crate::connector::driver::Outbound;
 use crate::connector::driver::OutboundCall;
+use crate::connector::driver::OutboundRole;
 use crate::connector::drivers::http_client::{
     HttpBearer, HttpClientPlanBinding, HttpClientRequestSettings, HttpRequest, decode_request,
 };
@@ -295,11 +295,11 @@ struct HttpClient<'plan> {
 }
 
 impl crate::connector::driver::Driver for HttpClient<'_> {
-    fn inbound(&mut self) -> Option<&mut dyn crate::connector::driver::Ingress> {
+    fn inbound_role(&mut self) -> Option<&mut dyn crate::connector::driver::InboundRole> {
         None
     }
 
-    fn outbound(&mut self) -> Option<&mut dyn Outbound> {
+    fn outbound_role(&mut self) -> Option<&mut dyn OutboundRole> {
         Some(self)
     }
 }

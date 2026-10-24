@@ -4,14 +4,15 @@
 //! The real Process Driver behind its Connector contract — where the graph's
 //! intent becomes an actual effect on the machine.
 //!
-//! A Driver is an [`Outbound`]: the Driver poller hands it
-//! journaled intents and collects its answers. Nothing else changes shape —
+//! This Driver exposes an [`OutboundRole`] through its [`OutboundCall`] interface:
+//! the Driver poller hands it journaled intents and collects its answers.
+//! Nothing else changes shape —
 //! the Lab's scripted worlds and real Drivers are interchangeable
 //! behind the same trait, which is the point: a simulation exercises
 //! exactly the machinery a run does, minus this file.
 
-use crate::connector::driver::Outbound;
 use crate::connector::driver::OutboundCall;
+use crate::connector::driver::OutboundRole;
 use crate::connector::exchange::CallOpen;
 use crate::connector::exchange::CallResponse;
 use crate::connector::exchange::CallStart;
@@ -479,7 +480,7 @@ impl ProcessSettings {
 /// carries the codec-framed request; the complete stdout at exit
 /// becomes the one reply. The process boundary is the correlation.
 ///
-/// The Driver is asynchronous, as the [`Outbound`] contract
+/// The Driver is asynchronous, as the [`OutboundCall`] contract
 /// demands: a Driver answers or stays silent — it never times itself out. Only
 /// the scheduler constructs TimeoutExpired; when the machine closes a
 /// call, [`OutboundCall::cancel`] kills the child. Every pipe drains on
@@ -725,11 +726,11 @@ impl super::DriverFactory for ProcessFactory {
 }
 
 impl crate::connector::driver::Driver for Process<'_> {
-    fn inbound(&mut self) -> Option<&mut dyn crate::connector::driver::Ingress> {
+    fn inbound_role(&mut self) -> Option<&mut dyn crate::connector::driver::InboundRole> {
         None
     }
 
-    fn outbound(&mut self) -> Option<&mut dyn Outbound> {
+    fn outbound_role(&mut self) -> Option<&mut dyn OutboundRole> {
         Some(self)
     }
 }

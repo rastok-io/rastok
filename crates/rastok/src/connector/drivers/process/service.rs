@@ -223,14 +223,14 @@ enum Event {
 }
 
 impl Driver for Service {
-    fn inbound(&mut self) -> Option<&mut dyn Ingress> {
+    fn inbound_role(&mut self) -> Option<&mut dyn InboundRole> {
         Some(self)
     }
-    fn outbound(&mut self) -> Option<&mut dyn Outbound> {
+    fn outbound_role(&mut self) -> Option<&mut dyn OutboundRole> {
         Some(self)
     }
 }
-impl Outbound for Service {
+impl OutboundRole for Service {
     fn call(&mut self) -> Option<&mut dyn OutboundCall> {
         None
     }
@@ -406,7 +406,7 @@ impl Service {
         }
     }
 }
-impl Ingress for Service {
+impl InboundRole for Service {
     fn poll_proposal(&mut self) -> Option<PendingIngress> {
         if self.proposal.is_some() {
             return self.proposal.clone();

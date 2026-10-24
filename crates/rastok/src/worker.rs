@@ -665,11 +665,11 @@ mod tests {
     }
 
     impl crate::connector::driver::Driver for SilentProcess {
-        fn inbound(&mut self) -> Option<&mut dyn crate::connector::driver::Ingress> {
+        fn inbound_role(&mut self) -> Option<&mut dyn crate::connector::driver::InboundRole> {
             None
         }
 
-        fn outbound(&mut self) -> Option<&mut dyn crate::connector::driver::Outbound> {
+        fn outbound_role(&mut self) -> Option<&mut dyn crate::connector::driver::OutboundRole> {
             Some(self)
         }
     }

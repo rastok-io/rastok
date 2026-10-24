@@ -8,8 +8,8 @@
 //! called after the EGRESS open is journaled, hands that descriptor to a
 //! worker that may observe or mutate the filesystem.
 
-use crate::connector::driver::Outbound;
 use crate::connector::driver::OutboundCall;
+use crate::connector::driver::OutboundRole;
 use crate::connector::exchange::CallOpen;
 use crate::connector::exchange::CallResponse;
 use crate::connector::exchange::CallStart;
@@ -363,11 +363,11 @@ impl Drop for File<'_> {
 }
 
 impl crate::connector::driver::Driver for File<'_> {
-    fn inbound(&mut self) -> Option<&mut dyn crate::connector::driver::Ingress> {
+    fn inbound_role(&mut self) -> Option<&mut dyn crate::connector::driver::InboundRole> {
         None
     }
 
-    fn outbound(&mut self) -> Option<&mut dyn Outbound> {
+    fn outbound_role(&mut self) -> Option<&mut dyn OutboundRole> {
         Some(self)
     }
 }
