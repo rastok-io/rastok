@@ -1509,15 +1509,21 @@ impl DataType {
                     )
                 }
             }
-            (
-                Self::Temporal(TemporalType::Timestamp { unit, .. }),
-                Value::Timestamp(nanoseconds),
-            )
-            | (
-                Self::Temporal(TemporalType::TimestampNtz(unit)),
-                Value::TimestampNtz(nanoseconds),
-            )
-            | (Self::Temporal(TemporalType::Duration(unit)), Value::Duration(nanoseconds)) => {
+            (Self::Temporal(TemporalType::Timestamp { unit, .. }), Value::Timestamp(instant))
+            | (Self::Temporal(TemporalType::TimestampNtz(unit)), Value::TimestampNtz(instant)) => {
+                if time_unit_accepts(*unit, i64::from(instant.nanoseconds())) {
+                    None
+                } else {
+                    refusal(
+                        name,
+                        path,
+                        self,
+                        value,
+                        ConformanceReason::TemporalPrecision { unit: *unit },
+                    )
+                }
+            }
+            (Self::Temporal(TemporalType::Duration(unit)), Value::Duration(nanoseconds)) => {
                 if time_unit_accepts(*unit, *nanoseconds) {
                     None
                 } else {
@@ -2546,6 +2552,33 @@ mod tests {
     }
 
     #[test]
+    fn civil_carriers_accept_wide_dates_without_losing_declared_precision() {
+        use crate::time::Timestamp;
+        let seconds = DataType::Temporal(TemporalType::Timestamp {
+            unit: TimeUnit::Second,
+            zone: TimeZone::Utc,
+        });
+        let micros = DataType::Temporal(TemporalType::TimestampNtz(TimeUnit::Microsecond));
+        for count in [
+            i64::MIN,
+            -62_135_596_800,
+            -11_676_096_000,
+            253_402_300_799,
+            i64::MAX,
+        ] {
+            let instant = Timestamp::try_new(count, 0).unwrap();
+            assert!(seconds.accepts(&Value::Timestamp(instant)));
+            assert!(micros.accepts(&Value::TimestampNtz(instant)));
+            let fraction = Timestamp::try_new(count, 999_999_000).unwrap();
+            assert!(!seconds.accepts(&Value::Timestamp(fraction)));
+            assert!(micros.accepts(&Value::TimestampNtz(fraction)));
+            assert!(!micros.accepts(&Value::TimestampNtz(
+                Timestamp::try_new(count, 999_999_999).unwrap()
+            )));
+        }
+    }
+
+    #[test]
     fn temporal_carriers_are_canonical_and_types_hold_the_parameters() {
         let date32 = DataType::Temporal(TemporalType::Date(DateUnit::Day));
         assert!(date32.accepts(&Value::Date(i64::from(i32::MAX))));
@@ -2565,12 +2598,20 @@ mod tests {
             unit: TimeUnit::Second,
             zone: TimeZone::named("Europe/Paris").expect("a named timezone"),
         });
-        assert!(timestamp_seconds.accepts(&Value::Timestamp(NANOS_PER_SECOND)));
-        assert!(!timestamp_seconds.accepts(&Value::Timestamp(1)));
+        assert!(timestamp_seconds.accepts(&Value::Timestamp(
+            crate::time::Timestamp::from_nanoseconds(NANOS_PER_SECOND)
+        )));
+        assert!(!timestamp_seconds.accepts(&Value::Timestamp(
+            crate::time::Timestamp::from_nanoseconds(1)
+        )));
 
         let local_micros = DataType::Temporal(TemporalType::TimestampNtz(TimeUnit::Microsecond));
-        assert!(local_micros.accepts(&Value::TimestampNtz(1_000)));
-        assert!(!local_micros.accepts(&Value::TimestampNtz(1)));
+        assert!(local_micros.accepts(&Value::TimestampNtz(
+            crate::time::Timestamp::from_nanoseconds(1_000)
+        )));
+        assert!(!local_micros.accepts(&Value::TimestampNtz(
+            crate::time::Timestamp::from_nanoseconds(1)
+        )));
 
         let duration_millis = DataType::Temporal(TemporalType::Duration(TimeUnit::Millisecond));
         assert!(duration_millis.accepts(&Value::Duration(-1_000_000)));

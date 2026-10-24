@@ -377,8 +377,14 @@ order.
 
 ### 5.3 Civil time in scenarios — `origin`
 
-Virtual time is relative ; `Calendar` (cron) needs an absolute anchor. A
-scenario may declare one :
+Virtual time starts at zero. A scenario may declare its immutable civil
+`origin` as a constant `timestamp`; omission means the Unix epoch. The
+declaration configures the run, is not an authored action, and never enters
+the production program's semantic hash. Duplicate, nonconstant or wrongly
+typed declarations refuse. `now()` uses this origin; tumbling boxes remain
+epoch-aligned, with the origin converting their bounds to logical instants.
+
+`Calendar` (cron) will also need this absolute anchor:
 
 ```rastok
 scenario monday_report {
@@ -388,9 +394,11 @@ scenario monday_report {
 }
 ```
 
-Absent : epoch default — and using `Calendar` in a scenario without a
-declared `origin` is a **warning** (your cron fires at instants you did not
-choose).
+Using `Calendar` in a scenario without a declared `origin` is a **warning**
+(your cron fires at instants you did not choose).
+
+Implementation status: Calendar remains outside the executable M1 subset;
+the warning specified above is not implemented in M1.
 
 ### 5.4 Fault injection
 
@@ -428,10 +436,10 @@ Byte-identical **iff** :
    (jq / SQL pinned in the manifest) ;
 5. **the fingerprint covers the CAUSAL CORE only** — `committed_at` and
    scheduler creation/due instants are observation annotations, journaled when
-   useful but outside blake3. The transaction-fixed logical instant is sealed
+   useful but outside blake3. The transaction-fixed civil timestamp is sealed
    only when a checked handler can observe `now()`; equivalent Lab execution
-   must therefore supply the same logical timeline, without waiting in real
-   time;
+   must therefore supply the same origin and logical timeline when observed,
+   without waiting in real time;
 6. **canonical serialization AND evaluation** — field order = spec schemas;
    fixed unsigned CBOR table keys use table order; struct fields and
    state-delta paths use UTF-8 name order; `app_meta` triples use

@@ -352,8 +352,13 @@ mod tests {
             let compilation = crate::compiler::compile(&[source], &catalogue).expect("valid graph");
             for run in crate::lab::run(&compilation.plan, GraphVersion(1), &compilation.labs[0]) {
                 assert!(run.report.passed(), "{:?}", run.report);
-                let journal = MemJournal::from_records(GraphVersion(1), None, &run.records)
-                    .expect("retained records reconstruct");
+                let journal = MemJournal::from_records(
+                    GraphVersion(1),
+                    crate::time::Timestamp::UNIX_EPOCH,
+                    None,
+                    &run.records,
+                )
+                .expect("retained records reconstruct");
                 let observations = journal.retained_observations();
                 let (sink, receiver) =
                     json_log_channel(observations.len()).expect("positive capacity");

@@ -399,7 +399,7 @@ fn check(paths: &[String]) -> ExitCode {
 /// to the Execution's explicit logical timeline. Nothing below this boundary reads
 /// the OS clock, and wall-clock adjustments cannot move a running Execution back.
 struct HostedTimeSource {
-    origin: i64,
+    origin: rastok::time::Timestamp,
     started: std::time::Instant,
 }
 
@@ -408,18 +408,20 @@ impl HostedTimeSource {
         let since_epoch = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_err(|_| String::from("the hosted wall clock is before the Unix epoch"))?;
-        let origin = i64::try_from(since_epoch.as_nanos()).map_err(|_| {
+        let seconds = i64::try_from(since_epoch.as_secs()).map_err(|_| {
             String::from("the hosted wall clock does not fit Rastok's timestamp range")
         })?;
+        let origin = rastok::time::Timestamp::try_new(seconds, since_epoch.subsec_nanos())
+            .map_err(|_| String::from("the hosted wall clock has an invalid fractional second"))?;
         Ok(Self {
             origin,
             started: std::time::Instant::now(),
         })
     }
 
-    fn logical_now(&self) -> i64 {
+    fn logical_now(&self) -> rastok::time::LogicalTime {
         let elapsed = i64::try_from(self.started.elapsed().as_nanos()).unwrap_or(i64::MAX);
-        self.origin.saturating_add(elapsed)
+        rastok::time::LogicalTime::from_nanoseconds(elapsed)
     }
 }
 
@@ -438,7 +440,7 @@ struct CliSupervision<'a> {
 impl rastok::worker::Supervision for CliSupervision<'_> {
     type Error = String;
 
-    fn logical_time(&mut self) -> i64 {
+    fn logical_time(&mut self) -> rastok::time::LogicalTime {
         self.time.logical_now()
     }
 
@@ -494,8 +496,23 @@ fn run(
         return ExitCode::FAILURE;
     };
     let boot = configuration.map(rastok::deployment_config::DeploymentConfig::boot);
+    let time = match HostedTimeSource::start() {
+        Ok(time) => time,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
     let mut recorder = match record
-        .map(|path| rastok::recording::Recorder::create(path, &compilation, GraphVersion(1), boot))
+        .map(|path| {
+            rastok::recording::Recorder::create(
+                path,
+                &compilation,
+                GraphVersion(1),
+                time.origin,
+                boot,
+            )
+        })
         .transpose()
     {
         Ok(recorder) => recorder,
@@ -557,18 +574,11 @@ fn run(
     } else {
         None
     };
-    let time = match HostedTimeSource::start() {
-        Ok(time) => time,
-        Err(error) => {
-            eprintln!("error: {error}");
-            return ExitCode::FAILURE;
-        }
-    };
     let mut worker = rastok::worker::Worker::new(
         &compilation.plan,
         Some(compilation.hash),
         version,
-        time.logical_now(),
+        time.origin,
         boot,
         world,
     );
@@ -636,7 +646,7 @@ fn run(
 fn recording_checkpoint(
     recorder: &mut Option<rastok::recording::Recorder>,
     journal: &MemJournal,
-    now: i64,
+    now: rastok::time::LogicalTime,
 ) -> Result<(), rastok::recording::Error> {
     if let Some(recorder) = recorder {
         recorder.checkpoint(journal, now)?;

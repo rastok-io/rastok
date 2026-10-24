@@ -5,6 +5,30 @@ use super::*;
 use crate::instance;
 use crate::journal::deadline::{Deadline, Deadlines};
 
+/// Elapsed nanoseconds within an epoch-aligned box. `every` is strictly
+/// positive, as proved by plan validation for a tumbling lifetime.
+///
+/// Reduce the wide origin before adding logical time. Modular multiplication
+/// avoids narrowing civil seconds to i64 nanoseconds or requiring i128 on
+/// embedded targets. Each addition fits u64: both residues are below the
+/// positive i64 period. The same remainder selects the address and deadline.
+pub(super) fn time_box_elapsed(origin: Timestamp, now: LogicalTime, every: i64) -> Duration {
+    let period = every as u64;
+    let mut seconds = origin.seconds().rem_euclid(every) as u64;
+    let mut multiplier = 1_000_000_000_u32;
+    let mut remainder = 0;
+    while multiplier != 0 {
+        if multiplier & 1 != 0 {
+            remainder = (remainder + seconds) % period;
+        }
+        seconds = (seconds + seconds) % period;
+        multiplier >>= 1;
+    }
+    remainder = (remainder + u64::from(origin.nanoseconds())) % period;
+    remainder = (remainder + now.as_nanoseconds().rem_euclid(every) as u64) % period;
+    Duration::from_nanoseconds(remainder as i64)
+}
+
 /// The work selected when a scheduler deadline is reached. Each variant
 /// carries the exact delivery, run or instance to which the obligation belongs;
 /// the scheduler does not infer a current generation when it fires.
@@ -157,17 +181,20 @@ impl Execution<'_> {
             let cause = envelope.meta().sys().id();
             activity.insert(reference.clone(), cause);
             let (due_at, deadline) = match lifetime {
-                instance::Lifetime::Idle(after) if previous != Some(cause) => {
-                    (self.now.saturating_add(*after), InstanceDeadline::Idle)
-                }
-                instance::Lifetime::Fixed(after) if previous.is_none() => {
-                    (self.now.saturating_add(*after), InstanceDeadline::Fixed)
-                }
+                instance::Lifetime::Idle(after) if previous != Some(cause) => (
+                    self.now + Duration::from_nanoseconds(*after),
+                    InstanceDeadline::Idle,
+                ),
+                instance::Lifetime::Fixed(after) if previous.is_none() => (
+                    self.now + Duration::from_nanoseconds(*after),
+                    InstanceDeadline::Fixed,
+                ),
                 instance::Lifetime::Tumbling(every) if previous.is_none() => (
                     self.now
-                        .div_euclid(*every)
-                        .saturating_mul(*every)
-                        .saturating_add(*every),
+                        + Duration::from_nanoseconds(
+                            *every
+                                - time_box_elapsed(self.origin, self.now, *every).as_nanoseconds(),
+                        ),
                     InstanceDeadline::Tumbling,
                 ),
                 _ => continue,
@@ -224,7 +251,7 @@ impl Execution<'_> {
                 Deadline {
                     kind: crate::journal::DeadlineKind::JoinWithin,
                     reference,
-                    due_at: self.now.saturating_add(within),
+                    due_at: self.now + Duration::from_nanoseconds(within),
                 },
                 Obligation::JoinWithin {
                     operator: path.clone(),
@@ -280,7 +307,7 @@ impl Execution<'_> {
                         crate::journal::DeadlineKind::CallTimeout
                     },
                     reference,
-                    due_at: self.now.saturating_add(budget),
+                    due_at: self.now + Duration::from_nanoseconds(budget),
                 },
                 Obligation::DeliveryBudget {
                     connector: path.clone(),
@@ -369,12 +396,12 @@ impl Execution<'_> {
         let Some(policy) = self.plan.nodes[instance.owner.index()].instance.closing else {
             return Vec::new();
         };
-        let drain = self.now.saturating_add(policy.drain_for);
+        let drain = self.now + Duration::from_nanoseconds(policy.drain_for);
         [
             (crate::journal::DeadlineKind::InstanceDrain, drain),
             (
                 crate::journal::DeadlineKind::InstanceSettlement,
-                drain.saturating_add(policy.settle_for),
+                drain + Duration::from_nanoseconds(policy.settle_for),
             ),
         ]
         .into_iter()
@@ -405,11 +432,54 @@ impl Execution<'_> {
     }
 
     pub(super) fn create_deadlines(
-        at: i64,
+        at: LogicalTime,
         deadlines: Vec<Deadline>,
     ) -> Result<Deadlines, ExecutionFault> {
         Deadlines::try_new(at, deadlines).map_err(|error| {
             ExecutionFault::Journal(crate::journal::Error::InvalidDeadlines(error))
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn epoch_alignment_matches_narrow_arithmetic_including_negative_instants() {
+        for origin in [-20_000_000_001, -999_999_999, 0, 1, 20_000_000_001] {
+            for now in [-30_000_000_001, -1, 0, 999_999_999, 30_000_000_001] {
+                for every in [1, 7, 999_999_999, 1_000_000_000, 2_000_000_000, i64::MAX] {
+                    assert_eq!(
+                        time_box_elapsed(
+                            Timestamp::from_nanoseconds(origin),
+                            LogicalTime::from_nanoseconds(now),
+                            every,
+                        ),
+                        Duration::from_nanoseconds((origin + now).rem_euclid(every)),
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn epoch_alignment_preserves_the_wide_civil_and_logical_bounds() {
+        for (origin, now, every, expected) in [
+            (
+                Timestamp::MIN,
+                LogicalTime::ZERO,
+                i64::MAX,
+                i64::MAX - 1_000_000_000,
+            ),
+            (Timestamp::MAX, LogicalTime::ZERO, i64::MAX, 999_999_999),
+            (Timestamp::MAX, LogicalTime::MIN, i64::MAX, 999_999_998),
+            (Timestamp::MIN, LogicalTime::MAX, 1, 0),
+        ] {
+            assert_eq!(
+                time_box_elapsed(origin, now, every),
+                Duration::from_nanoseconds(expected),
+            );
+        }
     }
 }

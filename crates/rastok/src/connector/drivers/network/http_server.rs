@@ -2292,7 +2292,11 @@ graph api : App {
         let mut drivers = crate::connector::drivers::RuntimeDrivers::prepare(&plan, &registry)
             .expect("the validated server plan binds");
         execution
-            .advance_to(&mut journal, &mut drivers, 1_000_000_000)
+            .advance_to(
+                &mut journal,
+                &mut drivers,
+                crate::time::LogicalTime::from_nanoseconds(1_000_000_000),
+            )
             .expect("the request deadline advances deterministically");
         assert!(execution.ready_inbound_call_responses().is_empty());
         let timeouts = execution.ready_inbound_call_timeouts();

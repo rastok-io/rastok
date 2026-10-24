@@ -58,8 +58,8 @@ pub enum Segment {
     ProcessingTimeBox {
         /// The owner whose lifetime selected the box.
         scope: node::OwnerPath,
-        /// Epoch-aligned box start in signed nanoseconds.
-        start_ns: i64,
+        /// Civil box start: the Unix epoch plus an integral number of periods.
+        start: crate::time::Timestamp,
     },
 }
 
@@ -91,11 +91,11 @@ impl Segment {
             ]),
             Self::ProcessingTimeBox {
                 scope: owner,
-                start_ns,
+                start,
             } => Cbor::Array(vec![
                 owner_path_tree(owner),
                 Cbor::Uint(2),
-                canonical::signed(*start_ns),
+                canonical::timestamp(*start),
             ]),
         }
     }
@@ -312,13 +312,7 @@ impl InstanceAddress {
                 }
                 [frame_owner, Cbor::Uint(2), instant] => Segment::ProcessingTimeBox {
                     scope: owner_from(frame_owner)?,
-                    start_ns: match instant {
-                        Cbor::Uint(value) => i64::try_from(*value).map_err(|_| malformed())?,
-                        Cbor::Negative(value) => {
-                            -1 - i64::try_from(*value).map_err(|_| malformed())?
-                        }
-                        _ => return Err(malformed()),
-                    },
+                    start: canonical::decode_timestamp(instant)?,
                 },
                 _ => return Err(malformed()),
             });
@@ -524,7 +518,7 @@ mod tests {
                 },
                 Segment::ProcessingTimeBox {
                     scope: owner.clone(),
-                    start_ns: i64::MIN,
+                    start: crate::time::Timestamp::MIN,
                 },
             ],
         )
@@ -566,7 +560,7 @@ mod tests {
                 },
                 Segment::ProcessingTimeBox {
                     scope: parent.clone(),
-                    start_ns: at,
+                    start: crate::time::Timestamp::from_nanoseconds(at),
                 },
             ]
         };
@@ -731,7 +725,7 @@ mod tests {
         let reversed = vec![
             Segment::ProcessingTimeBox {
                 scope: owner.clone(),
-                start_ns: 0,
+                start: crate::time::Timestamp::UNIX_EPOCH,
             },
             Segment::SelectedKey {
                 scope: owner.clone(),

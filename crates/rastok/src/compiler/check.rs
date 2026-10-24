@@ -1242,8 +1242,40 @@ impl Checker<'_, '_> {
         let mut mocks = Vec::new();
         let mut mocked: Vec<String> = Vec::new();
         let mut steps = Vec::new();
+        let mut origin = None;
         for item in &decl.body {
             match item {
+                ScenarioItem::Origin { expr, span } => {
+                    if origin.is_some() {
+                        self.bag.push(
+                            Diagnostic::new(
+                                E_DUP_LAB_IDENTITY,
+                                Phase::Resolve,
+                                "the scenario civil origin is declared more than once".to_string(),
+                            )
+                            .with_span(*span)
+                            .with_field("name", "origin"),
+                        );
+                        continue;
+                    }
+                    let Some(constant) =
+                        self.constant(expr, &expr::Signature::new(), &BTreeMap::new())
+                    else {
+                        continue;
+                    };
+                    match constant.value {
+                        crate::value::Value::Timestamp(value) => origin = Some(value),
+                        value => self.bag.push(
+                            Diagnostic::new(
+                                E_EXPR,
+                                Phase::Check,
+                                "origin takes a constant timestamp".to_string(),
+                            )
+                            .with_span(*span)
+                            .with_field("detail", format!("{value:?}")),
+                        ),
+                    }
+                }
                 ScenarioItem::Mock(mock) => {
                     let name = mock
                         .path
@@ -1569,6 +1601,7 @@ impl Checker<'_, '_> {
         crate::compiler::hir::Scenario {
             name: decl.name.text.clone(),
             label: decl.label.clone(),
+            origin: origin.unwrap_or(crate::time::Timestamp::UNIX_EPOCH),
             mocks,
             steps,
         }

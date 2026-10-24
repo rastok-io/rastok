@@ -29,10 +29,12 @@ review. This decision does not set a new freeze date.
 3. `now()` observes `origin + logical instant` as a civil timestamp. The
    observing transaction seals that civil value, including when only a
    guard observes it. An unobserved origin does not change a causal trace.
-   Tumbling boxes align on `origin + k·every`, and their civil starts enter
-   instance identity. This supersedes the contradictory `epoch + k·every`
-   wording in D-2026-10-10-1's rejection paragraph: the anchor is the fixed
-   journal origin, never the arrival of the first envelope.
+   Tumbling boxes remain epoch-aligned at `epoch + k·every`, and their civil
+   starts enter instance identity. Yoann confirms this on 24 October 2026:
+   `origin` converts between the civil and logical timelines; it does not
+   move the windows. This preserves instances.md §6.5 and the explicit
+   rejection of boot-relative boxes in D-2026-10-10-1. Its point 4's
+   ambiguous formula does not override that rule.
 4. Civil `timestamp` and `timestamp_ntz` use `[seconds, nanoseconds]`, with
    signed i64 seconds and an unsigned fraction strictly below one billion.
    Equal instants have one normalized representation. Value tags 22 and 23

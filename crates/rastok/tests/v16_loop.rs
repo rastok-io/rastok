@@ -390,11 +390,20 @@ fn graph_loop_delay_and_expiry_recover_without_restarting_the_wait() {
     inject(&mut execution, &mut journal, 2);
     execution.run_ready(&mut journal).unwrap();
     assert!(execution.outputs().is_empty());
-    let mut restored = Execution::new_at(&compilation.plan, GraphVersion(1), 500_000_000);
+    let mut restored = Execution::new_at(
+        &compilation.plan,
+        GraphVersion(1),
+        rastok::time::Timestamp::UNIX_EPOCH,
+        rastok::time::LogicalTime::from_nanoseconds(500_000_000),
+    );
     restored.recover_from_journal(&journal).unwrap();
     let mut world = RuntimeDrivers::prepare(&compilation.plan, &DriverRegistry::default()).unwrap();
     restored
-        .advance_to(&mut journal, &mut world, 1_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut world,
+            rastok::time::LogicalTime::from_nanoseconds(1_000_000_000),
+        )
         .unwrap();
     assert_eq!(restored.outputs().len(), 1);
     assert_eq!(restored.outputs()[0].port.name(), "expired");
@@ -404,10 +413,19 @@ fn graph_loop_delay_and_expiry_recover_without_restarting_the_wait() {
             .all(|(_, state)| state.phase == Phase::Expired && state.iteration == 1)
     );
     let last = journal.records().to_vec();
-    let mut closed = Execution::new_at(&compilation.plan, GraphVersion(1), 2_000_000_000);
+    let mut closed = Execution::new_at(
+        &compilation.plan,
+        GraphVersion(1),
+        rastok::time::Timestamp::UNIX_EPOCH,
+        rastok::time::LogicalTime::from_nanoseconds(2_000_000_000),
+    );
     closed.recover_from_journal(&journal).unwrap();
     closed
-        .advance_to(&mut journal, &mut world, 3_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut world,
+            rastok::time::LogicalTime::from_nanoseconds(3_000_000_000),
+        )
         .unwrap();
     assert_eq!(journal.records(), last);
     assert_eq!(closed.outputs(), restored.outputs());
@@ -423,7 +441,11 @@ fn closing_a_graph_loop_invalidates_its_pending_reentry() {
     inject(&mut execution, &mut journal, 2);
     execution.run_ready(&mut journal).unwrap();
     execution
-        .advance_to(&mut journal, &mut world, 2_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut world,
+            rastok::time::LogicalTime::from_nanoseconds(2_000_000_000),
+        )
         .unwrap();
     assert!(execution.outputs().is_empty());
     let records = journal.records().to_vec();
@@ -433,10 +455,19 @@ fn closing_a_graph_loop_invalidates_its_pending_reentry() {
             .runs()
             .all(|(_, state)| state.phase == Phase::Closed)
     );
-    let mut restored = Execution::new_at(&compilation.plan, GraphVersion(1), 2_000_000_000);
+    let mut restored = Execution::new_at(
+        &compilation.plan,
+        GraphVersion(1),
+        rastok::time::Timestamp::UNIX_EPOCH,
+        rastok::time::LogicalTime::from_nanoseconds(2_000_000_000),
+    );
     restored.recover_from_journal(&journal).unwrap();
     restored
-        .advance_to(&mut journal, &mut world, 6_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut world,
+            rastok::time::LogicalTime::from_nanoseconds(6_000_000_000),
+        )
         .unwrap();
     assert_eq!(journal.records(), records);
     assert!(restored.is_stable());
@@ -456,7 +487,11 @@ fn logical_advance_drains_graph_admissions_before_a_future_closure() {
     }
     let mut world = RuntimeDrivers::prepare(&compilation.plan, &DriverRegistry::default()).unwrap();
     execution
-        .advance_to(&mut journal, &mut world, 2_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut world,
+            rastok::time::LogicalTime::from_nanoseconds(2_000_000_000),
+        )
         .unwrap();
     // `advance` drains the current instant before moving to a future deadline.
     assert_eq!(execution.outputs().len(), 12);
@@ -468,7 +503,12 @@ fn logical_advance_drains_graph_admissions_before_a_future_closure() {
         12
     );
     assert!(execution.is_stable());
-    let mut restored = Execution::new_at(&compilation.plan, GraphVersion(1), 2_000_000_000);
+    let mut restored = Execution::new_at(
+        &compilation.plan,
+        GraphVersion(1),
+        rastok::time::Timestamp::UNIX_EPOCH,
+        rastok::time::LogicalTime::from_nanoseconds(2_000_000_000),
+    );
     restored.recover_from_journal(&journal).unwrap();
     assert!(restored.is_stable());
     inject(&mut restored, &mut journal, 0);
@@ -875,7 +915,11 @@ fn delayed_runs_reserve_manager_capacity_before_the_next_ingress_commit() {
     );
     let mut drivers = RuntimeDrivers::prepare(&plan, &DriverRegistry::default()).unwrap();
     execution
-        .advance_to(&mut journal, &mut drivers, 1_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut drivers,
+            rastok::time::LogicalTime::from_nanoseconds(1_000_000_000),
+        )
         .unwrap();
     execution.run_ready(&mut journal).unwrap();
     assert_eq!(execution.outputs().len(), 1024);
@@ -1069,14 +1113,23 @@ fn recovery_reschedules_the_original_deadline_not_a_fresh_delay() {
     inject(&mut interrupted, &mut journal, 1);
     interrupted.run_ready(&mut journal).unwrap();
     let before = journal.records().len();
-    let mut restored = Execution::new_at(&plan, GraphVersion(1), 750_000_000);
+    let mut restored = Execution::new_at(
+        &plan,
+        GraphVersion(1),
+        rastok::time::Timestamp::UNIX_EPOCH,
+        rastok::time::LogicalTime::from_nanoseconds(750_000_000),
+    );
     restored.recover_from_journal(&journal).unwrap();
     restored.run_ready(&mut journal).unwrap();
     assert!(restored.outputs().is_empty());
     assert_eq!(journal.records().len(), before);
     let mut drivers = RuntimeDrivers::prepare(&plan, &DriverRegistry::default()).unwrap();
     restored
-        .advance_to(&mut journal, &mut drivers, 1_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut drivers,
+            rastok::time::LogicalTime::from_nanoseconds(1_000_000_000),
+        )
         .unwrap();
     restored.run_ready(&mut journal).unwrap();
     assert_eq!(restored.outputs().len(), 1);
@@ -1093,7 +1146,12 @@ fn unsealed_deadline_bytes_are_required_for_delays_but_not_part_of_the_causal_se
       on in { Loop.next = data }
     "#,
     );
-    let mut execution = Execution::new_at(&plan, GraphVersion(1), 7_000_000_000);
+    let mut execution = Execution::new_at(
+        &plan,
+        GraphVersion(1),
+        rastok::time::Timestamp::UNIX_EPOCH,
+        rastok::time::LogicalTime::from_nanoseconds(7_000_000_000),
+    );
     let mut journal = MemJournal::new(GraphVersion(1));
     inject(&mut execution, &mut journal, 1);
     execution.run_ready(&mut journal).unwrap();
@@ -1103,8 +1161,14 @@ fn unsealed_deadline_bytes_are_required_for_delays_but_not_part_of_the_causal_se
         .position(|record| record.deadlines().is_some())
         .unwrap();
     let schedule = journal.records()[index].deadlines().unwrap();
-    assert_eq!(schedule.created_at(), 7_000_000_000);
-    assert_eq!(schedule.items()[0].due_at, 8_000_000_000);
+    assert_eq!(
+        schedule.created_at(),
+        rastok::time::LogicalTime::from_nanoseconds(7_000_000_000)
+    );
+    assert_eq!(
+        schedule.items()[0].due_at,
+        rastok::time::LogicalTime::from_nanoseconds(8_000_000_000)
+    );
     let mut decoder = rastok::journal::codec::Decoder::default();
     for record in &journal.records()[..=index] {
         let restored = decoder
@@ -1125,7 +1189,8 @@ fn unsealed_deadline_bytes_are_required_for_delays_but_not_part_of_the_causal_se
             1 => {
                 let schedule = transaction.deadlines.as_deref().unwrap();
                 let mut deadlines = schedule.items().to_vec();
-                deadlines[0].due_at += 1;
+                deadlines[0].due_at =
+                    deadlines[0].due_at + rastok::time::Duration::from_nanoseconds(1);
                 transaction.deadlines = Some(Box::new(
                     Deadlines::try_new(schedule.created_at(), deadlines).unwrap(),
                 ));
@@ -1135,7 +1200,7 @@ fn unsealed_deadline_bytes_are_required_for_delays_but_not_part_of_the_causal_se
                 let Fact::Advanced { due_at, .. } = &mut packet.facts[0] else {
                     unreachable!()
                 };
-                *due_at = Some(8_000_000_001);
+                *due_at = Some(rastok::time::LogicalTime::from_nanoseconds(8_000_000_001));
             }
             _ => {
                 let schedule = transaction.deadlines.as_deref().unwrap();
@@ -1461,15 +1526,26 @@ fn delayed_commands_wait_on_logical_time_without_reserving_reentry() {
     let fold = LoopView::from_records(journal.records()).unwrap();
     let run = fold.runs().next().unwrap().1;
     assert_eq!(run.phase, Phase::AwaitingAdmission);
-    assert_eq!(run.due_at, Some(1_000_000_000));
+    assert_eq!(
+        run.due_at,
+        Some(rastok::time::LogicalTime::from_nanoseconds(1_000_000_000))
+    );
     let mut drivers = RuntimeDrivers::prepare(&plan, &DriverRegistry::default()).unwrap();
     execution
-        .advance_to(&mut journal, &mut drivers, 999_999_999)
+        .advance_to(
+            &mut journal,
+            &mut drivers,
+            rastok::time::LogicalTime::from_nanoseconds(999_999_999),
+        )
         .unwrap();
     execution.run_ready(&mut journal).unwrap();
     assert!(execution.outputs().is_empty());
     execution
-        .advance_to(&mut journal, &mut drivers, 1_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut drivers,
+            rastok::time::LogicalTime::from_nanoseconds(1_000_000_000),
+        )
         .unwrap();
     execution.run_ready(&mut journal).unwrap();
     assert_eq!(execution.outputs().len(), 1);
@@ -1606,14 +1682,22 @@ fn lifetime_closure_invalidates_pending_reentry_before_the_next_generation() {
     inject(&mut execution, &mut journal, 7);
     execution.run_ready(&mut journal).unwrap();
     execution
-        .advance_to(&mut journal, &mut drivers, 1_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut drivers,
+            rastok::time::LogicalTime::from_nanoseconds(1_000_000_000),
+        )
         .unwrap();
     let fold = LoopView::from_records(journal.records()).unwrap();
     assert_eq!(fold.runs().next().unwrap().1.phase, Phase::Closed);
     inject(&mut execution, &mut journal, 8);
     execution.run_ready(&mut journal).unwrap();
     execution
-        .advance_to(&mut journal, &mut drivers, 2_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut drivers,
+            rastok::time::LogicalTime::from_nanoseconds(2_000_000_000),
+        )
         .unwrap();
     let fold = LoopView::from_records(journal.records()).unwrap();
     assert_eq!(fold.runs().count(), 2);

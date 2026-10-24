@@ -12,6 +12,12 @@ editor, a second runtime, a durable monitor or an alternative ingress.
 `replay capture.rkrec --ui` additionally inspects a recorded run read-only
 under D-2026-09-09-2; it cannot execute the embedded program.
 
+Logical positions and due instants are signed nanoseconds from the run's
+logical zero. Civil timestamp payloads expose exact seconds as decimal text
+and a separate nanosecond fraction, without passing wide integers through a
+JavaScript number. This is a projection of the recorded value, not a fresh
+wall-clock observation (`civil_timestamp_projection_keeps_wide_seconds_exact`).
+
 ## 1. Capability and CLI
 
 `hosted-ui` is an optional Cargo feature, omitted from reduced and embedded

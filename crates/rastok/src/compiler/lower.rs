@@ -2059,9 +2059,10 @@ impl Writer<'_> {
                 self.tag(7);
                 self.hasher.update(&nanos.to_le_bytes());
             }
-            crate::value::Value::Timestamp(nanos) => {
+            crate::value::Value::Timestamp(instant) => {
                 self.tag(8);
-                self.hasher.update(&nanos.to_le_bytes());
+                self.hasher.update(&instant.seconds().to_le_bytes());
+                self.hasher.update(&instant.nanoseconds().to_le_bytes());
             }
             crate::value::Value::Date(days) => {
                 self.tag(17);
@@ -2071,9 +2072,10 @@ impl Writer<'_> {
                 self.tag(18);
                 self.hasher.update(&nanos.to_le_bytes());
             }
-            crate::value::Value::TimestampNtz(nanos) => {
+            crate::value::Value::TimestampNtz(instant) => {
                 self.tag(19);
-                self.hasher.update(&nanos.to_le_bytes());
+                self.hasher.update(&instant.seconds().to_le_bytes());
+                self.hasher.update(&instant.nanoseconds().to_le_bytes());
             }
             crate::value::Value::Interval {
                 months,
@@ -2798,6 +2800,7 @@ graph app : App {
         );
         let mut attested_journal = crate::journal::MemJournal::new_with_deployment(
             GraphVersion(1),
+            crate::time::Timestamp::UNIX_EPOCH,
             boot.attestation().clone(),
         );
         assert_eq!(
@@ -2850,6 +2853,7 @@ graph app : App {
         );
         let mut missing_conditions_journal = crate::journal::MemJournal::new_with_deployment(
             GraphVersion(1),
+            crate::time::Timestamp::UNIX_EPOCH,
             boot.attestation().clone(),
         );
         assert!(matches!(
@@ -2887,6 +2891,7 @@ graph app : App {
         );
         let mut admitted_journal = crate::journal::MemJournal::new_with_deployment(
             GraphVersion(1),
+            crate::time::Timestamp::UNIX_EPOCH,
             regulated_boot.attestation().clone(),
         );
         assert_eq!(admitted.step(&mut admitted_journal), Ok(false));
@@ -2918,6 +2923,7 @@ graph app : App {
         );
         let mut undeclared_recipient_journal = crate::journal::MemJournal::new_with_deployment(
             GraphVersion(1),
+            crate::time::Timestamp::UNIX_EPOCH,
             boot.attestation().clone(),
         );
         assert!(matches!(
@@ -2955,6 +2961,7 @@ graph app : App {
         );
         let mut disclosed_journal = crate::journal::MemJournal::new_with_deployment(
             GraphVersion(1),
+            crate::time::Timestamp::UNIX_EPOCH,
             recipient_boot.attestation().clone(),
         );
         assert_eq!(disclosed_execution.step(&mut disclosed_journal), Ok(false));

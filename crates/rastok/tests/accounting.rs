@@ -94,7 +94,13 @@ graph accounting_probe : App {
 
     let first = accounting_observations(&compilation.plan, journal.records(), None)
         .expect("individual typed observations");
-    let retained = MemJournal::from_records(GraphVersion(1), None, journal.records()).unwrap();
+    let retained = MemJournal::from_records(
+        GraphVersion(1),
+        rastok::time::Timestamp::UNIX_EPOCH,
+        None,
+        journal.records(),
+    )
+    .unwrap();
     let replay = accounting_observations(&compilation.plan, retained.records(), None)
         .expect("the same original records remain readable");
     assert_eq!(first, replay);
@@ -217,7 +223,11 @@ graph priced_call : App {
     )
     .expect("the secret-free deployment resolves");
     let version = GraphVersion(1);
-    let mut journal = MemJournal::new_with_deployment(version, boot.attestation().clone());
+    let mut journal = MemJournal::new_with_deployment(
+        version,
+        rastok::time::Timestamp::UNIX_EPOCH,
+        boot.attestation().clone(),
+    );
     let mut execution = Execution::new_with_deployment(&compilation.plan, version, &boot);
     let mut world =
         rastok::connector::drivers::Process::try_new(&compilation.plan).expect("Process binds");

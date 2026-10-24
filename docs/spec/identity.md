@@ -1,10 +1,10 @@
 # Identity and canonical form
 
-> **Format 23, diagnostic recording 4.** The [lifecycle identity inventory](../architecture/lifecycle-registry-identity.md)
-> records the `l:loop` and `l:close` trigger spellings and their causal movement.
-> Semantic hashes, package bodies, lifecycle bytes and record tuple shapes are unchanged;
-> package checksums change with the version. The [Process identity inventory](../architecture/connector-rework-identity.md)
-> records the preceding single-Contract movement.
+> **Format 24, diagnostic recording 5.**
+> The [time-carrier inventory](../architecture/time-carriers-identity.md)
+> records the relative logical timeline, immutable civil origin and wide
+> timestamp carriers, with witness regeneration approved on 24 October.
+> There is no reader for the preceding format.
 > Only this format is readable. The registry is now extend-only: no
 > renumbering or reuse of an allocated key, tag or domain.
 > Changing the public version label to 1 remains a pre-publication TODO.
@@ -174,6 +174,15 @@ The journal contains immutable records with **sealed causal fields** and
 mutable or optional. Deadlines and winning Call closure instants must survive
 recovery exactly, but do not enter a causal trace seal.
 
+The immutable unsealed run header carries the civil `origin` as
+`[seconds_since_epoch (i64), nanoseconds (uint < 1,000,000,000)]`. It is a
+boot input, not a fourth record kind or a static plan field. The first logical
+instant is zero; all deadline and closure instants are signed nanoseconds
+relative to that zero. Recovery reuses the header, never a new wall-clock
+origin. Observing `now()` seals `origin + logical instant` at key 39; a
+tumbling address seals its epoch-aligned civil start. An otherwise
+unobserved origin does not affect the causal seal.
+
 The complete record codec and the canonical causal projection are different
 formats. A diagnostic recording includes the former. A golden compares the
 latter. A causal trace alone is therefore not a recovery backup.
@@ -275,7 +284,7 @@ execution-model §1) — keys `17–26`, `34–36`, `38–40`, `42–43`:
 | 35 | close_scope_generation | array | present exactly on the transaction whose close request wins (`l:close`, or a handler transaction containing bare `stop`); the fixed instance reference of the root of the Closing scope. Descendant work may drain under this reference, and later external admission reserves its successor. Omitted on ordinary firings. |
 | 36 | session_exit_id | bytes(16) | present exactly on the Connector transaction that terminates a Session. That transaction emits exactly one conventional `exit`, last; its envelope projects the same reference as `meta.ext.session_id`. The fold refuses a second exit, an exit with an open write, or any later message/write. |
 | 38 | inbound_call_exit_id | bytes(16) | present exactly on the Connector `l:reply` transaction that terminates the inbound Call opened by INGRESS key 16. Its cause is the root request; fixed ack consumes zero positions, while a graph response consumes exactly its one real delivery position. Owner/instance equal the opening source and exactly one conventional `exit` is last. The fold refuses an unmatched trigger or any second terminal. |
-| 39 | logical_time | int | the signed nanosecond logical instant since the Unix epoch, present exactly when a checked firing handler can observe `now()`; fixed across guard selection and body evaluation, omitted otherwise. This is an explicit transaction input, not a scheduler due date or host `committed_at`. |
+| 39 | observed_time | array | the normalized civil pair `[seconds_since_epoch (i64), nanoseconds (uint < 1,000,000,000)]` observed through `now()`; fixed across guard selection and body evaluation, omitted when the firing cannot observe it. This is an explicit transaction input, not a scheduler due date or host `committed_at`. |
 | 40 | loop_protocol | map | Sparse r2 packet: 1 context, 2 routed contexts, 3 produced commands, 4 consumed commands, 5 manager facts. Exact forms below; absent for unrelated transactions. |
 | 42 | instance_commands | map | Production or winning target-owned consumption; exact shape below. Absent without commands; separate from Loop r2. |
 | 43 | retry_protocol | map | Sparse Retry packet, also carried on its outbound Call facts. Correlation and Opened/Admitted/Held/Consumed/Advanced/Published/Closed use the exact forms below, checked against the retained prefix. Absent on unrelated records, INGRESS and Sessions. |
@@ -424,8 +433,6 @@ cannot diverge on bytes for the same journal :
   | 7 | null | null |
   | 8 | decimal | [minimal signed big-endian unscaled bytes, signed scale] |
   | 9 | date | signed days since epoch |
-  | 10 | timestamp | signed i64 nanoseconds since epoch |
-  | 11 | timestamp_ntz | signed i64 nanoseconds on the timezone-naive timeline |
   | 12 | time | signed nanoseconds since midnight |
   | 13 | uuid | 16-byte string |
   | 14 | duration | signed i64 nanoseconds |
@@ -436,6 +443,14 @@ cannot diverge on bytes for the same journal :
   | 19 | union | [canonical structural branch index, tagged value] or [case text, tagged struct payload] |
   | 20 | uint | unsigned integer within u64 |
   | 21 | interval | [signed months, signed days, signed nanoseconds] |
+  | 22 | timestamp | [signed i64 seconds since epoch, unsigned nanosecond fraction < 1,000,000,000] |
+  | 23 | timestamp_ntz | the same normalized pair on the timezone-naive timeline |
+
+  Tags 10 and 11 are not allocated in the readable form and are never reused
+  (D-2026-10-23-2). There is no alternate timestamp reader. Negative instants
+  use floor seconds and a nonnegative fraction: one nanosecond before the
+  epoch is `[-1, 999999999]`. The declared temporal unit constrains the
+  fraction without reducing the seconds range.
 
   Structural union branches are pairwise disjoint and use canonical type
   order. Tagged-union case names and structural indexes cannot collide.
@@ -467,7 +482,7 @@ cannot diverge on bytes for the same journal :
   extend-only kinds `1 = selected_key` (payload = `[resolved_key_type,
   tagged_value]`, using the plan's canonical `DataType` sub-form and the value
   registry above) and `2 = processing_time_box` (payload = the epoch-aligned
-  box-start timestamp in signed nanoseconds). The type is required because a
+  box-start civil pair `[seconds, nanoseconds]`). The type is required because a
   materialized `Value` deliberately does not duplicate integer width, temporal
   unit, decimal precision, enum domain, or struct field types. When one owner contributes both
   segments, selected-key precedes time-box. Singleton ownership contributes no
@@ -560,7 +575,7 @@ record kind, four `meta.sys` fields, payload, writable metadata, exact
 admission, consumed positions, ordered emissions, state delta, routes,
 lifecycle, manager facts and exchange transitions. Scheduler due instants
 are intentionally excluded, not derivable substitutes; explicit
-`logical_time` observations are included. Minimally differing record pairs
+`observed_time` observations are included. Minimally differing record pairs
 test these distinctions.
 
 **Sealed facts and unsealed circumstances.** The whole journal is immutable.

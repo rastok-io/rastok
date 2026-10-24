@@ -12,7 +12,7 @@ impl Execution<'_> {
         index: usize,
         slot: NodeIndex,
         record: &TransactionRecord,
-        resume_at: i64,
+        resume_at: LogicalTime,
     ) -> Result<(), ExecutionFault> {
         let packet = record
             .loop_protocol()
@@ -196,7 +196,7 @@ impl Execution<'_> {
                         {
                             let expected = self
                                 .loop_delay_for(slot, *to_iteration)?
-                                .map(|delay| self.now.saturating_add(delay));
+                                .map(|delay| self.now + Duration::from_nanoseconds(delay));
                             if *due_at != expected {
                                 return Err(invalid(
                                     index,

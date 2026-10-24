@@ -25,7 +25,7 @@ use std::io::{Read as _, Write as _};
 use std::path::Path;
 
 const MAGIC: &[u8; 4] = b"RKRC";
-const VERSION: u64 = 4;
+const VERSION: u64 = 5;
 const CHECKSUM_DOMAIN: &[u8] = b"rastok.diagnostic-recording\0";
 /// Upper bound on one diagnostic file, including its embedded plan package.
 pub const MAX_RECORDING_BYTES: usize = 64 * 1024 * 1024;
@@ -97,12 +97,13 @@ pub struct Recording {
     hash: SemanticHash,
     definitions: Vec<SourceDefinition>,
     version: GraphVersion,
+    origin: crate::time::Timestamp,
     records: Vec<Record>,
-    final_time: i64,
+    final_time: crate::time::LogicalTime,
     empty_deployment_header: bool,
     finished: bool,
     /// Prefix lengths and explicit observation instants; not causal timestamps.
-    checkpoints: Vec<(usize, i64)>,
+    checkpoints: Vec<(usize, crate::time::LogicalTime)>,
 }
 impl fmt::Debug for Recording {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -143,7 +144,7 @@ impl Recording {
     pub fn capture(
         compilation: &Compilation,
         journal: &MemJournal,
-        final_time: i64,
+        final_time: crate::time::LogicalTime,
     ) -> Result<Self, Error> {
         validate_capture(&compilation.plan, journal.deployment_attestation())?;
         if journal.records().len() > MAX_RECORDS {
@@ -154,6 +155,7 @@ impl Recording {
             hash: compilation.hash,
             definitions: compilation.source_definitions.clone(),
             version: journal.graph_version(),
+            origin: journal.origin(),
             records: journal.records().to_vec(),
             final_time,
             empty_deployment_header: journal.deployment_attestation().is_some(),
@@ -183,6 +185,11 @@ impl Recording {
     #[must_use]
     pub fn records(&self) -> &[Record] {
         &self.records
+    }
+    /// Immutable civil origin of this recorded run.
+    #[must_use]
+    pub fn origin(&self) -> crate::time::Timestamp {
+        self.origin
     }
     /// Whether the writer retained a normal end-of-run footer. A complete
     /// prefix without a footer remains inspectable, but is never called complete.
@@ -224,6 +231,7 @@ impl Recording {
             Cbor::Uint(self.version.0),
             Cbor::Bool(self.empty_deployment_header),
             definitions::encode(&self.definitions),
+            crate::canonical::timestamp(self.origin),
         ]);
         let mut bytes = MAGIC.to_vec();
         let mut seal = [0; 32];
@@ -233,7 +241,7 @@ impl Recording {
             bytes.extend(frame(
                 &codec::list([
                     Cbor::Uint(1),
-                    codec::integer(at),
+                    codec::integer(at.as_nanoseconds()),
                     codec::list(self.records[start..end].iter().map(codec::encode)),
                 ]),
                 &mut seal,
@@ -260,10 +268,11 @@ impl Recording {
         let mut rest = bytes.strip_prefix(MAGIC).ok_or(Error::Invalid("magic"))?;
         let mut seal = [0; 32];
         let tree = read_frame(&mut rest, &mut seal)?;
-        let [format, package, version, header, source] = codec::array(&tree)?;
-        if codec::uint(format)? != VERSION {
+        if codec::items(&tree)?.first().map(codec::uint).transpose()? != Some(VERSION) {
             return Err(Error::Unsupported("recording format version"));
         }
+        let [_, package, version, header, source, origin] = codec::array(&tree)?;
+        let origin = crate::canonical::decode_timestamp(origin).map_err(Error::Read)?;
         let (plan, hash) = plan::decode(codec::bytes(package)?).map_err(Error::Plan)?;
         let Cbor::Bool(empty_deployment_header) = header else {
             return Err(Error::Invalid("deployment header"));
@@ -278,7 +287,7 @@ impl Recording {
             let row = read_frame(&mut rest, &mut seal)?;
             match codec::items(&row)? {
                 [Cbor::Uint(1), at, retained] if !finished => {
-                    let at = codec::signed(at)?;
+                    let at = crate::time::LogicalTime::from_nanoseconds(codec::signed(at)?);
                     if final_time.is_some_and(|previous| at < previous) {
                         return Err(Error::Invalid("checkpoint time moved backwards"));
                     }
@@ -309,6 +318,7 @@ impl Recording {
             plan,
             hash,
             version: GraphVersion(codec::uint(version)?),
+            origin,
             final_time: final_time.ok_or(Error::Invalid("no retained checkpoint"))?,
             empty_deployment_header: *empty_deployment_header,
             definitions: definitions::decode(source)?,
@@ -337,8 +347,8 @@ impl Recording {
         let header = self
             .empty_deployment_header
             .then(DeploymentAttestation::default);
-        let journal =
-            MemJournal::from_records(self.version, header, prefix).map_err(Error::Journal)?;
+        let journal = MemJournal::from_records(self.version, self.origin, header, prefix)
+            .map_err(Error::Journal)?;
         // Acceptance may canonicalize collections, but must never rewrite history.
         if prefix
             .iter()
@@ -361,6 +371,7 @@ impl Recording {
             &self.plan,
             self.hash,
             self.version,
+            self.origin,
             now,
             self.empty_deployment_header.then_some(&empty),
         );
@@ -433,12 +444,13 @@ fn footer(records: &[Record]) -> Cbor {
 pub struct Recorder {
     file: File,
     version: GraphVersion,
+    origin: crate::time::Timestamp,
     hash: SemanticHash,
     written: usize,
     size: usize,
     seal: [u8; 32],
     checkpointed: bool,
-    last_time: Option<i64>,
+    last_time: Option<crate::time::LogicalTime>,
 }
 impl Recorder {
     /// Validates persistence policy and reserves a new file before execution.
@@ -450,6 +462,7 @@ impl Recorder {
         path: &Path,
         compilation: &Compilation,
         version: GraphVersion,
+        origin: crate::time::Timestamp,
         boot: Option<&BootBindings>,
     ) -> Result<Self, Error> {
         validate_capture(&compilation.plan, boot.map(BootBindings::attestation))?;
@@ -465,6 +478,7 @@ impl Recorder {
         let mut recorder = Self {
             file,
             version,
+            origin,
             hash: compilation.hash,
             written: 0,
             size: MAGIC.len(),
@@ -478,6 +492,7 @@ impl Recorder {
             Cbor::Uint(version.0),
             Cbor::Bool(boot.is_some()),
             definitions::encode(&compilation.source_definitions),
+            crate::canonical::timestamp(origin),
         ]))?;
         Ok(recorder)
     }
@@ -497,7 +512,14 @@ impl Recorder {
     ///
     /// # Errors
     /// Size bound, non-monotonic prefix or storage failure.
-    pub fn checkpoint(&mut self, journal: &MemJournal, now: i64) -> Result<(), Error> {
+    pub fn checkpoint(
+        &mut self,
+        journal: &MemJournal,
+        now: crate::time::LogicalTime,
+    ) -> Result<(), Error> {
+        if journal.origin() != self.origin {
+            return Err(Error::Invalid("recording civil origin changed"));
+        }
         if journal.graph_version() != self.version {
             return Err(Error::Invalid("recording deployment version changed"));
         }
@@ -516,7 +538,7 @@ impl Recorder {
         }
         self.append(&codec::list([
             Cbor::Uint(1),
-            codec::integer(now),
+            codec::integer(now.as_nanoseconds()),
             codec::list(suffix.iter().map(codec::encode)),
         ]))?;
         self.written = journal.records().len();
@@ -534,7 +556,7 @@ impl Recorder {
         mut self,
         compilation: &Compilation,
         journal: &MemJournal,
-        now: i64,
+        now: crate::time::LogicalTime,
     ) -> Result<(), Error> {
         if compilation.hash != self.hash {
             return Err(Error::Invalid("recording plan changed"));
@@ -543,7 +565,7 @@ impl Recorder {
         self.checkpoint(journal, now)?;
         self.append(&codec::list([
             Cbor::Uint(1),
-            codec::integer(now),
+            codec::integer(now.as_nanoseconds()),
             codec::list([]),
         ]))?;
         self.append(&footer(journal.records()))?;

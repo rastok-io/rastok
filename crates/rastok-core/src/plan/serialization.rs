@@ -1,7 +1,7 @@
 //! The plan package — the transportable, verifiable serialization
 //! of an [`ExecutionPlan`], per `docs/architecture/plan-package.md`.
 //!
-//! Format v23: the 4-byte magic `RKPB`, then one canonical CBOR map —
+//! Format v24: the 4-byte magic `RKPB`, then one canonical CBOR map —
 //! format version, the plan's semantic hash, the body as an embedded
 //! byte string, and a blake3 checksum over the domain-framed
 //! association `domain ‖ version ‖ semantic_hash ‖ body`, so a
@@ -54,7 +54,7 @@ pub const MAGIC: [u8; 4] = *b"RKPB";
 /// explicit Extensions and dispositions, and exact `std/` Contracts. The
 /// compact registry and ccbor values have one reading; every other package
 /// version refuses before its body can be interpreted.
-pub const FORMAT_VERSION: u32 = 23;
+pub const FORMAT_VERSION: u32 = 24;
 
 /// The checksum domain — fixed-width framing, so the covered fields
 /// cannot slide into one another.
@@ -3467,7 +3467,7 @@ mod tests {
                     Value::Int(-3),
                     Value::Bytes(vec![1]),
                     Value::Double(1.5),
-                    Value::Timestamp(7),
+                    Value::Timestamp(crate::time::Timestamp::from_nanoseconds(7)),
                 ]),
             );
             Value::Map(entries)
@@ -3971,10 +3971,10 @@ mod tests {
             },
             Value::Bytes(vec![1, 2]),
             Value::Duration(1),
-            Value::Timestamp(2),
+            Value::Timestamp(crate::time::Timestamp::from_nanoseconds(2)),
             Value::Date(3),
             Value::Time(4),
-            Value::TimestampNtz(5),
+            Value::TimestampNtz(crate::time::Timestamp::from_nanoseconds(5)),
             Value::Interval {
                 months: 1,
                 days: 2,

@@ -14,9 +14,9 @@ fn echo_retention_bytes_are_pinned_independently_of_the_codec_location() {
             .into_iter()
             .map(|run| codec::list(run.records.iter().map(codec::encode)))
     })));
-    // The recording-4 tuple includes inline unsealed deadlines. Its digest
-    // moves independently of causal seals; the single approval is inventoried
-    // in docs/architecture/human-review-v20-identity.md.
+    // The record tuple includes inline unsealed deadlines. Its digest is
+    // independent of the recording header, including its version and origin.
+    // The original pin is inventoried in human-review-v20-identity.md.
     assert_eq!(
         blake3::hash(&bytes).to_hex().as_str(),
         "6130123972daf8e882d56c726361a0ca26a4b6ac320613e697848e6bca6abb4d"
@@ -32,8 +32,19 @@ fn the_echo_recording_reconstructs_every_prefix_without_the_world() {
         .flat_map(|world| lab::run(&compilation.plan, GraphVersion(1), world));
     for run in runs {
         assert!(run.report.passed(), "{:?}", run.report.failures);
-        let journal = MemJournal::from_records(GraphVersion(1), None, &run.records).unwrap();
-        let recording = Recording::capture(&compilation, &journal, 10_000_000_000).unwrap();
+        let journal = MemJournal::from_records(
+            GraphVersion(1),
+            crate::time::Timestamp::UNIX_EPOCH,
+            None,
+            &run.records,
+        )
+        .unwrap();
+        let recording = Recording::capture(
+            &compilation,
+            &journal,
+            crate::time::LogicalTime::from_nanoseconds(10_000_000_000),
+        )
+        .unwrap();
         let decoded = Recording::decode(&recording.encode().unwrap()).unwrap();
         assert_eq!(decoded.definitions(), compilation.source_definitions);
         assert_eq!(
@@ -53,7 +64,12 @@ fn the_echo_recording_reconstructs_every_prefix_without_the_world() {
 #[test]
 fn incomplete_corrupt_and_wrong_version_files_refuse() {
     let compilation = compile("graph g : App { input in: int ; output out: int ; in -> out }");
-    let recording = Recording::capture(&compilation, &MemJournal::new(GraphVersion(1)), 0).unwrap();
+    let recording = Recording::capture(
+        &compilation,
+        &MemJournal::new(GraphVersion(1)),
+        crate::time::LogicalTime::ZERO,
+    )
+    .unwrap();
     let bytes = recording.encode().unwrap();
     for end in [0, 4, 35, bytes.len() - 1] {
         assert!(Recording::decode(&bytes[..end]).is_err());
@@ -70,8 +86,8 @@ fn incomplete_corrupt_and_wrong_version_files_refuse() {
     let Cbor::Array(fields) = &mut tree else {
         panic!("capture row");
     };
-    assert_eq!(fields[0], Cbor::Uint(4));
-    for version in [3, 5, u64::MAX] {
+    assert_eq!(fields[0], Cbor::Uint(5));
+    for version in [4, 6, u64::MAX] {
         let mut tree = tree.clone();
         let Cbor::Array(fields) = &mut tree else {
             panic!("capture row");
@@ -92,8 +108,56 @@ fn a_recording_is_not_allowed_to_promote_personal_memory_to_disk() {
         "graph g : App { input in: text @personal ; output out: text @personal ; in -> out }",
     );
     assert!(matches!(
-        Recording::capture(&compilation, &MemJournal::new(GraphVersion(1)), 0),
+        Recording::capture(
+            &compilation,
+            &MemJournal::new(GraphVersion(1)),
+            crate::time::LogicalTime::ZERO
+        ),
         Err(Error::PersonalData)
+    ));
+}
+
+#[test]
+fn recording_origin_is_mandatory_normalized_and_versioned() {
+    let compilation = compile("graph g : App { input in: int ; output out: int ; in -> out }");
+    let recording = Recording::capture(
+        &compilation,
+        &MemJournal::new(GraphVersion(1)),
+        crate::time::LogicalTime::ZERO,
+    )
+    .unwrap();
+    let bytes = recording.encode().unwrap();
+    let mut rest = &bytes[4..];
+    let tree = read_frame(&mut rest, &mut [0; 32]).unwrap();
+    let Cbor::Array(header) = tree else {
+        panic!("recording header");
+    };
+    assert_eq!(header.len(), 6);
+    assert_eq!(header[5], Cbor::Array(vec![Cbor::Uint(0), Cbor::Uint(0)]));
+
+    for origin in [
+        Cbor::Uint(0),
+        Cbor::Array(vec![Cbor::Uint(0)]),
+        Cbor::Array(vec![Cbor::Uint(0), Cbor::Uint(1_000_000_000)]),
+        Cbor::Array(vec![Cbor::Uint(u64::MAX), Cbor::Uint(0)]),
+    ] {
+        let mut fields = header.clone();
+        fields[5] = origin;
+        let mut forged = MAGIC.to_vec();
+        forged.extend(frame(&Cbor::Array(fields), &mut [0; 32]).unwrap());
+        assert!(matches!(Recording::decode(&forged), Err(Error::Read(_))));
+    }
+    let mut missing = header.clone();
+    missing.pop();
+    let mut forged = MAGIC.to_vec();
+    forged.extend(frame(&Cbor::Array(missing.clone()), &mut [0; 32]).unwrap());
+    assert!(matches!(Recording::decode(&forged), Err(Error::Invalid(_))));
+    missing[0] = Cbor::Uint(4);
+    let mut old = MAGIC.to_vec();
+    old.extend(frame(&Cbor::Array(missing), &mut [0; 32]).unwrap());
+    assert!(matches!(
+        Recording::decode(&old),
+        Err(Error::Unsupported("recording format version"))
     ));
 }
 
@@ -114,7 +178,11 @@ fn boot_dependent_recording_refuses_instead_of_copying_resolved_values() {
     }"#,
     );
     assert!(matches!(
-        Recording::capture(&compilation, &MemJournal::new(GraphVersion(1)), 0),
+        Recording::capture(
+            &compilation,
+            &MemJournal::new(GraphVersion(1)),
+            crate::time::LogicalTime::ZERO
+        ),
         Err(Error::Unsupported(_))
     ));
 }
@@ -136,10 +204,19 @@ fn keyed_retries_loops_and_bounded_joins_survive_recording_and_prefix_reconstruc
                 None,
             ) {
                 assert!(run.report.passed(), "{:?}", run.report);
-                let journal =
-                    MemJournal::from_records(GraphVersion(1), None, &run.records).unwrap();
-                let recording =
-                    Recording::capture(&compilation, &journal, 200_000_000_000_000).unwrap();
+                let journal = MemJournal::from_records(
+                    GraphVersion(1),
+                    crate::time::Timestamp::UNIX_EPOCH,
+                    None,
+                    &run.records,
+                )
+                .unwrap();
+                let recording = Recording::capture(
+                    &compilation,
+                    &journal,
+                    crate::time::LogicalTime::from_nanoseconds(200_000_000_000_000),
+                )
+                .unwrap();
                 let decoded = Recording::decode(&recording.encode().unwrap()).unwrap();
                 assert_eq!(
                     golden::project(decoded.records()),
@@ -192,7 +269,13 @@ fn encoded_data_and_nan_metadata_are_lossless_not_a_golden_only_projection() {
         .iter()
         .map(|record| reader.decode(&codec::encode(record)).unwrap())
         .collect();
-    let restored = MemJournal::from_records(GraphVersion(1), None, &decoded).unwrap();
+    let restored = MemJournal::from_records(
+        GraphVersion(1),
+        crate::time::Timestamp::UNIX_EPOCH,
+        None,
+        &decoded,
+    )
+    .unwrap();
     for (before, after) in journal.records().iter().zip(restored.records()) {
         assert_eq!(codec::encode(before), codec::encode(after));
     }
@@ -204,7 +287,12 @@ fn encoded_data_and_nan_metadata_are_lossless_not_a_golden_only_projection() {
 #[test]
 fn an_unfinished_complete_checkpoint_is_inspectable_but_not_reported_as_finished() {
     let compilation = compile("graph g : App { input in: int ; output out: int ; in -> out }");
-    let recording = Recording::capture(&compilation, &MemJournal::new(GraphVersion(1)), 0).unwrap();
+    let recording = Recording::capture(
+        &compilation,
+        &MemJournal::new(GraphVersion(1)),
+        crate::time::LogicalTime::ZERO,
+    )
+    .unwrap();
     let bytes = recording.encode().unwrap();
     let mut rest = &bytes[4..];
     let mut seal = [0; 32];
@@ -220,8 +308,19 @@ fn an_unfinished_complete_checkpoint_is_inspectable_but_not_reported_as_finished
 fn capture_retains_the_journals_deployment_version() {
     let compilation = compile(include_str!("../../../../examples/echo.rkg"));
     let run = lab::run(&compilation.plan, GraphVersion(7), &compilation.labs[0]).remove(0);
-    let journal = MemJournal::from_records(GraphVersion(7), None, &run.records).unwrap();
-    let captured = Recording::capture(&compilation, &journal, 10_000_000_000).unwrap();
+    let journal = MemJournal::from_records(
+        GraphVersion(7),
+        crate::time::Timestamp::UNIX_EPOCH,
+        None,
+        &run.records,
+    )
+    .unwrap();
+    let captured = Recording::capture(
+        &compilation,
+        &journal,
+        crate::time::LogicalTime::from_nanoseconds(10_000_000_000),
+    )
+    .unwrap();
     let decoded = Recording::decode(&captured.encode().unwrap()).unwrap();
     assert_eq!(decoded.version, GraphVersion(7));
     assert_eq!(

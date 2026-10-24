@@ -1,12 +1,14 @@
 # Diagnostic recording and read-only replay
 
-Status: 23 October 2026, diagnostic format **4**, embedding the
-[current plan package](../spec/identity.md). The
-[lifecycle identity inventory](lifecycle-registry-identity.md) records the
-`l:loop` and `l:close` trigger movement. Record tuple shapes are unchanged;
-records using these triggers carry their new text and derived identities.
-The [Connector identity inventory](connector-rework-identity.md) records
-the preceding Process Contract movement.
+Status: 24 October 2026, diagnostic format **5**, embedding the
+[current plan package](../spec/identity.md). The approved witness movement and
+qualification are recorded in the [time-carrier inventory](time-carriers-identity.md).
+The preceding movements remain documented in the
+[lifecycle identity inventory](lifecycle-registry-identity.md) and the
+[Connector identity inventory](connector-rework-identity.md).
+The header now carries the immutable civil origin; timestamp values and
+observed `now()` use wide seconds/fraction pairs. Logical checkpoint and deadline instants remain
+relative signed nanoseconds.
 There is no reader or converter for another
 recording format. Exact-instance closure packets travel on INGRESS and
 TRANSACTION; unused packets are absent from the causal seal.
@@ -49,6 +51,8 @@ Driver; it reconstructs the recorded Execution state only.
 - Source definitions and arm positions for inspection; presentation data,
   never code executed by the reader.
 - Deployment graph version and whether an empty deployment header existed.
+- Immutable civil origin, copied from the journal header, never observed
+  again at replay or recovery.
 - Complete INGRESS, TRANSACTION and EGRESS records, including typed DATA,
   META, prepared request bytes, completion extension metadata, manager
   commands, Loop states and exact unsealed deadlines.
@@ -76,6 +80,14 @@ body length, a 32-byte BLAKE3 checksum, and a canonical-CBOR body. The checksum
 covers `rastok.diagnostic-recording\0`, the previous checksum (zero initially)
 and the current body. Header, checkpoint and completion-footer shapes are
 versioned by this diagnostic format, independently of the embedded plan.
+
+The header is `[5, package_bytes, graph_version, empty_deployment_header,
+source_definitions, origin]`. `origin` is the normalized pair
+`[signed_seconds_since_epoch, unsigned_nanoseconds]`, with fraction strictly
+below one billion. It is integrity-protected but outside the causal seal.
+The header is mandatory even for an empty run; no reader infers an absent
+origin or accepts another version. Checkpoint instants count nanoseconds
+from logical zero, independently of the civil date.
 
 The reader refuses unknown versions, noncanonical or lossy records, partial
 frames, checksum mismatches, inconsistent repeated envelope identities,

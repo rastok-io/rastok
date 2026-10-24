@@ -45,7 +45,7 @@ fn transaction(instance: &instance::Generation, trigger: Trigger) -> Transaction
         exchange_exit: None,
         retry_record: None,
         loop_record: None,
-        logical_time: None,
+        observed_time: None,
         consumed: vec![],
         join_inputs: vec![],
         state_delta: vec![],

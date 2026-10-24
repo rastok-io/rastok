@@ -52,6 +52,7 @@ use crate::runtime::execution::driver_polling::DriverPoller;
 use crate::runtime::execution::timing::ClosingDeadline;
 use crate::runtime::execution::timing::InstanceDeadline;
 use crate::runtime::execution::timing::Obligation;
+use crate::time::{Duration, LogicalTime, Timestamp};
 
 use crate::journal::admission::InstanceAdmissions;
 use crate::journal::{Emission, Journal, LoopRunId, RouteTarget, RoutedDelivery, ids};
@@ -116,6 +117,10 @@ pub enum ExecutionFault {
     /// The journal run header does not carry the exact deployment facts with
     /// which this Execution was booted. No causal mutation may cross that split.
     DeploymentAttestationMismatch,
+    /// Execution and journal were constructed with different civil origins.
+    OriginMismatch,
+    /// A civil time required by an instance identity exceeds its carrier.
+    CivilTimeOutOfRange,
     /// One categorical boot reference has no compatible resolved binding.
     /// The Execution cannot defer this failure until a later Driver effect.
     MissingDeploymentBinding {
@@ -185,7 +190,7 @@ pub enum ExecutionFault {
         /// Tumbling owner whose box is closed.
         owner: node::OwnerPath,
         /// Canonical start of the closed box.
-        start_ns: i64,
+        start: Timestamp,
     },
     /// A causal closure arrived for a call this machine holds no
     /// pending request for — an integrity breach, never a silence.
@@ -296,6 +301,10 @@ impl fmt::Display for ExecutionFault {
             Self::DeploymentAttestationMismatch => {
                 f.write_str("the journal deployment attestation does not match the booted bindings")
             }
+            Self::OriginMismatch => f.write_str("the execution and journal civil origins differ"),
+            Self::CivilTimeOutOfRange => {
+                f.write_str("the required civil time exceeds the timestamp carrier")
+            }
             Self::MissingDeploymentBinding { location } => {
                 write!(f, "deployment binding required by {location} is missing")
             }
@@ -330,9 +339,9 @@ impl fmt::Display for ExecutionFault {
             Self::InstanceClosing { owner } => {
                 write!(f, "instance owner `{owner}` is closing")
             }
-            Self::ClosedTimeBox { owner, start_ns } => write!(
+            Self::ClosedTimeBox { owner, start } => write!(
                 f,
-                "processing-time box {start_ns} of `{owner}` is already closed"
+                "processing-time box {start:?} of `{owner}` is already closed"
             ),
             Self::MissingPending(_) => {
                 f.write_str("a closure settled a call with no pending request")
@@ -816,7 +825,7 @@ pub struct Scheduler {
     /// creation sequence breaks ties deterministically. Typed on the
     /// boundary vocabulary so every future obligation (join windows,
     /// lifetimes) crosses the same frontier as call budgets.
-    dated: BTreeMap<(i64, u64), Obligation>,
+    dated: BTreeMap<(LogicalTime, u64), Obligation>,
     creation_seq: u64,
 }
 
@@ -829,7 +838,7 @@ impl Scheduler {
         }
     }
 
-    fn schedule(&mut self, at: i64, payload: Obligation) {
+    fn schedule(&mut self, at: LogicalTime, payload: Obligation) {
         self.dated.insert((at, self.creation_seq), payload);
         self.creation_seq = self.creation_seq.wrapping_add(1);
     }
@@ -839,9 +848,9 @@ impl Scheduler {
     /// stays scheduled and replays.
     fn peek_due(
         &self,
-        target: i64,
+        target: LogicalTime,
         eligible: impl Fn(&Obligation) -> bool,
-    ) -> Option<((i64, u64), Obligation)> {
+    ) -> Option<((LogicalTime, u64), Obligation)> {
         self.dated
             .range(..=(target, u64::MAX))
             .find(|(_, payload)| eligible(payload))
@@ -849,7 +858,7 @@ impl Scheduler {
     }
 
     /// Acknowledges a resolved expiry.
-    fn ack(&mut self, key: (i64, u64)) {
+    fn ack(&mut self, key: (LogicalTime, u64)) {
         self.dated.remove(&key);
     }
 }
@@ -938,7 +947,9 @@ pub struct Execution<'plan> {
     buffered_poll: PollReport,
     /// Current logical instant in nanoseconds, supplied by the host or Lab.
     /// The semantic core never reads an ambient clock.
-    now: i64,
+    now: LogicalTime,
+    /// Immutable civil origin, also recorded in the journal's run header.
+    origin: Timestamp,
     outputs: Vec<BoundaryOutput>,
     observed: Vec<EnvelopeView>,
 }
@@ -1113,6 +1124,9 @@ impl<'plan> Execution<'plan> {
     }
 
     fn preflight(&self, journal: &dyn Journal) -> Result<(), ExecutionFault> {
+        if journal.origin() != self.origin {
+            return Err(ExecutionFault::OriginMismatch);
+        }
         if let Some(error) = self.unsupported_feature() {
             return Err(error);
         }
@@ -1191,7 +1205,12 @@ impl<'plan> Execution<'plan> {
     /// Use [`Self::recover_from_journal`] to reconstruct a recorded execution.
     #[must_use]
     pub fn new(plan: &'plan ValidatedExecutionPlan, graph_version: GraphVersion) -> Self {
-        Self::new_at(plan, graph_version, 0)
+        Self::new_at(
+            plan,
+            graph_version,
+            Timestamp::UNIX_EPOCH,
+            LogicalTime::ZERO,
+        )
     }
 
     /// Creates fresh execution state with resolved deployment inputs.
@@ -1204,21 +1223,27 @@ impl<'plan> Execution<'plan> {
         graph_version: GraphVersion,
         boot: &crate::deployment::BootBindings,
     ) -> Self {
-        Self::new_at_with_deployment(plan, graph_version, 0, boot)
+        Self::new_at_with_deployment(
+            plan,
+            graph_version,
+            Timestamp::UNIX_EPOCH,
+            LogicalTime::ZERO,
+            boot,
+        )
     }
 
-    /// Creates fresh execution state at an explicit logical instant, in
-    /// nanoseconds since the Unix epoch. Hosted code maps its time source
-    /// here; Lab and bare
-    /// metal may keep the deterministic epoch default or supply another
-    /// origin. The semantic core never reads an ambient clock.
+    /// Creates execution state at an explicit relative logical instant and
+    /// immutable civil origin. Fresh runs begin at zero; recovery supplies
+    /// its resume instant and restores the origin from the journal header.
+    /// The semantic core never reads an ambient clock.
     #[must_use]
     pub fn new_at(
         plan: &'plan ValidatedExecutionPlan,
         graph_version: GraphVersion,
-        logical_time: i64,
+        origin: Timestamp,
+        logical_time: LogicalTime,
     ) -> Self {
-        Self::new_at_inner(plan, graph_version, logical_time, None)
+        Self::new_at_inner(plan, graph_version, origin, logical_time, None)
     }
 
     /// Creates fresh execution state at the supplied logical instant with
@@ -1227,10 +1252,11 @@ impl<'plan> Execution<'plan> {
     pub fn new_at_with_deployment(
         plan: &'plan ValidatedExecutionPlan,
         graph_version: GraphVersion,
-        logical_time: i64,
+        origin: Timestamp,
+        logical_time: LogicalTime,
         boot: &crate::deployment::BootBindings,
     ) -> Self {
-        Self::new_at_inner(plan, graph_version, logical_time, Some(boot))
+        Self::new_at_inner(plan, graph_version, origin, logical_time, Some(boot))
     }
 
     /// Creates execution state for the exact validated program, including its
@@ -1241,10 +1267,11 @@ impl<'plan> Execution<'plan> {
         plan: &'plan ValidatedExecutionPlan,
         hash: crate::plan::SemanticHash,
         graph_version: GraphVersion,
-        logical_time: i64,
+        origin: Timestamp,
+        logical_time: LogicalTime,
         boot: Option<&crate::deployment::BootBindings>,
     ) -> Self {
-        let mut execution = Self::new_at_inner(plan, graph_version, logical_time, boot);
+        let mut execution = Self::new_at_inner(plan, graph_version, origin, logical_time, boot);
         execution.original_hash = Some(hash);
         execution
     }
@@ -1252,7 +1279,8 @@ impl<'plan> Execution<'plan> {
     fn new_at_inner(
         plan: &'plan ValidatedExecutionPlan,
         graph_version: GraphVersion,
-        logical_time: i64,
+        origin: Timestamp,
+        logical_time: LogicalTime,
         boot: Option<&crate::deployment::BootBindings>,
     ) -> Self {
         Self {
@@ -1326,6 +1354,7 @@ impl<'plan> Execution<'plan> {
             settled: VecDeque::new(),
             buffered_poll: PollReport::default(),
             now: logical_time,
+            origin,
             outputs: Vec::new(),
             observed: Vec::new(),
         }
@@ -2202,7 +2231,7 @@ impl<'plan> Execution<'plan> {
         Ok(())
     }
 
-    /// Advances logical time to the absolute `target` instant in nanoseconds.
+    /// Advances to `target` on the relative timeline, not by a duration.
     /// Processes scheduled obligations in deadline order and runs ready work
     /// between deadlines. This may commit multiple transitions.
     ///
@@ -2218,14 +2247,14 @@ impl<'plan> Execution<'plan> {
         &mut self,
         journal: &mut dyn Journal,
         drivers: &mut dyn OutboundDrivers,
-        target: i64,
+        target: LogicalTime,
     ) -> Result<(), ExecutionFault> {
         let mut advance = TimeAdvance::new(target);
         while advance.advance_once(self, journal, drivers)? {}
         Ok(())
     }
 
-    fn peek_due(&self, target: i64) -> Option<((i64, u64), Obligation)> {
+    fn peek_due(&self, target: LogicalTime) -> Option<((LogicalTime, u64), Obligation)> {
         self.scheduler.peek_due(target, |payload| {
             !matches!(payload, Obligation::InstanceLifetime { instance, .. }
                 if self.waiting.contains_key(instance)
@@ -2493,7 +2522,7 @@ impl<'plan> Execution<'plan> {
                     let executor = TransactionPreparer::at(
                         self.plan,
                         self.graph_version,
-                        self.now,
+                        self.civil_time(),
                         self.scheduler.mailboxes.routes(),
                     );
                     let trigger = node::Trigger::Port(
@@ -2807,10 +2836,20 @@ impl<'plan> Execution<'plan> {
         Ok(())
     }
 
-    /// Returns the current logical instant in nanoseconds since the Unix epoch.
+    /// Returns the current relative logical instant in nanoseconds.
     #[must_use]
-    pub fn logical_time(&self) -> i64 {
+    pub fn logical_time(&self) -> LogicalTime {
         self.now
+    }
+
+    /// The immutable civil origin recorded in this run's journal header.
+    #[must_use]
+    pub fn origin(&self) -> Timestamp {
+        self.origin
+    }
+
+    fn civil_time(&self) -> Option<Timestamp> {
+        self.origin.checked_add(self.now - LogicalTime::ZERO)
     }
 
     /// The envelopes that left the graph through its boundary, each
@@ -3148,7 +3187,7 @@ impl<'plan> Execution<'plan> {
         let Some(policy) = self.plan.nodes[instance.owner.index()].instance.closing else {
             return;
         };
-        let drain_at = self.now.saturating_add(policy.drain_for);
+        let drain_at = self.now + Duration::from_nanoseconds(policy.drain_for);
         self.scheduler.schedule(
             drain_at,
             Obligation::InstanceClosing {
@@ -3158,7 +3197,7 @@ impl<'plan> Execution<'plan> {
             },
         );
         self.scheduler.schedule(
-            drain_at.saturating_add(policy.settle_for),
+            drain_at + Duration::from_nanoseconds(policy.settle_for),
             Obligation::InstanceClosing {
                 instance: reference.clone(),
                 cause,
@@ -3193,7 +3232,7 @@ impl<'plan> Execution<'plan> {
             exchange_exit: None,
             retry_record: None,
             loop_record: None,
-            logical_time: None,
+            observed_time: None,
             deadlines: None,
             instance_commands: command.map(|id| {
                 Box::new(crate::journal::instance_stop::InstanceCommands {
@@ -3580,7 +3619,7 @@ impl<'plan> Execution<'plan> {
                     exchange_exit: None,
                     retry_record: None,
                     loop_record: None,
-                    logical_time: None,
+                    observed_time: None,
                     deadlines: None,
                     instance_commands: None,
                     trigger: node::Trigger::Lifecycle(work.lifecycle),
@@ -3609,7 +3648,7 @@ impl<'plan> Execution<'plan> {
                 let executor = TransactionPreparer::at(
                     self.plan,
                     self.graph_version,
-                    self.now,
+                    self.civil_time(),
                     self.scheduler.mailboxes.routes(),
                 );
                 let outcome = executor
@@ -3778,7 +3817,7 @@ impl<'plan> Execution<'plan> {
         let executor = TransactionPreparer::at(
             self.plan,
             self.graph_version,
-            self.now,
+            self.civil_time(),
             self.scheduler.mailboxes.routes(),
         );
         // The completion check validated every materialized draft before the
@@ -3876,7 +3915,7 @@ impl<'plan> Execution<'plan> {
         let executor = TransactionPreparer::at(
             self.plan,
             self.graph_version,
-            self.now,
+            self.civil_time(),
             self.scheduler.mailboxes.routes(),
         );
         let mut outcome = match pending.response.as_ref() {
@@ -3944,7 +3983,7 @@ impl<'plan> Execution<'plan> {
         let executor = TransactionPreparer::at(
             self.plan,
             self.graph_version,
-            self.now,
+            self.civil_time(),
             self.scheduler.mailboxes.routes(),
         );
         let consumed = session
@@ -4027,7 +4066,7 @@ impl<'plan> Execution<'plan> {
         let executor = TransactionPreparer::at(
             self.plan,
             self.graph_version,
-            self.now,
+            self.civil_time(),
             self.scheduler.mailboxes.routes(),
         );
         let state = self.state.cell_unchecked(self.plan.plan(), slot, instance);
@@ -4167,7 +4206,7 @@ impl<'plan> Execution<'plan> {
         let executor = TransactionPreparer::at(
             self.plan,
             self.graph_version,
-            self.now,
+            self.civil_time(),
             self.scheduler.mailboxes.routes(),
         );
         let state = self.state.cell_unchecked(self.plan.plan(), slot, instance);
@@ -4302,7 +4341,7 @@ impl<'plan> Execution<'plan> {
         let executor = TransactionPreparer::at(
             self.plan,
             self.graph_version,
-            self.now,
+            self.civil_time(),
             self.scheduler.mailboxes.routes(),
         );
         let state = self.state.cell_unchecked(self.plan.plan(), slot, instance);
@@ -4395,7 +4434,7 @@ impl<'plan> Execution<'plan> {
         let executor = TransactionPreparer::at(
             self.plan,
             self.graph_version,
-            self.now,
+            self.civil_time(),
             self.scheduler.mailboxes.routes(),
         );
         let mut outcome = executor
@@ -4517,7 +4556,7 @@ impl<'plan> Execution<'plan> {
             exchange_exit: None,
             retry_record: None,
             loop_record: None,
-            logical_time: None,
+            observed_time: None,
             deadlines: None,
             instance_commands: None,
             consumed: vec![crate::journal::ConsumedPosition {
@@ -4901,7 +4940,7 @@ impl<'plan> Execution<'plan> {
         let executor = TransactionPreparer::at(
             self.plan,
             self.graph_version,
-            self.now,
+            self.civil_time(),
             self.scheduler.mailboxes.routes(),
         );
         let trigger =
@@ -4995,7 +5034,7 @@ impl<'plan> Execution<'plan> {
                 let executor = TransactionPreparer::at(
                     self.plan,
                     self.graph_version,
-                    self.now,
+                    self.civil_time(),
                     self.scheduler.mailboxes.routes(),
                 );
                 let trigger = node::Trigger::Port(
@@ -5719,17 +5758,14 @@ impl<'plan> Execution<'plan> {
         let time_box_start = match owner.instance.lifetime {
             instance::Lifetime::Tumbling(every) => {
                 let start = self
-                    .now
-                    .div_euclid(every)
-                    .checked_mul(every)
-                    .ok_or_else(|| ExecutionFault::PlanInvariant {
-                        node: node::OwnerPath::new(["instance"])
-                            .unwrap_or_else(|_| unreachable!("a literal path is valid")),
-                        reason: "a validated tumbling duration overflowed its epoch box",
-                    })?;
+                    .civil_time()
+                    .and_then(|now| {
+                        now.checked_sub(timing::time_box_elapsed(self.origin, self.now, every))
+                    })
+                    .ok_or(ExecutionFault::CivilTimeOutOfRange)?;
                 frames.push(instance::Segment::ProcessingTimeBox {
                     scope: owner.path.clone(),
-                    start_ns: start,
+                    start,
                 });
                 Some(start)
             }
@@ -5750,12 +5786,12 @@ impl<'plan> Execution<'plan> {
         let reference = journal
             .instance_generation_for_admission(&address)
             .map_err(ExecutionFault::Journal)?;
-        if let Some(start_ns) = time_box_start
+        if let Some(start) = time_box_start
             && reference.generation() != 0
         {
             return Err(ExecutionFault::ClosedTimeBox {
                 owner: owner.path.clone(),
-                start_ns,
+                start,
             });
         }
         if let Some(instance) = self.instances.get(&reference) {

@@ -281,7 +281,7 @@ The [diagnostic registry](diagnostics.md) owns phases and payload fields.
 | `E-RETRY-CASES` | nonliteral, duplicate or unknown terminal selection, including predicates or quoted strings instead of case names |
 | `E-RETRY-EFFECT` | selected outcome-unknown/after-effect case lacks the original plan's idempotence guarantee |
 
-`E-RETRY-ATTRIBUTE` was retired on 23 October 2026 (`3736817`) in favor of
+`E-RETRY-ATTRIBUTE` was retired on 23 October 2026 in favor of
 `E-RETRY`; it is not an active diagnostic or alias. Incompatible same-owner
 Extensions use `E-EXTENSION-CONFLICT`. Loop's advisory `W-LOOP-REPEAT` remains
 distinct from Retry's hard admission rule.

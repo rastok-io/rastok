@@ -499,11 +499,19 @@ mod real {
                 .run_ready_with_drivers(&mut journal, &mut world)
                 .unwrap();
             execution
-                .advance_to(&mut journal, &mut world, 1_000_000_000)
+                .advance_to(
+                    &mut journal,
+                    &mut world,
+                    rastok::time::LogicalTime::from_nanoseconds(1_000_000_000),
+                )
                 .unwrap();
             if ignore_term {
                 execution
-                    .advance_to(&mut journal, &mut world, 2_000_000_000)
+                    .advance_to(
+                        &mut journal,
+                        &mut world,
+                        rastok::time::LogicalTime::from_nanoseconds(2_000_000_000),
+                    )
                     .unwrap();
             }
             until(&mut execution, &mut journal, &mut world, |execution, _| {

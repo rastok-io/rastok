@@ -113,13 +113,14 @@ The materialized carriers are consequently smaller than the type algebra:
 - variable/fixed bytes share one byte sequence, and variable/fixed arrays
   share one sequence. The declared length and element homogeneity remain in
   the type; a `variant` array may remain dynamically heterogeneous;
-- a date is canonical whole days; time, timestamps and durations are
-  canonical nanoseconds; an interval carries its month/day/nanosecond
-  components. Unit, timezone and external physical width remain type
-  parameters. The V1 value bound is the published i64 nanosecond domain;
-  an external value outside it refuses instead of overflowing.
-  D-2026-10-10-1 schedules wider `timestamp`/`timestamp_ntz` carriers
-  for the first post-opening format;
+- a date is canonical whole days; time and duration use signed i64
+  nanoseconds. A `timestamp` or `timestamp_ntz` carries signed i64 seconds
+  and a nonnegative nanosecond fraction smaller than one billion. Negative
+  instants use floor seconds. The declared unit constrains precision, not
+  the seconds range; year 0001, pre-1678 dates and year 9999 are representable.
+  An external value outside this carrier refuses instead of overflowing.
+  An interval keeps its month/day/nanosecond components. Unit, timezone and
+  external physical width remain type parameters (D-2026-10-23-2);
 - UUID carries exactly 16 network-order bytes;
 - `map<text,V>` uses the unique text-keyed form; other admitted key types use
   canonical tagged key values. Two canonically equal keys refuse;

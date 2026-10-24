@@ -687,7 +687,7 @@ pub struct TransactionPreparer<'plan> {
     plan: &'plan ValidatedExecutionPlan,
     routes: &'plan DeliveryRoutes,
     graph_version: GraphVersion,
-    logical_time: i64,
+    civil_time: Option<crate::time::Timestamp>,
 }
 
 impl<'plan> TransactionPreparer<'plan> {
@@ -704,25 +704,25 @@ impl<'plan> TransactionPreparer<'plan> {
             plan,
             routes,
             graph_version,
-            logical_time: 0,
+            civil_time: Some(crate::time::Timestamp::UNIX_EPOCH),
         }
     }
 
-    /// A transaction preparer at one explicit logical instant. The Execution supplies this from
-    /// its deterministic scheduler; the evaluator never reads an ambient
-    /// clock. Every expression in one firing therefore sees the same value.
+    /// A transaction preparer at the civil time derived from the run origin
+    /// and logical instant. Every expression in one firing sees the same
+    /// value. An unrepresentable civil time refuses only if `now()` is read.
     #[must_use]
     pub(crate) fn at(
         plan: &'plan ValidatedExecutionPlan,
         graph_version: GraphVersion,
-        logical_time: i64,
+        civil_time: Option<crate::time::Timestamp>,
         routes: &'plan DeliveryRoutes,
     ) -> Self {
         Self {
             plan,
             routes,
             graph_version,
-            logical_time,
+            civil_time,
         }
     }
 
@@ -846,10 +846,9 @@ impl<'plan> TransactionPreparer<'plan> {
             base.insert(name.clone(), expr::EvalValue::from(value.clone()));
         }
         base.extend(extra);
-        base.insert(
-            String::from("now"),
-            expr::EvalValue::Timestamp(self.logical_time),
-        );
+        if let Some(now) = self.civil_time {
+            base.insert(String::from("now"), expr::EvalValue::Timestamp(now));
+        }
         base.insert(
             String::from("meta"),
             expr::EvalValue::from(meta_value(input.meta())),
@@ -975,7 +974,7 @@ impl<'plan> TransactionPreparer<'plan> {
                 exchange_exit: None,
                 retry_record: None,
                 loop_record: None,
-                logical_time: None,
+                observed_time: None,
                 deadlines: None,
                 instance_commands: None,
                 trigger,
@@ -1076,7 +1075,7 @@ impl<'plan> TransactionPreparer<'plan> {
                     exchange_exit: None,
                     retry_record: None,
                     loop_record: None,
-                    logical_time: None,
+                    observed_time: None,
                     deadlines: None,
                     instance_commands: None,
                     trigger: trigger.clone(),
@@ -1090,7 +1089,7 @@ impl<'plan> TransactionPreparer<'plan> {
                 },
             });
         };
-        let guard_logical_time = time_use.guard.then_some(self.logical_time);
+        let guard_civil_time = time_use.guard.then_some(self.civil_time).flatten();
         // Scratch isolation: the handler runs against copies; nothing
         // below touches the caller's state.
         let mut scratch = state.clone();
@@ -1109,11 +1108,10 @@ impl<'plan> TransactionPreparer<'plan> {
             for (name, value) in lets {
                 map.insert(name.clone(), value.clone());
             }
-            if time_use.guard || time_use.body {
-                map.insert(
-                    String::from("now"),
-                    expr::EvalValue::Timestamp(self.logical_time),
-                );
+            if (time_use.guard || time_use.body)
+                && let Some(now) = self.civil_time
+            {
+                map.insert(String::from("now"), expr::EvalValue::Timestamp(now));
             }
             if time_use.meta {
                 map.insert(
@@ -1155,7 +1153,7 @@ impl<'plan> TransactionPreparer<'plan> {
                             exchange_exit: None,
                             retry_record: None,
                             loop_record: None,
-                            logical_time: guard_logical_time,
+                            observed_time: guard_civil_time,
                             deadlines: None,
                             instance_commands: None,
                             trigger: trigger.clone(),
@@ -1212,8 +1210,9 @@ impl<'plan> TransactionPreparer<'plan> {
                     .iter()
                     .flat_map(DispatchStep::expressions)
                     .any(|tree| crate::plan::expression_reads_root(&tree.root, "now")));
-        let logical_time = (time_use.guard || selection.observes_logical_time || body_time)
-            .then_some(self.logical_time);
+        let observed_time = (time_use.guard || selection.observes_logical_time || body_time)
+            .then_some(self.civil_time)
+            .flatten();
         lets.extend(selection.locals);
         let mut close_requested = false;
         let mut commands = Vec::new();
@@ -1406,7 +1405,7 @@ impl<'plan> TransactionPreparer<'plan> {
                         ..Default::default()
                     })
                 }),
-                logical_time,
+                observed_time,
                 trigger: trigger.clone(),
                 deadlines: None,
                 instance_commands: None,
@@ -1540,7 +1539,7 @@ impl<'plan> TransactionPreparer<'plan> {
                 exchange_exit: None,
                 retry_record: None,
                 loop_record: None,
-                logical_time: None,
+                observed_time: None,
                 deadlines: None,
                 instance_commands: None,
                 trigger: trigger.clone(),
@@ -1591,7 +1590,7 @@ impl<'plan> TransactionPreparer<'plan> {
                 ))),
                 retry_record: None,
                 loop_record: None,
-                logical_time: None,
+                observed_time: None,
                 deadlines: None,
                 instance_commands: None,
                 trigger,
@@ -1686,7 +1685,7 @@ impl<'plan> TransactionPreparer<'plan> {
                 )),
                 retry_record: None,
                 loop_record: None,
-                logical_time: None,
+                observed_time: None,
                 deadlines: None,
                 instance_commands: None,
                 trigger,
@@ -2397,13 +2396,19 @@ pub struct LazyBindings<'a> {
 }
 
 impl expr::Bindings for LazyBindings<'_> {
-    fn get(&self, name: &str) -> Option<expr::EvalValue> {
+    fn get(&self, name: &str) -> Result<Option<expr::EvalValue>, expr::Error> {
         if let Some(value) = self.base.get(name) {
-            return Some(value.clone());
+            return Ok(Some(value.clone()));
+        }
+        if name == "now" {
+            return Err(expr::Error {
+                kind: expr::ErrorKind::TimeOutOfRange,
+                message: String::from("origin plus logical instant exceeds the timestamp carrier"),
+            });
         }
         // Resolving the NAME is not yet inspecting the structure:
         // the witness carries; `Bindings::payload` materializes.
-        (name == "data").then_some(expr::EvalValue::Payload(expr::PayloadSource::Input))
+        Ok((name == "data").then_some(expr::EvalValue::Payload(expr::PayloadSource::Input)))
     }
 
     fn payload(&self, reference: &expr::PayloadSource) -> Result<expr::EvalValue, expr::Error> {
@@ -2438,10 +2443,16 @@ struct MultiLazyBindings<'a> {
 }
 
 impl expr::Bindings for MultiLazyBindings<'_> {
-    fn get(&self, name: &str) -> Option<expr::EvalValue> {
-        self.base.get(name).cloned().or_else(|| {
+    fn get(&self, name: &str) -> Result<Option<expr::EvalValue>, expr::Error> {
+        if name == "now" && !self.base.contains_key(name) {
+            return Err(expr::Error {
+                kind: expr::ErrorKind::TimeOutOfRange,
+                message: String::from("origin plus logical instant exceeds the timestamp carrier"),
+            });
+        }
+        Ok(self.base.get(name).cloned().or_else(|| {
             (name == "data").then_some(expr::EvalValue::Payload(expr::PayloadSource::Input))
-        })
+        }))
     }
 
     fn payload(&self, reference: &expr::PayloadSource) -> Result<expr::EvalValue, expr::Error> {

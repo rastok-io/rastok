@@ -69,7 +69,7 @@ pub(super) fn select<'a>(
             let DispatchStep::Let { name, value, .. } = step else {
                 return Err(fault("only pure local bindings may precede a match"));
             };
-            if locals.contains_key(name) || bindings.get(name).is_some() {
+            if locals.contains_key(name) || bindings.get(name)?.is_some() {
                 return Err(fault("a Dispatch prefix shadows a visible binding"));
             }
             observes_logical_time |=
@@ -153,11 +153,11 @@ struct LocalBindings<'a> {
 }
 
 impl Bindings for LocalBindings<'_> {
-    fn get(&self, name: &str) -> Option<EvalValue> {
-        self.locals
-            .get(name)
-            .cloned()
-            .or_else(|| self.bindings.get(name))
+    fn get(&self, name: &str) -> Result<Option<EvalValue>, expr::Error> {
+        match self.locals.get(name) {
+            Some(value) => Ok(Some(value.clone())),
+            None => self.bindings.get(name),
+        }
     }
 
     fn payload(&self, reference: &expr::PayloadSource) -> Result<EvalValue, expr::Error> {

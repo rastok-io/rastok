@@ -24,7 +24,7 @@ An expression:
 - is pure and deterministic;
 - terminates under a declared structural/cost bound;
 - has no ambient environment, filesystem, network or randomness;
-- may observe only the explicit, transaction-fixed logical instant through
+- may observe only the explicit, transaction-fixed civil time through
   `now()`;
 - reads only names present in its compile-time signature;
 - is checked against the logical [`DataType`](types.md) domain;
@@ -101,7 +101,7 @@ it in assignment.
 
 ### 1.2 Transaction time
 
-`now()` returns the transaction's logical instant as a `timestamp`. It is a
+`now()` returns the civil timestamp `origin + logical instant`. It is a
 context function, not an evaluator primitive that reads the host clock:
 
 ```rastok
@@ -113,8 +113,8 @@ on in {
 
 Both calls above are equal. The Execution fixes the value before guard selection and
 keeps it unchanged until the firing either commits or faults. A hosted runner
-maps one wall-clock origin plus monotonic elapsed time onto this logical
-timeline; a Lab controls the same value with its origin and `advance` steps.
+records one civil origin and supplies monotonic elapsed time on the relative
+logical timeline; a Lab controls the same value with its origin and `advance` steps.
 The resulting transaction seals the observation in the journal, so replay
 does not read either clock again.
 

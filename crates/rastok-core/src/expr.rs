@@ -59,14 +59,14 @@ pub enum EvalValue {
     Bytes(Vec<u8>),
     /// Duration in nanoseconds.
     Duration(i64),
-    /// UTC instant in nanoseconds since the Unix epoch.
-    Timestamp(i64),
+    /// UTC instant as normalized seconds and nanoseconds since the Unix epoch.
+    Timestamp(crate::time::Timestamp),
     /// Calendar date as days since the Unix epoch.
     Date(i64),
     /// Time of day as nanoseconds since midnight.
     Time(i64),
-    /// Timezone-naive timestamp as nanoseconds since the Unix epoch.
-    TimestampNtz(i64),
+    /// Zone-less date and time on the same normalized civil carrier.
+    TimestampNtz(crate::time::Timestamp),
     /// Calendar interval in canonical components.
     Interval {
         /// Whole months.
@@ -695,7 +695,11 @@ fn builtin_type(name: &str) -> Option<DataType> {
 /// the full dotted path is offered first, then the bare root.
 pub trait Bindings {
     /// The value bound to `name`, if any.
-    fn get(&self, name: &str) -> Option<EvalValue>;
+    ///
+    /// # Errors
+    /// A binding that is evaluated on demand can refuse its value, for
+    /// example when civil `now()` exceeds the timestamp carrier.
+    fn get(&self, name: &str) -> Result<Option<EvalValue>, Error>;
 
     /// The whole payload behind a [`EvalValue::Payload`] witness,
     /// materialized. The default has no payload provenance: a witness
@@ -721,8 +725,8 @@ pub trait Bindings {
 }
 
 impl Bindings for BTreeMap<String, EvalValue> {
-    fn get(&self, name: &str) -> Option<EvalValue> {
-        BTreeMap::get(self, name).cloned()
+    fn get(&self, name: &str) -> Result<Option<EvalValue>, Error> {
+        Ok(BTreeMap::get(self, name).cloned())
     }
 }
 
@@ -774,6 +778,8 @@ pub struct Error {
 pub enum ErrorKind {
     /// Ordinary evaluation failure.
     Evaluation,
+    /// The requested civil time or temporal difference exceeds its carrier.
+    TimeOutOfRange,
     /// Checked `as`/`is` narrowing failure that is not a simple mismatch.
     Narrowing(NarrowingFailure),
 }
@@ -2556,15 +2562,15 @@ fn eval_expr(expr: &Expr, bindings: &dyn Bindings) -> Result<EvalValue, Error> {
         Expr::Path(segments) => {
             if segments.len() == 1 {
                 return bindings
-                    .get(&segments[0])
+                    .get(&segments[0])?
                     .ok_or_else(|| fault(format!("`{}` is not bound", segments[0])));
             }
             let dotted = segments.join(".");
-            if let Some(value) = bindings.get(&dotted) {
+            if let Some(value) = bindings.get(&dotted)? {
                 return Ok(value);
             }
             let mut value = bindings
-                .get(&segments[0])
+                .get(&segments[0])?
                 .ok_or_else(|| fault(format!("`{}` is not bound", segments[0])))?;
             for segment in &segments[1..] {
                 // A member access IS the structural demand.
@@ -2970,6 +2976,10 @@ fn compare(lhs: &EvalValue, rhs: &EvalValue) -> Result<core::cmp::Ordering, Erro
 fn arithmetic(op: BinaryOp, lhs: EvalValue, rhs: EvalValue) -> Result<EvalValue, Error> {
     use BinaryOp::{Add, Div, Mul, Rem, Sub};
     let overflow = || fault(String::from("integer overflow"));
+    let time_overflow = || Error {
+        kind: ErrorKind::TimeOutOfRange,
+        message: String::from("the temporal result exceeds its carrier"),
+    };
     match (op, lhs, rhs) {
         (Add, EvalValue::Int(a), EvalValue::Int(b)) => {
             a.checked_add(b).map(EvalValue::Int).ok_or_else(overflow)
@@ -3020,17 +3030,17 @@ fn arithmetic(op: BinaryOp, lhs: EvalValue, rhs: EvalValue) -> Result<EvalValue,
             .ok_or_else(overflow),
         (Add, EvalValue::Timestamp(a), EvalValue::Duration(b))
         | (Add, EvalValue::Duration(b), EvalValue::Timestamp(a)) => a
-            .checked_add(b)
+            .checked_add(crate::time::Duration::from_nanoseconds(b))
             .map(EvalValue::Timestamp)
-            .ok_or_else(overflow),
+            .ok_or_else(time_overflow),
         (Sub, EvalValue::Timestamp(a), EvalValue::Duration(b)) => a
-            .checked_sub(b)
+            .checked_sub(crate::time::Duration::from_nanoseconds(b))
             .map(EvalValue::Timestamp)
-            .ok_or_else(overflow),
+            .ok_or_else(time_overflow),
         (Sub, EvalValue::Timestamp(a), EvalValue::Timestamp(b)) => a
-            .checked_sub(b)
-            .map(EvalValue::Duration)
-            .ok_or_else(overflow),
+            .checked_duration_since(b)
+            .map(|duration| EvalValue::Duration(duration.as_nanoseconds()))
+            .ok_or_else(time_overflow),
         (op, lhs, rhs) => Err(fault(format!(
             "{op:?} does not accept {} and {}",
             lhs.kind_name(),
@@ -3098,9 +3108,8 @@ fn parse_duration(text: &str) -> Result<i64, Error> {
     Ok(if negative { -total } else { total })
 }
 
-/// Parses an RFC 3339 UTC timestamp (`Z` suffix only) to nanoseconds
-/// since the Unix epoch.
-fn parse_timestamp(text: &str) -> Result<i64, Error> {
+/// Parses an RFC 3339 UTC timestamp (`Z` suffix only) to a normalized civil pair.
+fn parse_timestamp(text: &str) -> Result<crate::time::Timestamp, Error> {
     let bad = || fault(String::from("the text is not a valid UTC timestamp"));
     // RFC 3339 has fixed widths; checking them first also bounds every
     // component before any arithmetic, so nothing below can overflow.
@@ -3162,10 +3171,7 @@ fn parse_timestamp(text: &str) -> Result<i64, Error> {
     };
     let days = days_from_civil(year, month, day);
     let seconds = days * 86_400 + hour * 3_600 + minute * 60 + second;
-    seconds
-        .checked_mul(1_000_000_000)
-        .and_then(|nanos| nanos.checked_add(nanos_fraction))
-        .ok_or_else(bad)
+    crate::time::Timestamp::try_new(seconds, nanos_fraction as u32).map_err(|_| bad())
 }
 
 /// Days since 1970-01-01 for a proleptic-Gregorian civil date
@@ -3267,10 +3273,10 @@ mod tests {
             Value::Text(String::from("text")),
             Value::Bytes(alloc::vec![0, 1]),
             Value::Duration(1),
-            Value::Timestamp(2),
+            Value::Timestamp(crate::time::Timestamp::from_nanoseconds(2)),
             Value::Date(3),
             Value::Time(4),
-            Value::TimestampNtz(5),
+            Value::TimestampNtz(crate::time::Timestamp::from_nanoseconds(5)),
             Value::Interval {
                 months: 1,
                 days: 2,
@@ -4178,14 +4184,52 @@ mod tests {
     }
 
     #[test]
+    fn civil_timestamp_parsing_and_arithmetic_are_not_limited_to_epoch_nanoseconds() {
+        use crate::time::Timestamp;
+        for (source, seconds, nanoseconds) in [
+            ("0001-01-01T00:00:00Z", -62_135_596_800, 0),
+            ("1600-01-01T00:00:00Z", -11_676_096_000, 0),
+            ("1969-12-31T23:59:59.999999999Z", -1, 999_999_999),
+            (
+                "9999-12-31T23:59:59.999999999Z",
+                253_402_300_799,
+                999_999_999,
+            ),
+        ] {
+            assert_eq!(
+                eval_const(&format!("timestamp(\"{source}\")")),
+                EvalValue::Timestamp(Timestamp::try_new(seconds, nanoseconds).unwrap())
+            );
+        }
+        assert_eq!(
+            eval_const("timestamp(\"9999-12-31T23:59:59Z\") + duration(\"1s\")"),
+            EvalValue::Timestamp(Timestamp::try_new(253_402_300_800, 0).unwrap())
+        );
+        assert_eq!(
+            eval_const("timestamp(\"1600-01-01T00:00:00Z\") - duration(\"1ns\")"),
+            EvalValue::Timestamp(Timestamp::try_new(-11_676_096_001, 999_999_999).unwrap())
+        );
+        let too_wide = compile_ok(
+            "timestamp(\"9999-12-31T00:00:00Z\") - timestamp(\"0001-01-01T00:00:00Z\")",
+            &Signature::new(),
+        );
+        assert!(
+            eval(&too_wide, &BTreeMap::new()).is_err(),
+            "the civil domain is wide, the duration domain is not"
+        );
+    }
+
+    #[test]
     fn timestamps_are_utc_rfc3339() {
         assert_eq!(
             eval_const("timestamp(\"1970-01-01T00:00:00Z\")"),
-            EvalValue::Timestamp(0)
+            EvalValue::Timestamp(crate::time::Timestamp::from_nanoseconds(0))
         );
         assert_eq!(
             eval_const("timestamp(\"2026-01-05T00:00:00Z\")"),
-            EvalValue::Timestamp(1_767_571_200_000_000_000)
+            EvalValue::Timestamp(crate::time::Timestamp::from_nanoseconds(
+                1_767_571_200_000_000_000
+            ))
         );
         assert_eq!(
             eval_const("timestamp(\"2026-01-05T01:00:00Z\") - timestamp(\"2026-01-05T00:00:00Z\")"),
@@ -4223,10 +4267,13 @@ mod tests {
         let signature = Signature::new().with("now", DataType::TIMESTAMP);
         let tree = compile("now()", &signature).expect("the handler context supplies time");
         assert_eq!(tree.root, Expr::Path(vec![String::from("now")]));
-        let bindings = BTreeMap::from([(String::from("now"), EvalValue::Timestamp(1_234_567_890))]);
+        let bindings = BTreeMap::from([(
+            String::from("now"),
+            EvalValue::Timestamp(crate::time::Timestamp::from_nanoseconds(1_234_567_890)),
+        )]);
         assert_eq!(
             eval(&tree, &bindings).expect("the injected instant evaluates"),
-            EvalValue::Timestamp(1_234_567_890)
+            EvalValue::Timestamp(crate::time::Timestamp::from_nanoseconds(1_234_567_890))
         );
 
         for (text, needle) in [("now", "write `now()`"), ("now(1)", "takes no arguments")] {

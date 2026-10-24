@@ -61,12 +61,14 @@ pub(crate) fn require_deadline_instants(
     Ok(())
 }
 
-pub(crate) fn validate_transaction(record: &super::TransactionRecord) -> Result<(), Error> {
+pub(crate) fn validate_transaction(
+    record: &super::TransactionRecord,
+    origin: crate::time::Timestamp,
+) -> Result<(), Error> {
     if let Some(schedule) = record.deadlines.as_deref() {
-        if record
-            .logical_time
-            .is_some_and(|at| at != schedule.created_at())
-        {
+        if record.observed_time.is_some_and(|at| {
+            Some(at) != origin.checked_add(schedule.created_at() - crate::time::LogicalTime::ZERO)
+        }) {
             return Err(Error::FiringTimeDisagrees);
         }
         require_deadline_instants(schedule, &record.deadline_ids)?;

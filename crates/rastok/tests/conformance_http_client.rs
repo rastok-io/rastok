@@ -330,7 +330,11 @@ lab authenticated {
     let mut world = RuntimeDrivers::prepare_with_boot(&compilation.plan, &registry(), &boot)
         .expect("the real Driver resolves its exact boot inputs");
     let version = GraphVersion(1);
-    let mut journal = MemJournal::new_with_deployment(version, boot.attestation().clone());
+    let mut journal = MemJournal::new_with_deployment(
+        version,
+        rastok::time::Timestamp::UNIX_EPOCH,
+        boot.attestation().clone(),
+    );
     let mut execution = Execution::new_with_deployment(&compilation.plan, version, &boot);
     execution
         .accept_input(
@@ -503,8 +507,14 @@ graph app : App {{
     let mut world = RuntimeDrivers::prepare(&compilation.plan, &registry()).expect("HTTP binder");
     let version = GraphVersion(1);
     let mut journal = MemJournal::new(version);
-    let mut execution =
-        Execution::new_program(&compilation.plan, compilation.hash, version, 0, None);
+    let mut execution = Execution::new_program(
+        &compilation.plan,
+        compilation.hash,
+        version,
+        rastok::time::Timestamp::UNIX_EPOCH,
+        rastok::time::LogicalTime::from_nanoseconds(0),
+        None,
+    );
     execution
         .accept_input(
             &mut journal,

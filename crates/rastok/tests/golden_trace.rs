@@ -167,7 +167,7 @@ fn call_time_is_unsealed_but_retry_context_and_deadline_identity_are_causal() {
     let Record::Egress(EgressRecord::Call(call)) = &mut changed[index] else {
         unreachable!()
     };
-    call.closed_at = Some(99);
+    call.closed_at = Some(rastok::time::LogicalTime::from_nanoseconds(99));
     assert_eq!(
         project(&original),
         project(&changed),
@@ -193,11 +193,11 @@ fn call_time_is_unsealed_but_retry_context_and_deadline_identity_are_causal() {
     let reference = retry::admission_ref(operation, 2, call.intent.call_id);
     call.deadlines = Some(Box::new(
         Deadlines::try_new(
-            99,
+            rastok::time::LogicalTime::from_nanoseconds(99),
             vec![Deadline {
                 kind: DeadlineKind::RecurrenceDelay,
                 reference,
-                due_at: 199,
+                due_at: rastok::time::LogicalTime::from_nanoseconds(199),
             }],
         )
         .unwrap(),
@@ -230,11 +230,11 @@ fn call_time_is_unsealed_but_retry_context_and_deadline_identity_are_causal() {
     };
     call.deadlines = Some(Box::new(
         Deadlines::try_new(
-            99,
+            rastok::time::LogicalTime::from_nanoseconds(99),
             vec![Deadline {
                 kind: DeadlineKind::RecurrenceDelay,
                 reference,
-                due_at: 299,
+                due_at: rastok::time::LogicalTime::from_nanoseconds(299),
             }],
         )
         .unwrap(),

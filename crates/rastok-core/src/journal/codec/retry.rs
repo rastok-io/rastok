@@ -22,7 +22,7 @@ fn retained_pin(pin: &Pin) -> Cbor {
                 .map(|(name, value)| list([word(name), canonical::value(value)])),
         ),
         optional(pin.key.as_ref(), |value| word(value)),
-        integer(pin.opened_at),
+        integer(pin.opened_at.as_nanoseconds()),
     ])
 }
 
@@ -128,7 +128,7 @@ impl Decoder {
                         prepared: PreparedRequest::seal(bytes(prepared)?.to_vec()),
                         settings: resolved,
                         key: read_optional(key, |value| Ok(text(value)?.to_owned()))?,
-                        opened_at: signed(at)?,
+                        opened_at: crate::time::LogicalTime::from_nanoseconds(signed(at)?),
                     },
                 })
             }
@@ -212,7 +212,7 @@ mod tests {
                         ("timeout".into(), Value::Duration(100)),
                     ]),
                     key: Some("stable-key".into()),
-                    opened_at: i64::MIN,
+                    opened_at: crate::time::LogicalTime::from_nanoseconds(i64::MIN),
                 },
             }],
         };
@@ -301,7 +301,7 @@ mod tests {
         let Fact::Opened { pin, .. } = &mut later.facts[0] else {
             unreachable!()
         };
-        pin.opened_at = i64::MAX;
+        pin.opened_at = crate::time::LogicalTime::from_nanoseconds(i64::MAX);
         assert_eq!(later.tree(), packet.tree());
         assert_ne!(retry_record(&later), retry_record(&packet));
 

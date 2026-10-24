@@ -221,7 +221,7 @@ fn current_public_status_matches_the_package_and_contracts() {
     let paper = std::fs::read_to_string(root().join("WHITEPAPER.md")).unwrap();
     let version = rastok_core::plan::FORMAT_VERSION;
     assert!(paper.contains(&format!("Format-{version} (")));
-    assert!(paper.contains(&format!("**package {version} / diagnostic recording 4**")));
+    assert!(paper.contains(&format!("**package {version} / diagnostic recording 5**")));
     assert!(!paper.contains("blessing pending review"));
     let contract = rastok_core::connector::stdlib::PROCESS_CONNECTOR_ID;
     assert!(paper.contains(contract), "whitepaper names {contract}");
@@ -238,14 +238,15 @@ fn current_public_status_matches_the_package_and_contracts() {
     }
 
     let catalogue = std::fs::read_to_string(root().join("docs/examples/README.md")).unwrap();
-    assert!(catalogue.contains(&format!("**format-{version} / diagnostic-recording-4**")));
+    assert!(catalogue.contains(&format!("**format-{version} / diagnostic-recording-5**")));
+    assert!(catalogue.contains("time-carriers-identity.md"));
     assert!(catalogue.contains("connector-rework-identity.md"));
     assert!(catalogue.contains("lifecycle-registry-identity.md"));
     assert!(!catalogue.contains("unblessed v19 candidate"));
     assert!(!catalogue.contains("v18 is the last qualified"));
 
     let registry = std::fs::read_to_string(root().join("docs/spec/identity.md")).unwrap();
-    assert!(registry.contains(&format!("**Format {version}, diagnostic recording 4.**")));
+    assert!(registry.contains(&format!("**Format {version}, diagnostic recording 5.**")));
     for path in [
         "docs/spec/execution-model.md",
         "docs/spec/delivery-semantics.md",

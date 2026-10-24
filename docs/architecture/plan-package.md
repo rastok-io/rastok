@@ -1,9 +1,11 @@
 # The plan package — the transportable, verifiable ExecutionPlan
 
-> **Current package format 23, diagnostic recording 4.**
-> This is the only readable format. The [lifecycle identity inventory](lifecycle-registry-identity.md)
-> records the trigger-text movement and the version-only package updates.
-> The Node-table representation and field allocation are unchanged.
+> **Current package format 24, diagnostic recording 5.**
+> The [time-carrier inventory](time-carriers-identity.md) records the approved
+> witness movement and qualification.
+> Civil timestamp values use wide seconds/fraction pairs; the Node-table
+> representation and field allocation are unchanged. The run origin belongs
+> to the journal header, not the static package.
 > There is no compatibility reader or converter. The registry remains
 > extend-only; changing the public version label remains a pre-publication task.
 
@@ -40,7 +42,7 @@ module carries it.
 package := magic "RKPB"                      4 raw bytes, sniffable
            ("Rastok Plan Binary" — the pinned meaning of the magic)
         ┌ canonical CBOR map ─────────────────────────────────┐
-        │ 1 : format_version   uint      (23)                 │
+        │ 1 : format_version   uint      (24)                 │
         │ 2 : semantic_hash    bytes(32) (the plan's identity)│
         │ 3 : body             bytes     (embedded, see below)│
         │ 4 : checksum         bytes(32) (see recipe below)   │
@@ -144,7 +146,7 @@ effective claim. A3 follows the canonical operation graph and requires that
 claim to equal its independent derivation exactly. It never rewrites the raw
 row or recovers meaning from payload strings.
 
-## Body tables (format 23)
+## Body tables (format 24)
 
 The body is one canonical CBOR value encoding the `ExecutionPlan`.
 Compound values use fixed-shape arrays with a leading numeric

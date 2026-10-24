@@ -267,8 +267,12 @@ graph app : App {{
                 )
                 .unwrap();
             for _ in 0..100 {
-                let mut restored =
-                    Execution::new_at(&plan, GraphVersion(1), execution.logical_time());
+                let mut restored = Execution::new_at(
+                    &plan,
+                    GraphVersion(1),
+                    rastok::time::Timestamp::UNIX_EPOCH,
+                    execution.logical_time(),
+                );
                 restored.recover_from_journal(&journal).unwrap();
                 assert_eq!(restored.inspection(), execution.inspection());
                 execution = restored;

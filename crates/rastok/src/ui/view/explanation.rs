@@ -45,7 +45,7 @@ pub(super) fn future(inspection: &ExecutionInspection, records: &[Record]) -> Js
                     && !(kind == DeadlineKind::CallTimeout && settled)
                     && !stale_handshake
                 {
-                    result.push(json!({ "kind": label, "owner": mailbox.node.to_string(), "due_at_ns": due.to_string(), "envelope_id": id.to_string() }));
+                    result.push(json!({ "kind": label, "owner": mailbox.node.to_string(), "due_at_ns": due.as_nanoseconds().to_string(), "envelope_id": id.to_string() }));
                 }
             }
         }
@@ -87,7 +87,7 @@ pub(super) fn future(inspection: &ExecutionInspection, records: &[Record]) -> Js
         };
         for (kind, reference, label) in scheduled {
             if let Some(due) = deadlines.get(&(kind, reference)) {
-                result.push(json!({"kind": label, "owner": instance.owner.to_string(), "due_at_ns": due.to_string(), "instance": instance_ref_json(&instance.reference)}));
+                result.push(json!({"kind": label, "owner": instance.owner.to_string(), "due_at_ns": due.as_nanoseconds().to_string(), "instance": instance_ref_json(&instance.reference)}));
             }
         }
     }
@@ -101,7 +101,7 @@ pub(super) fn future(inspection: &ExecutionInspection, records: &[Record]) -> Js
                     .iter()
                     .find(|instance| instance.reference == run.instance)
                     .map(|instance| instance.owner.to_string());
-                result.push(json!({ "kind": "admitted", "owner": owner, "due_at_ns": due.to_string(), "run": reference.to_string(), "envelope_id": run.state.meta().sys().id().to_string() }));
+                result.push(json!({ "kind": "admitted", "owner": owner, "due_at_ns": due.as_nanoseconds().to_string(), "run": reference.to_string(), "envelope_id": run.state.meta().sys().id().to_string() }));
             }
         }
     }
@@ -577,7 +577,7 @@ fn decision(
             crate::expr::EvalValue::from(crate::runtime::meta_value(&meta)),
         );
     }
-    if let Some(now) = tx.logical_time {
+    if let Some(now) = tx.observed_time {
         bindings.insert("now".into(), crate::expr::EvalValue::Timestamp(now));
     }
     // Only plan-reduced immutable values are available without reconstructing

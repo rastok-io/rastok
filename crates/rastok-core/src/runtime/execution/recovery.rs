@@ -16,8 +16,9 @@ impl Execution<'_> {
     /// Restores Executor instances, exchanges, timed joins, lifetimes,
     /// Closing, mailboxes/cursors, and command Loops from the committed journal prefix. No
     /// producer executes and no new record is appended during reconstruction.
-    /// The explicitly supplied boot time is the resume instant; Loop deadlines
-    /// come from retained `Advanced` facts, never from that instant.
+    /// The execution's logical time is the resume instant. The civil origin
+    /// comes from the immutable journal header; Loop deadlines come from
+    /// recorded `Advanced` facts, never from the resume instant.
     ///
     /// A scheduler-owned Call closure needs the pure Contract projection from
     /// [`Self::recover_with_drivers`]. Reconstructed exchanges retain their
@@ -44,13 +45,18 @@ impl Execution<'_> {
         journal: &dyn Journal,
         drivers: &mut dyn OutboundDrivers,
     ) -> Result<(), ExecutionFault> {
-        self.preflight(journal)?;
         let resume_at = self.now;
-        let mut candidate = Self::new_at(self.plan, self.graph_version, 0);
+        let mut candidate = Self::new_at(
+            self.plan,
+            self.graph_version,
+            journal.origin(),
+            LogicalTime::ZERO,
+        );
         candidate.original_hash = self.original_hash;
         candidate.expected_deployment = self.expected_deployment.clone();
         candidate.unsupported_data_policy = self.unsupported_data_policy.clone();
         candidate.missing_deployment_binding = self.missing_deployment_binding.clone();
+        candidate.preflight(journal)?;
         let mut result = Ok(());
         let mut index = 0;
         let mut last_retained = None;
@@ -61,11 +67,29 @@ impl Execution<'_> {
         journal
             .visit_records(&mut |record| {
                 if result.is_ok() {
+                    let observed = match record {
+                        Record::Transaction(record) => record.observed_time,
+                        _ => None,
+                    };
+                    let observed_instant =
+                        match observed.map(|at| at.checked_duration_since(candidate.origin)) {
+                            Some(Some(duration)) if duration.as_nanoseconds() >= 0 => {
+                                Some(LogicalTime::from_nanoseconds(duration.as_nanoseconds()))
+                            }
+                            Some(_) => {
+                                result = Err(invalid(
+                                    index,
+                                    "observed civil time is outside the run's logical timeline",
+                                ));
+                                return;
+                            }
+                            None => None,
+                        };
                     let instant = record
                         .deadlines()
                         .map(|schedule| schedule.created_at())
                         .or_else(|| match record {
-                            Record::Transaction(record) => record.logical_time.or_else(|| {
+                            Record::Transaction(record) => observed_instant.or_else(|| {
                                 record
                                     .retry_record
                                     .as_deref()
@@ -139,7 +163,7 @@ impl Execution<'_> {
         drivers: &mut dyn OutboundDrivers,
         index: usize,
         record: &Record,
-        resume_at: i64,
+        resume_at: LogicalTime,
     ) -> Result<(), ExecutionFault> {
         if self.instance_commands.is_none()
             && match record {
@@ -184,14 +208,14 @@ impl Execution<'_> {
         admissions: &dyn InstanceAdmissions,
         index: usize,
         record: &TransactionRecord,
-        resume_at: i64,
+        resume_at: LogicalTime,
     ) -> Result<(), ExecutionFault> {
         crate::journal::retry_protocol::validate_transaction(record)
             .map_err(super::retry_manager::error)?;
         if record.trigger == node::Trigger::Lifecycle(node::Lifecycle::Retry) {
             return self.restore_retry_manager(index, record);
         }
-        crate::journal::acceptance::validate_transaction(record)
+        crate::journal::acceptance::validate_transaction(record, self.origin)
             .map_err(|_| invalid(index, "unsealed deadlines contradict the accepting record"))?;
         if record
             .deadlines
@@ -236,12 +260,12 @@ impl Execution<'_> {
             ));
         }
         if record
-            .logical_time
-            .is_some_and(|instant| instant > self.now)
+            .observed_time
+            .is_some_and(|instant| Some(instant) != self.civil_time())
         {
             return Err(invalid(
                 index,
-                "the resume instant precedes retained logical time",
+                "observed civil time disagrees with the transaction's logical instant",
             ));
         }
         self.restore_stop_residuals(index, record, resume_at)?;
@@ -492,7 +516,7 @@ impl Execution<'_> {
                                 &super::loop_manager::manager_edge(*run, &state.entry),
                                 envelope.meta().sys().id(),
                             ),
-                            due_at: self.now.saturating_add(*timeout),
+                            due_at: self.now + Duration::from_nanoseconds(*timeout),
                         });
                     }
                 }
@@ -670,7 +694,7 @@ impl Execution<'_> {
         &mut self,
         index: usize,
         record: &TransactionRecord,
-        resume_at: i64,
+        resume_at: LogicalTime,
     ) -> Result<(), ExecutionFault> {
         if record.trigger != node::Trigger::Lifecycle(node::Lifecycle::Stop) {
             return Ok(());

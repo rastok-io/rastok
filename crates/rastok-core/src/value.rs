@@ -31,14 +31,14 @@ pub enum Value {
     Bytes(Vec<u8>),
     /// Duration in nanoseconds.
     Duration(i64),
-    /// UTC instant in nanoseconds since the Unix epoch.
-    Timestamp(i64),
+    /// UTC instant as normalized seconds and nanoseconds since the Unix epoch.
+    Timestamp(crate::time::Timestamp),
     /// Calendar date as whole days since the Unix epoch.
     Date(i64),
     /// Time of day as nanoseconds since midnight.
     Time(i64),
-    /// Timezone-naive timestamp as nanoseconds since the Unix epoch.
-    TimestampNtz(i64),
+    /// Zone-less date and time on the same normalized civil carrier.
+    TimestampNtz(crate::time::Timestamp),
     /// Calendar interval in the common month/day/nanosecond value domain.
     /// The surrounding interval type constrains which components may be set.
     Interval {

@@ -109,10 +109,10 @@ pub fn value(value: &Value) -> Cbor {
         Value::Decimal { unscaled, scale } => decimal(*unscaled, *scale),
         Value::Bytes(v) => Cbor::Array(vec![Cbor::Uint(5), Cbor::Bytes(v.clone())]),
         Value::Duration(v) => Cbor::Array(vec![Cbor::Uint(14), signed(*v)]),
-        Value::Timestamp(v) => Cbor::Array(vec![Cbor::Uint(10), signed(*v)]),
+        Value::Timestamp(v) => Cbor::Array(vec![Cbor::Uint(22), timestamp(*v)]),
         Value::Date(v) => Cbor::Array(vec![Cbor::Uint(9), signed(*v)]),
         Value::Time(v) => Cbor::Array(vec![Cbor::Uint(12), signed(*v)]),
-        Value::TimestampNtz(v) => Cbor::Array(vec![Cbor::Uint(11), signed(*v)]),
+        Value::TimestampNtz(v) => Cbor::Array(vec![Cbor::Uint(23), timestamp(*v)]),
         Value::Interval {
             months,
             days,
@@ -193,6 +193,34 @@ pub fn value(value: &Value) -> Cbor {
             ]),
         ]),
     }
+}
+
+/// The normalized civil pair used by timestamp values, observed time and box
+/// identities. It carries no value tag; the enclosing field fixes its meaning.
+pub fn timestamp(value: crate::time::Timestamp) -> Cbor {
+    Cbor::Array(vec![
+        signed(value.seconds()),
+        Cbor::Uint(u64::from(value.nanoseconds())),
+    ])
+}
+
+/// Reads one normalized civil pair without accepting the former integer carrier.
+///
+/// # Errors
+/// A malformed pair, seconds outside i64, or a fraction at or above one billion.
+pub fn decode_timestamp(
+    value: &Cbor,
+) -> Result<crate::time::Timestamp, crate::canonical_cbor::DecodeError> {
+    let Cbor::Array(pair) = value else {
+        return Err(value_decode_error("timestamp pair"));
+    };
+    let [seconds, Cbor::Uint(nanoseconds)] = pair.as_slice() else {
+        return Err(value_decode_error("timestamp pair"));
+    };
+    let nanoseconds =
+        u32::try_from(*nanoseconds).map_err(|_| value_decode_error("timestamp fraction"))?;
+    crate::time::Timestamp::try_new(tagged_integer(seconds)?, nanoseconds)
+        .map_err(|_| value_decode_error("timestamp fraction"))
 }
 
 /// A `tagged_value` for writable metadata (flat by type).
@@ -297,9 +325,9 @@ pub fn decode_value(tree: &Cbor) -> Result<Value, crate::canonical_cbor::DecodeE
             }
             _ => Err(value_decode_error("decimal")),
         },
-        [Cbor::Uint(10), value] => Ok(Value::Timestamp(tagged_integer(value)?)),
+        [Cbor::Uint(22), value] => Ok(Value::Timestamp(decode_timestamp(value)?)),
         [Cbor::Uint(9), value] => Ok(Value::Date(tagged_integer(value)?)),
-        [Cbor::Uint(11), value] => Ok(Value::TimestampNtz(tagged_integer(value)?)),
+        [Cbor::Uint(23), value] => Ok(Value::TimestampNtz(decode_timestamp(value)?)),
         [Cbor::Uint(12), value] => Ok(Value::Time(tagged_integer(value)?)),
         [Cbor::Uint(13), Cbor::Bytes(value)] => Ok(Value::Uuid(
             value
@@ -939,10 +967,68 @@ mod tests {
     }
 
     #[test]
+    fn wide_civil_values_round_trip_and_equal_instants_share_bytes() {
+        use crate::time::Timestamp;
+        for instant in [
+            Timestamp::MIN,
+            Timestamp::try_new(-62_135_596_800, 0).unwrap(),
+            Timestamp::from_nanoseconds(-1),
+            Timestamp::UNIX_EPOCH,
+            Timestamp::try_new(253_402_300_799, 999_999_999).unwrap(),
+            Timestamp::MAX,
+        ] {
+            for (value, tag) in [
+                (Value::Timestamp(instant), 22),
+                (Value::TimestampNtz(instant), 23),
+            ] {
+                let expected = Cbor::Array(vec![
+                    Cbor::Uint(tag),
+                    Cbor::Array(vec![
+                        signed(instant.seconds()),
+                        Cbor::Uint(u64::from(instant.nanoseconds())),
+                    ]),
+                ]);
+                assert_eq!(self::value(&value), expected);
+                assert_eq!(decode_value(&expected), Ok(value));
+            }
+        }
+        let microsecond_before_epoch =
+            Value::Timestamp(Timestamp::try_new(-1, 999_999_000).unwrap());
+        let nanoseconds_before_epoch = Value::Timestamp(Timestamp::from_nanoseconds(-1_000));
+        assert_eq!(
+            encode(&self::value(&microsecond_before_epoch)),
+            encode(&self::value(&nanoseconds_before_epoch))
+        );
+    }
+
+    #[test]
+    fn civil_value_decoding_refuses_retired_tags_and_noncanonical_pairs() {
+        for tag in [10, 11] {
+            assert!(decode_value(&Cbor::Array(vec![Cbor::Uint(tag), signed(0)])).is_err());
+        }
+        for tag in [22, 23] {
+            for invalid in [
+                signed(0),
+                Cbor::Array(vec![signed(0)]),
+                Cbor::Array(vec![signed(0), signed(0), signed(0)]),
+                Cbor::Array(vec![signed(0), signed(-1)]),
+                Cbor::Array(vec![signed(0), Cbor::Uint(1_000_000_000)]),
+                Cbor::Array(vec![signed(0), Cbor::Uint(u64::MAX)]),
+                Cbor::Array(vec![Cbor::Uint(u64::MAX), Cbor::Uint(0)]),
+            ] {
+                assert!(decode_value(&Cbor::Array(vec![Cbor::Uint(tag), invalid])).is_err());
+            }
+        }
+    }
+
+    #[test]
     fn every_completed_scalar_family_has_one_canonical_value_tag() {
         let values = [
             (crate::value::Value::Date(0), 9),
-            (crate::value::Value::TimestampNtz(0), 11),
+            (
+                crate::value::Value::TimestampNtz(crate::time::Timestamp::UNIX_EPOCH),
+                23,
+            ),
             (crate::value::Value::Time(0), 12),
             (crate::value::Value::Uuid([0; 16]), 13),
             (

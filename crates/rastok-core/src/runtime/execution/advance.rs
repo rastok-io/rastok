@@ -8,9 +8,9 @@ use super::{ClosingDeadline, Execution, ExecutionFault, Journal, Obligation, Out
 /// sweep, including the settlement poll and same-instant expiry ordering.
 #[derive(Debug)]
 pub struct TimeAdvance {
-    target: i64,
+    target: crate::time::LogicalTime,
     phase: Phase,
-    instant: Option<i64>,
+    instant: Option<crate::time::LogicalTime>,
     polled_at_settlement: bool,
     saw_drain: bool,
 }
@@ -20,11 +20,11 @@ enum Phase {
     Ready,
     Due,
     Settlement {
-        key: (i64, u64),
+        key: (crate::time::LogicalTime, u64),
         payload: Obligation,
     },
     Expiry {
-        key: (i64, u64),
+        key: (crate::time::LogicalTime, u64),
         payload: Obligation,
     },
     Done,
@@ -33,7 +33,7 @@ enum Phase {
 impl TimeAdvance {
     /// Starts a sweep toward an absolute logical nanosecond instant.
     #[must_use]
-    pub const fn new(target: i64) -> Self {
+    pub const fn new(target: crate::time::LogicalTime) -> Self {
         Self {
             target,
             phase: Phase::Ready,

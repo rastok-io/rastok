@@ -5,14 +5,19 @@
 This is not a released tag. Public release and crate publication await
 5 November 2026 and Yoann's explicit instruction.
 
-The current checkout uses **format 23 / diagnostic recording 4**, to be
+The current checkout uses **format 24 / diagnostic recording 5**, to be
 labelled public format 1 at publication. The
-[identity inventory](docs/architecture/lifecycle-registry-identity.md) records
-the `l:loop` and `l:close` triggers, their causal identity changes and verification.
+[identity inventory](docs/architecture/time-carriers-identity.md) records
+the relative logical timeline and wide civil carriers, with witness regeneration
+approved on 24 October after review.
 External opening gates remain open; these capabilities are not a release claim.
 
 - `worker::Supervision` supplies the Worker's input, time and checkpoint services;
   `Host` retains its clustered-machine meaning, without changing execution.
+- `LogicalTime` and signed `Duration` distinguish execution instants from civil
+  timestamps. Journal and recording headers retain the immutable civil origin;
+  Lab scenarios apply `origin` and `now()` observes it; tumbling boxes retain
+  their epoch alignment. Wide civil values no longer share the i64-nanosecond date bound.
 - Typed Graph scopes, Operator/Connector execution, explicit destinations,
   case routing and atomic multi-emission; exact-instance closure commands
   introduced in v18 are kept.

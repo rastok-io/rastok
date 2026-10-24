@@ -733,11 +733,11 @@ pub struct TransactionRecord {
     /// One sparse Loop protocol packet. Boxing keeps its absence to one
     /// pointer in every retained non-Loop transaction.
     pub loop_record: Option<Box<loop_protocol::LoopRecord>>,
-    /// The transaction's fixed logical instant when one of its checked
+    /// The transaction's fixed civil time when one of its checked
     /// expressions can observe `now()`. Omitted for handlers that do not read
     /// time, so old causal facts and time-insensitive programs keep their
     /// exact canonical form.
-    pub logical_time: Option<i64>,
+    pub observed_time: Option<crate::time::Timestamp>,
     /// The consumed input positions; canonically sorted at commit.
     pub consumed: Vec<ConsumedPosition>,
     /// Envelope ids contributing to a presence-completing join, in the
@@ -798,7 +798,7 @@ pub struct CallRecord {
     /// Attempt correlation (causal key 43), absent outside Retry.
     pub retry_record: Option<Box<retry_protocol::RetryRecord>>,
     /// Winning logical closure instant (unsealed key 44); absent only on Open.
-    pub closed_at: Option<i64>,
+    pub closed_at: Option<crate::time::LogicalTime>,
     /// Original closure-based recurrence deadline (unsealed 41, causal presence 24).
     pub deadlines: Option<Box<deadline::Deadlines>>,
     /// The canonical call fields.
@@ -1195,6 +1195,10 @@ impl core::error::Error for Error {}
 /// no exposure of a physical record layout: a durable implementation
 /// may hold anything on disk as long as it answers these questions.
 pub trait Journal {
+    /// Immutable civil origin of the run, stored in its unsealed header.
+    /// Logical instants are relative to this origin, beginning at zero.
+    fn origin(&self) -> crate::time::Timestamp;
+
     /// Visits one consistent committed prefix in causal order. These are
     /// semantic records, not the store's physical encoding. Recovery never
     /// executes a producer while reading this stream.
@@ -1400,14 +1404,18 @@ pub trait Journal {
         &mut self,
         call_id: &CallId,
         closure: Closure,
-        closed_at: i64,
+        closed_at: crate::time::LogicalTime,
         schedule: Option<Box<deadline::Deadlines>>,
     ) -> Result<CloseVerdict, Error>;
 
     /// Declares that bounded Closing could not establish an observed
     /// terminal outcome. This participates in the same close-once race as a
     /// response or timeout and appends an `abandoned` fact on success.
-    fn abandon_egress(&mut self, call_id: &CallId, closed_at: i64) -> Result<CloseVerdict, Error>;
+    fn abandon_egress(
+        &mut self,
+        call_id: &CallId,
+        closed_at: crate::time::LogicalTime,
+    ) -> Result<CloseVerdict, Error>;
 
     /// The envelope carrying `id`, wherever the history recorded it.
     fn find_envelope(&self, id: Id) -> Option<Envelope>;
@@ -1442,6 +1450,7 @@ pub trait Journal {
 #[derive(Debug)]
 pub struct MemJournal {
     graph_version: GraphVersion,
+    origin: crate::time::Timestamp,
     deployment_attestation: Option<crate::deployment::DeploymentAttestation>,
     records: Vec<Record>,
     next_seq: BTreeMap<IngressProvenance, u64>,
@@ -1488,8 +1497,15 @@ impl MemJournal {
     /// deterministically run as version 1.
     #[must_use]
     pub fn new(graph_version: GraphVersion) -> Self {
+        Self::new_with_origin(graph_version, crate::time::Timestamp::UNIX_EPOCH)
+    }
+
+    /// An empty journal with an explicit immutable civil origin.
+    #[must_use]
+    pub fn new_with_origin(graph_version: GraphVersion, origin: crate::time::Timestamp) -> Self {
         Self {
             graph_version,
+            origin,
             deployment_attestation: None,
             records: Vec::new(),
             next_seq: BTreeMap::new(),
@@ -1507,9 +1523,10 @@ impl MemJournal {
     #[must_use]
     pub fn new_with_deployment(
         graph_version: GraphVersion,
+        origin: crate::time::Timestamp,
         attestation: crate::deployment::DeploymentAttestation,
     ) -> Self {
-        let mut journal = Self::new(graph_version);
+        let mut journal = Self::new_with_origin(graph_version, origin);
         journal.deployment_attestation = Some(attestation);
         journal
     }
@@ -1537,12 +1554,13 @@ impl MemJournal {
     /// An error never returns a partially reconstructed journal.
     pub fn from_records(
         graph_version: GraphVersion,
+        origin: crate::time::Timestamp,
         attestation: Option<crate::deployment::DeploymentAttestation>,
         records: &[Record],
     ) -> Result<Self, Error> {
         let mut journal = attestation.map_or_else(
-            || Self::new(graph_version),
-            |header| Self::new_with_deployment(graph_version, header),
+            || Self::new_with_origin(graph_version, origin),
+            |header| Self::new_with_deployment(graph_version, origin, header),
         );
         for record in records {
             let previous = journal.records.len();
@@ -1863,6 +1881,10 @@ impl MemJournal {
 }
 
 impl Journal for MemJournal {
+    fn origin(&self) -> crate::time::Timestamp {
+        self.origin
+    }
+
     fn visit_records(&self, visit: &mut dyn FnMut(&Record)) -> Result<(), Error> {
         for record in &self.records {
             visit(record);
@@ -2038,7 +2060,8 @@ impl Journal for MemJournal {
 
     fn commit(&mut self, mut transaction: TransactionRecord) -> Result<(), Error> {
         retry_protocol::validate_transaction(&transaction).map_err(Error::InvalidRetryProtocol)?;
-        acceptance::validate_transaction(&transaction).map_err(Error::InvalidDeadlines)?;
+        acceptance::validate_transaction(&transaction, self.origin)
+            .map_err(Error::InvalidDeadlines)?;
         if transaction.instance_commands.is_some() {
             self.instance_commands()?
                 .apply(&Record::Transaction(Box::new(transaction.clone())))
@@ -2452,7 +2475,7 @@ impl Journal for MemJournal {
         &mut self,
         call_id: &CallId,
         closure: Closure,
-        closed_at: i64,
+        closed_at: crate::time::LogicalTime,
         schedule: Option<Box<deadline::Deadlines>>,
     ) -> Result<CloseVerdict, Error> {
         let mut intent = None;
@@ -2490,7 +2513,11 @@ impl Journal for MemJournal {
         Ok(CloseVerdict::Won)
     }
 
-    fn abandon_egress(&mut self, call_id: &CallId, closed_at: i64) -> Result<CloseVerdict, Error> {
+    fn abandon_egress(
+        &mut self,
+        call_id: &CallId,
+        closed_at: crate::time::LogicalTime,
+    ) -> Result<CloseVerdict, Error> {
         let mut intent = None;
         for record in &self.records {
             let Record::Egress(EgressRecord::Call(outbound)) = record else {
@@ -2667,7 +2694,7 @@ mod tests {
             prepared,
             idempotency_key: Some(String::from("op-1")),
             resolved_settings: BTreeMap::new(),
-            logical_time: 0,
+            logical_time: crate::time::LogicalTime::ZERO,
         }
     }
 
@@ -2677,7 +2704,7 @@ mod tests {
         let mut call = CallRecord {
             intent: intent("clocked", 6),
             status: CallStatus::Open,
-            closed_at: Some(0),
+            closed_at: Some(crate::time::LogicalTime::ZERO),
             deadlines: None,
             retry_record: None,
         };
@@ -2691,12 +2718,12 @@ mod tests {
             acceptance::validate_call(&call),
             Err(DeadlineError::MissingClosureInstant)
         );
-        call.closed_at = Some(-1);
+        call.closed_at = Some(crate::time::LogicalTime::from_nanoseconds(-1));
         assert_eq!(
             acceptance::validate_call(&call),
             Err(DeadlineError::ClosurePrecedesOpening)
         );
-        call.closed_at = Some(0);
+        call.closed_at = Some(crate::time::LogicalTime::ZERO);
         let attempt = retry_protocol::AttemptId {
             operation: retry_protocol::OperationId::from_id(Id::from_bytes([8; 16])),
             ordinal: 1,
@@ -2721,9 +2748,11 @@ mod tests {
         let deadline = Deadline {
             kind: DeadlineKind::RecurrenceDelay,
             reference: retry_protocol::admission_ref(attempt.operation, 2, call.intent.call_id),
-            due_at: 10,
+            due_at: crate::time::LogicalTime::from_nanoseconds(10),
         };
-        call.deadlines = Some(Box::new(Deadlines::try_new(0, vec![deadline]).unwrap()));
+        call.deadlines = Some(Box::new(
+            Deadlines::try_new(crate::time::LogicalTime::ZERO, vec![deadline]).unwrap(),
+        ));
         assert_eq!(
             acceptance::validate_call(&call),
             Err(DeadlineError::DeadlineWithoutRetryContext)
@@ -2740,12 +2769,12 @@ mod tests {
             Err(DeadlineError::RetryOrdinalOverflow)
         );
         call.retry_record.as_deref_mut().unwrap().context = Some(attempt);
-        call.closed_at = Some(1);
+        call.closed_at = Some(crate::time::LogicalTime::from_nanoseconds(1));
         assert_eq!(
             acceptance::validate_call(&call),
             Err(DeadlineError::DeadlineMismatch)
         );
-        call.closed_at = Some(0);
+        call.closed_at = Some(crate::time::LogicalTime::ZERO);
         assert_eq!(acceptance::validate_call(&call), Ok(()));
     }
 
@@ -2756,22 +2785,27 @@ mod tests {
         let mut deadline = Deadline {
             kind: DeadlineKind::CallTimeout,
             reference: Id::from_bytes([7; 16]),
-            due_at: 10,
+            due_at: crate::time::LogicalTime::from_nanoseconds(10),
         };
-        record.deadlines = Some(Box::new(Deadlines::try_new(0, vec![deadline]).unwrap()));
-        record.logical_time = Some(1);
+        record.deadlines = Some(Box::new(
+            Deadlines::try_new(crate::time::LogicalTime::ZERO, vec![deadline]).unwrap(),
+        ));
+        record.observed_time = Some(crate::time::Timestamp::from_nanoseconds(1));
         assert_eq!(
-            acceptance::validate_transaction(&record),
+            acceptance::validate_transaction(&record, crate::time::Timestamp::UNIX_EPOCH),
             Err(DeadlineError::FiringTimeDisagrees)
         );
-        record.logical_time = Some(0);
+        record.observed_time = Some(crate::time::Timestamp::UNIX_EPOCH);
         record.deadline_ids = vec![(DeadlineKind::CallTimeout, Id::from_bytes([6; 16]))];
         assert_eq!(
-            acceptance::validate_transaction(&record),
+            acceptance::validate_transaction(&record, crate::time::Timestamp::UNIX_EPOCH),
             Err(DeadlineError::SealedDeadlineWithoutInstant)
         );
         record.deadline_ids = vec![(deadline.kind, deadline.reference)];
-        assert_eq!(acceptance::validate_transaction(&record), Ok(()));
+        assert_eq!(
+            acceptance::validate_transaction(&record, crate::time::Timestamp::UNIX_EPOCH),
+            Ok(())
+        );
 
         let run = LoopRunId::new(Id::from_bytes([9; 16]));
         let command = loop_protocol::CommandProduced::new(
@@ -2792,30 +2826,37 @@ mod tests {
                 remaining: 1,
                 command: command.reference,
                 state,
-                due_at: Some(10),
+                due_at: Some(crate::time::LogicalTime::from_nanoseconds(10)),
             }],
             ..Default::default()
         }));
         assert_eq!(
-            acceptance::validate_transaction(&record),
+            acceptance::validate_transaction(&record, crate::time::Timestamp::UNIX_EPOCH),
             Err(DeadlineError::LoopDeadlineMismatch)
         );
         deadline.kind = DeadlineKind::RecurrenceDelay;
         deadline.reference = loop_protocol::admission_ref(run, 1, command.reference);
         record.deadline_ids = vec![(deadline.kind, deadline.reference)];
-        record.deadlines = Some(Box::new(Deadlines::try_new(0, vec![deadline]).unwrap()));
-        assert_eq!(acceptance::validate_transaction(&record), Ok(()));
         record.deadlines = Some(Box::new(
-            Deadlines::try_new(0, vec![deadline, deadline]).unwrap(),
+            Deadlines::try_new(crate::time::LogicalTime::ZERO, vec![deadline]).unwrap(),
         ));
         assert_eq!(
-            acceptance::validate_transaction(&record),
+            acceptance::validate_transaction(&record, crate::time::Timestamp::UNIX_EPOCH),
+            Ok(())
+        );
+        record.deadlines = Some(Box::new(
+            Deadlines::try_new(crate::time::LogicalTime::ZERO, vec![deadline, deadline]).unwrap(),
+        ));
+        assert_eq!(
+            acceptance::validate_transaction(&record, crate::time::Timestamp::UNIX_EPOCH),
             Err(DeadlineError::LoopDeadlineMismatch)
         );
-        record.deadlines = Some(Box::new(Deadlines::try_new(0, vec![deadline]).unwrap()));
+        record.deadlines = Some(Box::new(
+            Deadlines::try_new(crate::time::LogicalTime::ZERO, vec![deadline]).unwrap(),
+        ));
         record.loop_record = None;
         assert_eq!(
-            acceptance::validate_transaction(&record),
+            acceptance::validate_transaction(&record, crate::time::Timestamp::UNIX_EPOCH),
             Err(DeadlineError::LoopDeadlineMismatch)
         );
     }
@@ -2829,27 +2870,47 @@ mod tests {
             journal.open_egress(original, None).unwrap();
             let open = journal.records()[0].clone();
             if abandoned {
-                journal.abandon_egress(&call, 17).unwrap();
+                journal
+                    .abandon_egress(&call, crate::time::LogicalTime::from_nanoseconds(17))
+                    .unwrap();
             } else {
                 journal
-                    .close_egress(&call, Closure::Timeout, 17, None)
+                    .close_egress(
+                        &call,
+                        Closure::Timeout,
+                        crate::time::LogicalTime::from_nanoseconds(17),
+                        None,
+                    )
                     .unwrap();
             }
             assert_eq!(journal.records()[0], open);
             let Record::Egress(EgressRecord::Call(closed)) = &journal.records()[1] else {
                 unreachable!()
             };
-            assert_eq!(closed.closed_at, Some(17));
+            assert_eq!(
+                closed.closed_at,
+                Some(crate::time::LogicalTime::from_nanoseconds(17))
+            );
             assert!(closed.retry_record.is_none());
             assert!(closed.deadlines.is_none());
             assert_eq!(
                 journal
-                    .close_egress(&call, Closure::Timeout, 29, None)
+                    .close_egress(
+                        &call,
+                        Closure::Timeout,
+                        crate::time::LogicalTime::from_nanoseconds(29),
+                        None
+                    )
                     .unwrap(),
                 CloseVerdict::AlreadyClosed
             );
-            let recovered =
-                MemJournal::from_records(GraphVersion(1), None, journal.records()).unwrap();
+            let recovered = MemJournal::from_records(
+                GraphVersion(1),
+                crate::time::Timestamp::UNIX_EPOCH,
+                None,
+                journal.records(),
+            )
+            .unwrap();
             assert_eq!(recovered.records(), journal.records());
             let mut reader = codec::Decoder::default();
             for record in journal.records() {
@@ -2862,16 +2923,26 @@ mod tests {
     fn call_retention_refuses_missing_backdated_or_recorrelated_closures() {
         let mut journal = MemJournal::new(GraphVersion(1));
         let mut original = intent("clocked", 4);
-        original.logical_time = 11;
+        original.logical_time = crate::time::LogicalTime::from_nanoseconds(11);
         let call = original.call_id;
         journal.open_egress(original, None).unwrap();
         assert!(matches!(
-            journal.close_egress(&call, Closure::Timeout, 10, None),
+            journal.close_egress(
+                &call,
+                Closure::Timeout,
+                crate::time::LogicalTime::from_nanoseconds(10),
+                None
+            ),
             Err(Error::InvalidCallRetention(_))
         ));
         assert_eq!(journal.records().len(), 1);
         journal
-            .close_egress(&call, Closure::Timeout, 11, None)
+            .close_egress(
+                &call,
+                Closure::Timeout,
+                crate::time::LogicalTime::from_nanoseconds(11),
+                None,
+            )
             .unwrap();
         for mutation in 0..3 {
             let mut records = journal.records().to_vec();
@@ -2893,7 +2964,15 @@ mod tests {
                     }))
                 }
             }
-            assert!(MemJournal::from_records(GraphVersion(1), None, &records).is_err());
+            assert!(
+                MemJournal::from_records(
+                    GraphVersion(1),
+                    crate::time::Timestamp::UNIX_EPOCH,
+                    None,
+                    &records
+                )
+                .is_err()
+            );
         }
         let mut encoded = codec::encode(&journal.records()[1]);
         let crate::canonical_cbor::Value::Array(fields) = &mut encoded else {
@@ -2915,16 +2994,20 @@ mod tests {
         let deadline = deadline::Deadline {
             kind: DeadlineKind::RecurrenceDelay,
             reference: retry_protocol::admission_ref(operation, 2, call),
-            due_at: 110,
+            due_at: crate::time::LogicalTime::from_nanoseconds(110),
         };
-        let schedule = deadline::Deadlines::try_new(10, vec![deadline]).unwrap();
+        let schedule = deadline::Deadlines::try_new(
+            crate::time::LogicalTime::from_nanoseconds(10),
+            vec![deadline],
+        )
+        .unwrap();
         let mut journal = MemJournal::new(GraphVersion(1));
         journal.open_egress(original.clone(), None).unwrap();
         assert!(matches!(
             journal.close_egress(
                 &call,
                 Closure::Timeout,
-                10,
+                crate::time::LogicalTime::from_nanoseconds(10),
                 Some(Box::new(schedule.clone()))
             ),
             Err(Error::InvalidCallRetention(_))
@@ -2938,17 +3021,37 @@ mod tests {
             } else {
                 wrong.kind = DeadlineKind::CallTimeout;
             }
-            let wrong = deadline::Deadlines::try_new(10, vec![wrong]).unwrap();
+            let wrong = deadline::Deadlines::try_new(
+                crate::time::LogicalTime::from_nanoseconds(10),
+                vec![wrong],
+            )
+            .unwrap();
             assert!(
                 journal
-                    .close_egress(&call, Closure::Timeout, 10, Some(Box::new(wrong)))
+                    .close_egress(
+                        &call,
+                        Closure::Timeout,
+                        crate::time::LogicalTime::from_nanoseconds(10),
+                        Some(Box::new(wrong))
+                    )
                     .is_err()
             );
         }
         journal
-            .close_egress(&call, Closure::Timeout, 10, Some(Box::new(schedule)))
+            .close_egress(
+                &call,
+                Closure::Timeout,
+                crate::time::LogicalTime::from_nanoseconds(10),
+                Some(Box::new(schedule)),
+            )
             .unwrap();
-        let recovered = MemJournal::from_records(GraphVersion(1), None, journal.records()).unwrap();
+        let recovered = MemJournal::from_records(
+            GraphVersion(1),
+            crate::time::Timestamp::UNIX_EPOCH,
+            None,
+            journal.records(),
+        )
+        .unwrap();
         assert_eq!(recovered.records(), journal.records());
         let mut reader = codec::Decoder::default();
         for record in journal.records() {
@@ -3007,7 +3110,7 @@ mod tests {
             exchange_exit: None,
             retry_record: None,
             loop_record: None,
-            logical_time: None,
+            observed_time: None,
             deadlines: None,
             instance_commands: None,
             trigger: node::Trigger::Lifecycle(lifecycle),
@@ -3141,14 +3244,14 @@ mod tests {
             0,
         );
         let mut record = lifecycle_transaction(reference, node::Lifecycle::Start);
-        record.logical_time = Some(7);
+        record.observed_time = Some(crate::time::Timestamp::from_nanoseconds(7));
         record.deadlines = Some(Box::new(
             deadline::Deadlines::try_new(
-                8,
+                crate::time::LogicalTime::from_nanoseconds(8),
                 vec![deadline::Deadline {
                     kind: DeadlineKind::JoinWithin,
                     reference: Id::from_bytes([1; 16]),
-                    due_at: 10,
+                    due_at: crate::time::LogicalTime::from_nanoseconds(10),
                 }],
             )
             .unwrap(),
@@ -3159,7 +3262,7 @@ mod tests {
             Err(Error::InvalidDeadlines(_))
         ));
         assert!(journal.records().is_empty());
-        record.logical_time = Some(8);
+        record.observed_time = Some(crate::time::Timestamp::from_nanoseconds(8));
         journal.commit(record).unwrap();
     }
 
@@ -3202,13 +3305,13 @@ mod tests {
                     prepared,
                     idempotency_key: None,
                     resolved_settings: BTreeMap::new(),
-                    logical_time: 0,
+                    logical_time: crate::time::LogicalTime::ZERO,
                 },
                 None,
             )
             .expect("the Call opens");
         journal
-            .abandon_egress(&call_id, 0)
+            .abandon_egress(&call_id, crate::time::LogicalTime::ZERO)
             .expect("the Call closes abandoned");
 
         let prepared = crate::connector::exchange::PreparedRequest::seal(vec![4, 5, 6]);
@@ -3385,7 +3488,13 @@ mod tests {
                 );
             }
         }
-        let rebuilt = MemJournal::from_records(GraphVersion(1), None, live.records()).unwrap();
+        let rebuilt = MemJournal::from_records(
+            GraphVersion(1),
+            crate::time::Timestamp::UNIX_EPOCH,
+            None,
+            live.records(),
+        )
+        .unwrap();
         for address in addresses {
             assert_eq!(
                 rebuilt.instance_generation_for_admission(address),
@@ -3776,7 +3885,12 @@ mod tests {
         let open_before = journal.records()[0].clone();
         assert_eq!(
             journal
-                .close_egress(&call, Closure::Timeout, 0, None)
+                .close_egress(
+                    &call,
+                    Closure::Timeout,
+                    crate::time::LogicalTime::ZERO,
+                    None
+                )
                 .unwrap(),
             CloseVerdict::Won
         );
@@ -3798,7 +3912,12 @@ mod tests {
         // The race: every later closure loses and appends nothing.
         assert_eq!(
             journal
-                .close_egress(&call, Closure::Timeout, 0, None)
+                .close_egress(
+                    &call,
+                    Closure::Timeout,
+                    crate::time::LogicalTime::ZERO,
+                    None
+                )
                 .unwrap(),
             CloseVerdict::AlreadyClosed
         );
@@ -3809,7 +3928,12 @@ mod tests {
             &[0; 32],
         );
         assert_eq!(
-            journal.close_egress(&ghost, Closure::Timeout, 0, None),
+            journal.close_egress(
+                &ghost,
+                Closure::Timeout,
+                crate::time::LogicalTime::ZERO,
+                None
+            ),
             Err(Error::UnknownCall)
         );
 
@@ -3817,18 +3941,27 @@ mod tests {
         let abandoned = abandoned_intent.call_id;
         journal.open_egress(abandoned_intent, None).unwrap();
         assert_eq!(
-            journal.abandon_egress(&abandoned, 0).unwrap(),
+            journal
+                .abandon_egress(&abandoned, crate::time::LogicalTime::ZERO)
+                .unwrap(),
             CloseVerdict::Won
         );
         assert_eq!(
             journal
-                .close_egress(&abandoned, Closure::Timeout, 0, None)
+                .close_egress(
+                    &abandoned,
+                    Closure::Timeout,
+                    crate::time::LogicalTime::ZERO,
+                    None
+                )
                 .unwrap(),
             CloseVerdict::AlreadyClosed,
             "an observed response or timeout cannot supersede abandonment"
         );
         assert_eq!(
-            journal.abandon_egress(&abandoned, 0).unwrap(),
+            journal
+                .abandon_egress(&abandoned, crate::time::LogicalTime::ZERO)
+                .unwrap(),
             CloseVerdict::AlreadyClosed
         );
         assert!(matches!(
@@ -3865,7 +3998,7 @@ mod tests {
                 exchange_exit: None,
                 retry_record: None,
                 loop_record: None,
-                logical_time: None,
+                observed_time: None,
                 deadlines: None,
                 instance_commands: None,
                 trigger: node::Trigger::Port(node::Port::new("in").unwrap()),
@@ -3920,7 +4053,7 @@ mod tests {
                 exchange_exit: None,
                 retry_record: None,
                 loop_record: None,
-                logical_time: None,
+                observed_time: None,
                 deadlines: None,
                 instance_commands: None,
                 trigger: node::Trigger::Port(node::Port::new("in").unwrap()),
@@ -4058,13 +4191,21 @@ mod tests {
         let mut deadline = Deadline {
             kind: deadline_id.0,
             reference: root,
-            due_at: 12,
+            due_at: crate::time::LogicalTime::from_nanoseconds(12),
         };
-        let schedule = Deadlines::try_new(7, vec![deadline]).unwrap();
+        let schedule = Deadlines::try_new(
+            crate::time::LogicalTime::from_nanoseconds(7),
+            vec![deadline],
+        )
+        .unwrap();
         deadline.reference = Id::from_bytes([255; 16]);
-        let forged = prepared
-            .clone()
-            .with_deadlines(Deadlines::try_new(7, vec![deadline]).unwrap());
+        let forged = prepared.clone().with_deadlines(
+            Deadlines::try_new(
+                crate::time::LogicalTime::from_nanoseconds(7),
+                vec![deadline],
+            )
+            .unwrap(),
+        );
         assert!(matches!(
             journal.commit_ingress(forged, vec![]),
             Err(Error::InvalidDeadlines(_))

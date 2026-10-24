@@ -98,7 +98,7 @@ pub struct Run {
     /// Source of the recurrence command, retained until the next admission.
     pub reentry_cause: Option<Id>,
     /// Derived due instant; no spatial capacity is represented by it.
-    pub due_at: Option<i64>,
+    pub due_at: Option<crate::time::LogicalTime>,
     /// Current application phase.
     pub phase: Phase,
     /// Producer committed, manager has not consumed; recovery requeues this.
@@ -631,7 +631,7 @@ mod tests {
             exchange_exit: None,
             retry_record: None,
             loop_record: Some(Box::new(packet)),
-            logical_time: None,
+            observed_time: None,
             deadlines: None,
             instance_commands: None,
             consumed: vec![],
@@ -686,7 +686,7 @@ mod tests {
                 remaining: 1,
                 command: command.reference,
                 state: state(1),
-                due_at: Some(100),
+                due_at: Some(crate::time::LogicalTime::from_nanoseconds(100)),
             }],
             ..LoopRecord::default()
         };
@@ -695,7 +695,10 @@ mod tests {
         records.push(record(&instance, consumption.clone()));
         assert_eq!(LoopView::from_records(&records).unwrap(), live);
         assert_eq!(live.run(run).unwrap().phase, Phase::AwaitingAdmission);
-        assert_eq!(live.run(run).unwrap().due_at, Some(100));
+        assert_eq!(
+            live.run(run).unwrap().due_at,
+            Some(crate::time::LogicalTime::from_nanoseconds(100))
+        );
         let checkpoint = live.clone();
         assert_eq!(live.apply(&consumption), Err(Error::UnknownCommand));
         assert_eq!(

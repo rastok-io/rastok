@@ -246,7 +246,7 @@ pub struct CallOpen {
     /// Logical instant fixed by the Execution for the causing transaction. This is
     /// execution context for scripted Drivers, not an EGRESS identity field
     /// and never an invitation for a Driver to read the host clock.
-    pub logical_time: i64,
+    pub logical_time: crate::time::LogicalTime,
 }
 
 impl CallOpen {

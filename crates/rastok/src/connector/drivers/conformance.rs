@@ -1020,7 +1020,11 @@ fn drive(
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
             execution
-                .advance_to(journal, driver, execution.logical_time() + 10_000_000)
+                .advance_to(
+                    journal,
+                    driver,
+                    execution.logical_time() + crate::time::Duration::from_nanoseconds(10_000_000),
+                )
                 .map_err(|error| format!("the advance faulted: {error}"))?;
         }
     }
@@ -1264,7 +1268,7 @@ fn interleave_battery(
                 .advance_to(
                     &mut journal,
                     &mut drivers,
-                    execution.logical_time() + 10_000_000,
+                    execution.logical_time() + crate::time::Duration::from_nanoseconds(10_000_000),
                 )
                 .map_err(|error| format!("the advance faulted: {error}"))?;
         }

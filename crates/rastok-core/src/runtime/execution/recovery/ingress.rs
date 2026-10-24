@@ -255,7 +255,7 @@ impl Execution<'_> {
             deadlines.push(crate::journal::deadline::Deadline {
                 kind: DeadlineKind::InboundCallTimeout,
                 reference: InboundCallId::from_root(inbound.envelope.meta().sys().id()).id(),
-                due_at: self.now.saturating_add(timeout),
+                due_at: self.now + Duration::from_nanoseconds(timeout),
             });
         }
         deadlines.extend(self.route_deadlines_with_activity(
@@ -283,7 +283,7 @@ impl Execution<'_> {
                 Some(InboundExchangeRecord::Call(call)) => {
                     if let Some(timeout) = timeout {
                         self.scheduler.schedule(
-                            self.now.saturating_add(timeout),
+                            self.now + Duration::from_nanoseconds(timeout),
                             Obligation::InboundCallBudget {
                                 call_id: call.reference,
                                 instance: target.reference.clone(),

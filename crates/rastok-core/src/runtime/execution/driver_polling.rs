@@ -149,7 +149,7 @@ impl DriverPoller {
         journal: &mut dyn Journal,
         drivers: &mut B,
         gate: &dyn CompletionCheck,
-        now: i64,
+        now: crate::time::LogicalTime,
     ) -> Result<PollBatch, PollFault> {
         self.poll_drivers_with_timing(journal, drivers, gate, now, &mut |_, _| Ok(None))
     }
@@ -159,7 +159,7 @@ impl DriverPoller {
         journal: &mut dyn Journal,
         drivers: &mut B,
         gate: &dyn CompletionCheck,
-        now: i64,
+        now: crate::time::LogicalTime,
         timing: &mut impl FnMut(
             &CallOpen,
             &Completion,
@@ -394,7 +394,7 @@ mod tests {
             prepared,
             idempotency_key: None,
             resolved_settings: alloc::collections::BTreeMap::new(),
-            logical_time: 0,
+            logical_time: crate::time::LogicalTime::ZERO,
         };
         journal.open_egress(intent.clone(), None).unwrap();
         (journal, intent)
@@ -406,13 +406,23 @@ mod tests {
         let mut driver = Scripted::default();
         let mut poller = DriverPoller::new();
         poller
-            .poll_drivers(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
+            .poll_drivers(
+                &mut journal,
+                &mut driver,
+                &AcceptAnyCompletion,
+                crate::time::LogicalTime::ZERO,
+            )
             .unwrap();
         assert_eq!(driver.started.len(), 1);
         assert_eq!(driver.started[0].0.call_id, intent.call_id);
         // A second poll never re-starts an already-started Call.
         poller
-            .poll_drivers(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
+            .poll_drivers(
+                &mut journal,
+                &mut driver,
+                &AcceptAnyCompletion,
+                crate::time::LogicalTime::ZERO,
+            )
             .unwrap();
         assert_eq!(driver.started.len(), 1);
     }
@@ -428,13 +438,23 @@ mod tests {
         let mut poller = DriverPoller::new();
 
         assert!(matches!(
-            poller.poll_drivers(&mut journal, &mut drivers, &AcceptAnyCompletion, 0),
+            poller.poll_drivers(
+                &mut journal,
+                &mut drivers,
+                &AcceptAnyCompletion,
+                crate::time::LogicalTime::ZERO
+            ),
             Err(PollFault::Driver(DriverRouteError::UnboundOutbound(_)))
         ));
         assert_eq!(drivers.attempts, 1);
         drivers.refuse = false;
         poller
-            .poll_drivers(&mut journal, &mut drivers, &AcceptAnyCompletion, 0)
+            .poll_drivers(
+                &mut journal,
+                &mut drivers,
+                &AcceptAnyCompletion,
+                crate::time::LogicalTime::ZERO,
+            )
             .unwrap();
         assert_eq!(drivers.attempts, 2, "the open call was retried");
     }
@@ -450,18 +470,33 @@ mod tests {
         let mut poller = DriverPoller::new();
 
         poller
-            .poll_drivers(&mut journal, &mut drivers, &AcceptAnyCompletion, 0)
+            .poll_drivers(
+                &mut journal,
+                &mut drivers,
+                &AcceptAnyCompletion,
+                crate::time::LogicalTime::ZERO,
+            )
             .unwrap();
         assert_eq!(drivers.attempts, 1);
         assert_eq!(journal.open_calls().len(), 1);
 
         drivers.pending = false;
         poller
-            .poll_drivers(&mut journal, &mut drivers, &AcceptAnyCompletion, 0)
+            .poll_drivers(
+                &mut journal,
+                &mut drivers,
+                &AcceptAnyCompletion,
+                crate::time::LogicalTime::ZERO,
+            )
             .unwrap();
         assert_eq!(drivers.attempts, 2, "capacity recovery retries the call");
         poller
-            .poll_drivers(&mut journal, &mut drivers, &AcceptAnyCompletion, 0)
+            .poll_drivers(
+                &mut journal,
+                &mut drivers,
+                &AcceptAnyCompletion,
+                crate::time::LogicalTime::ZERO,
+            )
             .unwrap();
         assert_eq!(drivers.attempts, 2, "a started call is never duplicated");
     }
@@ -474,7 +509,12 @@ mod tests {
         // started; re-calls are the recovery fold's decision.
         let mut poller = DriverPoller::resume(&journal);
         poller
-            .poll_drivers(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
+            .poll_drivers(
+                &mut journal,
+                &mut driver,
+                &AcceptAnyCompletion,
+                crate::time::LogicalTime::ZERO,
+            )
             .unwrap();
         assert!(driver.started.is_empty());
     }
@@ -485,15 +525,30 @@ mod tests {
         let mut driver = Scripted::default();
         let mut poller = DriverPoller::new();
         poller
-            .poll_drivers(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
+            .poll_drivers(
+                &mut journal,
+                &mut driver,
+                &AcceptAnyCompletion,
+                crate::time::LogicalTime::ZERO,
+            )
             .unwrap();
         assert!(poller.started.contains(&intent.call_id));
         journal
-            .close_egress(&intent.call_id, Closure::Timeout, 0, None)
+            .close_egress(
+                &intent.call_id,
+                Closure::Timeout,
+                crate::time::LogicalTime::ZERO,
+                None,
+            )
             .unwrap();
 
         poller
-            .poll_drivers(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
+            .poll_drivers(
+                &mut journal,
+                &mut driver,
+                &AcceptAnyCompletion,
+                crate::time::LogicalTime::ZERO,
+            )
             .unwrap();
         assert!(poller.started.is_empty());
     }
@@ -504,7 +559,12 @@ mod tests {
         let mut driver = Scripted::default();
         let mut poller = DriverPoller::new();
         poller
-            .poll_drivers(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
+            .poll_drivers(
+                &mut journal,
+                &mut driver,
+                &AcceptAnyCompletion,
+                crate::time::LogicalTime::ZERO,
+            )
             .unwrap();
         driver.replies = vec![
             CallResponse {
@@ -532,7 +592,12 @@ mod tests {
             },
         ];
         let batch = poller
-            .poll_drivers(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
+            .poll_drivers(
+                &mut journal,
+                &mut driver,
+                &AcceptAnyCompletion,
+                crate::time::LogicalTime::ZERO,
+            )
             .unwrap();
         assert_eq!(
             batch.events.len(),
@@ -565,7 +630,12 @@ mod tests {
         let mut driver = Scripted::default();
         let mut poller = DriverPoller::new();
         poller
-            .poll_drivers(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
+            .poll_drivers(
+                &mut journal,
+                &mut driver,
+                &AcceptAnyCompletion,
+                crate::time::LogicalTime::ZERO,
+            )
             .unwrap();
         driver.replies = vec![CallResponse {
             call_id: intent.call_id,
@@ -579,7 +649,12 @@ mod tests {
             ),
         }];
         let batch = poller
-            .poll_drivers(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
+            .poll_drivers(
+                &mut journal,
+                &mut driver,
+                &AcceptAnyCompletion,
+                crate::time::LogicalTime::ZERO,
+            )
             .unwrap();
         assert_eq!(batch.events.len(), 1);
         let outputs = batch.events[0].completion.outputs();
@@ -604,7 +679,12 @@ mod tests {
             }),
         }];
         let batch = poller
-            .poll_drivers(&mut journal, &mut driver, &AcceptAnyCompletion, 0)
+            .poll_drivers(
+                &mut journal,
+                &mut driver,
+                &AcceptAnyCompletion,
+                crate::time::LogicalTime::ZERO,
+            )
             .unwrap();
         assert!(batch.events.is_empty());
         assert_eq!(batch.uncorrelated.len(), 1, "correlation faults surface");

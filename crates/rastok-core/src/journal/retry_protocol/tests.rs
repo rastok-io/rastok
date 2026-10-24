@@ -86,7 +86,7 @@ impl Fixture {
             prepared: PreparedRequest::seal(vec![1, 2, 3]),
             settings: BTreeMap::from([("command".into(), Value::Text("cat".into()))]),
             key: Some("same-operation".into()),
-            opened_at: 0,
+            opened_at: crate::time::LogicalTime::ZERO,
         };
         Self {
             instance,
@@ -162,7 +162,7 @@ impl Fixture {
         fold.apply(
             &manager(vec![self.opened(), self.admitted(1, None)]),
             Some(&self.authority()),
-            0,
+            crate::time::LogicalTime::ZERO,
         )
         .unwrap();
         fold
@@ -201,11 +201,14 @@ impl Fixture {
             fold.begin_closing(&self.instance);
         }
         let schedule = (!stopping && self.policy.repeats(ordinal, case))
-            .then(|| self.policy.due_after(ordinal, at))
+            .then(|| {
+                self.policy
+                    .due_after(ordinal, crate::time::LogicalTime::from_nanoseconds(at))
+            })
             .flatten()
             .map(|due| {
                 Deadlines::try_new(
-                    at,
+                    crate::time::LogicalTime::from_nanoseconds(at),
                     vec![Deadline {
                         kind: crate::journal::DeadlineKind::RecurrenceDelay,
                         reference: admission_ref(self.operation, ordinal + 1, intent.call_id),
@@ -219,7 +222,7 @@ impl Fixture {
             &Settlement {
                 intent: &intent,
                 case,
-                closed_at: at,
+                closed_at: crate::time::LogicalTime::from_nanoseconds(at),
                 schedule: schedule.as_ref(),
             },
         )
@@ -300,7 +303,7 @@ fn carrier(
         instance_commands: None,
         retry_record: Some(Box::new(packet)),
         deadlines: None,
-        logical_time: None,
+        observed_time: None,
         consumed: if manager {
             vec![]
         } else {
@@ -329,9 +332,9 @@ fn retry_manager_retention_does_not_invent_a_semantic_now_read() {
     );
     // Pin.opened_at retains preparation time; no DSL expression read now().
     // Later admissions retain their time in the mandatory Call timeout deadline.
-    opened.logical_time = None;
+    opened.observed_time = None;
     validate_transaction(&opened).unwrap();
-    opened.logical_time = Some(0);
+    opened.observed_time = Some(crate::time::Timestamp::UNIX_EPOCH);
     assert_eq!(validate_transaction(&opened), Err(Error::RecordShape));
 }
 
@@ -431,7 +434,10 @@ fn advance(batch: &Batch) -> RetryRecord {
 
 fn refuses_unchanged(fold: &mut RetryView, packet: &RetryRecord, expected: Error, at: i64) {
     let before = fold.clone();
-    assert_eq!(fold.apply(packet, None, at), Err(expected));
+    assert_eq!(
+        fold.apply(packet, None, crate::time::LogicalTime::from_nanoseconds(at)),
+        Err(expected)
+    );
     assert_eq!(*fold, before);
 }
 
@@ -504,7 +510,12 @@ fn delayed_receipt_recovers_the_original_due_time_and_never_reopens_the_old_call
     let mut fold = f.start();
     let (first, emissions, batch) = f.settle(&mut fold, 1, "TimeoutExpired", 10, false);
     fold.validate_emissions(&held(&batch), &emissions).unwrap();
-    fold.apply(&held(&batch), None, 11).unwrap();
+    fold.apply(
+        &held(&batch),
+        None,
+        crate::time::LogicalTime::from_nanoseconds(11),
+    )
+    .unwrap();
     let mut restored = fold.clone(); // retained-prefix fold, not a manager queue
     assert_eq!(
         restored.operation(f.operation).unwrap().pending.as_ref(),
@@ -514,16 +525,25 @@ fn delayed_receipt_recovers_the_original_due_time_and_never_reopens_the_old_call
         restored.open_call(f.attempt(1), &first),
         Err(Error::Transition)
     );
-    restored.apply(&advance(&batch), None, 250).unwrap();
+    restored
+        .apply(
+            &advance(&batch),
+            None,
+            crate::time::LogicalTime::from_nanoseconds(250),
+        )
+        .unwrap();
     let state = restored.operation(f.operation).unwrap();
-    assert_eq!(state.due_at, Some(110));
+    assert_eq!(
+        state.due_at,
+        Some(crate::time::LogicalTime::from_nanoseconds(110))
+    );
     assert!(state.pending.is_none());
     let parent = *batch.emissions.last().unwrap();
     restored
         .apply(
             &manager(vec![f.admitted(2, Some((first.call_id, parent)))]),
             None,
-            250,
+            crate::time::LogicalTime::from_nanoseconds(250),
         )
         .unwrap();
     let (second, emissions, batch) = f.settle(&mut restored, 2, "Exited", 260, false);
@@ -533,7 +553,13 @@ fn delayed_receipt_recovers_the_original_due_time_and_never_reopens_the_old_call
     restored
         .validate_emissions(&publish(&batch), &emissions)
         .unwrap();
-    restored.apply(&publish(&batch), None, 261).unwrap();
+    restored
+        .apply(
+            &publish(&batch),
+            None,
+            crate::time::LogicalTime::from_nanoseconds(261),
+        )
+        .unwrap();
     assert_eq!(
         restored.operation(f.operation).unwrap().phase,
         Phase::Closed
@@ -558,18 +584,33 @@ fn the_bound_publishes_the_last_failure_without_an_extra_attempt_or_wrapper() {
                 refuses_unchanged(&mut fold, &held(&batch), Error::Transition, at);
                 fold.validate_emissions(&publish(&batch), &emissions)
                     .unwrap();
-                fold.apply(&publish(&batch), None, at).unwrap();
+                fold.apply(
+                    &publish(&batch),
+                    None,
+                    crate::time::LogicalTime::from_nanoseconds(at),
+                )
+                .unwrap();
             } else {
                 refuses_unchanged(&mut fold, &publish(&batch), Error::Transition, at);
-                fold.apply(&held(&batch), None, at).unwrap();
-                fold.apply(&advance(&batch), None, at).unwrap();
+                fold.apply(
+                    &held(&batch),
+                    None,
+                    crate::time::LogicalTime::from_nanoseconds(at),
+                )
+                .unwrap();
+                fold.apply(
+                    &advance(&batch),
+                    None,
+                    crate::time::LogicalTime::from_nanoseconds(at),
+                )
+                .unwrap();
                 fold.apply(
                     &manager(vec![f.admitted(
                         ordinal + 1,
                         Some((intent.call_id, *batch.emissions.last().unwrap())),
                     )]),
                     None,
-                    at + 100,
+                    crate::time::LogicalTime::from_nanoseconds(at + 100),
                 )
                 .unwrap();
             }
@@ -588,9 +629,19 @@ fn closing_during_backoff_consumes_once_without_publishing_any_failure() {
         let f = Fixture::new(3);
         let mut fold = f.start();
         let (_, _, batch) = f.settle(&mut fold, 1, "TimeoutExpired", 10, false);
-        fold.apply(&held(&batch), None, 10).unwrap();
+        fold.apply(
+            &held(&batch),
+            None,
+            crate::time::LogicalTime::from_nanoseconds(10),
+        )
+        .unwrap();
         if consumed {
-            fold.apply(&advance(&batch), None, 10).unwrap();
+            fold.apply(
+                &advance(&batch),
+                None,
+                crate::time::LogicalTime::from_nanoseconds(10),
+            )
+            .unwrap();
         }
         fold.begin_closing(&f.instance);
         let close = Fact::Closed {
@@ -606,7 +657,12 @@ fn closing_during_backoff_consumes_once_without_publishing_any_failure() {
         if !consumed {
             refuses_unchanged(&mut fold, &advance(&batch), Error::Transition, 20);
         }
-        fold.apply(&manager(facts), None, 20).unwrap();
+        fold.apply(
+            &manager(facts),
+            None,
+            crate::time::LogicalTime::from_nanoseconds(20),
+        )
+        .unwrap();
         assert_eq!(
             fold.operation(f.operation).unwrap().closed,
             Some(CloseReason::Stopped)
@@ -623,7 +679,12 @@ fn closing_after_settlement_does_not_change_its_already_selected_disposition() {
     let (_, _, batch) = f.settle(&mut fold, 1, "TimeoutExpired", 10, false);
     fold.begin_closing(&f.instance);
     refuses_unchanged(&mut fold, &publish(&batch), Error::Transition, 11);
-    fold.apply(&held(&batch), None, 11).unwrap();
+    fold.apply(
+        &held(&batch),
+        None,
+        crate::time::LogicalTime::from_nanoseconds(11),
+    )
+    .unwrap();
     fold.apply(
         &manager(vec![
             Fact::Consumed(batch.clone()),
@@ -633,13 +694,18 @@ fn closing_after_settlement_does_not_change_its_already_selected_disposition() {
             },
         ]),
         None,
-        12,
+        crate::time::LogicalTime::from_nanoseconds(12),
     )
     .unwrap();
     // A still-open Call when Closing wins follows ordinary final settlement.
     let mut fold = f.start();
     let (_, _, batch) = f.settle(&mut fold, 1, "TimeoutExpired", 10, true);
-    fold.apply(&publish(&batch), None, 11).unwrap();
+    fold.apply(
+        &publish(&batch),
+        None,
+        crate::time::LogicalTime::from_nanoseconds(11),
+    )
+    .unwrap();
 }
 
 #[test]
@@ -660,7 +726,12 @@ fn atomic_pairs_whole_batch_and_exact_admissions_cannot_be_forged() {
             Err(Error::Batch)
         );
     }
-    fold.apply(&held(&batch), None, 10).unwrap();
+    fold.apply(
+        &held(&batch),
+        None,
+        crate::time::LogicalTime::from_nanoseconds(10),
+    )
+    .unwrap();
     refuses_unchanged(
         &mut fold,
         &manager(vec![Fact::Consumed(batch.clone())]),
@@ -676,7 +747,12 @@ fn atomic_pairs_whole_batch_and_exact_admissions_cannot_be_forged() {
             Some((intent.call_id, *batch.emissions.last().unwrap())),
         )]);
     refuses_unchanged(&mut fold, &early, Error::Transition, 111);
-    fold.apply(&advance(&batch), None, 20).unwrap();
+    fold.apply(
+        &advance(&batch),
+        None,
+        crate::time::LogicalTime::from_nanoseconds(20),
+    )
+    .unwrap();
     refuses_unchanged(&mut fold, &advance(&batch), Error::Batch, 20);
     refuses_unchanged(&mut fold, &early, Error::Timing, 109);
     let mut bad = early.clone();
@@ -684,7 +760,12 @@ fn atomic_pairs_whole_batch_and_exact_admissions_cannot_be_forged() {
         *delivery = f.opening;
     }
     refuses_unchanged(&mut fold, &bad, Error::AdmissionIdentity, 110);
-    fold.apply(&early, None, 110).unwrap();
+    fold.apply(
+        &early,
+        None,
+        crate::time::LogicalTime::from_nanoseconds(110),
+    )
+    .unwrap();
     let mut changed = f.intent(&fold);
     changed
         .resolved_settings
@@ -701,8 +782,12 @@ fn atomic_pairs_whole_batch_and_exact_admissions_cannot_be_forged() {
 fn pending_initial_stop_has_no_fake_admission_and_successor_generation_is_independent() {
     let f = Fixture::new(3);
     let mut fold = RetryView::default();
-    fold.apply(&manager(vec![f.opened()]), Some(&f.authority()), 0)
-        .unwrap();
+    fold.apply(
+        &manager(vec![f.opened()]),
+        Some(&f.authority()),
+        crate::time::LogicalTime::ZERO,
+    )
+    .unwrap();
     fold.begin_closing(&instance::Generation::new(f.instance.address().clone(), 1));
     refuses_unchanged(
         &mut fold,
@@ -720,7 +805,7 @@ fn pending_initial_stop_has_no_fake_admission_and_successor_generation_is_indepe
             reason: CloseReason::Stopped,
         }]),
         None,
-        0,
+        crate::time::LogicalTime::ZERO,
     )
     .unwrap();
     assert_eq!(fold.operation(f.operation).unwrap().ordinal, 0);
@@ -769,8 +854,14 @@ fn policy_and_saturating_delays_are_closed_and_bounded_without_hidden_time() {
         true,
     )
     .unwrap();
-    assert_eq!(policy.due_after(2, i64::MAX - 1), Some(i64::MAX));
-    assert_eq!(policy.due_after(1, i64::MIN), Some(i64::MIN + 3));
+    assert_eq!(
+        policy.due_after(2, crate::time::LogicalTime::from_nanoseconds(i64::MAX - 1)),
+        Some(crate::time::LogicalTime::MAX)
+    );
+    assert_eq!(
+        policy.due_after(1, crate::time::LogicalTime::MIN),
+        Some(crate::time::LogicalTime::from_nanoseconds(i64::MIN + 3))
+    );
     assert!(!policy.repeats(0, "TimeoutExpired"));
     assert!(!policy.repeats(u64::MAX, "TimeoutExpired"));
     assert_eq!(
@@ -789,15 +880,15 @@ fn missing_renewed_foreign_and_final_deadlines_refuse_atomically() {
     let valid = Deadline {
         kind: crate::journal::DeadlineKind::RecurrenceDelay,
         reference: expected,
-        due_at: 110,
+        due_at: crate::time::LogicalTime::from_nanoseconds(110),
     };
     let candidates = [
         None,
         Some(
             Deadlines::try_new(
-                20,
+                crate::time::LogicalTime::from_nanoseconds(20),
                 vec![Deadline {
-                    due_at: 120,
+                    due_at: crate::time::LogicalTime::from_nanoseconds(120),
                     ..valid
                 }],
             )
@@ -805,9 +896,9 @@ fn missing_renewed_foreign_and_final_deadlines_refuse_atomically() {
         ),
         Some(
             Deadlines::try_new(
-                10,
+                crate::time::LogicalTime::from_nanoseconds(10),
                 vec![Deadline {
-                    due_at: 111,
+                    due_at: crate::time::LogicalTime::from_nanoseconds(111),
                     ..valid
                 }],
             )
@@ -815,7 +906,7 @@ fn missing_renewed_foreign_and_final_deadlines_refuse_atomically() {
         ),
         Some(
             Deadlines::try_new(
-                10,
+                crate::time::LogicalTime::from_nanoseconds(10),
                 vec![Deadline {
                     kind: crate::journal::DeadlineKind::CallTimeout,
                     ..valid
@@ -825,7 +916,7 @@ fn missing_renewed_foreign_and_final_deadlines_refuse_atomically() {
         ),
         Some(
             Deadlines::try_new(
-                10,
+                crate::time::LogicalTime::from_nanoseconds(10),
                 vec![Deadline {
                     reference: Id::from_bytes([0; 16]),
                     ..valid
@@ -833,7 +924,13 @@ fn missing_renewed_foreign_and_final_deadlines_refuse_atomically() {
             )
             .unwrap(),
         ),
-        Some(Deadlines::try_new(10, vec![valid, valid]).unwrap()),
+        Some(
+            Deadlines::try_new(
+                crate::time::LogicalTime::from_nanoseconds(10),
+                vec![valid, valid],
+            )
+            .unwrap(),
+        ),
     ];
     for schedule in candidates {
         let before = fold.clone();
@@ -843,7 +940,7 @@ fn missing_renewed_foreign_and_final_deadlines_refuse_atomically() {
                 &Settlement {
                     intent: &intent,
                     case: "TimeoutExpired",
-                    closed_at: 10,
+                    closed_at: crate::time::LogicalTime::from_nanoseconds(10),
                     schedule: schedule.as_ref()
                 }
             ),
@@ -851,14 +948,15 @@ fn missing_renewed_foreign_and_final_deadlines_refuse_atomically() {
         );
         assert_eq!(fold, before);
     }
-    let schedule = Deadlines::try_new(10, vec![valid]).unwrap();
+    let schedule =
+        Deadlines::try_new(crate::time::LogicalTime::from_nanoseconds(10), vec![valid]).unwrap();
     assert_eq!(
         fold.settle(
             f.attempt(1),
             &Settlement {
                 intent: &intent,
                 case: "Exited",
-                closed_at: 10,
+                closed_at: crate::time::LogicalTime::from_nanoseconds(10),
                 schedule: Some(&schedule)
             }
         ),
@@ -870,7 +968,7 @@ fn missing_renewed_foreign_and_final_deadlines_refuse_atomically() {
             &Settlement {
                 intent: &intent,
                 case: "RetryExpired",
-                closed_at: 10,
+                closed_at: crate::time::LogicalTime::from_nanoseconds(10),
                 schedule: None
             }
         ),
@@ -881,7 +979,7 @@ fn missing_renewed_foreign_and_final_deadlines_refuse_atomically() {
         &Settlement {
             intent: &intent,
             case: "TimeoutExpired",
-            closed_at: 10,
+            closed_at: crate::time::LogicalTime::from_nanoseconds(10),
             schedule: Some(&schedule),
         },
     )
@@ -893,7 +991,7 @@ fn missing_renewed_foreign_and_final_deadlines_refuse_atomically() {
             &Settlement {
                 intent: &intent,
                 case: "Exited",
-                closed_at: 11,
+                closed_at: crate::time::LogicalTime::from_nanoseconds(11),
                 schedule: None
             }
         ),
@@ -907,11 +1005,14 @@ fn opening_is_bound_to_original_plan_contract_input_and_exact_identity() {
     let f = Fixture::new(3);
     let packet = manager(vec![f.opened(), f.admitted(1, None)]);
     let mut fold = RetryView::default();
-    assert_eq!(fold.apply(&packet, None, 0), Err(Error::OriginalBinding));
+    assert_eq!(
+        fold.apply(&packet, None, crate::time::LogicalTime::ZERO),
+        Err(Error::OriginalBinding)
+    );
     let mut authority = f.authority();
     authority.delivery = Id::from_bytes([80; 16]);
     assert_eq!(
-        fold.apply(&packet, Some(&authority), 0),
+        fold.apply(&packet, Some(&authority), crate::time::LogicalTime::ZERO),
         Err(Error::OriginalBinding)
     );
     assert_eq!(fold, RetryView::default());
@@ -926,7 +1027,7 @@ fn opening_is_bound_to_original_plan_contract_input_and_exact_identity() {
     let mut authority = f.authority();
     authority.policy = &other_policy;
     assert_eq!(
-        fold.apply(&packet, Some(&authority), 0),
+        fold.apply(&packet, Some(&authority), crate::time::LogicalTime::ZERO),
         Err(Error::OriginalBinding)
     );
     assert_eq!(fold, RetryView::default());
@@ -948,10 +1049,13 @@ fn opening_is_bound_to_original_plan_contract_input_and_exact_identity() {
                         ContractId::parse(crate::connector::stdlib::FILE_CONNECTOR_ID).unwrap()
                 }
                 3 => pin.envelope = Id::from_bytes([0; 16]),
-                _ => pin.opened_at = 1,
+                _ => pin.opened_at = crate::time::LogicalTime::from_nanoseconds(1),
             }
         }
-        assert!(fold.apply(&bad, Some(&f.authority()), 0).is_err());
+        assert!(
+            fold.apply(&bad, Some(&f.authority()), crate::time::LogicalTime::ZERO)
+                .is_err()
+        );
         assert_eq!(fold, RetryView::default());
     }
     // A bad initial admission rolls back Opened in the same transaction too.
@@ -960,14 +1064,23 @@ fn opening_is_bound_to_original_plan_contract_input_and_exact_identity() {
         *delivery = Id::from_bytes([0; 16]);
     }
     assert_eq!(
-        fold.apply(&bad, Some(&f.authority()), 0),
+        fold.apply(&bad, Some(&f.authority()), crate::time::LogicalTime::ZERO),
         Err(Error::AdmissionIdentity)
     );
     assert_eq!(fold, RetryView::default());
-    fold.apply(&packet, Some(&f.authority()), 0).unwrap();
+    fold.apply(
+        &packet,
+        Some(&f.authority()),
+        crate::time::LogicalTime::ZERO,
+    )
+    .unwrap();
     let before = fold.clone();
     assert_eq!(
-        fold.apply(&packet, Some(&f.authority()), 0),
+        fold.apply(
+            &packet,
+            Some(&f.authority()),
+            crate::time::LogicalTime::ZERO
+        ),
         Err(Error::DuplicateOperation)
     );
     assert_eq!(fold, before);
@@ -993,7 +1106,13 @@ fn each_algebra_prefix_reconstructs_without_a_saved_manager_or_driver() {
     }
     fn apply(f: &Fixture, fold: &mut RetryView, fact: &Retained) {
         match fact {
-            Retained::Record(packet, at) => fold.apply(packet, Some(&f.authority()), *at).unwrap(),
+            Retained::Record(packet, at) => fold
+                .apply(
+                    packet,
+                    Some(&f.authority()),
+                    crate::time::LogicalTime::from_nanoseconds(*at),
+                )
+                .unwrap(),
             Retained::Open(intent, attempt) => fold.open_call(*attempt, intent).unwrap(),
             Retained::Settle(intent, attempt, case, at, schedule) => fold
                 .settle(
@@ -1001,7 +1120,7 @@ fn each_algebra_prefix_reconstructs_without_a_saved_manager_or_driver() {
                     &Settlement {
                         intent,
                         case,
-                        closed_at: *at,
+                        closed_at: crate::time::LogicalTime::from_nanoseconds(*at),
                         schedule: schedule.as_ref(),
                     },
                 )
@@ -1020,11 +1139,11 @@ fn each_algebra_prefix_reconstructs_without_a_saved_manager_or_driver() {
         history.push(Retained::Open(intent.clone(), f.attempt(ordinal)));
         let schedule = (ordinal < 3).then(|| {
             Deadlines::try_new(
-                at,
+                crate::time::LogicalTime::from_nanoseconds(at),
                 vec![Deadline {
                     kind: crate::journal::DeadlineKind::RecurrenceDelay,
                     reference: admission_ref(f.operation, ordinal + 1, intent.call_id),
-                    due_at: at + 100,
+                    due_at: crate::time::LogicalTime::from_nanoseconds(at + 100),
                 }],
             )
             .unwrap()
@@ -1042,17 +1161,32 @@ fn each_algebra_prefix_reconstructs_without_a_saved_manager_or_driver() {
         } else {
             publish(&batch)
         };
-        live.apply(&packet, None, at).unwrap();
+        live.apply(
+            &packet,
+            None,
+            crate::time::LogicalTime::from_nanoseconds(at),
+        )
+        .unwrap();
         history.push(Retained::Record(packet, at));
         if ordinal < 3 {
             let packet = advance(&batch);
-            live.apply(&packet, None, at + 250).unwrap();
+            live.apply(
+                &packet,
+                None,
+                crate::time::LogicalTime::from_nanoseconds(at + 250),
+            )
+            .unwrap();
             history.push(Retained::Record(packet, at + 250));
             let packet = manager(vec![f.admitted(
                 ordinal + 1,
                 Some((intent.call_id, *batch.emissions.last().unwrap())),
             )]);
-            live.apply(&packet, None, at + 250).unwrap();
+            live.apply(
+                &packet,
+                None,
+                crate::time::LogicalTime::from_nanoseconds(at + 250),
+            )
+            .unwrap();
             history.push(Retained::Record(packet, at + 250));
         }
     }
@@ -1089,8 +1223,18 @@ fn repeated_travelling_metadata_uses_canonical_nan_and_signed_zero_identity() {
     f.envelope = Envelope::new(meta, f.envelope.data().clone());
     let mut fold = f.start();
     let (intent, emissions, batch) = f.settle(&mut fold, 1, "TimeoutExpired", 10, false);
-    fold.apply(&held(&batch), None, 10).unwrap();
-    fold.apply(&advance(&batch), None, 110).unwrap();
+    fold.apply(
+        &held(&batch),
+        None,
+        crate::time::LogicalTime::from_nanoseconds(10),
+    )
+    .unwrap();
+    fold.apply(
+        &advance(&batch),
+        None,
+        crate::time::LogicalTime::from_nanoseconds(110),
+    )
+    .unwrap();
     let terminal = emissions.last().unwrap().envelope.meta().sys().id();
     let valid = manager(vec![f.admitted(2, Some((intent.call_id, terminal)))]);
     let mut changed = valid.clone();
@@ -1103,9 +1247,18 @@ fn repeated_travelling_metadata_uses_canonical_nan_and_signed_zero_identity() {
         );
     }
     assert_eq!(
-        fold.apply(&changed, None, 110),
+        fold.apply(
+            &changed,
+            None,
+            crate::time::LogicalTime::from_nanoseconds(110)
+        ),
         Err(Error::AdmissionIdentity)
     );
-    fold.apply(&valid, None, 110).unwrap();
+    fold.apply(
+        &valid,
+        None,
+        crate::time::LogicalTime::from_nanoseconds(110),
+    )
+    .unwrap();
     assert_eq!(fold.operation(f.operation).unwrap().ordinal, 2);
 }

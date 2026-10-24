@@ -1,6 +1,6 @@
 # Rastok — White Paper
 
-> **Format-23 (2026-10-23), diagnostic recording 4.**
+> **Format-24 (2026-10-24), diagnostic recording 5.**
 > The Node/Executor/Extension model, host-terminal Loop, exact-instance closure,
 > native outbound Call Retry and typed measurement retention are executable.
 > The [C4 qualification](docs/architecture/retry-c4-qualification.md) records
@@ -894,7 +894,7 @@ child's `on stop` may still route an emission through its siblings before the
 parent Graph's final `l:stop`. A Graph therefore has lifecycle without
 pretending to execute application handlers.
 
-**No implicit `on tick`.** `now()` may observe the fixed logical instant of an
+**No implicit `on tick`.** `now()` may observe the fixed civil time of an
 already-running handler, but it does not create a firing. When elapsed time
 must itself trigger work, the future Timer Contract supplies an event (§5).
 Timer/Calendar sources are not executable yet; this is the intended shape:
@@ -978,8 +978,8 @@ ambient I/O. The right-hand side of an assignment is a Rastok expression
 `label = meta.app.region + "-" + instance.key`. Structural reshaping may
 use tagged frontends such as `jq! { … }` / `sql! { … }`. No expression
 position admits ambient environment, network or filesystem I/O. Firing
-handlers alone admit `now()`, which reads their injected fixed logical instant
-rather than an ambient clock.
+handlers alone admit `now()`, which reads their fixed civil time, derived from
+the run origin and relative logical instant, rather than an ambient clock.
 
 **Emitting.**
 - Each executed output assignment emits an envelope. Repeated assignments to
@@ -1737,7 +1737,8 @@ lifetime = { kind = tumbling   ; every = duration("5m") }
 - **idle** closes after mailbox-admission silence;
 - **fixed** closes at a fixed age from the creating admission;
 - **single_pass** admits one root and closes after its bounded work settles;
-- **tumbling** selects the epoch-aligned processing-time box open at admission.
+- **tumbling** selects the epoch-aligned processing-time box open at admission,
+  independently of when the run started.
 
 Sliding windows and event-time/watermark semantics remain deferred because
 they make one arrival select several boxes or require an additional time
@@ -2043,8 +2044,9 @@ can diverge, replay cannot reproduce the branch, and a test can only wait.
 One ambient clock read is enough to break reproducibility.
 
 Rastok closes that hole without pretending that time is absent. The host gives
-the Execution an explicit logical timeline. At the start of a firing the Execution fixes one
-instant; `now()` returns that `timestamp` throughout guard selection and body
+the Execution an explicit logical timeline starting at zero, separate from
+its immutable civil origin. At the start of a firing the Execution fixes one
+instant; `now()` returns `origin + instant` as a wide `timestamp` throughout guard selection and body
 execution. The expression evaluator only reads a reserved binding. It never
 calls an OS API. If a checked handler can observe `now()`, the TRANSACTION
 record seals that value, so replay consumes the same input rather than asking
@@ -2053,7 +2055,7 @@ either clock again.
 Hosted execution observes civil time once at boot and advances from a
 monotonic timer, so wall-clock corrections cannot move a running Execution backward.
 The Lab chooses an origin and advances instantly. A microcontroller without an
-RTC can still advance from a hardware timer with origin zero (or an origin
+RTC can still advance from a hardware timer with the epoch origin (or an origin
 provided by its host); it can enforce durations without claiming knowledge of
 the civil date. `Calendar` is the separate source for civil schedules.
 
@@ -2073,7 +2075,7 @@ connector minute_timer : Timer { every = duration("1m") }
 minute_timer -> stats.tick
 ```
 
-Use `now()` for “what is this transaction's logical instant?” Use `Timer` for
+Use `now()` for “what is this transaction's civil time?” Use `Timer` for
 “run this handler after/every duration.” These are deliberately different
 questions.
 
@@ -2748,7 +2750,8 @@ ledgers are evidence for Rastok; future design sections are not.
 ## 10. Status
 
 Rastok is experimental, not production-ready. The current format is
-**package 23 / diagnostic recording 4**, with one Node table and Graph-owned wiring.
+**package 24 / diagnostic recording 5**, with one Node table and Graph-owned wiring.
+The approved witness movement and qualification are recorded in the [time-carrier inventory](docs/architecture/time-carriers-identity.md).
 Process job/service modes share the Contract `std/process@6`;
 File and the four HTTP/WebSocket Contracts use `@3`. These version registers
 are independent. The [Connector identity inventory](docs/architecture/connector-rework-identity.md)

@@ -245,7 +245,7 @@ impl Execution<'_> {
         let executor = TransactionPreparer::at(
             self.plan,
             self.graph_version,
-            self.now,
+            self.civil_time(),
             self.scheduler.mailboxes.routes(),
         );
         let mut held = Vec::new();

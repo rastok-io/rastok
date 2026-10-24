@@ -365,7 +365,12 @@ fn replay_of_an_open_replace_never_reexecutes_the_file_effect() {
     let mut drivers = RuntimeDrivers::prepare(&plan, &registry).expect("File rebinds");
     for _ in 0..3 {
         let batch = resumed
-            .poll_drivers(&mut journal, &mut drivers, &AcceptAnyCompletion, 0)
+            .poll_drivers(
+                &mut journal,
+                &mut drivers,
+                &AcceptAnyCompletion,
+                rastok::time::LogicalTime::ZERO,
+            )
             .expect("resume is a pure journal fold");
         assert!(batch.events.is_empty());
         std::thread::sleep(Duration::from_millis(5));

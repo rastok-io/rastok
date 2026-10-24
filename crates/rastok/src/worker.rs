@@ -82,7 +82,7 @@ pub trait Supervision {
     type Error;
 
     /// Current logical time in signed nanoseconds, supplied explicitly.
-    fn logical_time(&mut self) -> i64;
+    fn logical_time(&mut self) -> crate::time::LogicalTime;
 
     /// Non-blocking App input: `Pending` means listen again later,
     /// `Ready(None)` means this input source has ended, not that the graph
@@ -170,22 +170,39 @@ impl<'plan> Worker<'plan> {
         plan: &'plan ValidatedExecutionPlan,
         hash: Option<SemanticHash>,
         version: GraphVersion,
-        logical_time: i64,
+        origin: crate::time::Timestamp,
         boot: Option<&BootBindings>,
         drivers: RuntimeDrivers<'plan>,
     ) -> Self {
         let journal = boot.map_or_else(
-            || MemJournal::new(version),
-            |boot| MemJournal::new_with_deployment(version, boot.attestation().clone()),
+            || MemJournal::new_with_origin(version, origin),
+            |boot| MemJournal::new_with_deployment(version, origin, boot.attestation().clone()),
         );
         let execution = hash.map_or_else(
             || {
                 boot.map_or_else(
-                    || Execution::new_at(plan, version, logical_time),
-                    |boot| Execution::new_at_with_deployment(plan, version, logical_time, boot),
+                    || Execution::new_at(plan, version, origin, crate::time::LogicalTime::ZERO),
+                    |boot| {
+                        Execution::new_at_with_deployment(
+                            plan,
+                            version,
+                            origin,
+                            crate::time::LogicalTime::ZERO,
+                            boot,
+                        )
+                    },
                 )
             },
-            |hash| Execution::new_program(plan, hash, version, logical_time, boot),
+            |hash| {
+                Execution::new_program(
+                    plan,
+                    hash,
+                    version,
+                    origin,
+                    crate::time::LogicalTime::ZERO,
+                    boot,
+                )
+            },
         );
         Self {
             execution,
@@ -224,7 +241,7 @@ impl<'plan> Worker<'plan> {
     ///
     /// # Errors
     /// The same refusals as [`Execution::advance_to`]; earlier work may commit.
-    pub fn advance_to(&mut self, target: i64) -> Result<(), ExecutionFault> {
+    pub fn advance_to(&mut self, target: crate::time::LogicalTime) -> Result<(), ExecutionFault> {
         self.execution
             .advance_to(&mut self.journal, &mut self.drivers, target)
     }
@@ -487,7 +504,7 @@ mod tests {
 
     #[derive(Default)]
     struct TestSupervision {
-        now: i64,
+        now: crate::time::LogicalTime,
         inputs: VecDeque<Poll<Option<IngressProposal>>>,
         checkpoints: Vec<usize>,
         waits: usize,
@@ -497,7 +514,7 @@ mod tests {
     impl Supervision for TestSupervision {
         type Error = &'static str;
 
-        fn logical_time(&mut self) -> i64 {
+        fn logical_time(&mut self) -> crate::time::LogicalTime {
             self.now
         }
 
@@ -520,7 +537,7 @@ mod tests {
         fn wait(&mut self) {
             self.waits += 1;
             assert!(self.waits <= 3, "the test must not wait indefinitely");
-            self.now += 1_000_000_000;
+            self.now = self.now + crate::time::Duration::from_nanoseconds(1_000_000_000);
         }
     }
 
@@ -544,13 +561,29 @@ mod tests {
         let plan = &compilation.plan;
         let version = GraphVersion(1);
         let drivers = || RuntimeDrivers::prepare(plan, &DriverRegistry::default()).unwrap();
-        let new_worker = || Worker::new(plan, Some(compilation.hash), version, 0, None, drivers());
+        let new_worker = || {
+            Worker::new(
+                plan,
+                Some(compilation.hash),
+                version,
+                crate::time::Timestamp::UNIX_EPOCH,
+                None,
+                drivers(),
+            )
+        };
         let mut hosted = new_worker();
         let mut continuous = new_worker();
         let mut idle = new_worker();
         let mut scripted = new_worker();
         let mut stepped = new_worker();
-        let mut reference = Execution::new_program(plan, compilation.hash, version, 0, None);
+        let mut reference = Execution::new_program(
+            plan,
+            compilation.hash,
+            version,
+            crate::time::Timestamp::UNIX_EPOCH,
+            crate::time::LogicalTime::from_nanoseconds(0),
+            None,
+        );
         let mut journal = MemJournal::new(version);
         for value in [1, 2, 3] {
             let proposal = IngressProposal {
@@ -702,7 +735,7 @@ mod tests {
             &compilation.plan,
             Some(compilation.hash),
             GraphVersion(1),
-            0,
+            crate::time::Timestamp::UNIX_EPOCH,
             None,
             drivers,
         );
@@ -722,7 +755,10 @@ mod tests {
         assert!(worker.execution().has_open_obligations());
         assert!(!worker.execution().has_ready_work());
         assert!(!worker.execution().is_stable());
-        assert_eq!(worker.execution().logical_time(), 0);
+        assert_eq!(
+            worker.execution().logical_time(),
+            crate::time::LogicalTime::ZERO
+        );
         let records = worker.journal().records().to_vec();
         worker.run_until_idle(|_| {}).unwrap();
         assert_eq!(worker.journal().records(), records);
@@ -732,7 +768,10 @@ mod tests {
         worker.run(&mut supervision).unwrap();
         assert_eq!(supervision.waits, 1, "EOF must not abandon an open Call");
         assert_eq!(supervision.checkpoints.len(), 2);
-        assert_eq!(worker.execution().logical_time(), 1_000_000_000);
+        assert_eq!(
+            worker.execution().logical_time(),
+            crate::time::LogicalTime::from_nanoseconds(1_000_000_000)
+        );
         assert!(!worker.execution().has_open_obligations());
         assert_eq!(worker.execution().outputs().len(), 1);
         assert_eq!(
@@ -754,7 +793,7 @@ mod tests {
             &compilation.plan,
             Some(compilation.hash),
             GraphVersion(1),
-            0,
+            crate::time::Timestamp::UNIX_EPOCH,
             None,
             drivers,
         );
@@ -777,7 +816,10 @@ mod tests {
         worker.run(&mut supervision).unwrap();
         assert_eq!(supervision.waits, 1);
         assert_eq!(supervision.checkpoints.len(), 2);
-        assert_eq!(worker.execution().logical_time(), 1_000_000_000);
+        assert_eq!(
+            worker.execution().logical_time(),
+            crate::time::LogicalTime::from_nanoseconds(1_000_000_000)
+        );
         assert_eq!(worker.execution().outputs().len(), 1);
         assert_eq!(
             worker.execution().outputs()[0].envelope.data(),
@@ -807,7 +849,7 @@ mod tests {
                 &compilation.plan,
                 Some(compilation.hash),
                 GraphVersion(1),
-                0,
+                crate::time::Timestamp::UNIX_EPOCH,
                 None,
                 drivers,
             );
@@ -869,7 +911,7 @@ mod tests {
             &compilation.plan,
             Some(compilation.hash),
             GraphVersion(1),
-            0,
+            crate::time::Timestamp::UNIX_EPOCH,
             None,
             drivers,
         );

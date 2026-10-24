@@ -66,7 +66,7 @@ fn two_tenants_keep_the_request_fixed_and_only_alice_retries() {
             .iter()
             .map(|call| call.logical_time)
             .collect::<Vec<_>>(),
-        [0, 0, 2_000_000_000]
+        [0, 0, 2_000_000_000].map(rastok::time::LogicalTime::from_nanoseconds)
     );
     assert_eq!(
         calls[0].prepared, calls[2].prepared,

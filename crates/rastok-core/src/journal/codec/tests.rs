@@ -18,7 +18,7 @@ fn lifecycle_triggers_round_trip_only_the_current_registry_words() {
         exchange_exit: None,
         retry_record: None,
         loop_record: None,
-        logical_time: None,
+        observed_time: None,
         deadlines: None,
         instance_commands: None,
         consumed: vec![],
@@ -87,7 +87,7 @@ fn deadline(kind: u8, due_at: i64) -> Deadline {
     Deadline {
         kind: journal::DeadlineKind::try_from(kind).unwrap(),
         reference: Id::from_bytes([kind; 16]),
-        due_at,
+        due_at: crate::time::LogicalTime::from_nanoseconds(due_at),
     }
 }
 
@@ -137,7 +137,11 @@ fn deadline_kinds_keep_their_explicit_bytes_and_reject_unknown_wire_tags() {
 
 #[test]
 fn deadlines_have_an_exact_inline_signed_instant_encoding() {
-    let deadlines = Deadlines::try_new(-1, vec![deadline(5, 100)]).unwrap();
+    let deadlines = Deadlines::try_new(
+        crate::time::LogicalTime::from_nanoseconds(-1),
+        vec![deadline(5, 100)],
+    )
+    .unwrap();
     let mut expected = vec![0x82, 0x20, 0x81, 0x83, 0x05, 0x50];
     expected.extend_from_slice(&[5; 16]);
     expected.extend_from_slice(&[0x18, 0x64]);
@@ -159,12 +163,23 @@ fn every_registered_deadline_keeps_its_due_time_and_creation_order() {
         .map(|kind| deadline(kind, i64::MAX))
         .collect();
     items.push(deadline(8, i64::MAX)); // a renewal is not sorted or deduplicated
-    let deadlines = Deadlines::try_new(i64::MIN, items.clone()).unwrap();
+    let deadlines = Deadlines::try_new(
+        crate::time::LogicalTime::from_nanoseconds(i64::MIN),
+        items.clone(),
+    )
+    .unwrap();
     let tree = schedule(Some(&deadlines));
     let restored = read_schedule(&tree).unwrap().unwrap();
-    assert_eq!(restored.created_at(), i64::MIN);
+    assert_eq!(
+        restored.created_at(),
+        crate::time::LogicalTime::from_nanoseconds(i64::MIN)
+    );
     assert_eq!(restored.items(), items);
-    let reversed = Deadlines::try_new(i64::MIN, items.into_iter().rev().collect()).unwrap();
+    let reversed = Deadlines::try_new(
+        crate::time::LogicalTime::from_nanoseconds(i64::MIN),
+        items.into_iter().rev().collect(),
+    )
+    .unwrap();
     assert_ne!(tree, schedule(Some(&reversed)));
 }
 
@@ -172,7 +187,7 @@ fn every_registered_deadline_keeps_its_due_time_and_creation_order() {
 fn no_empty_unknown_or_backdated_schedule_is_constructible() {
     use journal::deadline::Error as DeadlineError;
     assert_eq!(
-        Deadlines::try_new(0, vec![]),
+        Deadlines::try_new(crate::time::LogicalTime::ZERO, vec![]),
         Err(DeadlineError::EmptySchedule)
     );
     for kind in [0, 9, 10, u8::MAX] {
@@ -182,10 +197,16 @@ fn no_empty_unknown_or_backdated_schedule_is_constructible() {
         );
     }
     assert_eq!(
-        Deadlines::try_new(0, vec![deadline(1, -1)]),
+        Deadlines::try_new(crate::time::LogicalTime::ZERO, vec![deadline(1, -1)]),
         Err(DeadlineError::DeadlinePrecedesCreation)
     );
-    assert!(Deadlines::try_new(i64::MAX, vec![deadline(1, i64::MAX)]).is_ok());
+    assert!(
+        Deadlines::try_new(
+            crate::time::LogicalTime::from_nanoseconds(i64::MAX),
+            vec![deadline(1, i64::MAX)]
+        )
+        .is_ok()
+    );
 }
 
 #[test]
@@ -215,7 +236,9 @@ fn decoding_distinguishes_carrier_errors_from_deadline_invariants() {
 
 #[test]
 fn malformed_deadlines_are_refused_without_repair() {
-    let valid = schedule(Some(&Deadlines::try_new(0, vec![deadline(1, 1)]).unwrap()));
+    let valid = schedule(Some(
+        &Deadlines::try_new(crate::time::LogicalTime::ZERO, vec![deadline(1, 1)]).unwrap(),
+    ));
     // No byte-string or map wrapper is a second spelling for this field.
     assert!(read_schedule(&Cbor::Bytes(crate::canonical_cbor::encode(&valid))).is_err());
     assert!(read_schedule(&Cbor::Map(BTreeMap::from([(41, valid.clone())]))).is_err());
@@ -261,11 +284,11 @@ fn malformed_deadlines_are_refused_without_repair() {
 #[test]
 fn deadlines_are_inline_values_not_nested_cbor_documents() {
     let deadlines = Deadlines::try_new(
-        -1,
+        crate::time::LogicalTime::from_nanoseconds(-1),
         vec![Deadline {
             kind: journal::DeadlineKind::CallTimeout,
             reference: Id::from_bytes([5; 16]),
-            due_at: 100,
+            due_at: crate::time::LogicalTime::from_nanoseconds(100),
         }],
     )
     .unwrap();

@@ -1949,11 +1949,12 @@ struct PlanValueBindings<'a> {
 }
 
 impl expr::Bindings for PlanValueBindings<'_> {
-    fn get(&self, name: &str) -> Option<expr::EvalValue> {
-        self.values
+    fn get(&self, name: &str) -> Result<Option<expr::EvalValue>, expr::Error> {
+        Ok(self
+            .values
             .get(name)
             .and_then(|binding| binding.resolved.clone())
-            .map(expr::EvalValue::from)
+            .map(expr::EvalValue::from))
     }
 
     fn asset(&self, index: u32) -> Result<expr::EvalValue, expr::Error> {
@@ -4144,7 +4145,7 @@ mod value_format_tests {
         let values = alloc::vec![
             Value::Date(0),
             Value::Time(0),
-            Value::TimestampNtz(0),
+            Value::TimestampNtz(crate::time::Timestamp::from_nanoseconds(0)),
             Value::Interval {
                 months: 0,
                 days: 0,

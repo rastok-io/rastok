@@ -103,7 +103,7 @@ graph app : App {
     let (decoded, decoded_hash) = plan::decode(&package).unwrap();
     assert_eq!(decoded, validated);
     assert_eq!(decoded_hash, hash);
-    assert_eq!(plan::FORMAT_VERSION, 23);
+    assert_eq!(plan::FORMAT_VERSION, 24);
 }
 
 #[test]
@@ -444,7 +444,12 @@ graph app : App {
     let compilation = compiler::compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
     let package = plan::encode(&compilation.plan, &compilation.hash);
     let decoded = plan::decode(&package).unwrap().0;
-    let mut execution = Execution::new_at(&decoded, plan::GraphVersion(1), 17);
+    let mut execution = Execution::new_at(
+        &decoded,
+        plan::GraphVersion(1),
+        rastok::time::Timestamp::UNIX_EPOCH,
+        rastok::time::LogicalTime::from_nanoseconds(17),
+    );
     let mut journal = MemJournal::new(plan::GraphVersion(1));
     execution
         .accept_input(
@@ -461,7 +466,7 @@ graph app : App {
         execution.outputs()[0].envelope.data(),
         &Data::materialized(Value::Text("selected".into()))
     );
-    assert!(journal.records().iter().all(|record| !matches!(record, Record::Transaction(transaction) if transaction.logical_time.is_some())));
+    assert!(journal.records().iter().all(|record| !matches!(record, Record::Transaction(transaction) if transaction.observed_time.is_some())));
 }
 
 #[test]

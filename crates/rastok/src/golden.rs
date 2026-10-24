@@ -412,7 +412,7 @@ fn key_name(key: u64) -> String {
         36 => "session_exit",
         37 => "session_fact",
         38 => "inbound_call_exit",
-        39 => "logical_time",
+        39 => "observed_time",
         40 => "loop_protocol",
         41 => "deadlines",
         42 => "instance_commands",
@@ -705,15 +705,8 @@ fn record_tree(record: &Record) -> Cbor {
                 }
                 None => {}
             }
-            if let Some(logical_time) = transaction.logical_time {
-                pairs.insert(
-                    39,
-                    if logical_time >= 0 {
-                        Cbor::Uint(logical_time as u64)
-                    } else {
-                        Cbor::Negative(logical_time.unsigned_abs() - 1)
-                    },
-                );
+            if let Some(observed_time) = transaction.observed_time {
+                pairs.insert(39, canonical::timestamp(observed_time));
             }
             if let Some(packet) = transaction.loop_protocol() {
                 pairs.insert(40, loop_record_tree(packet));
@@ -988,7 +981,7 @@ mod tests {
                 }],
                 ..LoopRecord::default()
             })),
-            logical_time: None,
+            observed_time: None,
             deadlines: None,
             instance_commands: None,
             consumed: Vec::new(),
@@ -1030,11 +1023,17 @@ mod tests {
         let Record::Transaction(mut timed) = record.clone() else {
             unreachable!("the fixture is a transaction")
         };
-        timed.logical_time = Some(-1);
+        timed.observed_time = Some(crate::time::Timestamp::from_nanoseconds(-1));
         let Cbor::Map(timed_tree) = record_tree(&Record::Transaction(timed)) else {
             panic!("a transaction projects as a canonical map")
         };
-        assert_eq!(timed_tree.get(&39), Some(&Cbor::Negative(0)));
+        assert_eq!(
+            timed_tree.get(&39),
+            Some(&Cbor::Array(vec![
+                Cbor::Negative(0),
+                Cbor::Uint(999_999_999)
+            ]))
+        );
 
         let Record::Transaction(mut admit) = record else {
             unreachable!("the fixture is a transaction")

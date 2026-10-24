@@ -24,7 +24,12 @@ fn an_overdue_queued_call_cannot_start_an_effect_after_recovery() {
     let mut execution = Execution::new(&plan, GraphVersion(1));
     inject(&mut execution, &mut journal, "in", 3);
     let mut world = World::default();
-    let mut recovered = Execution::new_at(&plan, GraphVersion(1), 4_000_000_000);
+    let mut recovered = Execution::new_at(
+        &plan,
+        GraphVersion(1),
+        rastok::time::Timestamp::UNIX_EPOCH,
+        rastok::time::LogicalTime::from_nanoseconds(4_000_000_000),
+    );
     recovered
         .recover_with_drivers(&journal, &mut CallDriver(&mut world))
         .unwrap();
@@ -63,7 +68,12 @@ graph app : App {
     );
     for queued in [false, true] {
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut execution = Execution::new_at(&plan, GraphVersion(1), 7_000_000_000);
+        let mut execution = Execution::new_at(
+            &plan,
+            GraphVersion(1),
+            rastok::time::Timestamp::UNIX_EPOCH,
+            rastok::time::LogicalTime::from_nanoseconds(7_000_000_000),
+        );
         let mut world = World::default();
         inject(&mut execution, &mut journal, "in", 3);
         if queued {
@@ -78,17 +88,30 @@ graph app : App {
         assert_eq!(world.starts, 1);
         for at in [8_000_000_000, 9_000_000_000, 10_000_000_000, 11_000_000_000] {
             execution
-                .advance_to(&mut journal, &mut CallDriver(&mut world), at)
+                .advance_to(
+                    &mut journal,
+                    &mut CallDriver(&mut world),
+                    rastok::time::LogicalTime::from_nanoseconds(at),
+                )
                 .unwrap();
             let retained = journal.records().to_vec();
-            let mut recovered = Execution::new_at(&plan, GraphVersion(1), at);
+            let mut recovered = Execution::new_at(
+                &plan,
+                GraphVersion(1),
+                rastok::time::Timestamp::UNIX_EPOCH,
+                rastok::time::LogicalTime::from_nanoseconds(at),
+            );
             recovered
                 .recover_with_drivers(&journal, &mut CallDriver(&mut world))
                 .unwrap_or_else(|error| panic!("queued={queued}, at={at}: {error}"));
             assert_eq!(world.starts, 1, "recovery starts no effect");
             assert_eq!(journal.records(), retained);
             recovered
-                .advance_to(&mut journal, &mut CallDriver(&mut world), at)
+                .advance_to(
+                    &mut journal,
+                    &mut CallDriver(&mut world),
+                    rastok::time::LogicalTime::from_nanoseconds(at),
+                )
                 .unwrap();
             assert_eq!(
                 recovered.inspection(),
@@ -252,12 +275,21 @@ graph app : App + Loop {
         assert_eq!(world.starts, 1);
         for at in [0, 3_000_000_000, 4_000_000_000] {
             execution
-                .advance_to(&mut journal, &mut CallDriver(&mut world), at)
+                .advance_to(
+                    &mut journal,
+                    &mut CallDriver(&mut world),
+                    rastok::time::LogicalTime::from_nanoseconds(at),
+                )
                 .unwrap();
             execution
                 .poll_drivers(&mut journal, &mut CallDriver(&mut world))
                 .unwrap();
-            let mut restored = Execution::new_at(&plan, GraphVersion(1), at);
+            let mut restored = Execution::new_at(
+                &plan,
+                GraphVersion(1),
+                rastok::time::Timestamp::UNIX_EPOCH,
+                rastok::time::LogicalTime::from_nanoseconds(at),
+            );
             restored
                 .recover_with_drivers(&journal, &mut CallDriver(&mut world))
                 .unwrap();
@@ -270,7 +302,11 @@ graph app : App + Loop {
         assert_eq!(world.starts, 2);
         if exhausted {
             execution
-                .advance_to(&mut journal, &mut CallDriver(&mut world), 7_000_000_000)
+                .advance_to(
+                    &mut journal,
+                    &mut CallDriver(&mut world),
+                    rastok::time::LogicalTime::from_nanoseconds(7_000_000_000),
+                )
                 .unwrap();
         } else {
             world
@@ -289,7 +325,12 @@ graph app : App + Loop {
                 .unwrap();
         }
         for _ in 0..100 {
-            let mut restored = Execution::new_at(&plan, GraphVersion(1), execution.logical_time());
+            let mut restored = Execution::new_at(
+                &plan,
+                GraphVersion(1),
+                rastok::time::Timestamp::UNIX_EPOCH,
+                execution.logical_time(),
+            );
             restored
                 .recover_with_drivers(&journal, &mut CallDriver(&mut world))
                 .unwrap();
@@ -479,7 +520,12 @@ fn graph_commands_wait_for_calls_and_recovery_never_restarts_them() {
 fn graph_call_deadlines_survive_recovery_without_extending_the_application() {
     use rastok::journal::loop_protocol::{LoopView, Phase};
     let plan = compile(GRAPH_CALLS);
-    let mut execution = Execution::new_at(&plan, GraphVersion(1), 7_000_000_000);
+    let mut execution = Execution::new_at(
+        &plan,
+        GraphVersion(1),
+        rastok::time::Timestamp::UNIX_EPOCH,
+        rastok::time::LogicalTime::from_nanoseconds(7_000_000_000),
+    );
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut world = World::default();
     inject(&mut execution, &mut journal, "in", 1);
@@ -494,20 +540,34 @@ fn graph_call_deadlines_survive_recovery_without_extending_the_application() {
         (10_000_000_000, 1, Phase::Active),
         (13_000_000_000, 1, Phase::Closed),
     ] {
-        let mut restored = Execution::new_at(&plan, GraphVersion(1), at);
+        let mut restored = Execution::new_at(
+            &plan,
+            GraphVersion(1),
+            rastok::time::Timestamp::UNIX_EPOCH,
+            rastok::time::LogicalTime::from_nanoseconds(at),
+        );
         let starts = world.starts;
         restored
             .recover_with_drivers(&journal, &mut CallDriver(&mut world))
             .unwrap();
         assert_eq!(world.starts, starts);
         restored
-            .advance_to(&mut journal, &mut CallDriver(&mut world), at)
+            .advance_to(
+                &mut journal,
+                &mut CallDriver(&mut world),
+                rastok::time::LogicalTime::from_nanoseconds(at),
+            )
             .unwrap();
         let fold = LoopView::from_records(journal.records()).unwrap();
         let (_, run) = fold.runs().next().unwrap();
         assert_eq!((run.iteration, run.phase), (iteration, phase), "at {at}");
         let retained = journal.records().to_vec();
-        let mut checked = Execution::new_at(&plan, GraphVersion(1), at);
+        let mut checked = Execution::new_at(
+            &plan,
+            GraphVersion(1),
+            rastok::time::Timestamp::UNIX_EPOCH,
+            rastok::time::LogicalTime::from_nanoseconds(at),
+        );
         checked
             .recover_with_drivers(&journal, &mut CallDriver(&mut world))
             .unwrap();
@@ -617,9 +677,18 @@ fn closing_a_graph_call_run_cancels_recurrence_and_recovers_settlement() {
         .unwrap();
     for at in [2_000_000_000, 3_000_000_000, 4_000_000_000, 20_000_000_000] {
         execution
-            .advance_to(&mut journal, &mut CallDriver(&mut world), at)
+            .advance_to(
+                &mut journal,
+                &mut CallDriver(&mut world),
+                rastok::time::LogicalTime::from_nanoseconds(at),
+            )
             .unwrap();
-        let mut restored = Execution::new_at(&plan, GraphVersion(1), at);
+        let mut restored = Execution::new_at(
+            &plan,
+            GraphVersion(1),
+            rastok::time::Timestamp::UNIX_EPOCH,
+            rastok::time::LogicalTime::from_nanoseconds(at),
+        );
         restored
             .recover_with_drivers(&journal, &mut CallDriver(&mut world))
             .unwrap_or_else(|error| panic!("at {at}: {error}"));
@@ -627,7 +696,11 @@ fn closing_a_graph_call_run_cancels_recurrence_and_recovers_settlement() {
         // action. Processing that same instant reaches the settling phase.
         let retained = journal.records().to_vec();
         restored
-            .advance_to(&mut journal, &mut CallDriver(&mut world), at)
+            .advance_to(
+                &mut journal,
+                &mut CallDriver(&mut world),
+                rastok::time::LogicalTime::from_nanoseconds(at),
+            )
             .unwrap();
         assert_eq!(journal.records(), retained);
         assert_eq!(restored.inspection(), execution.inspection(), "at {at}");
@@ -661,7 +734,12 @@ fn call_recovery_restores_the_held_delivery_without_restarting_the_driver() {
         .unwrap();
     assert_eq!(world.starts, 1);
     let before = journal.records().to_vec();
-    let mut restored = Execution::new_at(&plan, GraphVersion(1), 750_000_000);
+    let mut restored = Execution::new_at(
+        &plan,
+        GraphVersion(1),
+        rastok::time::Timestamp::UNIX_EPOCH,
+        rastok::time::LogicalTime::from_nanoseconds(750_000_000),
+    );
     restored.recover_from_journal(&journal).unwrap();
     assert_eq!(restored.inspection().calls, execution.inspection().calls);
     restored
@@ -688,7 +766,12 @@ fn call_recovery_restores_the_held_delivery_without_restarting_the_driver() {
         .poll_drivers(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
     let retained = journal.records().to_vec();
-    let mut after_response = Execution::new_at(&plan, GraphVersion(1), 750_000_000);
+    let mut after_response = Execution::new_at(
+        &plan,
+        GraphVersion(1),
+        rastok::time::Timestamp::UNIX_EPOCH,
+        rastok::time::LogicalTime::from_nanoseconds(750_000_000),
+    );
     after_response.recover_from_journal(&journal).unwrap();
     assert_eq!(
         after_response.inspection().calls,
@@ -698,7 +781,12 @@ fn call_recovery_restores_the_held_delivery_without_restarting_the_driver() {
     assert_eq!(journal.records(), retained);
     after_response.step(&mut journal).unwrap(); // completion produces Again
     let retained = journal.records().to_vec();
-    let mut after_command = Execution::new_at(&plan, GraphVersion(1), 750_000_000);
+    let mut after_command = Execution::new_at(
+        &plan,
+        GraphVersion(1),
+        rastok::time::Timestamp::UNIX_EPOCH,
+        rastok::time::LogicalTime::from_nanoseconds(750_000_000),
+    );
     after_command.recover_from_journal(&journal).unwrap();
     assert!(after_command.inspection().calls.is_empty());
     assert_eq!(journal.records(), retained);
@@ -707,7 +795,11 @@ fn call_recovery_restores_the_held_delivery_without_restarting_the_driver() {
         .unwrap();
     assert_eq!(world.starts, 1);
     after_command
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 1_750_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(1_750_000_000),
+        )
         .unwrap();
     after_command
         .poll_drivers(&mut journal, &mut CallDriver(&mut world))
@@ -732,7 +824,12 @@ fn delivery_deadlines_are_retained_at_both_ingress_and_producer_commits() {
             DELIVERY_DEADLINES.into()
         };
         let plan = compile(&source);
-        let mut execution = Execution::new_at(&plan, GraphVersion(1), 7_000_000_000);
+        let mut execution = Execution::new_at(
+            &plan,
+            GraphVersion(1),
+            rastok::time::Timestamp::UNIX_EPOCH,
+            rastok::time::LogicalTime::from_nanoseconds(7_000_000_000),
+        );
         let mut journal = MemJournal::new(GraphVersion(1));
         inject(&mut execution, &mut journal, "in", 4);
         if !direct {
@@ -769,7 +866,10 @@ fn delivery_deadlines_are_retained_at_both_ingress_and_producer_commits() {
             )
         };
         let schedule = schedule.expect("every delivery deadline has a retained due instant");
-        assert_eq!(schedule.created_at(), 7_000_000_000);
+        assert_eq!(
+            schedule.created_at(),
+            rastok::time::LogicalTime::from_nanoseconds(7_000_000_000)
+        );
         assert_eq!(schedule.items().len(), 2);
         for deadline in schedule.items() {
             assert!(
@@ -779,11 +879,11 @@ fn delivery_deadlines_are_retained_at_both_ingress_and_producer_commits() {
             );
             assert_eq!(
                 deadline.due_at,
-                match deadline.kind {
+                rastok::time::LogicalTime::from_nanoseconds(match deadline.kind {
                     DeadlineKind::JoinWithin => 9_000_000_000,
                     DeadlineKind::CallTimeout => 10_000_000_000,
                     _ => panic!("unexpected deadline kind"),
-                }
+                })
             );
         }
     }
@@ -812,11 +912,21 @@ graph app : App {
 }
 "#,
     );
-    let mut execution = Execution::new_at(&plan, GraphVersion(1), 7_000_000_000);
+    let mut execution = Execution::new_at(
+        &plan,
+        GraphVersion(1),
+        rastok::time::Timestamp::UNIX_EPOCH,
+        rastok::time::LogicalTime::from_nanoseconds(7_000_000_000),
+    );
     let mut journal = MemJournal::new(GraphVersion(1));
     inject(&mut execution, &mut journal, "left", 4);
     execution.run_ready(&mut journal).unwrap();
-    let mut restored = Execution::new_at(&plan, GraphVersion(1), 8_500_000_000);
+    let mut restored = Execution::new_at(
+        &plan,
+        GraphVersion(1),
+        rastok::time::Timestamp::UNIX_EPOCH,
+        rastok::time::LogicalTime::from_nanoseconds(8_500_000_000),
+    );
     restored.recover_from_journal(&journal).unwrap();
     assert_eq!(
         restored.inspection().mailboxes,
@@ -824,19 +934,36 @@ graph app : App {
     );
     let mut world = World::default();
     restored
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 8_999_999_999)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(8_999_999_999),
+        )
         .unwrap();
     assert!(restored.outputs().is_empty());
     restored
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 9_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(9_000_000_000),
+        )
         .unwrap();
     assert_eq!(restored.outputs().len(), 1);
     assert_eq!(restored.outputs()[0].port.name(), "expired");
     let before = journal.records().to_vec();
-    let mut after_eviction = Execution::new_at(&plan, GraphVersion(1), 10_000_000_000);
+    let mut after_eviction = Execution::new_at(
+        &plan,
+        GraphVersion(1),
+        rastok::time::Timestamp::UNIX_EPOCH,
+        rastok::time::LogicalTime::from_nanoseconds(10_000_000_000),
+    );
     after_eviction.recover_from_journal(&journal).unwrap();
     after_eviction
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 10_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(10_000_000_000),
+        )
         .unwrap();
     assert_eq!(
         journal.records(),
@@ -851,7 +978,12 @@ graph app : App {
         after_eviction.outputs().last().unwrap().envelope.data(),
         &Data::materialized(Value::Int(11))
     );
-    let mut after_join = Execution::new_at(&plan, GraphVersion(1), 10_000_000_000);
+    let mut after_join = Execution::new_at(
+        &plan,
+        GraphVersion(1),
+        rastok::time::Timestamp::UNIX_EPOCH,
+        rastok::time::LogicalTime::from_nanoseconds(10_000_000_000),
+    );
     after_join.recover_from_journal(&journal).unwrap();
     assert_eq!(after_join.outputs(), after_eviction.outputs());
     assert!(
@@ -876,14 +1008,26 @@ fn scheduler_closed_calls_recover_through_pure_contract_projection_only() {
             .unwrap();
         let call = journal.open_calls()[0].call_id;
         if abandoned {
-            journal.abandon_egress(&call, 0).unwrap();
+            journal
+                .abandon_egress(&call, rastok::time::LogicalTime::ZERO)
+                .unwrap();
         } else {
             journal
-                .close_egress(&call, rastok::journal::Closure::Timeout, 0, None)
+                .close_egress(
+                    &call,
+                    rastok::journal::Closure::Timeout,
+                    rastok::time::LogicalTime::ZERO,
+                    None,
+                )
                 .unwrap();
         }
         let before = journal.records().to_vec();
-        let mut restored = Execution::new_at(&plan, GraphVersion(1), 3_000_000_000);
+        let mut restored = Execution::new_at(
+            &plan,
+            GraphVersion(1),
+            rastok::time::Timestamp::UNIX_EPOCH,
+            rastok::time::LogicalTime::from_nanoseconds(3_000_000_000),
+        );
         let empty = restored.inspection();
         assert!(restored.recover_from_journal(&journal).is_err());
         assert_eq!(
@@ -899,7 +1043,12 @@ fn scheduler_closed_calls_recover_through_pure_contract_projection_only() {
         assert!(restored.inspection().calls[0].completion_recorded);
         restored.step(&mut journal).unwrap();
         assert!(restored.inspection().calls.is_empty());
-        let mut after = Execution::new_at(&plan, GraphVersion(1), 3_000_000_000);
+        let mut after = Execution::new_at(
+            &plan,
+            GraphVersion(1),
+            rastok::time::Timestamp::UNIX_EPOCH,
+            rastok::time::LogicalTime::from_nanoseconds(3_000_000_000),
+        );
         after
             .recover_with_drivers(&journal, &mut CallDriver(&mut world))
             .unwrap();
@@ -1035,7 +1184,11 @@ graph app : App {{
         let mut recovered = Execution::new(&plan, GraphVersion(1));
         recovered.recover_from_journal(&journal).unwrap();
         recovered
-            .advance_to(&mut journal, &mut CallDriver(&mut world), 3_000_000_000)
+            .advance_to(
+                &mut journal,
+                &mut CallDriver(&mut world),
+                rastok::time::LogicalTime::from_nanoseconds(3_000_000_000),
+            )
             .unwrap();
         assert_eq!(recovered.outputs().len(), 1, "{aggregate} -> {formatter}");
         assert_eq!(
@@ -1065,10 +1218,19 @@ graph app : App {{
                 && record.trigger == rastok::node::Trigger::Lifecycle(rastok::node::Lifecycle::Start)
         )).count(), 1, "a closing receiver is not recreated in a successor generation");
         let retained = journal.records().to_vec();
-        let mut closed = Execution::new_at(&plan, GraphVersion(1), 3_000_000_000);
+        let mut closed = Execution::new_at(
+            &plan,
+            GraphVersion(1),
+            rastok::time::Timestamp::UNIX_EPOCH,
+            rastok::time::LogicalTime::from_nanoseconds(3_000_000_000),
+        );
         closed.recover_from_journal(&journal).unwrap();
         closed
-            .advance_to(&mut journal, &mut CallDriver(&mut world), 4_000_000_000)
+            .advance_to(
+                &mut journal,
+                &mut CallDriver(&mut world),
+                rastok::time::LogicalTime::from_nanoseconds(4_000_000_000),
+            )
             .unwrap();
         assert_eq!(journal.records(), retained);
         assert_eq!(closed.outputs(), recovered.outputs());
@@ -1097,7 +1259,12 @@ graph app : App {{
 "#
         ));
         let mut journal = MemJournal::new(GraphVersion(1));
-        let mut execution = Execution::new_at(&plan, GraphVersion(1), 7_000_000_000);
+        let mut execution = Execution::new_at(
+            &plan,
+            GraphVersion(1),
+            rastok::time::Timestamp::UNIX_EPOCH,
+            rastok::time::LogicalTime::from_nanoseconds(7_000_000_000),
+        );
         let mut world = World::default();
         inject(&mut execution, &mut journal, "in", 3);
         let schedule = journal.records()[0]
@@ -1108,10 +1275,20 @@ graph app : App {{
         } else {
             10_000_000_000
         };
-        assert_eq!(schedule.created_at(), 7_000_000_000);
-        assert_eq!(schedule.items()[0].due_at, first_due);
+        assert_eq!(
+            schedule.created_at(),
+            rastok::time::LogicalTime::from_nanoseconds(7_000_000_000)
+        );
+        assert_eq!(
+            schedule.items()[0].due_at,
+            rastok::time::LogicalTime::from_nanoseconds(first_due)
+        );
         execution
-            .advance_to(&mut journal, &mut CallDriver(&mut world), 8_000_000_000)
+            .advance_to(
+                &mut journal,
+                &mut CallDriver(&mut world),
+                rastok::time::LogicalTime::from_nanoseconds(8_000_000_000),
+            )
             .unwrap();
         inject(&mut execution, &mut journal, "in", 4);
         execution.run_ready(&mut journal).unwrap();
@@ -1120,17 +1297,30 @@ graph app : App {{
         } else {
             first_due
         };
-        let mut recovered = Execution::new_at(&plan, GraphVersion(1), 8_500_000_000);
+        let mut recovered = Execution::new_at(
+            &plan,
+            GraphVersion(1),
+            rastok::time::Timestamp::UNIX_EPOCH,
+            rastok::time::LogicalTime::from_nanoseconds(8_500_000_000),
+        );
         recovered.recover_from_journal(&journal).unwrap();
         recovered
-            .advance_to(&mut journal, &mut CallDriver(&mut world), due - 1)
+            .advance_to(
+                &mut journal,
+                &mut CallDriver(&mut world),
+                rastok::time::LogicalTime::from_nanoseconds(due - 1),
+            )
             .unwrap();
         assert!(
             recovered.outputs().is_empty(),
             "{kind}: not before original deadline"
         );
         recovered
-            .advance_to(&mut journal, &mut CallDriver(&mut world), due)
+            .advance_to(
+                &mut journal,
+                &mut CallDriver(&mut world),
+                rastok::time::LogicalTime::from_nanoseconds(due),
+            )
             .unwrap();
         assert_eq!(recovered.outputs().len(), 1, "{kind}");
         assert_eq!(
@@ -1138,10 +1328,19 @@ graph app : App {{
             &Data::materialized(Value::Int(7))
         );
         let prefix = journal.records().to_vec();
-        let mut closed = Execution::new_at(&plan, GraphVersion(1), due);
+        let mut closed = Execution::new_at(
+            &plan,
+            GraphVersion(1),
+            rastok::time::Timestamp::UNIX_EPOCH,
+            rastok::time::LogicalTime::from_nanoseconds(due),
+        );
         closed.recover_from_journal(&journal).unwrap();
         closed
-            .advance_to(&mut journal, &mut CallDriver(&mut world), due + 1)
+            .advance_to(
+                &mut journal,
+                &mut CallDriver(&mut world),
+                rastok::time::LogicalTime::from_nanoseconds(due + 1),
+            )
             .unwrap();
         assert_eq!(
             journal.records(),

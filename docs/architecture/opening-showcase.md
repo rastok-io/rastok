@@ -4,9 +4,14 @@ Opening: **5 November 2026**, freeze **24 October**, per the 5 October
 [human-review amendment](human-review-m1.md). This is the current M1 delivery
 checklist. **Release TODO:** relabel the first public package as format 1 before
 publication. No public operation is authorized by this update. The
-[current plan package](../spec/identity.md) and diagnostic recording **4**
-are tracked in the [lifecycle identity inventory](lifecycle-registry-identity.md);
-the preceding Process movement is in the [Connector identity inventory](connector-rework-identity.md).
+[current plan package](../spec/identity.md) and diagnostic recording **5**
+are tracked in the [time-carrier inventory](time-carriers-identity.md). Yoann
+approved witness regeneration on 24 October, preserving epoch-aligned tumbling.
+The preceding movements remain documented in the
+[lifecycle identity inventory](lifecycle-registry-identity.md) and the
+[Connector identity inventory](connector-rework-identity.md).
+The opening-tree freeze date follows C's independent replay and Yoann's
+scheduling decision; the earlier freeze above is not a new scheduling decision.
 Exact-instance
 closure, resident Process, native Retry, flat annotation types and bounded
 typed HTTP deserialization keep their execution semantics. The

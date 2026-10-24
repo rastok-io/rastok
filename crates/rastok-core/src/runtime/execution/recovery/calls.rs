@@ -223,7 +223,7 @@ impl Execution<'_> {
         let mut expected = TransactionPreparer::at(
             self.plan,
             self.graph_version,
-            self.now,
+            self.civil_time(),
             self.scheduler.mailboxes.routes(),
         )
         .connector_completion(

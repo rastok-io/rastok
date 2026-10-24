@@ -1276,7 +1276,8 @@ graph real : App {
                     .advance_to(
                         &mut journal,
                         &mut world,
-                        execution.logical_time() + 10_000_000,
+                        execution.logical_time()
+                            + crate::time::Duration::from_nanoseconds(10_000_000),
                     )
                     .unwrap();
             }

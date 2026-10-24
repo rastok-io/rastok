@@ -105,11 +105,17 @@ mod tests {
         .remove(0);
         let journal = crate::journal::MemJournal::from_records(
             crate::plan::GraphVersion(1),
+            crate::time::Timestamp::UNIX_EPOCH,
             None,
             &run.records,
         )
         .unwrap();
-        let recording = Recording::capture(&compilation, &journal, 10_000_000_000).unwrap();
+        let recording = Recording::capture(
+            &compilation,
+            &journal,
+            crate::time::LogicalTime::from_nanoseconds(10_000_000_000),
+        )
+        .unwrap();
         let views = snapshots(&recording).unwrap();
         assert_eq!(views.len(), run.records.len() + 1);
         // The same closed command set is checked by the generic snapshot tests.

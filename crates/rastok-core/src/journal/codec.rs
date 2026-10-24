@@ -254,12 +254,12 @@ fn read_deadline_ids(value: &Cbor) -> Result<Vec<(journal::DeadlineKind, Id)>, E
 fn schedule(value: Option<&journal::deadline::Deadlines>) -> Cbor {
     optional(value, |value| {
         list([
-            integer(value.created_at()),
+            integer(value.created_at().as_nanoseconds()),
             list(value.items().iter().map(|deadline| {
                 list([
                     Cbor::Uint(u64::from(u8::from(deadline.kind))),
                     id(deadline.reference),
-                    integer(deadline.due_at),
+                    integer(deadline.due_at.as_nanoseconds()),
                 ])
             })),
         ])
@@ -279,13 +279,16 @@ fn read_schedule(value: &Cbor) -> Result<Option<Box<journal::deadline::Deadlines
                     )
                     .map_err(|_| Error::Invalid("unknown deadline kind"))?,
                     reference: read_id(reference)?,
-                    due_at: signed(due_at)?,
+                    due_at: crate::time::LogicalTime::from_nanoseconds(signed(due_at)?),
                 })
             })
             .collect::<Result<_, Error>>()?;
-        journal::deadline::Deadlines::try_new(signed(created_at)?, items)
-            .map(Box::new)
-            .map_err(Error::Deadlines)
+        journal::deadline::Deadlines::try_new(
+            crate::time::LogicalTime::from_nanoseconds(signed(created_at)?),
+            items,
+        )
+        .map(Box::new)
+        .map_err(Error::Deadlines)
     })
 }
 fn completion(value: &Completion) -> Cbor {
@@ -325,7 +328,7 @@ fn intent(value: &CallOpen) -> Cbor {
                 .iter()
                 .map(|(name, value)| list([word(name), canonical::value(value)])),
         ),
-        integer(value.logical_time),
+        integer(value.logical_time.as_nanoseconds()),
     ])
 }
 fn read_intent(value: &Cbor) -> Result<CallOpen, Error> {
@@ -351,7 +354,7 @@ fn read_intent(value: &Cbor) -> Result<CallOpen, Error> {
         prepared: PreparedRequest::seal(bytes(prepared)?.to_vec()),
         idempotency_key: read_optional(key, |value| Ok(text(value)?.to_owned()))?,
         resolved_settings,
-        logical_time: signed(at)?,
+        logical_time: crate::time::LogicalTime::from_nanoseconds(signed(at)?),
     })
 }
 
@@ -413,7 +416,9 @@ pub fn encode(value: &Record) -> Cbor {
                     }
                 }),
                 optional(value.loop_record.as_deref(), loop_record),
-                optional(value.logical_time.as_ref(), |value| integer(*value)),
+                optional(value.observed_time.as_ref(), |value| {
+                    canonical::timestamp(*value)
+                }),
                 list(value.consumed.iter().map(|value| {
                     list([
                         word(&value.edge),
@@ -458,7 +463,9 @@ pub fn encode(value: &Record) -> Cbor {
                 journal::CallStatus::Closed(journal::Closure::Timeout) => list([Cbor::Uint(3)]),
                 journal::CallStatus::Abandoned => list([Cbor::Uint(4)]),
             },
-            optional(value.closed_at.as_ref(), |value| integer(*value)),
+            optional(value.closed_at.as_ref(), |value| {
+                integer(value.as_nanoseconds())
+            }),
             schedule(value.deadlines.as_deref()),
             optional(value.retry_record.as_deref(), retry_record),
         ]),
@@ -558,7 +565,7 @@ fn loop_fact(value: &lp::Fact) -> Cbor {
             Cbor::Uint(*remaining),
             id(command.id()),
             envelope(state),
-            optional(due_at.as_ref(), |value| integer(*value)),
+            optional(due_at.as_ref(), |value| integer(value.as_nanoseconds())),
         ]),
         Fact::Admitted {
             run,
@@ -809,7 +816,9 @@ impl Decoder {
                 }))
             })?,
             loop_record: read_optional(packet, |value| self.loop_record(value).map(Box::new))?,
-            logical_time: read_optional(at, |value| signed(value).map_err(Error::Read))?,
+            observed_time: read_optional(at, |value| {
+                canonical::decode_timestamp(value).map_err(Error::Read)
+            })?,
             consumed: items(consumed)?
                 .iter()
                 .map(|value| {
@@ -870,7 +879,11 @@ impl Decoder {
         let record = journal::CallRecord {
             intent: read_intent(intent)?,
             status,
-            closed_at: read_optional(closed_at, |value| signed(value).map_err(Error::Read))?,
+            closed_at: read_optional(closed_at, |value| {
+                signed(value)
+                    .map(crate::time::LogicalTime::from_nanoseconds)
+                    .map_err(Error::Read)
+            })?,
             deadlines: read_schedule(schedule)?,
             retry_record: read_optional(retry, |value| self.retry_record(value).map(Box::new))?,
         };
@@ -1016,7 +1029,11 @@ impl Decoder {
                 remaining: uint(remaining)?,
                 command: self.command(command)?,
                 state: self.envelope(state)?,
-                due_at: read_optional(due, |value| signed(value).map_err(Error::Read))?,
+                due_at: read_optional(due, |value| {
+                    signed(value)
+                        .map(crate::time::LogicalTime::from_nanoseconds)
+                        .map_err(Error::Read)
+                })?,
             },
             [Cbor::Uint(3), reference, iteration, admission, envelope] => Fact::Admitted {
                 run: run(reference)?,

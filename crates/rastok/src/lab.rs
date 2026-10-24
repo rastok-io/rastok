@@ -254,11 +254,12 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
         let empty_boot = crate::deployment::BootBindings::empty();
         let (driver, faults) = mock_drivers(
             plan,
+            scenario.origin,
             mocks,
             boot.unwrap_or(&empty_boot),
             Rc::clone(&source_input),
         )?;
-        let worker = Worker::new(plan, hash, graph_version, 0, boot, driver);
+        let worker = Worker::new(plan, hash, graph_version, scenario.origin, boot, driver);
         Ok(Self {
             plan,
             simulation: String::from(simulation),
@@ -541,11 +542,8 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
                 self.window_start = self.worker.execution().envelope_views().len();
                 self.output_window_start = self.worker.execution().outputs().len();
                 self.record_window_start = self.worker.journal().records().len();
-                let target = self
-                    .worker
-                    .execution()
-                    .logical_time()
-                    .saturating_add(*nanos);
+                let target = self.worker.execution().logical_time()
+                    + crate::time::Duration::from_nanoseconds(*nanos);
                 self.advance = Some(TimeAdvance::new(target));
                 self.quiescent = false;
                 ScenarioActionKind::Advance
@@ -1066,6 +1064,7 @@ fn draft(port: &node::Port, value: &EmitValue) -> Result<EnvelopeDraft, String> 
 
 struct MockConnectorFactory {
     id: ContractId,
+    origin: crate::time::Timestamp,
     modes: Vec<&'static str>,
     bind_protocol: ScriptedProtocolBinder,
     mocks: SharedMocks,
@@ -1117,6 +1116,7 @@ impl DriverFactory for MockConnectorFactory {
         let protocol = (self.bind_protocol)(plan, nodes, boot)?;
         Ok(Box::new(MockOutboundDriver {
             plan,
+            origin: self.origin,
             mocks: self.mocks.clone(),
             protocol,
             pending: Vec::new(),
@@ -1127,13 +1127,14 @@ impl DriverFactory for MockConnectorFactory {
 
 fn mock_drivers<'plan>(
     plan: &'plan ValidatedExecutionPlan,
+    origin: crate::time::Timestamp,
     mocks: BTreeMap<node::Path, Mock>,
     boot: &crate::deployment::BootBindings,
     source_input: Rc<RefCell<HttpServerLabInput>>,
 ) -> Result<(RuntimeDrivers<'plan>, MockFaults), String> {
     let faults = Rc::new(RefCell::new(Vec::new()));
     let mocks = share_mocks(mocks);
-    let registry = mock_registry(mocks, Rc::clone(&faults), source_input)?;
+    let registry = mock_registry(origin, mocks, Rc::clone(&faults), source_input)?;
     let drivers = RuntimeDrivers::prepare_with_boot(plan, &registry, boot)
         .map_err(|error| error.to_string())?;
     Ok((drivers, faults))
@@ -1147,6 +1148,7 @@ fn mock_drivers<'plan>(
 /// Contradictory built-in registry or model capability metadata.
 pub fn driver_manifest() -> Result<crate::connector::drivers::DriverManifest, String> {
     mock_registry(
+        crate::time::Timestamp::UNIX_EPOCH,
         Rc::new(BTreeMap::new()),
         Rc::new(RefCell::new(Vec::new())),
         Rc::new(RefCell::new(HttpServerLabInput::default())),
@@ -1156,6 +1158,7 @@ pub fn driver_manifest() -> Result<crate::connector::drivers::DriverManifest, St
 }
 
 fn mock_registry(
+    origin: crate::time::Timestamp,
     mocks: SharedMocks,
     faults: MockFaults,
     source_input: Rc<RefCell<HttpServerLabInput>>,
@@ -1163,6 +1166,7 @@ fn mock_registry(
     let mut registry = DriverRegistry::default();
     registry = registry
         .try_with(Box::new(process_service::Factory::new(
+            origin,
             Rc::clone(&mocks),
             Rc::clone(&faults),
         )?))
@@ -1171,6 +1175,7 @@ fn mock_registry(
         let id = ContractId::parse(spelling).map_err(|error| error.to_string())?;
         registry = registry
             .try_with(Box::new(MockConnectorFactory {
+                origin,
                 modes: crate::connector::stdlib::contract(&id)
                     .into_iter()
                     .flat_map(|definition| {
@@ -1221,6 +1226,7 @@ fn share_mocks(mocks: BTreeMap<node::Path, Mock>) -> SharedMocks {
 /// the external effect is replaced.
 struct MockOutboundDriver<'plan> {
     plan: &'plan ValidatedExecutionPlan,
+    origin: crate::time::Timestamp,
     mocks: SharedMocks,
     protocol: Box<dyn CallProtocol>,
     pending: Vec<CallResponse>,
@@ -1247,7 +1253,7 @@ impl MockOutboundDriver<'_> {
     fn answer_outputs(
         &mut self,
         connector: &node::Path,
-        logical_time: Option<i64>,
+        logical_time: Option<crate::time::LogicalTime>,
         request: &Envelope,
     ) -> Option<Vec<EnvelopeDraft>> {
         let Some(mock) = self.mocks.get(connector).cloned() else {
@@ -1262,7 +1268,10 @@ impl MockOutboundDriver<'_> {
         // reply must never force an opaque request to decode. The
         // slot caches across branches — one decode at most.
         let mut env: BTreeMap<String, expr::EvalValue> = BTreeMap::new();
-        if let Some(time) = logical_time {
+        if let Some(time) = logical_time.and_then(|instant| {
+            self.origin
+                .checked_add(instant - crate::time::LogicalTime::ZERO)
+        }) {
             env.insert(String::from("now"), expr::EvalValue::Timestamp(time));
         }
         env.insert(
@@ -1570,6 +1579,7 @@ mod tests {
         let nodes = [path.clone()];
         let mut driver = MockOutboundDriver {
             plan: &compilation.plan,
+            origin: crate::time::Timestamp::UNIX_EPOCH,
             mocks: share_mocks(mocks),
             protocol: Box::new(
                 ProcessRequestSettings::try_bind(&compilation.plan, &nodes)
@@ -1598,7 +1608,7 @@ mod tests {
             prepared,
             idempotency_key: None,
             resolved_settings: BTreeMap::new(),
-            logical_time: 0,
+            logical_time: crate::time::LogicalTime::ZERO,
         };
         let outcome = driver.answer(&intent, &request);
         let reported = faults.borrow().clone();
@@ -2009,6 +2019,7 @@ graph websocket_server_source : App {
             .unwrap_or_else(|bag| panic!("the H2 source and Lab must check: {bag:#?}"));
             mock_drivers(
                 &compilation.plan,
+                crate::time::Timestamp::UNIX_EPOCH,
                 BTreeMap::new(),
                 &crate::deployment::BootBindings::empty(),
                 Rc::new(RefCell::new(HttpServerLabInput::default())),
@@ -2037,6 +2048,7 @@ graph passive_server : App {
         .unwrap();
         mock_drivers(
             &compilation.plan,
+            crate::time::Timestamp::UNIX_EPOCH,
             BTreeMap::new(),
             &crate::deployment::BootBindings::empty(),
             Rc::new(RefCell::new(HttpServerLabInput::default())),

@@ -290,7 +290,7 @@ pub fn snapshot(input: SnapshotInput<'_>) -> Result<UiSnapshot, serde_json::Erro
         },
         "execution": {
             "state": state.spelling(),
-            "logical_time_ns": execution.logical_time().to_string(),
+            "logical_time_ns": execution.logical_time().as_nanoseconds().to_string(),
             "awaiting_outbound_calls": execution.awaiting_outbound_calls(),
             "legal_commands": legal_commands,
         },
@@ -765,7 +765,7 @@ fn loop_runs(plan: &ValidatedExecutionPlan, records: &[Record]) -> JsonValue {
                 "remaining": run.remaining.to_string(),
                 "phase": format!("{:?}", run.phase),
                 "state_envelope_id": run.state.meta().sys().id().to_string(),
-                "due_at_ns": run.due_at.map(|instant| instant.to_string()),
+                "due_at_ns": run.due_at.map(|instant| instant.as_nanoseconds().to_string()),
                 "pending_command": run.pending.as_ref().map(|command| match &command.value {
                     CommandValue::Next(_) => "Loop.next",
                     CommandValue::Again(_) => "Loop.again",
@@ -1441,14 +1441,14 @@ fn value_json(
         Value::Bytes(value) => json!({ "kind": "bytes", "hex": hex(value) }),
         Value::Duration(value) => json!({ "kind": "duration", "nanoseconds": value.to_string() }),
         Value::Timestamp(value) => {
-            json!({ "kind": "timestamp", "nanoseconds_since_epoch": value.to_string() })
+            json!({ "kind": "timestamp", "seconds_since_epoch": value.seconds().to_string(), "nanoseconds": value.nanoseconds() })
         }
         Value::Date(value) => json!({ "kind": "date", "days_since_epoch": value.to_string() }),
         Value::Time(value) => {
             json!({ "kind": "time", "nanoseconds_since_midnight": value.to_string() })
         }
         Value::TimestampNtz(value) => {
-            json!({ "kind": "timestamp_ntz", "nanoseconds_since_epoch": value.to_string() })
+            json!({ "kind": "timestamp_ntz", "seconds_since_epoch": value.seconds().to_string(), "nanoseconds": value.nanoseconds() })
         }
         Value::Interval {
             months,
@@ -2139,6 +2139,26 @@ graph inspected : App {
             }
         }
         assert!(saw_wait && saw_two_active);
+    }
+
+    #[test]
+    fn civil_timestamp_projection_keeps_wide_seconds_exact() {
+        for instant in [crate::time::Timestamp::MIN, crate::time::Timestamp::MAX] {
+            for (value, kind) in [
+                (Value::Timestamp(instant), "timestamp"),
+                (Value::TimestampNtz(instant), "timestamp_ntz"),
+            ] {
+                let rendered = materialized_value_json(&value, &EMPTY_ANNOTATIONS);
+                assert_eq!(
+                    rendered["content"],
+                    json!({
+                        "kind": kind,
+                        "seconds_since_epoch": instant.seconds().to_string(),
+                        "nanoseconds": instant.nanoseconds(),
+                    })
+                );
+            }
+        }
     }
 
     #[test]

@@ -1083,18 +1083,18 @@ fn a_non_canonical_envelope_refuses() {
     // Reordered header keys: same fields, same checksum coverage,
     // different bytes — not the canonical encoding. Raw splice,
     // because the canonical encoder itself refuses to write an
-    // unsorted map: entry (1, uint 23) is bytes 5..7, entry
+    // unsorted map: entry (1, uint 24) is bytes 5..8, entry
     // (2, bytes32) is the 35 bytes after it; swap them.
     assert_eq!(
-        &bytes[4..7],
-        &[0xa4, 0x01, 0x17],
+        &bytes[4..8],
+        &[0xa4, 0x01, 0x18, 0x18],
         "the envelope head is stable"
     );
-    assert_eq!(&bytes[7..10], &[0x02, 0x58, 0x20], "the hash entry follows");
+    assert_eq!(&bytes[8..11], &[0x02, 0x58, 0x20], "the hash entry follows");
     let mut reordered = bytes.clone();
-    let version_entry: Vec<u8> = bytes[5..7].to_vec();
-    let hash_entry: Vec<u8> = bytes[7..42].to_vec();
-    reordered.splice(5..42, hash_entry.into_iter().chain(version_entry));
+    let version_entry: Vec<u8> = bytes[5..8].to_vec();
+    let hash_entry: Vec<u8> = bytes[8..43].to_vec();
+    reordered.splice(5..43, hash_entry.into_iter().chain(version_entry));
     // The reader itself is strict now: unsorted keys refuse at the
     // parse, in the reader's own non-canonical category.
     assert!(matches!(
@@ -1102,16 +1102,16 @@ fn a_non_canonical_envelope_refuses() {
         DecodeError::Read(rastok::canonical_cbor::DecodeError::NonCanonical(_))
     ));
 
-    // A non-minimal integer in the header: uint 23 written on two
-    // bytes (0x18 0x17) instead of one. The checksum still holds —
+    // A non-minimal integer in the header: uint 24 written on three
+    // bytes (0x19 0x00 0x18) instead of two. The checksum still holds —
     // the VALUE is unchanged — so only the canonicity check refuses.
     assert_eq!(
-        &bytes[4..7],
-        &[0xa4, 0x01, 0x17],
+        &bytes[4..8],
+        &[0xa4, 0x01, 0x18, 0x18],
         "the envelope head is stable"
     );
     let mut widened = bytes.clone();
-    widened.splice(6..7, [0x18, 0x17]);
+    widened.splice(6..8, [0x19, 0x00, 0x18]);
     assert!(matches!(
         plan::decode(&widened).unwrap_err(),
         DecodeError::Read(rastok::canonical_cbor::DecodeError::NonCanonical(_))

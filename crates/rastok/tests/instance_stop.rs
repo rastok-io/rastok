@@ -93,9 +93,13 @@ fn closure_commits_its_request_before_the_exact_target_closes() {
         };
         assert!(journal.records().iter().any(|record| matches!(record, Record::Transaction(record) if record.owner_path.to_string() == target && record.trigger == Trigger::Lifecycle(Lifecycle::Stop))));
         for prefix in [produced + 1, closing + 1, journal.records().len()] {
-            let mut recovered_journal =
-                MemJournal::from_records(GraphVersion(1), None, &journal.records()[..prefix])
-                    .unwrap();
+            let mut recovered_journal = MemJournal::from_records(
+                GraphVersion(1),
+                rastok::time::Timestamp::UNIX_EPOCH,
+                None,
+                &journal.records()[..prefix],
+            )
+            .unwrap();
             let mut recovered = Execution::new(&plan, GraphVersion(1));
             recovered.recover_from_journal(&recovered_journal).unwrap();
             assert_eq!(recovered_journal.records(), &journal.records()[..prefix]);
@@ -131,7 +135,7 @@ fn forged_packages_cannot_omit_the_lexical_scope_proof() {
     assert!(error.to_string().contains("instance closure"), "{error}");
     assert_eq!(
         plan::FORMAT_VERSION,
-        23,
+        24,
         "the current package requires the exact-instance closure proof"
     );
 }
@@ -267,7 +271,13 @@ fn child_and_graph_closure_preserve_the_other_tenant_and_survive_every_prefix() 
     );
     let records = journal.records();
     for prefix in 0..=records.len() {
-        let retained = MemJournal::from_records(GraphVersion(1), None, &records[..prefix]).unwrap();
+        let retained = MemJournal::from_records(
+            GraphVersion(1),
+            rastok::time::Timestamp::UNIX_EPOCH,
+            None,
+            &records[..prefix],
+        )
+        .unwrap();
         let mut recovered = Execution::new(plan, GraphVersion(1));
         recovered
             .recover_from_journal(&retained)
@@ -383,8 +393,13 @@ fn independent_pending_targets_are_each_closed_once() {
             .count(),
         2
     );
-    let mut retained =
-        MemJournal::from_records(GraphVersion(1), None, &journal.records()[..produced]).unwrap();
+    let mut retained = MemJournal::from_records(
+        GraphVersion(1),
+        rastok::time::Timestamp::UNIX_EPOCH,
+        None,
+        &journal.records()[..produced],
+    )
+    .unwrap();
     let mut recovered = Execution::new(&compiled.plan, GraphVersion(1));
     recovered.recover_from_journal(&retained).unwrap();
     recovered.run_ready(&mut retained).unwrap();
@@ -486,7 +501,13 @@ fn recovery_rederives_command_presence_and_target_from_the_plan() {
             );
         }
         // The command is valid as a lifecycle fact, but contradicts this plan.
-        let retained = MemJournal::from_records(GraphVersion(1), None, &records).unwrap();
+        let retained = MemJournal::from_records(
+            GraphVersion(1),
+            rastok::time::Timestamp::UNIX_EPOCH,
+            None,
+            &records,
+        )
+        .unwrap();
         let mut recovered = Execution::new(&compiled.plan, GraphVersion(1));
         let error = recovered.recover_from_journal(&retained).unwrap_err();
         assert!(
@@ -567,7 +588,13 @@ lab app {{
         assert_eq!(runs.len(), 1);
         let run = &runs[0];
         assert!(run.report.passed(), "{contract}: {:?}", run.report.failures);
-        let journal = MemJournal::from_records(GraphVersion(1), None, &run.records).unwrap();
+        let journal = MemJournal::from_records(
+            GraphVersion(1),
+            rastok::time::Timestamp::UNIX_EPOCH,
+            None,
+            &run.records,
+        )
+        .unwrap();
         let fold = journal.instance_commands().unwrap();
         assert_eq!(fold.commands().count(), 2);
         assert_eq!(
@@ -610,8 +637,12 @@ lab app {{
         };
         assert_ne!(call_instance(calls[0]), call_instance(calls[1]));
         assert_eq!(&command.target, call_instance(calls[0]));
-        let captured =
-            rastok::recording::Recording::capture(&compiled, &journal, 100_000_000_000).unwrap();
+        let captured = rastok::recording::Recording::capture(
+            &compiled,
+            &journal,
+            rastok::time::LogicalTime::from_nanoseconds(100_000_000_000),
+        )
+        .unwrap();
         let decoded = rastok::recording::Recording::decode(&captured.encode().unwrap()).unwrap();
         assert_eq!(decoded.records(), run.records);
         for through in 0..=run.records.len() {
@@ -651,8 +682,13 @@ fn a_loop_scope_can_be_stopped_without_a_port_or_a_loop_verdict_command() {
     execution.run_ready(&mut journal).unwrap();
     assert!(journal.records().iter().any(|record| matches!(record, Record::Transaction(record) if record.loop_protocol().is_some_and(|packet| packet.facts.iter().any(|fact| matches!(fact, Fact::Closed { reason: CloseReason::Stopped, .. }))))));
     for through in 0..=journal.records().len() {
-        let mut retained =
-            MemJournal::from_records(GraphVersion(1), None, &journal.records()[..through]).unwrap();
+        let mut retained = MemJournal::from_records(
+            GraphVersion(1),
+            rastok::time::Timestamp::UNIX_EPOCH,
+            None,
+            &journal.records()[..through],
+        )
+        .unwrap();
         let mut execution = Execution::new(&compiled.plan, GraphVersion(1));
         execution.recover_from_journal(&retained).unwrap();
         execution.run_ready(&mut retained).unwrap();

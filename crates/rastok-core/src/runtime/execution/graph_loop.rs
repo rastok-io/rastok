@@ -1006,7 +1006,7 @@ impl Execution<'_> {
         index: usize,
         owner: node::NodeIndex,
         record: &crate::journal::TransactionRecord,
-        resume_at: i64,
+        resume_at: LogicalTime,
     ) -> Result<(), ExecutionFault> {
         let invalid = |reason| ExecutionFault::InvalidRecovery {
             record: index,
@@ -1283,7 +1283,7 @@ impl Execution<'_> {
                 {
                     let expected = self
                         .loop_delay_for(owner, *to_iteration)?
-                        .map(|delay| self.now.saturating_add(delay));
+                        .map(|delay| self.now + Duration::from_nanoseconds(delay));
                     if *due_at != expected {
                         return Err(invalid("a Graph recurrence changed its logical delay"));
                     }

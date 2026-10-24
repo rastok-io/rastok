@@ -1,9 +1,11 @@
 # Checked examples and historical sketches
 
-The checkout uses **format-23 / diagnostic-recording-4**. Its
-[lifecycle inventory](../architecture/lifecycle-registry-identity.md) records
-the `l:loop` and `l:close` trigger movement: four gallery traces change,
-while semantic hashes and package bodies remain fixed.
+The checkout uses **format-24 / diagnostic-recording-5**. Its
+[time-carrier inventory](../architecture/time-carriers-identity.md) records
+the relative timeline, wide civil values and immutable run origin, with
+witness regeneration approved on 24 October after review.
+The preceding lifecycle-trigger changes are recorded in the
+[lifecycle identity inventory](../architecture/lifecycle-registry-identity.md).
 The preceding single Process Contract identity is tracked in the
 [Connector identity inventory](../architecture/connector-rework-identity.md),
 with verification in the [qualification report](../architecture/connector-rework-qualification.md).

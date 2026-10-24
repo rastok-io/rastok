@@ -535,6 +535,11 @@ only when the graph itself needs an event because time passed. An embedded
 host may drive both from a monotonic hardware timer; an RTC or another
 civil-time source is needed only to anchor `Calendar` semantics.
 
+Its declared timestamp payload uses the same wide civil carrier as any other
+`timestamp` value: signed seconds and a normalized nanosecond fraction
+([identity.md §3](identity.md#3-the-canonical-record-form)). It is not a raw
+`LogicalTime` count. This carrier change does not add a Timer Driver to M1.
+
 ### 3.5 `Calendar` — civil time
 
 | Case | Contract |

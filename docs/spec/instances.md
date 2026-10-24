@@ -429,7 +429,9 @@ This is not permission to open a Retry manager in a closing generation.
 
 ### 6.5 Tumbling
 
-Processing-time boxes are epoch-aligned at `epoch + k·every`. The runtime adds
+Processing-time boxes are epoch-aligned at `epoch + k·every`, independently
+of the run's civil origin. The immutable origin recorded in the journal
+header converts their boundaries to relative logical instants. The runtime adds
 the canonical window start as a runtime-owned address segment; it is not a field
 the source author fabricates. One envelope belongs to exactly the box open at
 its admission. A lifetime without `instance.key` is therefore a true temporal
@@ -439,7 +441,7 @@ partition; it is App-global only when every ancestor is singleton.
 Each box address admits generation zero at most once in forward execution. A
 route committed before box closure remains old-box work and drains there; an
 attempt after closure cannot reopen that address as generation one or spill
-into the next box. The next epoch boundary creates a different address segment.
+into the next box. The next box boundary creates a different address segment.
 
 Sliding windows remain a named deferred feature: overlap maps one envelope to
 several instances and therefore requires explicit one-to-many admission.

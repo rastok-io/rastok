@@ -67,7 +67,7 @@ pub struct Pin {
     /// Optional external business-operation key; never suffixed by an attempt.
     pub key: Option<String>,
     /// Explicit original logical time, retained but not causally sealed.
-    pub opened_at: i64,
+    pub opened_at: crate::time::LogicalTime,
 }
 
 /// Policy resolved from the original validated Contract/plan, not from a fact.
@@ -129,11 +129,15 @@ impl Policy {
 
     /// Original deadline from the winning closure, never a later manager time.
     #[must_use]
-    pub fn due_after(&self, ordinal: u64, closed_at: i64) -> Option<i64> {
+    pub fn due_after(
+        &self,
+        ordinal: u64,
+        closed_at: crate::time::LogicalTime,
+    ) -> Option<crate::time::LogicalTime> {
         self.delay
             .as_ref()
             .and_then(|delay| delay.duration_after(ordinal))
-            .map(|delay| closed_at.saturating_add(delay))
+            .map(|delay| closed_at + crate::time::Duration::from_nanoseconds(delay))
     }
 }
 

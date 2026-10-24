@@ -80,7 +80,7 @@ pub(super) fn run(plan: &ValidatedExecutionPlan, hash: SemanticHash) -> usize {
         frames,
         bytes,
     };
-    let mut execution = Execution::new_program(plan, hash, GraphVersion(1), 0, None);
+    let mut execution = Execution::new_program(plan, hash, GraphVersion(1), rastok_core::time::Timestamp::UNIX_EPOCH, rastok_core::time::LogicalTime::ZERO, None);
     let mut journal = MemJournal::new(GraphVersion(1));
     for _ in 0..operations {
         execution.accept_input(
@@ -98,7 +98,7 @@ pub(super) fn run(plan: &ValidatedExecutionPlan, hash: SemanticHash) -> usize {
         )
         .unwrap();
     }
-    let mut now = 0;
+    let mut now = rastok_core::time::LogicalTime::ZERO;
     for _ in 0..4096 {
         execution.run_ready_with_drivers(&mut journal, &mut world)
             .unwrap();
@@ -109,7 +109,7 @@ pub(super) fn run(plan: &ValidatedExecutionPlan, hash: SemanticHash) -> usize {
             break;
         }
         if world.ready.is_empty() {
-            now += 1_000_000;
+            now = now + rastok_core::time::Duration::from_nanoseconds(1_000_000);
             execution.advance_to(&mut journal, &mut world, now).unwrap();
         }
     }
@@ -129,7 +129,7 @@ pub(super) fn run(plan: &ValidatedExecutionPlan, hash: SemanticHash) -> usize {
     );
     let records = journal.records().len();
     drop(execution);
-    let mut restored = Execution::new_program(plan, hash, GraphVersion(1), now, None);
+    let mut restored = Execution::new_program(plan, hash, GraphVersion(1), rastok_core::time::Timestamp::UNIX_EPOCH, now, None);
     let starts = world.starts;
     restored
         .recover_with_drivers(&journal, &mut world)

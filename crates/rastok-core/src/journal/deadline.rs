@@ -77,8 +77,8 @@ pub struct Deadline {
     pub kind: DeadlineKind,
     /// Exact obligation, never a freshly derived restart reference.
     pub reference: Id,
-    /// Absolute signed nanosecond instant on the run's logical timeline.
-    pub due_at: i64,
+    /// Signed nanoseconds from the run's logical zero, not a civil timestamp.
+    pub due_at: crate::time::LogicalTime,
 }
 
 /// An immutable schedule accepted with one journal record. The journal owns
@@ -86,7 +86,7 @@ pub struct Deadline {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Deadlines {
     /// Creation instant in signed logical nanoseconds, not wall-clock time.
-    created_at: i64,
+    created_at: crate::time::LogicalTime,
     items: Vec<Deadline>,
 }
 
@@ -96,7 +96,10 @@ impl Deadlines {
     ///
     /// # Errors
     /// Empty schedules or deadlines preceding their creation instant.
-    pub fn try_new(created_at: i64, items: Vec<Deadline>) -> Result<Self, Error> {
+    pub fn try_new(
+        created_at: crate::time::LogicalTime,
+        items: Vec<Deadline>,
+    ) -> Result<Self, Error> {
         if items.is_empty() {
             return Err(Error::EmptySchedule);
         }
@@ -110,7 +113,7 @@ impl Deadlines {
 
     /// The explicit logical instant at acceptance, never OS or restart time.
     #[must_use]
-    pub const fn created_at(&self) -> i64 {
+    pub const fn created_at(&self) -> crate::time::LogicalTime {
         self.created_at
     }
 

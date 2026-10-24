@@ -17,12 +17,18 @@ use std::collections::VecDeque;
 
 pub(super) struct Factory {
     id: ContractId,
+    origin: crate::time::Timestamp,
     mocks: SharedMocks,
     faults: MockFaults,
 }
 impl Factory {
-    pub(super) fn new(mocks: SharedMocks, faults: MockFaults) -> Result<Self, String> {
+    pub(super) fn new(
+        origin: crate::time::Timestamp,
+        mocks: SharedMocks,
+        faults: MockFaults,
+    ) -> Result<Self, String> {
         Ok(Self {
+            origin,
             id: ContractId::parse(crate::connector::stdlib::PROCESS_CONNECTOR_ID)
                 .map_err(|e| e.to_string())?,
             mocks,
@@ -60,6 +66,7 @@ impl DriverFactory for Factory {
             request_settings,
             evaluator: MockOutboundDriver {
                 plan,
+                origin: self.origin,
                 mocks: Rc::clone(&self.mocks),
                 faults: Rc::clone(&self.faults),
                 protocol: Box::new(protocol),

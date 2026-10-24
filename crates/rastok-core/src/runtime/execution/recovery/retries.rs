@@ -173,7 +173,7 @@ impl Execution<'_> {
             expected_deadlines.push(Deadline {
                 kind: crate::journal::DeadlineKind::CallTimeout,
                 reference,
-                due_at: self.now.saturating_add(*timeout),
+                due_at: self.now + Duration::from_nanoseconds(*timeout),
             });
             if let Some(packet) = expected_loop.as_deref_mut() {
                 packet.routes.push(protocol::RoutedContext {

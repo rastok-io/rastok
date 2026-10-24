@@ -127,6 +127,13 @@ pub struct ScenarioDecl {
 /// One entry of a scenario body.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScenarioItem {
+    /// `origin = <constant timestamp>` — immutable civil origin of this run.
+    Origin {
+        /// The constant civil timestamp expression.
+        expr: ExprSource,
+        /// The declaration's span.
+        span: Span,
+    },
     /// `<port_ref> = <value> (seq INT)?` — the world sends.
     Injection {
         /// The injection target (`app.in` in this build).

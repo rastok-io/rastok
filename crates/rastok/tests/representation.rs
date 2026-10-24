@@ -247,7 +247,13 @@ fn loop_expiry_materializes_last_state_by_the_host_entry_type() {
                 Value::Bytes("é\n".as_bytes().to_vec())
             };
             assert_eq!(output.payload, [("last_state".into(), expected)]);
-            MemJournal::from_records(GraphVersion(1), None, journal.records()).unwrap();
+            MemJournal::from_records(
+                GraphVersion(1),
+                rastok::time::Timestamp::UNIX_EPOCH,
+                None,
+                journal.records(),
+            )
+            .unwrap();
             let mut recovered = Execution::new(&compiled.plan, GraphVersion(1));
             recovered.recover_from_journal(&journal).unwrap();
             assert_eq!(recovered.outputs(), execution.outputs());
@@ -287,7 +293,13 @@ fn loop_expiry_materializes_last_state_by_the_host_entry_type() {
                 }
             }
             assert_eq!(changed, 1);
-            let forged = MemJournal::from_records(GraphVersion(1), None, &forged).unwrap();
+            let forged = MemJournal::from_records(
+                GraphVersion(1),
+                rastok::time::Timestamp::UNIX_EPOCH,
+                None,
+                &forged,
+            )
+            .unwrap();
             let mut recovery = Execution::new(&compiled.plan, GraphVersion(1));
             assert!(recovery.recover_from_journal(&forged).is_err());
         }

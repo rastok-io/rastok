@@ -313,11 +313,14 @@ canonical rather than semantic.
 ## 5. The two planes — logical time and the dated-events queue
 
 The semantic core never reads an operating-system clock. The hosted
-**observation/supervision plane** maps one civil-time origin plus monotonic
-elapsed time onto an explicit logical timeline; the Lab supplies that timeline
-directly. The Execution uses it for dated obligations and fixes one instant for every
-transaction. A handler may observe that instant through `now()`, in which case
-the transaction seals it as an input fact. Everything else the supervision
+**observation/supervision plane** supplies a civil `origin` once at boot and
+advances a separate signed-i64 logical timeline from zero using monotonic
+elapsed nanoseconds. The Lab supplies explicit advances on the same relative
+timeline. Execution uses logical instants for dated obligations and fixes one
+instant for every transaction. `now()` returns the civil timestamp
+`origin + instant`; the transaction seals that observed pair as an input fact.
+The immutable journal header records the origin outside the causal seal, and
+recovery continues the same timeline with that origin. Everything else the supervision
 plane decides enters the graph as a **journaled event**:
 
 ```
@@ -353,7 +356,7 @@ never re-runs a race.
 
 Creation/due instants and host commit time remain journal annotations and
 observability facts — **never** envelope fields. The narrow exception is an
-explicit `now()` observation: the transaction's fixed logical instant is
+explicit `now()` observation: the transaction's fixed civil timestamp is
 sealed under canonical key 39 because it may change control flow. It remains
 absent from time-insensitive firings (the `created_at` lesson,
 envelope.md §8).
@@ -364,6 +367,14 @@ atomic and integrity-protected, not best-effort observability. Its ordered
 deadlines preserve the original due instants and tie order; a restart cannot turn
 a missing instant into `now + duration`. Recovery restores supported Loop, Retry, Call, join and lifecycle obligations
 from the original unsealed instants.
+
+The runtime value type `LogicalTime` distinguishes an instant from a signed
+`Duration`. Adding a duration to a logical instant, or subtracting two
+logical instants, saturates at the i64 bounds. Two instants cannot be added.
+Civil timestamp arithmetic is checked instead: an unrepresentable `now()`
+refuses the expression with `TimeOutOfRange` before commit. A path that does
+not read `now()` does not fail merely because that civil sum is outside the
+carrier. Logical duration limits do not bound admissible civil dates.
 
 A resumed sweep preserves the unfinished dated frontier before executing
 lifecycle work queued by an expiry. Only an instance's own lifetime is fenced
@@ -671,7 +682,8 @@ The complete conflict rule lives in [extensions.md](extensions.md).
 The processing-time tumbling contract has four rules:
 
 1. an envelope belongs to the box open at mailbox admission;
-2. boundaries are `epoch + k·every`, never relative to the first envelope;
+2. civil boundaries are `epoch + k·every`, independent of boot or the first
+   envelope; the journal's origin maps them onto the relative logical line;
 3. the canonical box start is a runtime-owned address segment, not application
    data fabricated by the author;
 4. box expiry follows the same Closing protocol and `on stop` ordering as any

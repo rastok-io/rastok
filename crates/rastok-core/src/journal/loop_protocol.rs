@@ -165,7 +165,7 @@ pub enum Fact {
         /// Proposed state for Next, retained state for Again.
         state: Envelope,
         /// Explicit scheduler annotation, outside causal identity.
-        due_at: Option<i64>,
+        due_at: Option<crate::time::LogicalTime>,
     },
     /// Capacity was proved and the current state entered the host.
     Admitted {

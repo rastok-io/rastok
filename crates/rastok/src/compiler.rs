@@ -342,7 +342,8 @@ fn scenario_definitions(unit: &Unit, sources: &[&str]) -> Vec<ScenarioDefinition
                                 }
                                 syntax::ScenarioItem::Advance { span, .. } => span.range().start,
                                 syntax::ScenarioItem::Expect(step) => step.span.range().start,
-                                syntax::ScenarioItem::Mock(_) => return None,
+                                syntax::ScenarioItem::Mock(_)
+                                | syntax::ScenarioItem::Origin { .. } => return None,
                             };
                             Some(
                                 source[span.range().start..start]

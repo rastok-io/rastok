@@ -409,6 +409,8 @@ pub struct Scenario {
     pub name: String,
     /// The optional human label.
     pub label: Option<String>,
+    /// Immutable civil origin; the logical timeline always starts at zero.
+    pub origin: crate::time::Timestamp,
     /// Scenario-level mock overrides — whole-mock replacement,
     /// nearest wins.
     pub mocks: Vec<Mock>,

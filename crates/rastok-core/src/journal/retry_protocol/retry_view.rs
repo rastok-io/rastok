@@ -91,7 +91,7 @@ pub struct Settlement<'a> {
     /// Terminal re-derived from the validated completion/timeout/abandonment.
     pub case: &'a str,
     /// Explicit Execution logical instant accepted with this winning closure.
-    pub closed_at: i64,
+    pub closed_at: crate::time::LogicalTime,
     /// Exact original unsealed deadline, or absence for a final/non-delayed attempt.
     pub schedule: Option<&'a Deadlines>,
 }
@@ -144,15 +144,15 @@ pub struct Operation {
     /// Current Call, never reused by a later attempt.
     pub call: Option<CallId>,
     /// Original winning closure instant of this attempt.
-    pub closed_at: Option<i64>,
+    pub closed_at: Option<crate::time::LogicalTime>,
     /// Original deadline, unaffected by a late manager or recovery.
-    pub due_at: Option<i64>,
+    pub due_at: Option<crate::time::LogicalTime>,
     /// Exact pending receipt; consumed history is not duplicated here.
     pub pending: Option<Batch>,
     /// Why this operation ended.
     pub closed: Option<CloseReason>,
-    admitted_at: Option<i64>,
-    call_opened_at: Option<i64>,
+    admitted_at: Option<crate::time::LogicalTime>,
+    call_opened_at: Option<crate::time::LogicalTime>,
     policy: Policy,
     terminal: Option<String>,
     parent: Option<Id>,
@@ -162,7 +162,7 @@ pub struct Operation {
 impl Operation {
     /// Original unsealed instant of this attempt's admission.
     #[must_use]
-    pub const fn admitted_at(&self) -> Option<i64> {
+    pub const fn admitted_at(&self) -> Option<crate::time::LogicalTime> {
         self.admitted_at
     }
 
@@ -228,7 +228,7 @@ impl RetryView {
         &mut self,
         packet: &RetryRecord,
         opening: Option<&Opening<'_>>,
-        at: i64,
+        at: crate::time::LogicalTime,
     ) -> Result<(), Error> {
         let mut next = self.clone();
         next.apply_inner(packet, opening, at)?;
@@ -240,7 +240,7 @@ impl RetryView {
         &mut self,
         packet: &RetryRecord,
         opening: Option<&Opening<'_>>,
-        at: i64,
+        at: crate::time::LogicalTime,
     ) -> Result<(), Error> {
         match (packet.context, packet.facts.as_slice()) {
             (None, [fact @ Fact::Opened { .. }]) => {
@@ -310,7 +310,12 @@ impl RetryView {
         }
     }
 
-    fn open(&mut self, fact: &Fact, authority: &Opening<'_>, at: i64) -> Result<(), Error> {
+    fn open(
+        &mut self,
+        fact: &Fact,
+        authority: &Opening<'_>,
+        at: crate::time::LogicalTime,
+    ) -> Result<(), Error> {
         let Fact::Opened {
             operation,
             opening,
@@ -380,7 +385,7 @@ impl RetryView {
         Ok(state)
     }
 
-    fn admit(&mut self, fact: &Fact, at: i64) -> Result<(), Error> {
+    fn admit(&mut self, fact: &Fact, at: crate::time::LogicalTime) -> Result<(), Error> {
         let Fact::Admitted {
             attempt,
             envelope,

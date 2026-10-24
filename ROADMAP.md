@@ -73,6 +73,17 @@ records the subsequent **package format 23 / diagnostic recording 4**:
 request. Lifecycle bytes and semantic hashes stay fixed; trigger text changes
 the affected causal traces, and the version changes package checksums.
 
+### Relative logical time — 24 October
+
+A-T1-12 now precedes the opening (D-2026-10-23-2): `LogicalTime(i64)`
+counts elapsed nanoseconds from zero; an immutable journal origin relates it
+to wide civil timestamps only for explicit observations and tumbling addresses.
+The [format-24 / recording-5 inventory](docs/architecture/time-carriers-identity.md)
+tracks implementation and qualification. Yoann approved witness regeneration
+after Fable's review, preserving epoch-aligned tumbling windows. The external
+review's `main` stays unchanged; integration and
+the opening-tree freeze await Yoann's order after independent replay.
+
 ### Human-review follow-up — 5 October
 
 The review's written valve has applied: **24 October** is the real freeze.
@@ -456,13 +467,6 @@ in the checker and core, without changing the runtime, plan format or goldens.
 
 ## Later — incident lab and safe dogfood
 
-- Introduce the Rust `LogicalTime(i64)` value type with explicit nanosecond
-  conversions as part of the relative-timeline refactor in
-  [D-2026-10-10-1](docs/spec/decisions.md#d-2026-10-10-1--the-logical-timeline-is-relative-civil-time-is-a-retained-external-input)
-  (A-T1-12). Yoann confirmed on 15 October that it belongs with the separation
-  of logical and civil time, not in the current runtime-organisation lot.
-  It distinguishes execution instants from durations and civil timestamps;
-  it adds no DSL type.
 - Qualify derived Retry journal indexes before M2 durable storage: current
   prefix scans can make long histories quadratic in total work. Preserve the
   retained arm order and exact recovery facts; the

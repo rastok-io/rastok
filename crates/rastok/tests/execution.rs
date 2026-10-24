@@ -1184,7 +1184,7 @@ fn within_evicts_only_a_still_buffered_candidate() {
         .advance_to(
             &mut expired_journal,
             &mut CallDriver(&mut EchoWorld::default()),
-            1_000_000_000,
+            rastok::time::LogicalTime::from_nanoseconds(1_000_000_000),
         )
         .unwrap();
     assert!(
@@ -1208,7 +1208,7 @@ fn within_evicts_only_a_still_buffered_candidate() {
         .advance_to(
             &mut joined_journal,
             &mut CallDriver(&mut EchoWorld::default()),
-            1_000_000_000,
+            rastok::time::LogicalTime::from_nanoseconds(1_000_000_000),
         )
         .unwrap();
     assert_eq!(
@@ -1883,7 +1883,11 @@ graph lifecycle : App {
 
     let mut world = EchoWorld::default();
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 1_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(1_000_000_000),
+        )
         .unwrap();
     assert_eq!(
         execution
@@ -2045,7 +2049,11 @@ graph nested_lifetimes : App {
     assert!(execution.has_open_obligations());
 
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 1_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(1_000_000_000),
+        )
         .unwrap();
     assert!(
         journal.records().iter().all(|record| !matches!(
@@ -2146,7 +2154,11 @@ graph draining : App {
     );
 
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 1_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(1_000_000_000),
+        )
         .unwrap();
     execution
         .poll_drivers(&mut journal, &mut CallDriver(&mut world))
@@ -2196,14 +2208,22 @@ fn a_confirmed_cancel_keeps_the_observed_exit_and_never_invents_unknown() {
     assert_eq!(world.started.len(), 1);
 
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 1_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(1_000_000_000),
+        )
         .unwrap();
     assert!(
         world.cancelled.is_empty(),
         "Closing first offers the drain budget"
     );
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 2_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(2_000_000_000),
+        )
         .unwrap();
 
     assert_eq!(world.cancelled, world.started);
@@ -2241,7 +2261,11 @@ fn silent_cancel_becomes_one_unknown_only_after_settlement() {
         .poll_drivers(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 2_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(2_000_000_000),
+        )
         .unwrap();
     assert_eq!(world.cancelled.len(), 1);
     assert!(source_exit_cases(&execution).is_empty());
@@ -2251,7 +2275,11 @@ fn silent_cancel_becomes_one_unknown_only_after_settlement() {
     );
 
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 3_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(3_000_000_000),
+        )
         .unwrap();
     assert_eq!(source_exit_cases(&execution), ["OutcomeUnknown"]);
     assert_eq!(
@@ -2352,7 +2380,11 @@ fn bounded_closing_interleavings_are_model_checked() {
         // t=1 requests Closing; t=2 ends drain and requests cancel;
         // t=3 ends settlement. Reply placement is the model dimension.
         execution
-            .advance_to(&mut journal, &mut CallDriver(&mut world), 1_000_000_000)
+            .advance_to(
+                &mut journal,
+                &mut CallDriver(&mut world),
+                rastok::time::LogicalTime::from_nanoseconds(1_000_000_000),
+            )
             .unwrap();
         if matches!(reply_at, ReplyAt::BeforeDrain) {
             world.answers.push(reply());
@@ -2364,7 +2396,11 @@ fn bounded_closing_interleavings_are_model_checked() {
                 .unwrap();
         }
         execution
-            .advance_to(&mut journal, &mut CallDriver(&mut world), 2_000_000_000)
+            .advance_to(
+                &mut journal,
+                &mut CallDriver(&mut world),
+                rastok::time::LogicalTime::from_nanoseconds(2_000_000_000),
+            )
             .unwrap();
         if matches!(reply_at, ReplyAt::DuringSettlement) {
             world.answers.push(reply());
@@ -2374,7 +2410,11 @@ fn bounded_closing_interleavings_are_model_checked() {
             execution.run_ready(&mut journal).unwrap();
         }
         execution
-            .advance_to(&mut journal, &mut CallDriver(&mut world), 3_000_000_000)
+            .advance_to(
+                &mut journal,
+                &mut CallDriver(&mut world),
+                rastok::time::LogicalTime::from_nanoseconds(3_000_000_000),
+            )
             .unwrap();
         let late = if matches!(reply_at, ReplyAt::AfterSettlement) {
             world.answers.push(reply());
@@ -2469,7 +2509,11 @@ fn external_arrival_waits_for_the_clean_successor_generation() {
         .poll_drivers(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 1_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(1_000_000_000),
+        )
         .unwrap();
     let second = execution
         .accept_input(&mut journal, text_submission("second"))
@@ -2483,7 +2527,11 @@ fn external_arrival_waits_for_the_clean_successor_generation() {
     );
 
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 2_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(2_000_000_000),
+        )
         .unwrap();
     let root_lifecycle: Vec<_> = journal
         .records()
@@ -2571,7 +2619,11 @@ graph two_calls : App {
         "one call per claimed connector starts"
     );
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 2_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(2_000_000_000),
+        )
         .unwrap();
     let mut sorted = world.cancelled.clone();
     sorted.sort();
@@ -2580,7 +2632,11 @@ graph two_calls : App {
         "cancels follow canonical CallId order"
     );
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 3_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(3_000_000_000),
+        )
         .unwrap();
 
     let residual_count: usize = journal
@@ -2651,7 +2707,11 @@ graph finite : App {{
         execution.run_ready(&mut journal).unwrap();
         if needs_advance {
             execution
-                .advance_to(&mut journal, &mut CallDriver(&mut world), 1_000_000_000)
+                .advance_to(
+                    &mut journal,
+                    &mut CallDriver(&mut world),
+                    rastok::time::LogicalTime::from_nanoseconds(1_000_000_000),
+                )
                 .unwrap();
         }
         execution
@@ -2724,7 +2784,11 @@ graph persistent : App {
         .accept_input(&mut journal, int_submission(1))
         .unwrap();
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), i64::MAX)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(i64::MAX),
+        )
         .unwrap();
 
     let lifecycle: Vec<_> = journal
@@ -2778,13 +2842,21 @@ graph keyed_fixed : App {
         .accept_input(&mut journal, int_submission(1))
         .unwrap();
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 500_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(500_000_000),
+        )
         .unwrap();
     execution
         .accept_input(&mut journal, int_submission(2))
         .unwrap();
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 1_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(1_000_000_000),
+        )
         .unwrap();
 
     let stopped: Vec<_> = journal
@@ -2803,7 +2875,11 @@ graph keyed_fixed : App {
     assert_eq!(stopped.len(), 1, "only the t=0 key reaches its deadline");
 
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 1_500_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(1_500_000_000),
+        )
         .unwrap();
     let stopped = journal
         .records()
@@ -2976,7 +3052,11 @@ graph windows : App {
         .accept_input(&mut journal, int_submission(2))
         .unwrap();
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 5_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(5_000_000_000),
+        )
         .unwrap();
     execution
         .accept_input(&mut journal, int_submission(3))
@@ -3068,14 +3148,22 @@ graph clipped : App {
         .accept_input(&mut journal, int_submission(1))
         .unwrap();
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 1_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(1_000_000_000),
+        )
         .unwrap();
     assert!(matches!(
         execution.accept_input(&mut journal, int_submission(2)),
-        Err(ExecutionFault::ClosedTimeBox { owner, start_ns: 0 }) if owner.to_string() == "window"
+        Err(ExecutionFault::ClosedTimeBox { owner, start: rastok::time::Timestamp::UNIX_EPOCH }) if owner.to_string() == "window"
     ));
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 5_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(5_000_000_000),
+        )
         .unwrap();
     execution
         .accept_input(&mut journal, int_submission(2))
@@ -3113,19 +3201,31 @@ graph parent : App {
         .accept_input(&mut journal, int_submission(1))
         .unwrap();
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 1_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(1_000_000_000),
+        )
         .unwrap();
     execution
         .accept_input(&mut journal, int_submission(2))
         .unwrap();
     execution.run_ready(&mut journal).unwrap();
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 2_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(2_000_000_000),
+        )
         .unwrap();
 
     let records_after_successor = journal.records().len();
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 5_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(5_000_000_000),
+        )
         .unwrap();
 
     let child_stops: Vec<u64> = journal
@@ -3181,7 +3281,7 @@ graph ties : App {
             .advance_to(
                 &mut journal,
                 &mut CallDriver(&mut EchoWorld::default()),
-                1_000_000_000,
+                rastok::time::LogicalTime::from_nanoseconds(1_000_000_000),
             )
             .unwrap();
         journal
@@ -3621,7 +3721,11 @@ fn a_new_input_reopens_only_its_ended_session_without_resending_old_writes() {
             assert_eq!(journal.records(), retained);
         }
         execution
-            .advance_to(&mut journal, &mut world, 10_000_000_000)
+            .advance_to(
+                &mut journal,
+                &mut world,
+                rastok::time::LogicalTime::from_nanoseconds(10_000_000_000),
+            )
             .unwrap();
         assert_eq!(world.opened, vec![alice, bob], "no timed respawn");
         assert_eq!(world.writes, original_writes, "no recovery resend");
@@ -3733,7 +3837,11 @@ fn repeated_child_stop_closes_only_the_exact_session_instance() {
             .run_ready_with_drivers(&mut journal, &mut world)
             .unwrap();
         execution
-            .advance_to(&mut journal, &mut world, through)
+            .advance_to(
+                &mut journal,
+                &mut world,
+                rastok::time::LogicalTime::from_nanoseconds(through),
+            )
             .unwrap();
     }
     assert_eq!(
@@ -3746,7 +3854,11 @@ fn repeated_child_stop_closes_only_the_exact_session_instance() {
         .run_ready_with_drivers(&mut journal, &mut world)
         .unwrap();
     execution
-        .advance_to(&mut journal, &mut world, 3_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut world,
+            rastok::time::LogicalTime::from_nanoseconds(3_000_000_000),
+        )
         .unwrap();
     assert_eq!(journal.live_sessions(), vec![bob]);
     assert_eq!(world.opened, vec![alice, bob], "a stop does not respawn");
@@ -3914,7 +4026,11 @@ graph app : App {
                     execution.recover_from_journal(&journal).unwrap();
                 }
                 execution
-                    .advance_to(&mut journal, &mut world, 1_000_000_000)
+                    .advance_to(
+                        &mut journal,
+                        &mut world,
+                        rastok::time::LogicalTime::from_nanoseconds(1_000_000_000),
+                    )
                     .unwrap();
                 assert_eq!(world.close_requests, [alice]);
                 assert!(
@@ -3925,7 +4041,11 @@ graph app : App {
                     execution.recover_from_journal(&journal).unwrap();
                 }
                 execution
-                    .advance_to(&mut journal, &mut world, 2_000_000_000)
+                    .advance_to(
+                        &mut journal,
+                        &mut world,
+                        rastok::time::LogicalTime::from_nanoseconds(2_000_000_000),
+                    )
                     .unwrap();
                 execution
                     .run_ready_with_drivers(&mut journal, &mut world)
@@ -4014,13 +4134,21 @@ fn session_release_waits_for_the_committed_terminal_even_after_a_storage_failure
                 .run_ready_with_drivers(&mut journal, &mut world)
                 .unwrap();
             execution
-                .advance_to(&mut journal, &mut world, 999_999_999)
+                .advance_to(
+                    &mut journal,
+                    &mut world,
+                    rastok::time::LogicalTime::from_nanoseconds(999_999_999),
+                )
                 .unwrap();
             assert!(world.close_requests.is_empty());
             assert!(world.abort_requests.is_empty());
             assert!(world.released.is_empty());
             execution
-                .advance_to(&mut journal, &mut world, 1_000_000_000)
+                .advance_to(
+                    &mut journal,
+                    &mut world,
+                    rastok::time::LogicalTime::from_nanoseconds(1_000_000_000),
+                )
                 .unwrap();
             assert_eq!(world.close_requests, [alice]);
             assert!(
@@ -4038,7 +4166,11 @@ fn session_release_waits_for_the_committed_terminal_even_after_a_storage_failure
             journal.refuse_commits = true;
             let retained = journal.inner.records().to_vec();
             assert!(matches!(
-                execution.advance_to(&mut journal, &mut world, 2_000_000_000),
+                execution.advance_to(
+                    &mut journal,
+                    &mut world,
+                    rastok::time::LogicalTime::from_nanoseconds(2_000_000_000)
+                ),
                 Err(ExecutionFault::Journal(_))
             ));
             assert_eq!(journal.inner.records(), retained);
@@ -4068,7 +4200,11 @@ fn session_release_waits_for_the_committed_terminal_even_after_a_storage_failure
                 }
             }
             execution
-                .advance_to(&mut journal, &mut world, 2_000_000_000)
+                .advance_to(
+                    &mut journal,
+                    &mut world,
+                    rastok::time::LogicalTime::from_nanoseconds(2_000_000_000),
+                )
                 .unwrap();
             assert_eq!(world.released, [alice]);
             assert_eq!(
@@ -4087,7 +4223,11 @@ fn session_release_waits_for_the_committed_terminal_even_after_a_storage_failure
             let retained = journal.inner.records().to_vec();
             execution.recover_from_journal(&journal).unwrap();
             execution
-                .advance_to(&mut journal, &mut world, 3_000_000_000)
+                .advance_to(
+                    &mut journal,
+                    &mut world,
+                    rastok::time::LogicalTime::from_nanoseconds(3_000_000_000),
+                )
                 .unwrap();
             assert_eq!(
                 world.released,
@@ -4169,13 +4309,17 @@ graph app : App {
         .run_ready_with_drivers(&mut journal, &mut world)
         .unwrap();
     execution
-        .advance_to(&mut journal, &mut world, 1_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut world,
+            rastok::time::LogicalTime::from_nanoseconds(1_000_000_000),
+        )
         .unwrap();
     assert_eq!(world.close_requests, [session]);
     assert!(world.abort_requests.is_empty());
     let retained = journal.records().to_vec();
     assert!(matches!(
-        execution.advance_to(&mut journal, &mut world, 2_000_000_000),
+        execution.advance_to(&mut journal, &mut world, rastok::time::LogicalTime::from_nanoseconds(2_000_000_000)),
         Err(ExecutionFault::MailboxFull { node }) if node == node::Path::new(["hold"]).unwrap()
     ));
     assert_eq!(
@@ -4296,7 +4440,12 @@ graph app : App {
 "#;
     let compilation = compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
     let mut journal = FlakyJournal::healthy(GraphVersion(1));
-    let mut execution = Execution::new_at(&compilation.plan, GraphVersion(1), 7_000_000_000);
+    let mut execution = Execution::new_at(
+        &compilation.plan,
+        GraphVersion(1),
+        rastok::time::Timestamp::UNIX_EPOCH,
+        rastok::time::LogicalTime::from_nanoseconds(7_000_000_000),
+    );
     let mut world = SessionWorld {
         pending_opens: true,
         ..SessionWorld::default()
@@ -4339,14 +4488,27 @@ graph app : App {
         assert_eq!(retained, journal.inner.records());
     }
     journal.recovery_records = None;
-    let mut restored = Execution::new_at(&compilation.plan, GraphVersion(1), 11_000_000_000);
+    let mut restored = Execution::new_at(
+        &compilation.plan,
+        GraphVersion(1),
+        rastok::time::Timestamp::UNIX_EPOCH,
+        rastok::time::LogicalTime::from_nanoseconds(11_000_000_000),
+    );
     restored.recover_from_journal(&journal).unwrap();
     restored
-        .advance_to(&mut journal, &mut world, 11_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut world,
+            rastok::time::LogicalTime::from_nanoseconds(11_000_000_000),
+        )
         .unwrap();
     assert!(restored.outputs().is_empty());
     restored
-        .advance_to(&mut journal, &mut world, 12_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut world,
+            rastok::time::LogicalTime::from_nanoseconds(12_000_000_000),
+        )
         .unwrap();
     assert_eq!(restored.outputs().len(), 1);
     assert_eq!(source_exit_cases(&restored), ["TimeoutExpired"]);
@@ -4814,7 +4976,11 @@ graph websocket : App {
     assert_eq!(world.opened.len(), 2, "one pump makes one bounded retry");
 
     execution
-        .advance_to(&mut journal, &mut world, 5_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut world,
+            rastok::time::LogicalTime::from_nanoseconds(5_000_000_000),
+        )
         .unwrap();
     assert!(journal.live_sessions().is_empty());
     assert!(execution.is_stable());
@@ -5004,6 +5170,10 @@ impl FlakyJournal {
 }
 
 impl Journal for FlakyJournal {
+    fn origin(&self) -> rastok::time::Timestamp {
+        self.inner.origin()
+    }
+
     fn visit_records(&self, visit: &mut dyn FnMut(&Record)) -> Result<(), rastok::journal::Error> {
         if let Some(records) = &self.recovery_records {
             for record in records {
@@ -5100,7 +5270,7 @@ impl Journal for FlakyJournal {
         &mut self,
         call_id: &rastok::connector::exchange::CallId,
         closure: rastok::journal::Closure,
-        closed_at: i64,
+        closed_at: rastok::time::LogicalTime,
         schedule: Option<Box<rastok::journal::deadline::Deadlines>>,
     ) -> Result<rastok::journal::CloseVerdict, rastok::journal::Error> {
         if self.refuse_closes || self.refuse_call.as_ref() == Some(call_id) {
@@ -5112,7 +5282,7 @@ impl Journal for FlakyJournal {
     fn abandon_egress(
         &mut self,
         call_id: &rastok::connector::exchange::CallId,
-        closed_at: i64,
+        closed_at: rastok::time::LogicalTime,
     ) -> Result<rastok::journal::CloseVerdict, rastok::journal::Error> {
         if self.refuse_closes {
             return Err(rastok::journal::Error::Storage(String::from("scripted")));
@@ -5690,7 +5860,7 @@ graph app : App {
                    world: &mut ClosingWorld,
                    target: i64,
                    faulted: bool| {
-        let mut sweep = TimeAdvance::new(target);
+        let mut sweep = TimeAdvance::new(rastok::time::LogicalTime::from_nanoseconds(target));
         let mut steps = 0;
         while !sweep.is_complete() {
             steps += 1;
@@ -5737,7 +5907,14 @@ graph app : App {
     let mut reference = None;
     for faulted in [false, true] {
         let mut journal = FlakyJournal::healthy(GraphVersion(1));
-        let mut execution = Execution::new_program(&plan, hash, GraphVersion(1), 0, None);
+        let mut execution = Execution::new_program(
+            &plan,
+            hash,
+            GraphVersion(1),
+            rastok::time::Timestamp::UNIX_EPOCH,
+            rastok::time::LogicalTime::from_nanoseconds(0),
+            None,
+        );
         let mut world = ClosingWorld::default();
         execution
             .accept_input(&mut journal, text_submission("same operation"))
@@ -6108,7 +6285,7 @@ graph app : App {
                     signal: None,
                 },
             )),
-            0,
+            rastok::time::LogicalTime::ZERO,
             None,
         )
         .unwrap();
@@ -6125,7 +6302,8 @@ graph app : App {
                 } else {
                     let schedule = inbound.deadlines.as_ref().unwrap();
                     let mut deadlines = schedule.items().to_vec();
-                    deadlines[0].due_at += 1;
+                    deadlines[0].due_at =
+                        deadlines[0].due_at + rastok::time::Duration::from_nanoseconds(1);
                     inbound.deadlines = Some(Box::new(
                         rastok::journal::deadline::Deadlines::try_new(
                             schedule.created_at(),
@@ -6139,7 +6317,8 @@ graph app : App {
                 let Record::Egress(EgressRecord::Call(closed)) = records.last_mut().unwrap() else {
                     panic!("closure");
                 };
-                closed.intent.logical_time += 1;
+                closed.intent.logical_time =
+                    closed.intent.logical_time + rastok::time::Duration::from_nanoseconds(1);
             }
             3 => {
                 let opening = records
@@ -6155,7 +6334,7 @@ graph app : App {
                 else {
                     panic!("opening");
                 };
-                opening.intent.logical_time = -1;
+                opening.intent.logical_time = rastok::time::LogicalTime::from_nanoseconds(-1);
             }
         }
         journal.recovery_records = Some(records);
@@ -6218,7 +6397,12 @@ graph logical_time : App {
     )
     .expect("a handler may observe its logical instant");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut execution = Execution::new_at(&compilation.plan, GraphVersion(1), 1_000);
+    let mut execution = Execution::new_at(
+        &compilation.plan,
+        GraphVersion(1),
+        rastok::time::Timestamp::UNIX_EPOCH,
+        rastok::time::LogicalTime::from_nanoseconds(1_000),
+    );
     let mut world = EchoWorld::default();
 
     execution
@@ -6228,7 +6412,11 @@ graph logical_time : App {
         .run_ready_with_drivers(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 2_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(2_000),
+        )
         .unwrap();
     execution
         .accept_input(&mut journal, submission("second"))
@@ -6251,17 +6439,25 @@ graph logical_time : App {
             other => panic!("expected a struct, got {other:?}"),
         })
         .collect();
-    assert_eq!(instants, [vec![1_000, 1_000], vec![2_000, 2_000]]);
+    assert_eq!(
+        instants,
+        [[1_000, 1_000], [2_000, 2_000]].map(|values| values
+            .map(rastok::time::Timestamp::from_nanoseconds)
+            .to_vec())
+    );
 
     let observed: Vec<_> = journal
         .records()
         .iter()
         .filter_map(|record| match record {
-            Record::Transaction(transaction) => transaction.logical_time,
+            Record::Transaction(transaction) => transaction.observed_time,
             Record::Ingress(_) | Record::Egress(_) => None,
         })
         .collect();
-    assert_eq!(observed, [1_000, 2_000]);
+    assert_eq!(
+        observed,
+        [1_000, 2_000].map(rastok::time::Timestamp::from_nanoseconds)
+    );
 }
 
 #[test]
@@ -6286,7 +6482,12 @@ graph logical_time_guard : App {
     )
     .expect("a guard may observe its logical instant");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut execution = Execution::new_at(&compilation.plan, GraphVersion(1), 1_000);
+    let mut execution = Execution::new_at(
+        &compilation.plan,
+        GraphVersion(1),
+        rastok::time::Timestamp::UNIX_EPOCH,
+        rastok::time::LogicalTime::from_nanoseconds(1_000),
+    );
     let mut world = EchoWorld::default();
 
     execution
@@ -6304,11 +6505,11 @@ graph logical_time_guard : App {
         .records()
         .iter()
         .filter_map(|record| match record {
-            Record::Transaction(transaction) => transaction.logical_time,
+            Record::Transaction(transaction) => transaction.observed_time,
             Record::Ingress(_) | Record::Egress(_) => None,
         })
         .collect();
-    assert_eq!(observed, [1_000]);
+    assert_eq!(observed, [rastok::time::Timestamp::from_nanoseconds(1_000)]);
 }
 
 #[test]
@@ -6330,10 +6531,17 @@ fn a_silent_driver_expires_into_a_typed_timeout() {
     assert!(execution.has_open_obligations());
     // Nobody answers; the budget expires at the discrete advance.
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 5_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(5_000_000_000),
+        )
         .unwrap();
     assert!(execution.is_stable(), "the expiry released the machine");
-    assert_eq!(execution.logical_time(), 5_000_000_000);
+    assert_eq!(
+        execution.logical_time(),
+        rastok::time::LogicalTime::from_nanoseconds(5_000_000_000)
+    );
     // The closure is a Timeout fact and the completion transaction
     // fired under l:timeout, with TimeoutExpired on `exit`.
     let last = journal.records().last().unwrap();
@@ -6387,7 +6595,11 @@ fn a_scheduler_projection_refusal_precedes_the_timeout_close() {
 
     drivers.refuse_scheduler_completion = true;
     assert!(matches!(
-        execution.advance_to(&mut journal, &mut drivers, 5_000_000_000),
+        execution.advance_to(
+            &mut journal,
+            &mut drivers,
+            rastok::time::LogicalTime::from_nanoseconds(5_000_000_000)
+        ),
         Err(ExecutionFault::Dispatch(
             rastok::runtime::execution::driver_polling::PollFault::Driver(
                 DriverRouteError::UnavailableOutbound(_)
@@ -6399,7 +6611,11 @@ fn a_scheduler_projection_refusal_precedes_the_timeout_close() {
 
     drivers.refuse_scheduler_completion = false;
     execution
-        .advance_to(&mut journal, &mut drivers, 5_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut drivers,
+            rastok::time::LogicalTime::from_nanoseconds(5_000_000_000),
+        )
         .unwrap();
     assert_eq!(source_exit_cases(&execution), ["TimeoutExpired"]);
 }
@@ -6426,7 +6642,11 @@ fn a_cancel_refusal_cannot_strand_an_expiring_call() {
         .unwrap();
 
     assert!(matches!(
-        execution.advance_to(&mut journal, &mut drivers, 5_000_000_000),
+        execution.advance_to(
+            &mut journal,
+            &mut drivers,
+            rastok::time::LogicalTime::from_nanoseconds(5_000_000_000)
+        ),
         Err(ExecutionFault::Dispatch(
             rastok::runtime::execution::driver_polling::PollFault::Driver(
                 DriverRouteError::UnavailableOutbound(_)
@@ -6441,7 +6661,11 @@ fn a_cancel_refusal_cannot_strand_an_expiring_call() {
 
     drivers.refuse_cancel = false;
     execution
-        .advance_to(&mut journal, &mut drivers, 5_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut drivers,
+            rastok::time::LogicalTime::from_nanoseconds(5_000_000_000),
+        )
         .unwrap();
     assert_eq!(source_exit_cases(&execution), ["TimeoutExpired"]);
     assert!(
@@ -6478,7 +6702,11 @@ fn a_budget_runs_from_delivery_and_covers_queue_time() {
     assert_eq!(journal.open_calls().len(), 1, "one open, one queued");
     // Nobody answers; both budgets expire at the same sweep.
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 5_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(5_000_000_000),
+        )
         .unwrap();
     assert!(execution.is_stable());
     assert_eq!(
@@ -6593,7 +6821,11 @@ on in { out = data.text }
     assert_eq!(journal.open_calls().len(), 2, "both calls opened");
     // Only beta's budget is due at 100ms.
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 100_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(100_000_000),
+        )
         .unwrap();
     let open = journal.open_calls();
     assert_eq!(open.len(), 1);
@@ -6629,7 +6861,11 @@ fn an_answer_and_an_expiry_race_to_a_single_closure() {
         .run_ready_with_drivers(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 5_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(5_000_000_000),
+        )
         .unwrap();
     assert!(execution.is_stable());
     let closures = journal
@@ -6673,7 +6909,11 @@ fn a_late_answer_is_a_reported_observation_not_a_silence() {
     let call_id = journal.open_calls()[0].call_id;
     // The budget expires first…
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 5_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(5_000_000_000),
+        )
         .unwrap();
     // …then the world answers a closed call.
     let mut late = ScriptedWorld {
@@ -6722,14 +6962,22 @@ fn a_refused_expiry_stays_scheduled_and_replays() {
         .unwrap();
     assert!(
         execution
-            .advance_to(&mut journal, &mut CallDriver(&mut world), 5_000_000_000)
+            .advance_to(
+                &mut journal,
+                &mut CallDriver(&mut world),
+                rastok::time::LogicalTime::from_nanoseconds(5_000_000_000)
+            )
             .is_err(),
         "the refused closure surfaces"
     );
     // Heal and replay: the deadline was never acknowledged.
     journal.refuse_closes = false;
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 5_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(5_000_000_000),
+        )
         .unwrap();
     assert!(execution.is_stable());
     assert_eq!(source_exit_cases(&execution), ["TimeoutExpired"]);
@@ -6759,12 +7007,20 @@ fn a_refused_open_on_a_queued_expiry_replays_without_duplicates() {
     journal.refuse_opens = true;
     assert!(
         execution
-            .advance_to(&mut journal, &mut CallDriver(&mut world), 5_000_000_000)
+            .advance_to(
+                &mut journal,
+                &mut CallDriver(&mut world),
+                rastok::time::LogicalTime::from_nanoseconds(5_000_000_000)
+            )
             .is_err()
     );
     journal.refuse_opens = false;
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 5_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(5_000_000_000),
+        )
         .unwrap();
     assert!(execution.is_stable());
     assert_eq!(
@@ -6806,7 +7062,11 @@ fn a_refused_commit_on_a_queued_expiry_loses_nothing() {
     journal.refuse_commits = true;
     assert!(
         execution
-            .advance_to(&mut journal, &mut CallDriver(&mut world), 5_000_000_000)
+            .advance_to(
+                &mut journal,
+                &mut CallDriver(&mut world),
+                rastok::time::LogicalTime::from_nanoseconds(5_000_000_000)
+            )
             .is_err()
     );
     assert!(
@@ -6819,7 +7079,11 @@ fn a_refused_commit_on_a_queued_expiry_loses_nothing() {
     // never acked — exactly one typed terminal fact results.
     journal.refuse_commits = false;
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 5_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(5_000_000_000),
+        )
         .unwrap();
     execution.run_ready(&mut journal).unwrap();
     assert!(execution.is_stable());
@@ -6944,7 +7208,12 @@ graph countdown : App + Loop {
     )
     .expect("a fixed-delay Loop is executable");
     let mut journal = MemJournal::new(GraphVersion(1));
-    let mut before_restart = Execution::new_at(&compilation.plan, GraphVersion(1), 0);
+    let mut before_restart = Execution::new_at(
+        &compilation.plan,
+        GraphVersion(1),
+        rastok::time::Timestamp::UNIX_EPOCH,
+        rastok::time::LogicalTime::from_nanoseconds(0),
+    );
     before_restart
         .accept_input(&mut journal, int_submission(2))
         .expect("the root is admitted");
@@ -6954,11 +7223,19 @@ graph countdown : App + Loop {
     let run = first_loop(&journal);
     let first = loop_state(&journal, run);
     assert_eq!(first.iteration, 1);
-    assert_eq!(first.due_at, Some(2_000_000_000));
+    assert_eq!(
+        first.due_at,
+        Some(rastok::time::LogicalTime::from_nanoseconds(2_000_000_000))
+    );
     assert!(before_restart.outputs().is_empty());
     drop(before_restart);
 
-    let mut recovered = Execution::new_at(&compilation.plan, GraphVersion(1), 1_000_000_000);
+    let mut recovered = Execution::new_at(
+        &compilation.plan,
+        GraphVersion(1),
+        rastok::time::Timestamp::UNIX_EPOCH,
+        rastok::time::LogicalTime::from_nanoseconds(1_000_000_000),
+    );
     recovered
         .recover_from_journal(&journal)
         .expect("the persisted due-date annotation reschedules the same wakeup");
@@ -6967,17 +7244,32 @@ graph countdown : App + Loop {
         .expect("a duplicate recovery observation may reschedule but cannot re-enter twice");
     let mut world = EchoWorld::default();
     recovered
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 1_999_999_999)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(1_999_999_999),
+        )
         .expect("advancing short of the date is inert");
     assert_eq!(loop_state(&journal, run).iteration, 1);
     recovered
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 2_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(2_000_000_000),
+        )
         .expect("the exact date admits one traversal");
     let second = loop_state(&journal, run);
     assert_eq!(second.iteration, 2);
-    assert_eq!(second.due_at, Some(4_000_000_000));
+    assert_eq!(
+        second.due_at,
+        Some(rastok::time::LogicalTime::from_nanoseconds(4_000_000_000))
+    );
     recovered
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 4_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(4_000_000_000),
+        )
         .expect("the second exact date reaches the terminal branch");
     assert_eq!(recovered.outputs().len(), 1);
     assert_eq!(
@@ -7049,17 +7341,38 @@ graph countdown : App + Loop {
         .unwrap();
     execution.run_ready(&mut journal).unwrap();
     let run = first_loop(&journal);
-    assert_eq!(loop_state(&journal, run).due_at, Some(1_000_000_000));
+    assert_eq!(
+        loop_state(&journal, run).due_at,
+        Some(rastok::time::LogicalTime::from_nanoseconds(1_000_000_000))
+    );
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 1_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(1_000_000_000),
+        )
         .unwrap();
-    assert_eq!(loop_state(&journal, run).due_at, Some(3_000_000_000));
+    assert_eq!(
+        loop_state(&journal, run).due_at,
+        Some(rastok::time::LogicalTime::from_nanoseconds(3_000_000_000))
+    );
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 3_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(3_000_000_000),
+        )
         .unwrap();
-    assert_eq!(loop_state(&journal, run).due_at, Some(6_000_000_000));
+    assert_eq!(
+        loop_state(&journal, run).due_at,
+        Some(rastok::time::LogicalTime::from_nanoseconds(6_000_000_000))
+    );
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 6_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(6_000_000_000),
+        )
         .unwrap();
     assert_eq!(execution.outputs().len(), 1);
     assert_eq!(loop_state(&journal, run).remaining, 1);
@@ -7104,7 +7417,11 @@ graph countdown : App + Loop {
     let old_run = first_loop(&journal);
 
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 1_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(1_000_000_000),
+        )
         .expect("the lifetime closes before the later Loop wakeup");
     execution
         .accept_input(&mut journal, int_submission(0))
@@ -7114,7 +7431,11 @@ graph countdown : App + Loop {
         .expect("the successor run reaches its own terminal branch");
     assert_eq!(execution.outputs().len(), 1);
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 2_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(2_000_000_000),
+        )
         .expect("the stale predecessor wakeup is a harmless observation");
     assert_eq!(
         execution.outputs().len(),
@@ -7192,7 +7513,7 @@ graph countdown : App + Loop {
         .advance_to(
             &mut journal,
             &mut CallDriver(&mut EchoWorld::default()),
-            1_000_000_000,
+            rastok::time::LogicalTime::from_nanoseconds(1_000_000_000),
         )
         .unwrap();
     let transitions: Vec<_> = journal.records()[before..]
@@ -7215,16 +7536,25 @@ graph countdown : App + Loop {
         "opened {runs:?}, transitions {transitions:?}"
     );
     for cut in before..=journal.records().len() {
-        let mut retained =
-            MemJournal::from_records(GraphVersion(1), None, &journal.records()[..cut]).unwrap();
-        let mut restored =
-            Execution::new_at(&compilation.plan, GraphVersion(1), execution.logical_time());
+        let mut retained = MemJournal::from_records(
+            GraphVersion(1),
+            rastok::time::Timestamp::UNIX_EPOCH,
+            None,
+            &journal.records()[..cut],
+        )
+        .unwrap();
+        let mut restored = Execution::new_at(
+            &compilation.plan,
+            GraphVersion(1),
+            rastok::time::Timestamp::UNIX_EPOCH,
+            execution.logical_time(),
+        );
         restored.recover_from_journal(&retained).unwrap();
         restored
             .advance_to(
                 &mut retained,
                 &mut CallDriver(&mut EchoWorld::default()),
-                1_000_000_000,
+                rastok::time::LogicalTime::from_nanoseconds(1_000_000_000),
             )
             .unwrap();
         assert_eq!(retained.records(), journal.records(), "recovery at {cut}");
@@ -7287,25 +7617,44 @@ graph retry : App + Loop {
     let run = first_loop(&journal);
 
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 1_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(1_000_000_000),
+        )
         .expect("the Call budget publishes TimeoutExpired first");
     let after_timeout = loop_state(&journal, run);
     assert_eq!(after_timeout.iteration, 1);
-    assert_eq!(after_timeout.due_at, Some(3_000_000_000));
+    assert_eq!(
+        after_timeout.due_at,
+        Some(rastok::time::LogicalTime::from_nanoseconds(3_000_000_000))
+    );
     assert_eq!(after_timeout.phase, LoopPhase::AwaitingAdmission);
     assert!(journal.open_calls().is_empty());
 
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 2_999_999_999)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(2_999_999_999),
+        )
         .expect("the Loop delay has not elapsed");
     assert!(journal.open_calls().is_empty());
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 3_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(3_000_000_000),
+        )
         .expect("the delayed state re-enters the spatial Call body");
     assert_eq!(journal.open_calls().len(), 1);
 
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 4_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(4_000_000_000),
+        )
         .expect("the second independent Call timeout exhausts fuel");
     assert!(journal.open_calls().is_empty());
     assert_eq!(execution.outputs().len(), 1);
@@ -7386,26 +7735,47 @@ graph retry : App + Loop {
         .run_ready_with_drivers(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
     execution
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 1_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(1_000_000_000),
+        )
         .expect("the first Call timeout selects delayed recurrence");
     drop(execution);
 
-    let mut recovered = Execution::new_at(&compilation.plan, GraphVersion(1), 2_000_000_000);
+    let mut recovered = Execution::new_at(
+        &compilation.plan,
+        GraphVersion(1),
+        rastok::time::Timestamp::UNIX_EPOCH,
+        rastok::time::LogicalTime::from_nanoseconds(2_000_000_000),
+    );
     let before = journal.records().to_vec();
     recovered
         .recover_with_drivers(&journal, &mut CallDriver(&mut world))
         .expect("the spatial fold retains the first timeout and delayed command");
     assert_eq!(journal.records(), before);
     recovered
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 2_999_999_999)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(2_999_999_999),
+        )
         .unwrap();
     assert!(journal.open_calls().is_empty());
     recovered
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 3_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(3_000_000_000),
+        )
         .unwrap();
     assert_eq!(journal.open_calls().len(), 1);
     recovered
-        .advance_to(&mut journal, &mut CallDriver(&mut world), 4_000_000_000)
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(4_000_000_000),
+        )
         .unwrap();
     assert_eq!(recovered.outputs().len(), 1);
     assert_eq!(

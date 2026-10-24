@@ -101,7 +101,7 @@ pub(super) fn operations(execution: &Execution<'_>, records: &[Record]) -> JsonV
                             _ => {
                                 row["closed_record"] = json!(index);
                                 row["closed_at_ns"] =
-                                    json!(call.closed_at.map(|at| at.to_string()));
+                                    json!(call.closed_at.map(|at| at.as_nanoseconds().to_string()));
                             }
                         }
                     }
@@ -118,7 +118,7 @@ pub(super) fn operations(execution: &Execution<'_>, records: &[Record]) -> JsonV
                 "active": operation.phase != Phase::Closed,
                 "phase": format!("{:?}", operation.phase),
                 "closed": operation.closed.map(|reason| format!("{reason:?}")),
-                "due_at_ns": operation.due_at.map(|at| at.to_string()),
+                "due_at_ns": operation.due_at.map(|at| at.as_nanoseconds().to_string()),
                 "attempts": attempts.into_values().collect::<Vec<_>>(),
             })
         })

@@ -717,14 +717,23 @@ impl<'src> Parser<'src, '_> {
                         body.push(ScenarioItem::Mock(mock));
                     }
                 }
-                (TokenKind::Ident, word @ ("crash" | "restart" | "origin")) => {
-                    // Fault injection and the civil-time anchor join
-                    // with the recovery fold; parsed to the end of
-                    // the line, refused whole.
-                    let construct = match word {
-                        "crash" => "a crash step",
-                        "restart" => "a restart step",
-                        _ => "a scenario origin",
+                (TokenKind::Ident, "origin") => {
+                    let start = token.span.range().start;
+                    self.bump();
+                    self.expect(TokenKind::Eq, "`=`")?;
+                    let expr = self.expr(&ATTR_POSITION);
+                    body.push(ScenarioItem::Origin {
+                        expr,
+                        span: self.span_from(start),
+                    });
+                }
+                (TokenKind::Ident, word @ ("crash" | "restart")) => {
+                    // Fault injection is parsed to the end of the line and
+                    // refused until the Lab has a specified recovery model.
+                    let construct = if word == "crash" {
+                        "a crash step"
+                    } else {
+                        "a restart step"
                     };
                     let step_start = token.span.range().start;
                     self.bump();

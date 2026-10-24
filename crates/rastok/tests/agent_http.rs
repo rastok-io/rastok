@@ -181,8 +181,19 @@ fn projected_plan_and_samples_survive_every_recording_prefix_without_a_driver() 
         None,
     ) {
         assert!(run.report.passed(), "{:?}", run.report);
-        let journal = MemJournal::from_records(GraphVersion(1), None, &run.records).unwrap();
-        let recording = Recording::capture(&compilation, &journal, 10_000_000_000).unwrap();
+        let journal = MemJournal::from_records(
+            GraphVersion(1),
+            rastok::time::Timestamp::UNIX_EPOCH,
+            None,
+            &run.records,
+        )
+        .unwrap();
+        let recording = Recording::capture(
+            &compilation,
+            &journal,
+            rastok::time::LogicalTime::from_nanoseconds(10_000_000_000),
+        )
+        .unwrap();
         let decoded = Recording::decode(&recording.encode().unwrap()).unwrap();
         assert_eq!(decoded.plan(), &compilation.plan);
         assert_eq!(decoded.records(), run.records);
@@ -198,7 +209,12 @@ fn projected_plan_and_samples_survive_every_recording_prefix_without_a_driver() 
         }
     }
     assert!(
-        Recording::capture(&checked(SOURCE), &MemJournal::new(GraphVersion(1)), 0).is_err(),
+        Recording::capture(
+            &checked(SOURCE),
+            &MemJournal::new(GraphVersion(1)),
+            rastok::time::LogicalTime::ZERO
+        )
+        .is_err(),
         "no hidden new boot-recording capability"
     );
 }

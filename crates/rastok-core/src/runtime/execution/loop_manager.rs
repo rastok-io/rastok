@@ -585,7 +585,7 @@ impl Execution<'_> {
                         vec![crate::journal::deadline::Deadline {
                             kind: crate::journal::DeadlineKind::CallTimeout,
                             reference: ids::delivery_id(&edge, envelope.meta().sys().id()),
-                            due_at: self.now.saturating_add(timeout),
+                            due_at: self.now + Duration::from_nanoseconds(timeout),
                         }],
                     )?;
                 }
@@ -618,7 +618,7 @@ impl Execution<'_> {
                 });
                 if let Some(timeout) = call_timeout {
                     self.scheduler.schedule(
-                        self.now.saturating_add(timeout),
+                        self.now + Duration::from_nanoseconds(timeout),
                         Obligation::DeliveryBudget {
                             connector: self.executor_path(slot)?.clone(),
                             edge,
@@ -668,7 +668,7 @@ impl Execution<'_> {
                         .ok_or_else(|| loop_error(&current.instance, "Loop ordinal overflow"))?;
                     due = self
                         .loop_delay_for(owner, iteration)?
-                        .map(|delay| self.now.saturating_add(delay));
+                        .map(|delay| self.now + Duration::from_nanoseconds(delay));
                     packet.facts.push(Fact::Advanced {
                         run,
                         from_iteration: current.iteration,
@@ -901,7 +901,7 @@ pub(super) fn manager_record(
         exchange_exit: None,
         retry_record: None,
         loop_record: Some(Box::new(packet)),
-        logical_time: None,
+        observed_time: None,
         deadlines: None,
         instance_commands: None,
         trigger: node::Trigger::Lifecycle(node::Lifecycle::Loop),

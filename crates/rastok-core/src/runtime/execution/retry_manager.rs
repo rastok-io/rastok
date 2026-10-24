@@ -473,7 +473,7 @@ impl Execution<'_> {
                             })
                         });
                     if ready && in_turn {
-                        let key = (state.due_at.unwrap_or(i64::MIN), index);
+                        let key = (state.due_at.unwrap_or(LogicalTime::MIN), index);
                         if selected
                             .as_ref()
                             .is_none_or(|(previous, _)| key < *previous)
@@ -617,7 +617,7 @@ impl Execution<'_> {
                 vec![Deadline {
                     kind: crate::journal::DeadlineKind::CallTimeout,
                     reference,
-                    due_at: self.now.saturating_add(ns),
+                    due_at: self.now + Duration::from_nanoseconds(ns),
                 }],
             )?;
         }
@@ -645,7 +645,7 @@ impl Execution<'_> {
                 .map_err(|_| error(protocol::Error::AdmissionIdentity))?;
             if let Some(ns) = timeout {
                 self.scheduler.schedule(
-                    self.now.saturating_add(ns),
+                    self.now + Duration::from_nanoseconds(ns),
                     Obligation::DeliveryBudget {
                         connector: self.executor_path(slot)?.clone(),
                         edge,
@@ -685,7 +685,7 @@ pub(super) fn closure_schedule(
     fold: Option<&RetryView>,
     intent: &CallOpen,
     completion: &Completion,
-    now: i64,
+    now: LogicalTime,
 ) -> Result<Option<Box<Deadlines>>, protocol::Error> {
     let Some(fold) = fold else { return Ok(None) };
     let Some((op, state)) = fold
@@ -791,7 +791,7 @@ pub(super) fn manager_record(
         instance_commands: None,
         retry_record: Some(Box::new(packet)),
         deadlines: None,
-        logical_time: None,
+        observed_time: None,
         consumed: vec![],
         join_inputs: vec![],
         state_delta: vec![],

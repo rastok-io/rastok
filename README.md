@@ -147,12 +147,13 @@ durable deployment journal, Kafka or SQL Connector; diagnostic recordings
 are not durable recovery or share-safe exports. See the
 [opening ledger](docs/architecture/opening-showcase.md).
 
-Instants (`timestamp`, `timestamp_ntz`, `duration`) are carried as signed
-64-bit nanoseconds, which bounds dates to 1678–2262; a value outside that
-range refuses at the boundary instead of overflowing. The logical timeline is
-relative to the first boot and its civil anchor is a host input. Wider date
-carriers are scheduled for the first post-opening format
-([D-2026-10-10-1](docs/spec/decisions.md)).
+Format 24 separates logical time from civil dates. Logical
+instants and durations use signed 64-bit nanoseconds; `timestamp` and
+`timestamp_ntz` use signed seconds plus a nanosecond fraction, including dates
+before 1678 and through year 9999. The journal retains the civil origin used
+by `now()` and epoch-aligned tumbling boxes. The approved witness movement
+and qualification are recorded in the
+[time-carrier inventory](docs/architecture/time-carriers-identity.md).
 
 The current executable proof is one continuous path:
 
