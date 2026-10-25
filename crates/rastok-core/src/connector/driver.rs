@@ -249,7 +249,7 @@ pub trait OutboundRole {
 /// outcome: budgets belong to the scheduler, triage to the recovery
 /// fold. Correlation uses the connector's own protocol.
 pub trait OutboundCall {
-    /// Frames one invocation under this bound contract before the machine
+    /// Frames one invocation under this bound contract before the Execution
     /// opens its EGRESS record. The Driver chooses no defaults: binding has
     /// already resolved every effective non-plan setting for `connector`.
     fn prepare_request(
@@ -268,8 +268,8 @@ pub trait OutboundCall {
         completion: SchedulerCompletion,
     ) -> Completion;
 
-    /// Withdraws an open call: the machine closed it (a won timeout)
-    /// and any in-flight work should stop. Default: nothing — a
+    /// Withdraws an open call: the Execution closed it (a won timeout)
+    /// and any in-flight work should stop. Default: nothing, because a
     /// scripted world has nothing to stop.
     fn cancel(&mut self, call_id: &CallId) {
         let _ = call_id;
@@ -277,7 +277,7 @@ pub trait OutboundCall {
 
     /// Offers an already-journaled open call for execution. A bounded Driver
     /// may leave it pending without starting an effect; the same intent is
-    /// then offered again. The request envelope rides along because the
+    /// then offered again. The request envelope is passed along because the
     /// intent seals only the digest of the request, not its bytes.
     fn start(&mut self, intent: &CallOpen, request: &Envelope) -> CallStart;
 

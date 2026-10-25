@@ -147,8 +147,8 @@ impl State {
         Ok(self.cell_unchecked(plan.plan(), slot, instance))
     }
 
-    /// The unchecked read the machine uses on its own plan-derived
-    /// slots — crate-private: the public door above verifies.
+    /// The unchecked read the Execution uses on its own plan-derived
+    /// slots. Crate-private: the public accessor above verifies the slot.
     pub(crate) fn cell_unchecked(
         &self,
         plan: &ExecutionPlan,
@@ -1424,7 +1424,7 @@ impl<'plan> TransactionPreparer<'plan> {
     /// reaching a connector with a declared `timeout` starts its
     /// budget AT DELIVERY — queue time counts (execution-model §8).
     /// Statically derivable from the plan, so the record can seal
-    /// what the machine then creates, identically.
+    /// what the Execution then creates, identically.
     fn created_deadline_ids(
         &self,
         slot: NodeIndex,
@@ -2085,10 +2085,10 @@ impl PinViolation {
     }
 }
 
-/// Judges materialized content against every pin it must cross —
-/// the emitting end's own pin and each fan-out target's — BEFORE any
+/// Checks materialized content against every pin it must cross,
+/// the emitting end's own pin and each fan-out target's, BEFORE any
 /// commit: routing is post-commit and must never fail. Encoded bytes
-/// never reach this judge (the codecs' door); an explicit `variant`
+/// never reach this check (the codecs verify them); an explicit `variant`
 /// destination admits any valid materialized value.
 pub(crate) fn crossing_pins_hold(
     plan: &crate::plan::ValidatedExecutionPlan,

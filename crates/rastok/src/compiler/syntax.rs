@@ -6,7 +6,7 @@
 //! one is never lowered. Rastok expressions and guest bodies are opaque
 //! spans of text: the host tree never interprets them.
 //!
-//! Nodes are owned plain data with public fields; spans ride along for
+//! Nodes are owned plain data with public fields; spans are carried for
 //! diagnostics and are never part of any canonical identity.
 
 use crate::diagnostics::Span;

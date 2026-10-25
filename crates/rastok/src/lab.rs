@@ -1,11 +1,11 @@
-//! The scenario runner — the graph's possible worlds, executed.
+//! The scenario runner: every scenario of a checked Lab, executed.
 //!
 //! A scenario is the world's half of a journal, written in advance:
-//! injections play the ingress, mocks play the outbound drivers, `advance`
-//! plays time. Everything runs on the same [`Execution`] a production run
-//! uses — the mock replaces the driver, never the bookkeeping — so
-//! a green scenario is a statement about the machine, not about a
-//! test double.
+//! injections supply the ingress, mocks answer for the outbound Drivers,
+//! `advance` moves logical time. Everything runs on the same [`Execution`]
+//! a production run uses; the mock replaces the Driver, never the journal
+//! or the state. A green scenario is therefore a statement about the
+//! Execution, not about a test double.
 
 use crate::compiler::hir::{
     Cmp, EmitValue, ExpectTarget, Expectation, InjectionTarget, Lab, Mock, Quantifier, Scenario,

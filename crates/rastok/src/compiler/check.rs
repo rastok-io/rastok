@@ -78,14 +78,14 @@ pub const E_ASSET: Code = Code::new("E-ASSET");
 /// A named type declared twice in the unit; field `name`.
 pub const E_DUP_TYPE: Code = Code::new("E-DUP-TYPE");
 /// A named type that reaches itself through its own expansion, or
-/// one whose expansion exceeds the structural budgets — the
-/// measured value rides the diagnostic; field `name`.
+/// one whose expansion exceeds the structural budgets; the
+/// measured value is carried by the diagnostic; field `name`.
 pub const E_TYPE_RECURSIVE: Code = Code::new("E-TYPE-RECURSIVE");
 /// A duplicate field or symbol inside one type declaration; fields
 /// `name` (the type) and `field` (the duplicate).
 pub const E_TYPE_DUP: Code = Code::new("E-TYPE-DUP");
 /// A type expansion beyond a structural budget — depth, nodes, or
-/// width; the MEASURED value rides the diagnostic; fields `name` +
+/// width; the MEASURED value is carried by the diagnostic; fields `name` +
 /// `depth`/`nodes`/`count` (D-2026-08-10-8).
 pub const E_TYPE_BUDGET: Code = Code::new("E-TYPE-BUDGET");
 /// A structural union whose branches overlap and therefore have no unique
@@ -587,8 +587,9 @@ impl Checker<'_, '_> {
             .map(|(tree, _)| self.inline_unit_constants(tree, signature))
     }
 
-    /// Compiles an expression used as the whole payload. Only this door may
-    /// retain the optional content type of a root `asset(path, ct)` call.
+    /// Compiles an expression used as the whole payload. Only this entry
+    /// point may retain the optional content type of a root
+    /// `asset(path, ct)` call.
     fn payload_expr(
         &mut self,
         expr: &ExprSource,
@@ -840,8 +841,9 @@ impl Checker<'_, '_> {
     }
 
     /// Reduces a tree already built by the host value grammar. Tagged and
-    /// struct constructors share this door with intrinsic expressions, so a
-    /// constant position has one evaluation rule and one diagnostic shape.
+    /// struct constructors share this entry point with intrinsic
+    /// expressions, so a constant position has one evaluation rule and one
+    /// diagnostic shape.
     fn reduce_constant(
         &mut self,
         tree: expr::Tree,
@@ -4370,7 +4372,7 @@ impl Checker<'_, '_> {
     /// Whether `name` may introduce a binding here: reserved handler
     /// names and shadowing are refused — which is also what keeps
     /// compile-time constant substitution sound.
-    /// THE naming policy, one door for every live declaration
+    /// The naming policy, one entry point for every live declaration
     /// (D-2026-08-14-1): the structural value form `nothing` and the
     /// expression literals (`true`/`false`/`null`), and the handler context
     /// function `now()` refuse in every binding-introducing position.
@@ -5595,7 +5597,7 @@ impl Checker<'_, '_> {
     /// Collapses every PURE alias chain (`type A = B` where `B` is
     /// itself a single bare name) to its terminal type, iteratively
     /// — validation has already refused cycles and over-budget
-    /// chains, so the guard here is a backstop, never a judge.
+    /// chains, so the guard here is a backstop, never the deciding check.
     fn collapse_alias_chains(&mut self) {
         let names: Vec<String> = self.type_decls.keys().cloned().collect();
         for name in names {
@@ -6127,8 +6129,8 @@ impl Checker<'_, '_> {
     }
 
     /// Compiles one host value under an optional logical expectation. This is
-    /// the single contextual-construction door used by ports, state and case
-    /// fields; ordinary expression parsing remains context-free.
+    /// the single contextual-construction entry point used by ports, state
+    /// and case fields; ordinary expression parsing remains context-free.
     fn typed_value_tree(
         &mut self,
         value: &SynValue,
@@ -7606,7 +7608,7 @@ enum BuildOrigin<'a> {
     /// A handler emission: `Identity`/`Patch` start from the received
     /// envelope, whose data carries the activation port's pin.
     Handler(Option<&'a DataType>),
-    /// A scenario injection: the draft is born as an empty map.
+    /// A scenario injection: the draft starts as an empty map.
     Draft,
 }
 
@@ -7893,8 +7895,8 @@ fn key_path(key: &crate::compiler::syntax::LValue) -> String {
         .join(".")
 }
 
-/// Canonical flat field-name set when a braced value can be judged as one
-/// closed struct. Detailed refusals stay at the construction door.
+/// Canonical flat field-name set when a braced value can be read as one
+/// closed struct. Detailed refusals stay at the construction entry point.
 fn source_field_names(body: &StructBody) -> Option<Vec<String>> {
     let mut names = Vec::with_capacity(body.entries.len());
     for entry in &body.entries {

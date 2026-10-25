@@ -391,8 +391,8 @@ pub struct Simulation {
     pub scenarios: Vec<Scenario>,
 }
 
-/// A scripted stand-in for one connector: the driver replaced, the
-/// bookkeeping untouched.
+/// A scripted stand-in for one connector: the Driver replaced, the
+/// Execution's journal and state untouched.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Mock {
     /// The mocked connector.

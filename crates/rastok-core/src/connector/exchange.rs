@@ -77,7 +77,7 @@ impl fmt::Display for CallId {
 /// Placement-neutral identity of one admitted inbound Call.
 ///
 /// Unlike [`CallId`], this is not a digest of an outbound request intent. An
-/// inbound Call is born as a root envelope, so its root id is already the
+/// inbound Call is admitted as a root envelope, so its root id is already the
 /// unique causal reference. The newtype prevents the two directions from
 /// being crossed accidentally while keeping the recipe free of a redundant
 /// hash.
@@ -537,7 +537,7 @@ pub enum RequestPreparation {
     Rejected(Completion),
 }
 
-/// A terminal fact whose occurrence is decided by the machine, while its
+/// A terminal fact whose occurrence is decided by the Execution, while its
 /// typed representation belongs to the Connector contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SchedulerCompletion {
@@ -757,7 +757,7 @@ pub enum SessionStart {
     /// The Driver owns the opening or write and must report its observation.
     Started,
     /// No protocol bytes became visible; bounded capacity kept the action
-    /// pending and the machine may offer the same intent again.
+    /// pending and the Execution may offer the same intent again.
     Pending,
 }
 

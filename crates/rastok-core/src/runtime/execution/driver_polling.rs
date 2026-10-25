@@ -92,7 +92,7 @@ impl core::error::Error for PollFault {}
 /// A refused settlement keeps its batch for a later round; another batch is
 /// not polled until that one is complete. The Execution builds the output envelopes
 /// and commits the Connector transaction. The poller never creates an envelope.
-/// Mocks replace Drivers, never this bookkeeping.
+/// A mock replaces the Driver, never this construction and commit.
 ///
 /// Restart discipline: an old Call is never executed again by recovery.
 /// A later Retry admission is a new, independently authorized Call.

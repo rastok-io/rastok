@@ -77,6 +77,8 @@ impl UiOptions {
     }
 }
 
+/// Parses the command line and dispatches to one sub-command. Usage
+/// errors exit with 2; a refused unit or a failed run exits with 1.
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let (command, paths) = match args.split_first() {
@@ -257,6 +259,8 @@ fn main() -> ExitCode {
     }
 }
 
+/// Writes the starter graph and its Lab to `<name>.rkg`, never over an
+/// existing file.
 fn new_graph(arguments: &[String]) -> ExitCode {
     let [name] = arguments else {
         eprintln!("error: new requires one name, without a path or extension");
@@ -295,6 +299,8 @@ fn new_graph(arguments: &[String]) -> ExitCode {
     }
 }
 
+/// Creates or updates `openapi.generated.rkg` from the OpenAPI documents of
+/// a project directory; `--check` only reports whether it is current.
 fn resolve_open_api(arguments: &[String]) -> ExitCode {
     let mut root: Option<&std::path::Path> = None;
     let mut mode = rastok::openapi::ResolveMode::Write;
@@ -383,6 +389,7 @@ fn load(paths: &[String]) -> Result<(Compilation, Sources), ExitCode> {
     }
 }
 
+/// Compiles the unit and prints its Node count and semantic hash.
 fn check(paths: &[String]) -> ExitCode {
     let Ok((compilation, _)) = load(paths) else {
         return ExitCode::FAILURE;
@@ -643,6 +650,8 @@ fn run(
     ExitCode::SUCCESS
 }
 
+/// Appends the journal's new records to the diagnostic recording, when one
+/// was requested with `--record`.
 fn recording_checkpoint(
     recorder: &mut Option<rastok::recording::Recorder>,
     journal: &MemJournal,
@@ -654,6 +663,8 @@ fn recording_checkpoint(
     Ok(())
 }
 
+/// Reconstructs a recorded run from its `.rkrec` file without any Driver
+/// I/O, then prints its boundary outputs or serves the read-only debugger.
 fn replay(arguments: &[String]) -> ExitCode {
     let mut path = None;
     let mut ui = UiOptions::default();
@@ -727,6 +738,8 @@ fn replay(arguments: &[String]) -> ExitCode {
     }
 }
 
+/// The debugger's description of a transaction fault: nothing was committed
+/// and the step may be retried.
 #[cfg(feature = "hosted-ui")]
 fn transaction_fault(message: String) -> rastok::ui::FaultView {
     rastok::ui::FaultView {
@@ -739,6 +752,8 @@ fn transaction_fault(message: String) -> rastok::ui::FaultView {
     }
 }
 
+/// The debugger's description of a physical boundary failure: earlier
+/// transactions stay committed and the run is not retried.
 #[cfg(feature = "hosted-ui")]
 fn boundary_fault(message: String) -> rastok::ui::FaultView {
     rastok::ui::FaultView {
@@ -753,6 +768,8 @@ fn boundary_fault(message: String) -> rastok::ui::FaultView {
     }
 }
 
+/// Wraps one stdin line as a `text/plain` ingress proposal on the App's
+/// `in` port.
 fn cli_submission(inbound_path: &node::Path, line: String) -> IngressProposal {
     IngressProposal {
         provenance: IngressProvenance::single(inbound_path.clone()),
@@ -775,6 +792,8 @@ fn cli_submission(inbound_path: &node::Path, line: String) -> IngressProposal {
     }
 }
 
+/// Prints the boundary outputs produced since the previous call, one line
+/// per envelope as `port: data`.
 fn print_new_outputs(execution: &Execution<'_>, printed_outputs: &mut usize) {
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
@@ -855,6 +874,9 @@ fn simulate(
     }
 }
 
+/// Serves the paused simulation debugger for the unit's first scenario and
+/// applies its commands (step, next action, run, replay, reset, scenario
+/// selection) to one `Simulator` at a time.
 #[cfg(feature = "hosted-ui")]
 fn simulate_with_ui(
     compilation: &Compilation,
@@ -1338,6 +1360,8 @@ fn simulate_with_ui(
     }
 }
 
+/// Builds a fresh `Simulator` for a named simulation and scenario of the
+/// unit, as the debugger's reset and scenario selection require.
 #[cfg(feature = "hosted-ui")]
 fn recreate_scenario<'plan>(
     compilation: &'plan Compilation,
@@ -1369,6 +1393,8 @@ fn recreate_scenario<'plan>(
     )
 }
 
+/// The scenario part of a debugger snapshot: available simulations, the
+/// current scenario's progress, next injection, failures and expectation.
 #[cfg(feature = "hosted-ui")]
 fn simulation_view(
     compilation: &Compilation,
@@ -1415,6 +1441,7 @@ fn simulation_view(
     })
 }
 
+/// The JSON name of one authored scenario action kind.
 #[cfg(feature = "hosted-ui")]
 const fn scenario_action_name(action: lab::ScenarioActionKind) -> &'static str {
     match action {
@@ -1424,6 +1451,8 @@ const fn scenario_action_name(action: lab::ScenarioActionKind) -> &'static str {
     }
 }
 
+/// Compares the scenario's causal trace with its stored golden, or saves it
+/// as the new golden; returns the failures to report, if any.
 fn compare_or_save_golden(
     report: &lab::ScenarioReport,
     records: &[rastok::journal::Record],
@@ -1463,6 +1492,7 @@ fn compare_or_save_golden(
     }
 }
 
+/// Prints one PASS or FAIL line for a scenario, then its failures.
 #[cfg(feature = "hosted-ui")]
 fn print_scenario_verdict(report: &lab::ScenarioReport, golden_failures: &[String]) {
     let passed = report.passed() && golden_failures.is_empty();

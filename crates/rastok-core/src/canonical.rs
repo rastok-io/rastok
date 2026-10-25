@@ -73,9 +73,10 @@ pub fn envelope(envelope: &Envelope) -> Cbor {
 }
 
 /// `data` (canonical form key 5): `[encoding_tag, bytes]`. Encoded payloads
-/// seal their original bytes, never re-encoded. A graph-born value uses its
-/// canonical tagged-value bytes under `ccbor`, distinct from external `raw`
-/// bytes even when those bytes happen to encode the same tagged value.
+/// seal their original bytes, never re-encoded. A value created in the
+/// graph uses its canonical tagged-value bytes under `ccbor`, distinct from
+/// external `raw` bytes even when those bytes happen to encode the same
+/// tagged value.
 #[must_use]
 pub fn data(data: &Data) -> Cbor {
     match data {

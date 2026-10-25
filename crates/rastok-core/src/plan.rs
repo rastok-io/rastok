@@ -3,7 +3,7 @@
 //! The `ExecutionPlan` is what ships to runtime hosts: tables plus
 //! canonical expression trees — no closures, no host references. Attribute
 //! constants are the boot-time reductions; the semantic identity was
-//! taken earlier, over the canonical HIR (`identity.md` §1), and rides
+//! taken earlier, over the canonical HIR (`identity.md` §1), and travels
 //! beside the plan as [`SemanticHash`].
 //!
 //! A `*Spec` describes an authored header declaration after checking and

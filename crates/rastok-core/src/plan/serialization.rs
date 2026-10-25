@@ -965,12 +965,12 @@ fn narrow_target_tree(target: &expr::NarrowTarget) -> Cbor {
 
 /// The 0-based level of the deepest CBOR node the body encoding of
 /// this plan will contain — computed WITHOUT building the tree and
-/// without recursion, so the measurement itself never rides the
-/// machine stack. Both real plan sources arrive pre-bounded: the
+/// without recursion, so the measurement itself never uses the
+/// call stack. Both real plan sources arrive pre-bounded: the
 /// compiler gates expression depth at parse, and the decoder's
 /// reader is budgeted — so everything that recurses after this check
 /// (the tree builders above, the encoder, the expression walks) is
-/// bounded too. A hand-BUILT plan nesting beyond the machine stack
+/// bounded too. A hand-BUILT plan nesting beyond the call stack
 /// is outside the raw-plan contract: its mere destruction would
 /// overflow in its builder's hands before validation could answer.
 /// The per-construct arithmetic mirrors the builders line by line;

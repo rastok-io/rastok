@@ -390,8 +390,8 @@ impl EvalValue {
 
 /// Sorted-field struct comparison, shared by structural equality and
 /// the expression `==` operator: stable-sort both sides by name, compare
-/// positionally. For well-formed structs (unique names — the door
-/// invariant) this IS by-name equality and agrees with the canonical
+/// positionally. For well-formed structs (unique names, enforced at
+/// construction) this IS by-name equality and agrees with the canonical
 /// bytes; for malformed values it stays reflexive, symmetric, and
 /// transitive, which `Eq` promises unconditionally.
 fn struct_fields_eq(
@@ -742,12 +742,12 @@ pub enum DiagnosticKind {
     /// this to the asset diagnostic family rather than a generic expression
     /// fault.
     AssetCall,
-    /// An expression nesting beyond [`MAX_EXPRESSION_DEPTH`] — refused at
-    /// the gate, before any recursive pass rides the machine stack.
-    /// Carries the measured depth: the STRUCTURED payload the
+    /// An expression nesting beyond [`MAX_EXPRESSION_DEPTH`], refused by
+    /// the parse-time depth check before any recursive pass uses the call
+    /// stack. Carries the measured depth: the STRUCTURED payload the
     /// registered diagnostic emits, never the human sentence.
     TooDeep {
-        /// The nesting depth reached when the gate refused.
+        /// The nesting depth reached when the check refused.
         depth: usize,
     },
 }

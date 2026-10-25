@@ -1,5 +1,5 @@
-//! Structural validation of an [`ExecutionPlan`] — every invariant
-//! the machine dereferences without checking and every canonical
+//! Structural validation of an [`ExecutionPlan`]: every invariant
+//! the Execution dereferences without checking and every canonical
 //! order the plan documents, held once, at a boundary, by a type.
 
 use crate::instance;
@@ -436,7 +436,7 @@ pub enum PlanValidationError {
     },
     /// A reference to a connector port beyond the default trio. The
     /// RESOLVED table travels in the plan (the future needs it), but
-    /// this machine's Outbound seam does not carry the port yet —
+    /// this Execution's Outbound seam does not carry the port yet:
     /// `CallOpen`, the response protocol, and the outcome trigger all
     /// speak `in`/`out`/`err`. A plan wiring such a port is valid in
     /// shape and NOT executable faithfully, so it refuses here; the
@@ -1023,7 +1023,7 @@ impl ValidatedExecutionPlan {
     ///
     /// Raw-plan contract: the checks themselves never recurse before
     /// the nesting budget holds, but the plan's own `Drop` does — a
-    /// hand-built plan nesting beyond the machine stack cannot even
+    /// hand-built plan nesting beyond the call stack cannot even
     /// be destroyed safely, and is outside this function's domain.
     /// Both real sources (the compiler, gated at parse; the decoder,
     /// bounded by its reader) sit far below that.

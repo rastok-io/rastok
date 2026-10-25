@@ -301,7 +301,7 @@ impl TryFrom<u8> for DeadlineKind {
 /// changes neither the three record kinds nor their canonical projection.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Record {
-    /// The world entered: an envelope was born at ingress.
+    /// The world entered: an envelope was created at ingress.
     Ingress(Box<IngressRecord>),
     /// One node fired: the atomic commit packet.
     Transaction(Box<TransactionRecord>),
@@ -579,7 +579,7 @@ pub struct IngressRecord {
     pub connector_path: Option<node::Path>,
     /// The atomic per-provenance sequence.
     pub seq: u64,
-    /// The envelope born here.
+    /// The envelope created by this admission.
     pub envelope: Envelope,
     /// Every target instance selected before this INGRESS fact committed.
     /// Singleton owners are explicit because generation is never derivable

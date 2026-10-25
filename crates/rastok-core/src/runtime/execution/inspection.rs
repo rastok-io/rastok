@@ -98,7 +98,7 @@ pub enum CallReferenceInspection {
     Inbound(InboundCallId),
 }
 
-/// One Call held by the machine at the inspection boundary.
+/// One Call held by the Execution at the inspection boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CallInspection {
     /// Typed Call identity.
@@ -120,7 +120,7 @@ pub enum SessionDirectionInspection {
     Inbound,
 }
 
-/// One long-lived Session held by the machine.
+/// One long-lived Session held by the Execution.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionInspection {
     /// Logical Session identity.

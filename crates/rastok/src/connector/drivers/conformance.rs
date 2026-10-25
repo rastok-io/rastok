@@ -1173,7 +1173,7 @@ fn mute_battery(
 }
 
 /// The interleaved-correlation battery: one submission opens two calls with
-/// distinct request bytes (the machine serializes calls per connector, so
+/// distinct request bytes (the Execution serializes calls per connector, so
 /// simultaneity needs two connectors served by one Driver). Each completion
 /// must carry the result declared for its own connector, with its own terminal
 /// `exit`. A Driver that swaps two concurrent responses — correct call

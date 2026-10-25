@@ -226,7 +226,7 @@ pub enum Data {
         /// structural access.
         value_cache: OnceCell<Value>,
     },
-    /// A value born in memory from the graph, with no original bytes.
+    /// A value created in memory by the graph, with no original bytes.
     Materialized(Value),
 }
 
@@ -241,14 +241,14 @@ impl Data {
         }
     }
 
-    /// Wraps a value born in memory.
+    /// Wraps a value created in memory.
     #[must_use]
     pub fn materialized(value: Value) -> Self {
         Self::Materialized(value)
     }
 
     /// The materialized view, if one exists without decoding work:
-    /// the born-in-memory value, or an already-filled cache.
+    /// the value created in memory, or an already-filled cache.
     #[must_use]
     pub fn materialized_value(&self) -> Option<&Value> {
         match self {
@@ -259,7 +259,7 @@ impl Data {
 
     /// The materialized view, decoding through `decode` on first
     /// structural access — the transcode-once rule of `envelope.md`
-    /// §5.1. A born-in-memory value never decodes; a successful decode
+    /// §5.1. A value created in memory never decodes; a successful decode
     /// caches at most once. A failed decode caches nothing: the typed
     /// error reaches the caller, and a later attempt may retry.
     ///

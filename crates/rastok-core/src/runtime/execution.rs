@@ -192,11 +192,11 @@ pub enum ExecutionFault {
         /// Canonical start of the closed box.
         start: Timestamp,
     },
-    /// A causal closure arrived for a call this machine holds no
-    /// pending request for — an integrity breach, never a silence.
+    /// A causal closure arrived for a call this Execution holds no
+    /// pending request for: an integrity breach, never a silence.
     MissingPending(CallId),
     /// A plan state the validator's invariants exclude reached the
-    /// machine anyway — the typed belt behind those doors, never a
+    /// Execution anyway: the typed safeguard behind validation, never a
     /// panic and never a data-representation fault.
     PlanInvariant {
         /// The offending node.
@@ -2895,7 +2895,7 @@ impl<'plan> Execution<'plan> {
             .count()
     }
 
-    /// Whether the machine is stable: no activation can run, no completion
+    /// Whether the Execution is stable: no activation can run, no completion
     /// waits to commit, and no call is open. A partial join is retained
     /// mailbox state, not runnable work; it is therefore quiescent until a
     /// matching arrival or its dated/count eviction makes progress possible.

@@ -1,8 +1,8 @@
 // The Driver layer IS the OS boundary: spawning, threads, and the
 // clock are its business — the frontier lints stop at this file.
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
-//! The real Process Driver behind its Connector contract — where the graph's
-//! intent becomes an actual effect on the machine.
+//! The real Process Driver behind its Connector contract: where the graph's
+//! intent becomes an actual effect on the host.
 //!
 //! This Driver exposes an [`OutboundRole`] through its [`OutboundCall`] interface:
 //! the Driver poller hands it journaled intents and collects its answers.
@@ -219,8 +219,8 @@ pub(super) fn bind_scripted_protocol(
         .map_err(|error| super::DriverFactoryError::new(error.to_string()))
 }
 
-/// A violated `Process` invariant — typed, so the refusal names the
-/// exact door instead of concatenating prose at the fault site.
+/// A violated `Process` invariant, typed so the refusal names the
+/// exact invariant instead of concatenating prose at the fault site.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProcessSettingsError {
     /// The spec belongs to another contract entirely.
@@ -306,8 +306,8 @@ enum ProcessFailure {
     /// The OS refused a launch — or an intent reached an unbound
     /// path (the edge defense).
     SpawnFailed { message: String },
-    /// The reply's CONTENT is invalid: JSON, UTF-8, framing — the
-    /// offending detail rides the payload.
+    /// The reply's CONTENT is invalid: JSON, UTF-8, framing; the
+    /// offending detail is carried in the payload.
     DecodeFailed {
         message: String,
         line: Option<String>,
@@ -482,7 +482,7 @@ impl ProcessSettings {
 ///
 /// The Driver is asynchronous, as the [`OutboundCall`] contract
 /// demands: a Driver answers or stays silent — it never times itself out. Only
-/// the scheduler constructs TimeoutExpired; when the machine closes a
+/// the scheduler constructs TimeoutExpired; when the Execution closes a
 /// call, [`OutboundCall::cancel`] kills the child. Every pipe drains on
 /// its own detached thread through a channel, so a descendant that
 /// inherits the pipes can never hang this process: readers are never
@@ -505,8 +505,8 @@ pub struct Process<'plan> {
     answers: Vec<CallResponse>,
 }
 
-/// Why a plan cannot BIND to the Process Driver — surfaced at
-/// construction, before the machine opens anything.
+/// Why a plan cannot BIND to the Process Driver, surfaced at
+/// construction, before the Execution opens anything.
 #[derive(Debug)]
 pub struct ProcessBindError {
     /// The refusing connector.
@@ -556,7 +556,7 @@ struct Run {
 struct Capture {
     stdout: Vec<u8>,
     stderr: Vec<u8>,
-    /// Bytes SEEN on each stream, in u64 — the budget judge, so the
+    /// Bytes SEEN on each stream, in u64: the budget check, so the
     /// buffers never hold a byte past the cap and a 32-bit host
     /// never allocates toward a bound its `Vec` cannot express.
     observed_out: u64,
