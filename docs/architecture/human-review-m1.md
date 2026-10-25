@@ -162,6 +162,42 @@ He also asked where the validated plan lives: `ValidatedExecutionPlan` is
 validation passes in a fixed order; the raw `ExecutionPlan` and `Node` are
 `plan.rs:357` and 603.
 
+**Work — 25 October, afternoon (Fable, on Yoann's instruction).** Before
+the freeze Yoann asked for comments that say what things do without
+figurative words, a last pass on the README ("more styled and classic, for
+what GitHub expects"), the GIF re-captured if the debugger had changed, the
+white paper checked and `main.rs` read for clarity. Measured first:
+`missing_docs = "warn"` under `-D warnings` already documents every public
+item (1 065 in the core, 591 in the host), and the figurative register was
+about forty doc-comment lines in fifteen files, concentrated on "the
+machine", "door", "born", "rides", "judge". Done: 51 doc-comment lines
+rewritten in 21 files ("the machine" becomes the Execution, the host or the
+call stack as meant; "door" an entry point or a constructor; "born" created;
+"rides" carried; "judge" and "gate" a check), the `lab.rs` header restated
+in the specification's words, and 16 one-line descriptions on the CLI's
+top-level functions; the diff stripped of `//` lines is empty. The three
+stills and the GIF were stale (`l:closing`, five `meta.sys` fields) and are
+re-captured with `capture-showcase.cjs` at the same transitions 0, 20 and
+34; the manifest is byte-identical. The README is rebuilt around the
+verbatim narrative and quickstart (badges, metadata sentence, starter graph
+with the real `check` and `simulate` output, GIF, what you get, how it
+works, command table, short status, documentation map, repository,
+contributing, license; 327 lines), and its 250 lines of milestone-level
+status move unchanged to
+[m1-implementation-status.md](m1-implementation-status.md). The white
+paper's header and §10 were already at format 24; its §2 "virtual machine"
+paragraph now says Execution. `main.rs`: `main` dispatches seven commands
+top-down; the inline `run` and `simulate` argument parsers (60 and 75
+lines) and `simulate_with_ui` (480 lines) are the heavy spots, left to
+Yoann's decision after the opening. Gate on the result: fmt, clippy strict,
+rustdoc strict, 63 groups, 1 662 tests, 0 failed (62 workspace groups plus
+the explicit `site_content` run), three `no_std` targets, `site_content`
+13/13; the browser suite and QEMU were not rerun, no code line changed. For
+the specification after the opening: README, white paper and `grammar.md`
+say "typed Driver events" where the 12 October vocabulary decision says
+observation; the public documents stay aligned with the specification as it
+stands. Three commits before this record: comments, captures, README.
+
 Rastok promises that the same validated plan and the same journaled inputs
 produce the same execution, identities and trace. The review reads what
 carries that promise first (identity, journal, validated plan, VM), then what

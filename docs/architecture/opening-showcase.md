@@ -34,6 +34,14 @@ publication require Yoann's order on or after 5 November. M2 durability is not
 an M1 gate. The separate site consumes this repository's ordinary Markdown,
 examples, goldens and editor grammar at one tag; it does not author them here.
 
+**Publication day, on Yoann's order.** Three items found on 24 and 25 October
+that no earlier checklist named: the workspace `Cargo.toml` still carries
+`publish = false` and must drop it before `cargo publish` (rastok-core, then
+rastok); the README's crates.io badge is written as an HTML comment and is
+enabled once the crate exists; the `rastok` and `rastok-core` names were free
+on crates.io on 24 October, and whether to reserve them before the opening is
+Yoann's decision.
+
 ## Accepted opening corrections
 
 Yoann approved the bounded-join destination correction before implementation.
