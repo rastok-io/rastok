@@ -575,13 +575,13 @@ languages a handler computes with (§2.5), the topology that connects nodes
 
 A Rastok App is a graph that compiles into a target-neutral
 `ExecutionPlan`. The plan is an immutable description of a state
-machine. The Rastok runtime interprets that state machine in its virtual
-machine.
+machine. The Rastok runtime executes that state machine in its
+Execution.
 
 The first runtime is native: it is written in Rust and compiled for the
-underlying operating system and hardware. "Virtual machine" describes
-the interpreter for the `ExecutionPlan`; it does not mean that the
-runtime itself is interpreted or requires a separate managed runtime.
+underlying operating system and hardware. The Execution is the interpreter
+of the `ExecutionPlan`; the runtime itself is not interpreted and requires
+no separate managed runtime.
 
 The plan boundary leaves room for future execution forms:
 
