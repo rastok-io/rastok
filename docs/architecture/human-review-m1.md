@@ -140,6 +140,28 @@ a noun, and Astra applied it the same evening as `9844a19`
 (`InboundRole`, `OutboundRole`, `inbound_role()`, `outbound_role()`):
 [Driver roles](human-review-vocabulary.md#driver-roles--24-october-evening-astra-9844a19-fable).
 
+**Reading — 25 October.** Yoann read `lab.rs` diagonally (T8, first
+contact) and asked three questions. Whether `Simulator` should be `Lab`: no.
+`hir::Lab` is the DSL block; `Simulator` is one scenario in flight, built
+once per scenario by `run_inner`; the name is the specification's
+(simulation-semantics §1) and was settled on 12 October (vocabulary ledger
+⟂ 11b). The `session` locals and two doc comments (`lab.rs:179`, 676) still
+carry the old name: cosmetic, after the opening. Why HTTP in the Lab: the §2
+rule "injection at inbound only" needs a Lab twin of every injectable source
+Driver, and §2.1 models one source today, HttpServer `ack`;
+`HttpServerLabInput` is that twin's world-side slot, one retained proposal
+and one terminal, no socket. Whether the simulator should know the mocks at
+all: the inversion exists for everything that passes through the Worker
+(`Driver`, `InboundRole`, `OutboundRole`, `DriverFactory`, `RuntimeDrivers`)
+and leaks through two shared `Rc<RefCell<…>>` back-channels, the mock fault
+vector and the HttpServer source slot. Yoann judged `lab.rs` acceptable for
+now and parked the second leak as A-T8-1 under
+[Parked remarks](#lab-world-face--25-october-yoann-to-the-post-opening-queue).
+He also asked where the validated plan lives: `ValidatedExecutionPlan` is
+`plan/validation.rs:979`, its constructor `try_new` (line 1021) runs the
+validation passes in a fixed order; the raw `ExecutionPlan` and `Node` are
+`plan.rs:357` and 603.
+
 Rastok promises that the same validated plan and the same journaled inputs
 produce the same execution, identities and trace. The review reads what
 carries that promise first (identity, journal, validated plan, VM), then what
@@ -2597,3 +2619,29 @@ by surface:
 - **`E-SIM-TARGET` on a typo** (T8): `simulation smoke on apx` answers "a
   simulation closes `app`; sub-graph targets are a deferred capability".
   Name the typo before the deferred capability. After the opening.
+
+### Lab world face — 25 October (Yoann, to the post-opening queue)
+
+From Yoann's diagonal reading of `lab.rs`, judged acceptable for now.
+
+- **A-T8-1** (zero bytes, owner to assign, after the opening): `Simulator`
+  depends on one stdlib type. Its field `source_input:
+  Rc<RefCell<HttpServerLabInput>>` (`lab.rs:161`) is used at eleven sites
+  (`offer`, `is_pending`, `take_fault`); `injection_port` (`lab.rs:846-856`)
+  repeats at run time the HttpServer + `ack` + `out` gate that
+  `check.rs:1178-1195` already enforces as deferred; and the injection's
+  `target.connector()` path is ignored in favour of the single slot.
+  `InboundRole` is pulled (`poll_proposal`), so nothing in the Driver traits
+  lets a scenario push a scripted arrival or ask whether it is still
+  pending: the Lab needed a world-side face and took the concrete one.
+  Shape: a Lab-side trait for that face with the three methods already
+  used, implemented by `HttpServerLabInput`, held by `node::Path`; the gate
+  becomes "a scripted source is registered for this path", and the
+  capability moves to the Lab factory that owns the twin
+  (`inbound_lab_factories`, `drivers/mod.rs:95`). The mock fault vector
+  (`MockFaults`, `lab.rs:49`) is the lesser leak: the simulator depends on
+  `Vec<String>`, not on a mock. AGENTS.md asks for a trait only at a real
+  second implementation; `check.rs:1180` says "currently HttpServer ack
+  only" and the WebSocket server twin already binds without injection, so
+  the second implementation is announced. Not before the opening: the tree
+  is frozen for the external reviewer.
