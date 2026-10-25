@@ -80,9 +80,9 @@ counts elapsed nanoseconds from zero; an immutable journal origin relates it
 to wide civil timestamps only for explicit observations and tumbling addresses.
 The [format-24 / recording-5 inventory](docs/architecture/time-carriers-identity.md)
 tracks implementation and qualification. Yoann approved witness regeneration
-after Fable's review, preserving epoch-aligned tumbling windows. The external
-review's `main` stays unchanged; integration and
-the opening-tree freeze await Yoann's order after independent replay.
+after Fable's review, preserving epoch-aligned tumbling windows. On Yoann's
+order, `main` was fast-forwarded to the reviewed tree on 25 October; the
+external review reads it from 26 October.
 
 ### Human-review follow-up — 5 October
 

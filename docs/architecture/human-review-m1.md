@@ -198,6 +198,18 @@ say "typed Driver events" where the 12 October vocabulary decision says
 observation; the public documents stay aligned with the specification as it
 stands. Three commits before this record: comments, captures, README.
 
+**Integration — 25 October, evening (Fable, on Yoann's order).** `main` is
+fast-forwarded from `fedada7` to `495b767`, the commit the gate above ran
+on: 100 commits, no merge commit, tree identical to `realign/node-ontology`.
+The stale branch `review/t2-t4-2026-10-08` (`4b4a4a4`, entirely contained)
+is deleted; `realign/node-ontology` stays at the same commit. Nothing is
+pushed: `backup` moves on Yoann's instruction and no public remote exists.
+The external brief below was checked against the new head: between
+`9fbe8d2` and `495b767` none of the files it cites changed except
+`execution.rs`, on three lines of equal count, so every line reference
+holds; ten of them were re-read at `495b767`. Not re-gated, the commit
+being the one already qualified.
+
 Rastok promises that the same validated plan and the same journaled inputs
 produce the same execution, identities and trace. The review reads what
 carries that promise first (identity, journal, validated plan, VM), then what
@@ -2450,9 +2462,10 @@ specification prose (v21 docs sweep).
 
 ## External Rust review (26–30 October) — priorities
 
-The reviewer reads the frozen branch. Line references in this section are
-anchored on `9fbe8d2` (24 October), the tree integrated into `main` for the
-review; the earlier `fedada7` anchors were retired with the realignment
+The reviewer reads `main`, at `495b767` since the 25 October integration.
+Line references in this section are anchored on `9fbe8d2` (24 October) and
+verified unchanged at `495b767`: no file cited here moved between the two
+commits. The earlier `fedada7` anchors were retired with the realignment
 (`runtime/vm.rs` is now `runtime/execution.rs` and `runtime/execution/*`,
 `Vm` is `Execution`, the Loop and Retry folds are `loop_view.rs` and
 `retry_view.rs`). In order of value for the promise
