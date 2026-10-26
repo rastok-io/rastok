@@ -51,9 +51,10 @@ authorized by this metadata preparation. The site handoff is tracked in
 
 Private reporting and contribution controls have a separate
 [owner checklist](github-opening-checklist.md). The local DCO check and
-templates are prepared, not activated GitHub settings. `contact@rastok.com`
-is the planned address for Yoann; mailbox/forwarding activation and an external
-receipt test remain necessary. Main protection, labels and private vulnerability
+templates are prepared, not activated GitHub settings. The addresses confirmed
+on 27 October for Yoann are `security@rastok.com` for security reports and
+`contact@rastok.com` for conduct reports; mailbox/forwarding activation and
+external receipt remain unverified. Main protection, labels and private vulnerability
 reporting are unconfigured here. The full-history DCO audit identifies one
 unsigned historical commit requiring a maintainer decision, not automatic
 rewriting. These gates must close before public participation opens.

@@ -5,7 +5,7 @@ release. Security reports are nevertheless welcome.
 
 Do not disclose a suspected vulnerability in a public issue.
 
-The designated recipient is Yoann Pantic, through `contact@rastok.com`,
+The designated recipient is Yoann Pantic, through `security@rastok.com`,
 with subject prefix `[RASTOK SECURITY]`. **Pre-opening status: this address
 is planned; mailbox/forwarding activation and a receipt test are pending.**
 Do not assume it can receive a report yet. Private vulnerability reporting

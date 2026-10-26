@@ -19,15 +19,16 @@ explicitly authorized destination.
   and scope. Blank issues are disabled in the chooser; the PR template asks
   for human review, tests, contract references, and model/version credits.
   These are submission aids, not enforcement of every possible client.
-- `SECURITY.md` and `CODE_OF_CONDUCT.md` name Yoann Pantic as recipient and
-  `contact@rastok.com` as the planned private address. They explicitly mark
-  activation and receipt testing as pending.
+- `SECURITY.md` and `CODE_OF_CONDUCT.md` name Yoann Pantic as recipient:
+  `security@rastok.com` for vulnerabilities, `contact@rastok.com` for conduct
+  reports, as confirmed on 27 October. Activation and receipt testing remain
+  unverified; changing a document does not provision either channel.
 
 ## Owner actions before opening
 
 | Item | State | Evidence required |
 |---|---|---|
-| Contact mailbox or forwarding to Yoann | Pending | Provision `contact@rastok.com`; verify receipt of synthetic security and conduct reports from an external address; do not put the forwarding destination in Git |
+| Reporting mailboxes or forwarding to Yoann | Pending verification | Confirm activation and external receipt for `security@rastok.com` (security) and `contact@rastok.com` (conduct); do not put the forwarding destination in Git |
 | Private vulnerability reporting | Pending | Enable it for `rastok-io/rastok`; verify the reporting entry and maintainer notifications with a synthetic report |
 | Labels | Pending | Create or confirm `bug`, `design`, `documentation`, `needs-triage`; verify the forms assign them. Missing labels are not created by an issue form |
 | DCO and CI on the hosted repository | Partial — hosted rerun green; test PRs pending | On 26 October 2026, the private repository's first [CI run #1, ID 40366152302](https://github.com/rastok-io/rastok/actions/runs/40366152302) ran on `main` at `80f9729`. The history contains 452 commits; hosted DCO passed for the 378 commits after the configured exception `bb1b1edb3606`. A separate local audit of all 452 finds only that documented exception. The macOS gate (1,649 tests, summed from the raw job log), all three no_std targets, spike-emulated and bench-proofs passed. The Ubuntu gate exhausted disk while compiling `retry_runtime`; debugger setup failed because Playwright 1.58.2 does not support Chromium on Ubuntu 26.04. Ubuntu 24.04, Linux toolset/image cleanup and `line-tables-only` dev/test debug information are now validated by [40375545442](https://github.com/rastok-io/rastok/actions/runs/40375545442), attempt 2: all jobs passed (Ubuntu about eight minutes, macOS three, debugger four). Attempt 1 exposed the intermittent macOS HttpServer refusal-close race and cancelled Ubuntu; the [T9 follow-up](human-review-m1.md#hosted-ci-and-alpha-follow-up--26-october-evening-yoann--astra) records the bounded close fix, independent matrix legs and action-runtime upgrades awaiting their next hosted run. Signed and unsigned sample PR pass/refusal tests remain pending. |
