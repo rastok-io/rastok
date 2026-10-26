@@ -23,14 +23,14 @@ explicitly authorized destination.
   `contact@rastok.com` as the planned private address. They explicitly mark
   activation and receipt testing as pending.
 
-## Owner actions before opening — not performed
+## Owner actions before opening
 
 | Item | State | Evidence required |
 |---|---|---|
 | Contact mailbox or forwarding to Yoann | Pending | Provision `contact@rastok.com`; verify receipt of synthetic security and conduct reports from an external address; do not put the forwarding destination in Git |
 | Private vulnerability reporting | Pending | Enable it for `rastok-io/rastok`; verify the reporting entry and maintainer notifications with a synthetic report |
 | Labels | Pending | Create or confirm `bug`, `design`, `documentation`, `needs-triage`; verify the forms assign them. Missing labels are not created by an issue form |
-| DCO and CI on the hosted repository | Pending | Run a signed sample contribution and an unsigned one, verify pass/refusal; record the real checks produced by the complete workflow |
+| DCO and CI on the hosted repository | Partial — first hosted run recorded; infrastructure fixes and test PRs await verification | On 26 October 2026, the private repository's first [CI run #1, ID 40366152302](https://github.com/rastok-io/rastok/actions/runs/40366152302) ran on `main` at `80f9729`. The history contains 452 commits; hosted DCO passed for the 378 commits after the configured exception `bb1b1edb3606`. A separate local audit of all 452 finds only that documented exception. The macOS gate (1,652 tests), all three no_std targets, spike-emulated and bench-proofs passed. The Ubuntu gate exhausted disk while compiling `retry_runtime`; debugger setup failed because Playwright 1.58.2 does not support Chromium on Ubuntu 26.04. The workflows now pin Ubuntu 24.04; the Linux gate first removes unused toolsets and Docker images, then uses `line-tables-only` for both dev and test debug information. All checks and macOS settings are preserved. These infrastructure fixes are not yet validated by a hosted rerun; signed and unsigned sample PR pass/refusal tests remain pending. |
 | PR merge strategy | Decided by Yoann on 18 September; activation pending | Keep strict DCO for every commit. Enable only Rebase and merge, disable merge commits and squash, and require linear history. Verify author-matching sign-offs and Assisted-by trailers on the resulting main commits |
 | Historical DCO exception | Decided 7 October (Yoann): documented exception, no rewrite | Commit `bb1b1edb3606` (6 August 2026) has no author sign-off and is kept as it is; `ci.yml` starts a first-push check after it, every later commit is signed, and `CONTRIBUTING.md` states the exception |
 | Protection of `main` | Pending | Require PR review and the actual DCO/full CI checks; disable force pushes and deletion; explicitly review any bypass permissions |

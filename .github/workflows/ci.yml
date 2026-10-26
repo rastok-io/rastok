@@ -12,7 +12,7 @@ permissions:
 jobs:
   dco:
     name: DCO sign-off
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -41,7 +41,7 @@ jobs:
           node tools/ci/check-dco.mjs "$DCO_BASE" "$DCO_HEAD"
 
   debugger:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -71,9 +71,18 @@ jobs:
   gate:
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-24.04, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
+      - name: prepare Linux runner disk and debug profiles
+        if: runner.os == 'Linux'
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          docker image prune -af
+          echo "CARGO_PROFILE_DEV_DEBUG=line-tables-only" >> "$GITHUB_ENV"
+          echo "CARGO_PROFILE_TEST_DEBUG=line-tables-only" >> "$GITHUB_ENV"
+          df -h /
       - uses: actions/checkout@v4
       - run: rustup toolchain install 1.97.1 --component rustfmt,clippy --no-self-update
       - run: cargo fmt --all -- --check
@@ -94,7 +103,7 @@ jobs:
           - thumbv8m.main-none-eabihf
           - thumbv7m-none-eabi
           - riscv32imac-unknown-none-elf
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - run: rustup toolchain install 1.97.1 --no-self-update
@@ -106,7 +115,7 @@ jobs:
   # kernel boots, runs, and prints the SAME semantic hash as the
   # host gate.
   spike-emulated:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - run: rustup toolchain install 1.97.1 --no-self-update
@@ -130,7 +139,7 @@ jobs:
   # solution green against its referee, and the dry rehearsal of the
   # full loop — all without any model spend.
   bench-proofs:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - run: rustup toolchain install 1.97.1 --no-self-update
