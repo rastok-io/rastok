@@ -30,16 +30,23 @@ use hyper_util::rt::{TokioExecutor, TokioIo};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::convert::Infallible;
 use std::fmt;
+use std::future::Future;
+use std::io;
 #[cfg(any(test, feature = "hosted-http3"))]
 use std::net::SocketAddr;
 use std::net::TcpListener;
+use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::task::{Context, Poll, ready};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 const DEFAULT_MAX_IN_FLIGHT: usize = 64;
 const DEFAULT_MAX_HEADER_BYTES: usize = 64 * 1024;
 const DEFAULT_BUFFERED_BYTES: usize = 16 * 1024 * 1024;
 const MIN_HTTP1_BUFFER_BYTES: usize = 8 * 1024;
+const REFUSAL_DRAIN_BYTES: usize = 64 * 1024;
+const REFUSAL_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// Physical bounds of one hosted HttpServer Driver.
 ///
@@ -1416,6 +1423,92 @@ async fn serve_listener(
     }
 }
 
+/// Keeps the read side open briefly after Hyper closes an HTTP/1 refusal.
+///
+/// Closing a socket with unread request bytes can reset the connection and
+/// discard the refusal. Hyper flushes the response before `poll_shutdown`;
+/// half-close first, then discard at most 64 KiB for at most 250 ms. Neither
+/// an endless body nor a peer waiting for EOF can retain the connection permit
+/// indefinitely. Successful requests and HTTP/2 use ordinary shutdown.
+struct RefusalClose<I> {
+    stream: I,
+    unread_body: Arc<AtomicBool>,
+    remaining: usize,
+    deadline: Option<Pin<Box<tokio::time::Sleep>>>,
+}
+
+impl<I> RefusalClose<I> {
+    fn new(stream: I, unread_body: Arc<AtomicBool>) -> Self {
+        Self {
+            stream,
+            unread_body,
+            remaining: REFUSAL_DRAIN_BYTES,
+            deadline: None,
+        }
+    }
+}
+
+impl<I: AsyncRead + Unpin> AsyncRead for RefusalClose<I> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buffer: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().stream).poll_read(cx, buffer)
+    }
+}
+
+impl<I: AsyncRead + AsyncWrite + Unpin> AsyncWrite for RefusalClose<I> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bytes: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.get_mut().stream).poll_write(cx, bytes)
+    }
+
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buffers: &[io::IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.get_mut().stream).poll_write_vectored(cx, buffers)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.stream.is_write_vectored()
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.get_mut().stream).poll_flush(cx)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        ready!(Pin::new(&mut this.stream).poll_shutdown(cx))?;
+        if !this.unread_body.load(Ordering::Relaxed) {
+            return Poll::Ready(Ok(()));
+        }
+        let deadline = this
+            .deadline
+            .get_or_insert_with(|| Box::pin(tokio::time::sleep(REFUSAL_DRAIN_TIMEOUT)));
+        let mut bytes = [0; 4096];
+        while this.remaining > 0 && deadline.as_mut().poll(cx).is_pending() {
+            let limit = this.remaining.min(bytes.len());
+            let mut buffer = ReadBuf::new(&mut bytes[..limit]);
+            match ready!(Pin::new(&mut this.stream).poll_read(cx, &mut buffer)) {
+                Ok(()) if !buffer.filled().is_empty() => {
+                    this.remaining -= buffer.filled().len();
+                }
+                // The response is already sent; EOF or a peer error ends only
+                // this best-effort drain, never a causal admission or outcome.
+                _ => break,
+            }
+        }
+        Poll::Ready(Ok(()))
+    }
+}
+
 async fn serve_connection<I>(
     stream: I,
     routes: Arc<Vec<BoundRoute>>,
@@ -1427,6 +1520,8 @@ async fn serve_connection<I>(
 ) where
     I: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
+    let unread_body = Arc::new(AtomicBool::new(false));
+    let stream = RefusalClose::new(stream, Arc::clone(&unread_body));
     let service = hyper::service::service_fn(move |request| {
         handle_request(
             request,
@@ -1435,6 +1530,7 @@ async fn serve_connection<I>(
             Arc::clone(&requests),
             Arc::clone(&references),
             max_header_bytes,
+            Arc::clone(&unread_body),
         )
     });
     let mut builder = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new());
@@ -1458,7 +1554,15 @@ async fn handle_request(
     requests: Arc<tokio::sync::Semaphore>,
     references: Arc<AtomicU64>,
     max_header_bytes: usize,
+    unread_body: Arc<AtomicBool>,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
+    // HTTP/1 requests are serviced serially on this connection. Only a return
+    // before consuming the body leaves the flag set; HTTP/2 never sets it.
+    unread_body.store(
+        matches!(request.version(), Version::HTTP_10 | Version::HTTP_11)
+            && !request.body().is_end_stream(),
+        Ordering::Relaxed,
+    );
     let version = match request.version() {
         Version::HTTP_11 => HttpVersion::Http1,
         Version::HTTP_2 => HttpVersion::Http2,
@@ -1559,6 +1663,7 @@ async fn handle_request(
             }
         }
     }
+    unread_body.store(false, Ordering::Relaxed);
     let Some(data) = decode_body(&route.codec, body) else {
         return Ok(simple_response(StatusCode::BAD_REQUEST));
     };
@@ -2391,6 +2496,95 @@ graph api : App {
             .run_ready(&mut journal)
             .expect("the HTTP/3 Call closes exactly once");
         assert!(journal.open_inbound_calls().is_empty());
+    }
+
+    #[test]
+    fn refused_http1_body_can_finish_after_the_response_without_admission() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let (done, completed) = std::sync::mpsc::channel();
+        let mut engine = HostedNetworkEngine::start(
+            "rastok-http-refusal-close",
+            HttpServerConfig::default().engine_limits().expect("valid bounds"),
+            move |runtime: NetworkRuntime<(), (), ServerEvent>| async move {
+                // Duplex I/O makes the close ordering deterministic: dropping the
+                // server before reading the body tail makes the client write fail.
+                let (server, mut client) = tokio::io::duplex(1024);
+                let connection = tokio::spawn(serve_connection(
+                    server,
+                    Arc::new(Vec::new()),
+                    runtime.event_sender(),
+                    Arc::new(tokio::sync::Semaphore::new(1)),
+                    Arc::new(AtomicU64::new(1)),
+                    MIN_HTTP1_BUFFER_BYTES,
+                    1,
+                ));
+                client
+                    .write_all(b"POST /missing HTTP/1.1\r\nHost: localhost\r\nContent-Length: 5\r\nConnection: close\r\n\r\nx")
+                    .await
+                    .expect("the first part of the refused request is sent");
+                let mut response = Vec::new();
+                client.read_to_end(&mut response).await.expect("the refusal reaches EOF");
+                assert!(response.starts_with(b"HTTP/1.1 404 Not Found\r\n"));
+                client.write_all(b"tail").await.expect("the refused body tail is still readable by the server");
+                client.shutdown().await.expect("the client finishes its request");
+                connection.await.expect("the connection closes after discarding the tail");
+                done.send(()).expect("the test is waiting");
+            },
+        )
+        .expect("the local protocol engine starts");
+        completed
+            .recv_timeout(Duration::from_secs(3))
+            .expect("bounded refusal close completes");
+        assert!(
+            !matches!(engine.try_event(), EventPoll::Event(_)),
+            "the refused request produces no admission or terminal event"
+        );
+    }
+
+    #[test]
+    fn refusal_close_has_byte_and_time_bounds_and_leaves_other_closes_alone() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("the local test runtime starts");
+        runtime.block_on(async {
+            // No EOF is sent in any case: the idle refused peer must time out,
+            // the oversized one must hit the byte bound, and an ordinary close
+            // must not consume any additional bytes.
+            for (refused, sent, left) in [
+                (true, 0, 0),
+                (true, REFUSAL_DRAIN_BYTES + 1, 1),
+                (false, 1, 1),
+            ] {
+                let (stream, mut client) = tokio::io::duplex(REFUSAL_DRAIN_BYTES + 1);
+                client
+                    .write_all(&vec![b'x'; sent])
+                    .await
+                    .expect("buffered request bytes");
+                let mut closing = RefusalClose::new(stream, Arc::new(AtomicBool::new(refused)));
+                tokio::time::timeout(Duration::from_secs(2), closing.shutdown())
+                    .await
+                    .expect("close cannot wait indefinitely for the peer")
+                    .expect("the write side shuts down");
+                if left > 0 {
+                    let mut byte = [0];
+                    assert_eq!(
+                        tokio::time::timeout(
+                            Duration::from_secs(2),
+                            closing.stream.read(&mut byte),
+                        )
+                        .await
+                        .expect("shutdown did not drain beyond its byte bound")
+                        .expect("undrained byte"),
+                        left
+                    );
+                    assert_eq!(byte, [b'x']);
+                }
+            }
+        });
     }
 
     #[test]

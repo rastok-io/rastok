@@ -5,6 +5,9 @@ order: 2
 ---
 
 <!-- quickstart:start -->
+Release binaries target macOS Apple silicon and Linux x86-64. Intel Macs and
+other platforms build from source using the same command below.
+
 Build from the repository with Rust **1.97.1** while release binaries are being
 prepared. This installs HTTP/1.1–2, WebSocket and the debugger, not HTTP/3.
 
@@ -35,8 +38,9 @@ this quickstart is qualified for opening. No elapsed-time claim is made yet.
 ## After the public opening
 
 The planned 5 November 2026 download location is
-[Rastok releases](https://github.com/rastok-io/rastok/releases): macOS arm64,
-macOS x86-64 and Linux x86-64, with `hosted-ui,hosted-websocket`. Once the
+[Rastok releases](https://github.com/rastok-io/rastok/releases): macOS Apple
+silicon and Linux x86-64, with `hosted-ui,hosted-websocket`. Intel Macs and
+other platforms use the source-install fallback. Once the
 repository and `v0.1.0-alpha` tag have been published on Yoann's instruction,
 the Rust 1.97.1 source-install fallback is:
 

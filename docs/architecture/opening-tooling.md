@@ -34,10 +34,14 @@ v17 lexical rules. This is syntax highlighting, not a second checker.
 
 ## Release artifacts
 
-The manual `alpha-artifacts` workflow builds macOS arm64, macOS x86-64 and
-Linux x86-64 with `hosted-ui,hosted-websocket` on Rust 1.97.1. It neither includes
+The manual `alpha-artifacts` workflow builds macOS Apple silicon and Linux
+x86-64 with `hosted-ui,hosted-websocket` on Rust 1.97.1. Intel Macs and other
+platforms use the quickstart's source-install command. It neither includes
 `hosted-http3` nor creates a tag, GitHub release or registry publication.
 An uploaded CI artifact is qualification evidence, not an announced release.
-Cross-host builds and installation are unqualified until that workflow runs
-and the actual outputs are checked. Public publication waits for 5 November
-and Yoann's explicit order.
+On 26 October, [run 40378495117](https://github.com/rastok-io/rastok/actions/runs/40378495117)
+built both retained targets on hosted runners (Linux about four minutes,
+Apple silicon about one and a half). The Intel job never acquired a runner;
+Yoann removed that alpha target the same evening. Artifact installation and
+the two unaided trials remain separate gates. Public publication waits for
+5 November and Yoann's explicit order.

@@ -14,11 +14,11 @@ jobs:
     name: DCO sign-off
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
       - name: test the sign-off checker
@@ -43,8 +43,8 @@ jobs:
   debugger:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
       - run: rustup toolchain install 1.97.1 --no-self-update
@@ -60,7 +60,7 @@ jobs:
           RASTOK_PLAYWRIGHT: ${{ runner.temp }}/rastok-browser/node_modules/playwright
           RASTOK_UI_CAPTURES: ${{ runner.temp }}/rastok-ui-captures
         run: node --test crates/rastok/src/ui/browser.test.cjs
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         if: always()
         with:
           name: debugger-qualification
@@ -70,6 +70,7 @@ jobs:
 
   gate:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-24.04, macos-latest]
     runs-on: ${{ matrix.os }}
@@ -83,7 +84,7 @@ jobs:
           echo "CARGO_PROFILE_DEV_DEBUG=line-tables-only" >> "$GITHUB_ENV"
           echo "CARGO_PROFILE_TEST_DEBUG=line-tables-only" >> "$GITHUB_ENV"
           df -h /
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: rustup toolchain install 1.97.1 --component rustfmt,clippy --no-self-update
       - run: cargo fmt --all -- --check
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
@@ -105,7 +106,7 @@ jobs:
           - riscv32imac-unknown-none-elf
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: rustup toolchain install 1.97.1 --no-self-update
       - run: rustup target add ${{ matrix.target }} --toolchain 1.97.1
       - run: cargo check --locked -p rastok-core --no-default-features --target ${{ matrix.target }}
@@ -117,7 +118,7 @@ jobs:
   spike-emulated:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: rustup toolchain install 1.97.1 --no-self-update
       - run: rustup target add thumbv8m.main-none-eabihf --toolchain 1.97.1
       - run: sudo apt-get update && sudo apt-get install -y qemu-system-arm
@@ -141,7 +142,7 @@ jobs:
   bench-proofs:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: rustup toolchain install 1.97.1 --no-self-update
       - name: runner unit tests
         working-directory: bench/vibe/runner

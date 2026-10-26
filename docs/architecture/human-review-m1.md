@@ -1759,6 +1759,56 @@ selectable implementation. The registry file of 3 112 lines became
 resumes on this tree. The external brief's and this ledger's line references
 anchored on `fedada7` remain Fable's re-anchoring debt.
 
+## T9 — Physical Drivers
+
+### Hosted CI and alpha follow-up — 26 October evening (Yoann / Astra)
+
+[CI run 40375545442](https://github.com/rastok-io/rastok/actions/runs/40375545442),
+on `2d30938`, failed on macOS in attempt 1: the HttpServer test
+`auth_codec_and_body_refusals_never_invent_an_inbound_call` could not read the
+refusal (`Connection reset by peer`, OS error 54). That same test passed in
+run 40366152302 and in attempt 2; the second attempt passed all jobs (Ubuntu
+about eight minutes, macOS three, debugger four). The first attempt's Ubuntu
+gate was cancelled by the matrix, not a Linux test failure.
+
+- The hosted Driver now half-closes writes after the HTTP/1 refusal and
+  drains unread request bytes before dropping the stream: at most 64 KiB
+  or 250 ms, with a fixed 4 KiB scratch buffer. HTTP/2 and fully consumed
+  requests retain ordinary shutdown. This is physical connection cleanup,
+  not admission or journal work. The original loopback assertion is kept;
+  a deterministic duplex test sends the body tail only after reading the
+  response and EOF. It failed with `BrokenPipe` before the fix and passes
+  after it. A second test covers the byte/time bounds and ordinary shutdown.
+- `gate.strategy.fail-fast: false` keeps one OS's failure from cancelling
+  the other. No gate step, feature flag or lockfile requirement is removed.
+- Both workflows move checkout/upload-artifact/setup-node, where present,
+  from v4 to v5 after the Node 20 deprecation warning in
+  [alpha run 40378495117](https://github.com/rastok-io/rastok/actions/runs/40378495117).
+  Action inputs are unchanged, including the explicit Node 22 test toolchain.
+- Yoann drops the Intel macOS alpha binary. That alpha run built Linux
+  x86-64 in about four minutes and Apple silicon in about one and a half;
+  its Intel job never acquired a runner (capacity notice). The matrix now
+  contains only `ubuntu-24.04` / `x86_64-unknown-linux-gnu` and
+  `macos-latest` / `aarch64-apple-darwin`. The quickstart and its exact README
+  copy name these two downloads; Intel Macs and other platforms build from
+  source using the existing install command. The Browser opening gate is
+  unchanged.
+
+Local qualification completed on 27 October: fmt, strict all-target/all-feature
+Clippy, the locked all-feature workspace suite and rustdoc pass. The suite
+contains 1,651 passed, zero failed and zero ignored across 61 nonempty groups
+(62 including the empty hosted-crate doctest group). The raw macOS attempt-2
+log totals 1,649, not the initially reported 1,652; the only count change is
+the two new regressions. All nine HttpServer tests pass, and the original
+refusal test passes 20 additional consecutive runs. The 13 site-content tests
+and 14 JavaScript CI-checker tests pass. Workflow YAML, embedded shell syntax,
+the unchanged gate inputs and the exact quickstart copy were checked locally.
+No core, golden or trace changes; no_std, QEMU and browser checks were not
+rerun for this hosted Driver/workflow patch. No push, tag, workflow dispatch
+or publication. The new close fix and workflow versions still require a
+hosted rerun; artifact builds do not certify the two unaided installation
+trials.
+
 ## Realignment on the Node ontology — decided 2026-10-11
 
 Astra's 11 October proposal, verified by Fable against the code, and

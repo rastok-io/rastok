@@ -88,6 +88,9 @@ the same run in the debugger.
 ## Quickstart
 
 <!-- quickstart:start -->
+Release binaries target macOS Apple silicon and Linux x86-64. Intel Macs and
+other platforms build from source using the same command below.
+
 Build from the repository with Rust **1.97.1** while release binaries are being
 prepared. This installs HTTP/1.1–2, WebSocket and the debugger, not HTTP/3.
 
