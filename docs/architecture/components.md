@@ -16,9 +16,9 @@ that own them, the dependency direction between modules, and what the
 current build implements. It adds no language or runtime semantics;
 on any conflict,
 [`docs/spec/`](../spec/README.md) wins. The
-[C4 component view](03-rastok-components.svg) remains the coarse visual.
-The [core data view](05-rastok-packages.svg) shows current owned types. The maintained
-[module overview](06-rastok-modules-overview.svg) tracks the load-bearing
+[component view](../../ARCHITECTURE.md#component-view) remains the coarse visual.
+The [core data view](../../ARCHITECTURE.md#core-data-forms) shows current owned types. The maintained
+[module overview](../../ARCHITECTURE.md#module-overview) tracks the load-bearing
 modules and public types of the current build.
 
 ## How to read this

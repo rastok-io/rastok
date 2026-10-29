@@ -117,23 +117,23 @@ Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
   concurrency model and the decisions left for physical parallelism;
 - [`spike-rp2350-emulated.md`](spike-rp2350-emulated.md) for the measured
   `no_std` kernel proof;
-- `01-system-context` for the system and its users;
-- `02-rastok-container` for executable and deployment boundaries;
-- `03-rastok-components` for current logical responsibilities inside the
+- [System context](../../ARCHITECTURE.md#system-context) for the system and its users;
+- [Container view](../../ARCHITECTURE.md#container-view) for executable and deployment boundaries;
+- [Component view](../../ARCHITECTURE.md#component-view) for current logical responsibilities inside the
   executable;
-- `04-app-lab-effect-cycle` for the main runtime interaction;
-- `05-rastok-packages` for the current core data types: envelopes, instances,
+- [App/Lab effect cycle](../../ARCHITECTURE.md#applab-effect-cycle) for the main runtime interaction;
+- [Core data forms](../../ARCHITECTURE.md#core-data-forms) for envelopes, instances,
   the canonical registry, records and unsealed deadlines;
-- `06-rastok-modules-overview` for the current Rust module inventory and
+- [Module overview](../../ARCHITECTURE.md#module-overview) for the current Rust module inventory and
   one-way crate dependency;
-- `07-node-executor-extension` for semantic ownership: Graph, Executor,
+- [Semantic model](../../ARCHITECTURE.md#semantic-model) for Graph, Executor,
   Operator, Connector/Contract, Extension and its manager. These categories
   do not imply a public Rust trait for every box.
 
 ## Diagram conventions
 
-- `.puml` files are editable sources; adjacent `.svg` files are generated
-  review artifacts.
+- Mermaid is the only diagram notation. Its editable source lives inline
+  in the Markdown that explains it, not in a separate generated asset.
 - Diagrams are descriptive, not normative. When a diagram and
   `docs/spec/` disagree, the specification wins.
 - C4 containers represent executable or deployable units. Rust modules
@@ -142,27 +142,29 @@ Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
   crates or public APIs.
 - Dynamic behavior that is clearer as an interaction is shown as a
   sequence rather than forced into a static C4 view.
-- Includes come from PlantUML's bundled standard library. Diagram builds
-  do not fetch remote templates.
+- Keep one idea per diagram and about fifteen nodes at most. Split larger
+  views or put a detailed inventory in a table.
+- Name real types, Nodes and commands. Introduce each diagram with a sentence.
+  Do not encode meaning in color or use `%%{init}%%` directives.
+- Render locally. Do not send repository content to a remote rendering service.
 
-Render every diagram from the repository root:
+Check the inline views from the repository root with a locally installed
+Mermaid CLI and browser. Write the rendered review artifacts outside the checkout:
 
 ```sh
-tools/diagrams/render.sh
+diagram_output=$(mktemp -d)
+mmdc -i ARCHITECTURE.md -o "$diagram_output/architecture.md" -b transparent
 ```
 
-The initial views were checked with PlantUML 1.2026.6. The source should
-remain compatible with the bundled C4 standard library rather than rely
-on a machine-specific include path.
+If the CLI's browser is not installed, pass `-p` with a local Puppeteer JSON
+configuration containing `executablePath` for an installed browser. No remote
+renderer is needed. The 29 October migration was checked with Mermaid CLI
+11.12.0 (Mermaid 11.12.2) and local Chrome. GitHub rendering was not exercised.
 
-The 22 October Connector series updates views 03, 04 and 06 and regenerates
-their SVGs from the reviewed sources. They show the shared Contract definitions,
-implementation selection and execution-owned polling; no format change follows
-from these module names.
-
-The 7 October documentation sweep refreshes views 03–07 against the current
-format registry and regenerates their SVG with the installed PlantUML renderer.
-View 05 now describes implemented types rather than a pre-build design. View 04
-remains explicitly an outbound **Call**, not the resident Session frame protocol.
-No measured report, OTLP implementation, Budget manager or plugin loader is
-implied by these views; no renderer or frontend dependency is added.
+The seven views are now in `ARCHITECTURE.md`. The container view separates
+local control from external exchanges. The effect cycle is split into
+opening and settlement, the core data view into three smaller diagrams, and
+the module inventory into two tables plus its crate dependency. The effect
+cycle remains an outbound **Call**, not the resident Session frame protocol.
+No report engine, OTLP implementation, Budget manager or plugin loader is
+implied; no renderer or frontend dependency is added to the Rust workspace.
