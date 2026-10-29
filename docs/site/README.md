@@ -32,8 +32,9 @@ must reject missing, unknown or wrongly typed fields, duplicate keys, broken
 references and duplicate gallery orders. Empty strings and empty lists do not
 meet a required field. No field is optional in the following tables.
 
-The required introductory pages are `index.md`, `overview.md` and
-`getting-started.md`. The six runnable example pages live in `examples/`.
+The required introductory pages are `index.md` (Overview, order 1) and
+`getting-started.md` (Getting Started, order 2). The six runnable example
+pages live in `examples/`.
 
 Every page has:
 

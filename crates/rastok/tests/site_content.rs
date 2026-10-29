@@ -75,7 +75,7 @@ fn reference(path: &str, extension: &str) {
 
 #[test]
 fn public_pages_have_the_site_contract_and_existing_artifacts() {
-    for name in ["index.md", "overview.md", "getting-started.md"] {
+    for name in ["index.md", "getting-started.md"] {
         let (front, _) = markdown(&root().join("docs/site").join(name));
         let page: Page = serde_yaml_ng::from_str(&front).unwrap();
         assert!(
