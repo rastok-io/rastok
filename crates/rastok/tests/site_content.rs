@@ -229,6 +229,174 @@ fn readme_quickstart_is_a_verbatim_copy_of_the_site_source() {
 }
 
 #[test]
+fn guide_chapters_have_a_checked_learning_path() {
+    let mut chapters: Vec<_> = std::fs::read_dir(root().join("docs/site/guide"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    chapters.sort();
+    assert_eq!(chapters.len(), 5);
+    let mut orders = std::collections::BTreeSet::new();
+    for (index, path) in chapters.iter().enumerate() {
+        let (front, body) = markdown(path);
+        let page: Page = serde_yaml_ng::from_str(&front).unwrap();
+        assert!(!page.title.trim().is_empty() && !page.description.trim().is_empty());
+        assert!(orders.insert(page.order), "duplicate guide order");
+        assert_eq!(page.order as usize, index + 1);
+        assert!(body.trim_start().starts_with("After this chapter you can"));
+        assert!(
+            (500..=900).contains(&body.split_whitespace().count()),
+            "{path:?}"
+        );
+        assert!(body.contains("\n## Summary\n"));
+        let next = body
+            .split_once("\n## Next\n")
+            .expect("a next reading step")
+            .1;
+        assert!(next.contains("(../examples/"), "{path:?}: hands-on mirror");
+        if let Some(following) = chapters.get(index + 1) {
+            assert!(next.contains(&format!(
+                "({})",
+                following.file_name().unwrap().to_str().unwrap()
+            )));
+        }
+        assert!(body.contains("../index.md#what-is-available-today"));
+        assert!(body.matches("```mermaid\n").count() <= 1);
+    }
+}
+
+#[test]
+fn public_page_links_and_typography_are_valid() {
+    let mut paths = vec![
+        root().join("docs/site/index.md"),
+        root().join("docs/site/getting-started.md"),
+    ];
+    for directory in ["guide", "examples"] {
+        paths.extend(
+            std::fs::read_dir(root().join("docs/site").join(directory))
+                .unwrap()
+                .map(|entry| entry.unwrap().path()),
+        );
+    }
+    paths.sort();
+    let checkout = root().canonicalize().unwrap();
+    for path in paths {
+        let (front, body) = markdown(&path);
+        assert!(
+            !front.contains('\u{2014}'),
+            "{path:?}: no em dash in metadata"
+        );
+        assert!(!body.contains('\u{2014}'), "{path:?}: no em dash");
+        let mut fenced = false;
+        for line in body.lines() {
+            if line.starts_with("```") {
+                fenced = !fenced;
+            }
+            if fenced {
+                continue;
+            }
+            // Public pages use inline Markdown links; code fences are not links.
+            for link in line.split("](").skip(1) {
+                let target = link.split_once(')').expect("closed inline link").0;
+                if target.starts_with("https://") || target.starts_with("mailto:") {
+                    continue;
+                }
+                let (file, fragment) = target
+                    .split_once('#')
+                    .map_or((target, None), |(file, fragment)| (file, Some(fragment)));
+                let destination = if file.is_empty() {
+                    path.clone()
+                } else {
+                    path.parent().unwrap().join(file)
+                };
+                let resolved = destination
+                    .canonicalize()
+                    .unwrap_or_else(|error| panic!("{path:?}: {target}: {error}"));
+                assert!(
+                    resolved.starts_with(&checkout),
+                    "link stays in the checkout"
+                );
+                if let Some(fragment) = fragment {
+                    let source = std::fs::read_to_string(resolved).unwrap();
+                    assert!(
+                        source
+                            .lines()
+                            .filter(|line| line.starts_with('#'))
+                            .any(|line| {
+                                let heading: String = line
+                                    .trim_start_matches('#')
+                                    .trim()
+                                    .to_lowercase()
+                                    .chars()
+                                    .filter(|ch| {
+                                        ch.is_alphanumeric() || ch.is_whitespace() || *ch == '-'
+                                    })
+                                    .collect();
+                                heading.split_whitespace().collect::<Vec<_>>().join("-") == fragment
+                            }),
+                        "{path:?}: missing heading {target}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn book_dsl_blocks_are_exact_slices_of_shipped_examples() {
+    fn dedent(text: &str) -> String {
+        let indent = text
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| line.len() - line.trim_start().len())
+            .min()
+            .unwrap_or(0);
+        text.lines()
+            .map(|line| {
+                if line.trim().is_empty() {
+                    ""
+                } else {
+                    &line[indent..]
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+    let examples: Vec<String> = [
+        "echo",
+        "file-pipeline",
+        "webhook-to-partner",
+        "sensor-alarm",
+    ]
+    .map(|name| std::fs::read_to_string(root().join(format!("examples/{name}.rkg"))).unwrap())
+    .into();
+    let mut paths = vec![root().join("docs/site/index.md")];
+    paths.extend(
+        std::fs::read_dir(root().join("docs/site/guide"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path()),
+    );
+    for path in paths {
+        let (_, body) = markdown(&path);
+        let mut count = 0;
+        for block in body.split("```rkg\n").skip(1) {
+            let excerpt = block.split_once("```").unwrap().0.trim_end_matches('\n');
+            let lines = excerpt.lines().count();
+            assert!(
+                examples.iter().any(|source| source
+                    .lines()
+                    .collect::<Vec<_>>()
+                    .windows(lines)
+                    .any(|slice| dedent(&slice.join("\n")) == dedent(excerpt))),
+                "{path:?}: the excerpt must be a contiguous source slice, only dedented"
+            );
+            count += 1;
+        }
+        assert!(count > 0, "{path:?}: read the actual program");
+    }
+}
+
+#[test]
 fn current_public_status_matches_the_package_and_contracts() {
     let paper = std::fs::read_to_string(root().join("WHITEPAPER.md")).unwrap();
     let version = rastok_core::plan::FORMAT_VERSION;
