@@ -34,6 +34,28 @@ The Lab replaces both file operations, using the same resolved port types.
 
 ## Expected result
 
+In `files.copy`, both File Calls use Lab responses; the count is emitted
+before the accepted bytes reach `write_file`.
+
+```mermaid
+sequenceDiagram
+    participant lab as Lab: files.copy
+    participant app as file_pipeline
+    participant read as read_file: File
+    participant inspect as inspect
+    participant write as write_file: File
+    lab->>app: in = input.txt
+    app->>read: in = input.txt
+    read->>lab: Scripted read request
+    lab-->>read: 11 bytes, then Completed
+    read->>inspect: out to in = alpha\nbeta\n
+    inspect-->>app: bytes_read = 11
+    inspect->>write: accepted to in = the same bytes
+    write->>lab: Scripted replace request for copy.txt
+    lab-->>write: Completed
+    Note over read,write: Completed exits are disposed to nothing
+```
+
 The Lab supplies `alpha\nbeta\n`: eleven bytes. The Operator counts them and
 forwards a nonempty value to the replacement File Connector. Empty input does
 not overwrite the target. A directory produces `NotAFile`, routed to `failed`.

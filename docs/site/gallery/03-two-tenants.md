@@ -43,6 +43,34 @@ The nested `audit` Graph adds composition, not another execution model.
 
 ## Expected result
 
+This cut of `ui_tour.two_tenants` follows `model` and `answer`; the separate
+`audit.observe` branch runs once per input and is omitted here.
+
+```mermaid
+sequenceDiagram
+    participant lab as Lab: ui_tour.two_tenants
+    participant app as agent_retry
+    participant model as model: Process + Retry
+    participant answer as answer
+    lab->>app: in = Alice's request
+    app->>model: Alice, attempt 1
+    model->>lab: Scripted Call: no response
+    lab->>app: in = Bob's request
+    app->>model: Bob, attempt 1
+    model->>lab: Scripted Call
+    lab-->>model: Bob's data, then Exited(0)
+    model->>answer: Bob's data
+    answer-->>app: done = Bob's answer
+    lab->>lab: advance 1s
+    Note over model: Alice: TimeoutExpired is Held, not delivered
+    lab->>lab: advance 1s
+    model->>lab: Alice, attempt 2: the same request
+    lab-->>model: Alice's data, then Exited(0)
+    model->>answer: Alice's data
+    answer-->>app: done = Alice's answer
+    Note over model: No second Call for Bob
+```
+
 Alice enters first and waits. Bob enters a separate instance and finishes
 immediately. Advancing one second expires Alice's Call;
 the next second admits her retry, which finishes. Bob

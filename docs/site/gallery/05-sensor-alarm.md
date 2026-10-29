@@ -36,6 +36,23 @@ hidden in the application.
 
 ## Expected result
 
+The golden's `sensors.virtual_day` follows one unanswered probe, not the
+separate hysteresis scenario; the advance visits its five-minute deadline.
+
+```mermaid
+sequenceDiagram
+    participant lab as Lab: sensors.virtual_day
+    participant app as sensor_alarm
+    participant watchdog as watchdog
+    lab->>app: probe = pump-a
+    app->>watchdog: probe = pump-a
+    Note over watchdog: Wait for heartbeat within 5m
+    lab->>lab: advance 24h
+    Note over watchdog: At 5m: no matching heartbeat
+    watchdog-->>app: expired to silent = JoinExpired
+    Note over lab,app: Advance completes at 24h, no alarm emitted
+```
+
 Pump-a trips above 120, stays tripped at 100, and clears below 80. Pump-b has
 independent state. A keyed join pairs a probe with a heartbeat within five
 minutes; only the unanswered probe expires in the silent-sensor scenario.

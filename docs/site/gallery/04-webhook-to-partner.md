@@ -59,6 +59,32 @@ not separate conventions the reader must guess from the happy path.
 
 ## Expected result
 
+In `webhook.nominal`, admission produces the ACK before business validation;
+the scripted partner then completes the first attempt.
+
+```mermaid
+sequenceDiagram
+    participant lab as Lab: webhook.nominal
+    participant listener as listener: HttpServer
+    participant validate as validate
+    participant dedup as deduplicate
+    participant request as deliver.request
+    participant partner as deliver.partner: HttpClient + Retry
+    participant decide as deliver.decide
+    participant app as webhook_to_partner
+    lab->>listener: Decoded request: event_id = ok
+    Note over listener: Admission ACK: Completed(202), disposed to nothing
+    listener->>validate: out = decoded payload
+    validate->>dedup: out = validated Webhook
+    dedup->>request: First event_id: set seen, forward
+    request->>partner: Body and meta.app.event_id
+    partner->>lab: Scripted POST with idempotency key
+    lab-->>partner: Receipt charge 0.02 USD, then Completed(201)
+    Note over partner: Receipt measured in journal, out disposed to nothing
+    partner->>decide: exit = Completed(201)
+    decide-->>app: done = event_id ok, status 201
+```
+
 `6 scenario(s), 0 failed` covers:
 
 - `nominal`: one `202` ACK and one partner Call ending with `201`;

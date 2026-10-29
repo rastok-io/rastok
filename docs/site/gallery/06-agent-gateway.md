@@ -56,6 +56,36 @@ whole conversation Graph. Socket closure has its own `session_exit` output.
 
 ## Expected result
 
+This cut of `app_server.two_conversations` starts after both initialization
+and thread exchanges. The Lab enters through `peer`, not a real socket;
+each reply also targets `clients.in`, omitted here to focus on isolation.
+
+```mermaid
+sequenceDiagram
+    participant lab as Lab: app_server.two_conversations
+    participant app as agent_gateway
+    participant model as conversation.model: Process service
+    participant route as conversation.route_reply
+    participant finish as conversation.finish
+    Note over model,route: Separate instances keyed by session_id
+    loop Alice, then Bob, in recorded order
+        lab->>app: peer = turn/start, id 2, session_id
+        app->>model: in = turn/start for this session
+        app->>route: remember = this session_id
+        model->>lab: Scripted service input
+        lab-->>model: Response, delta, turn/completed
+        model->>route: Three out frames in that order
+        route-->>app: Three reply frames addressed to this session
+    end
+    lab->>app: close = Alice's session
+    app->>finish: in = close request
+    finish->>model: Alice: instance.stop
+    lab->>lab: advance 2s
+    model-->>app: process_exit = OutcomeUnknown for Alice
+    lab->>app: peer = Bob's turn/start, id 3
+    Note over model,route: Bob's original service returns three addressed replies
+```
+
 Alice and Bob both initialize and start a thread. Both use request ids 0, 1
 and 2: isolation cannot rely on globally unique RPC ids. Each scripted turn
 returns an initial response, a text delta and a final notification. Two

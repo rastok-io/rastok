@@ -36,6 +36,24 @@ hide an extra handler.
 
 ## Expected result
 
+In `smoke.roundtrip`, `relay` forwards `salut` and the Lab supplies the
+`shell` response without starting a process.
+
+```mermaid
+sequenceDiagram
+    participant lab as Lab: smoke.roundtrip
+    participant app as echo
+    participant relay as relay
+    participant shell as shell: Process
+    lab->>app: in = salut
+    app->>relay: in = salut
+    relay->>shell: out to in = salut
+    shell->>lab: Scripted Call request
+    lab-->>shell: out = salut, exit = Exited(0)
+    shell-->>app: out = salut
+    Note over shell: Exited is disposed to nothing
+```
+
 Three scenarios pass. A nonempty line is echoed, an empty line never calls the
 Process, and a silent Process produces `TimeoutExpired` after virtual time
 advances. Simulation uses the Lab; it never starts `cat`.
