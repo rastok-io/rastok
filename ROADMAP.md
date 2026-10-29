@@ -3,10 +3,10 @@
 This roadmap is organized by evidence gates, not by a speculative
 sequence of product releases.
 
-## Done — M0 mechanical proof (exited 2026-08-04)
+## Done: M0 mechanical proof (exited 2026-08-04)
 
 M0 answered one question: can the central technical loop work end to
-end? It can — the evidence is recorded in
+end? It can. The evidence is recorded in
 [`docs/architecture/m0-exit-report.md`](docs/architecture/m0-exit-report.md).
 
 - Parse and check the smallest useful `.rkg` subset.
@@ -21,40 +21,40 @@ Out of scope: a complete connector catalogue, live Saga or Loop
 managers, durable deployment, enterprise security, UI, registry, and
 cluster operation.
 
-## Done — M0.5 engine consolidation (closed 2026-08-06)
+## Done: M0.5 engine consolidation (closed 2026-08-06)
 
 Consolidated what M0 proved before widening it
 ([`docs/architecture/m0.5-slice.md`](docs/architecture/m0.5-slice.md)):
 
 - The delivery reference specified and the call identity derived
-  from it — the multiport prerequisite, spec-first.
+  from it (the multiport prerequisite, spec-first).
 - The no_std-ready core (`rastok-core`) split from the std layer,
   with CI guarding the frontier; neutrality proven by the unchanged
   semantic hash.
 - The executable plan carried as a versioned, verifiable package
   with typed refusals.
-- The embedded spike run emulated against its written go/no-go —
+- The embedded spike run emulated against its written go/no-go:
   provisional GO, silicon confirmation pending hardware.
-- The Connector conformance harness over the outbound Call Driver interface —
+- The Connector conformance harness over the outbound Call Driver interface:
   the M0 subset of the ten contract cases made executable (error-set,
   journal, timeout, cancel, silence, and interleaved-correlation
   disciplines; the declarative cases as sheet checks), with every
   unproven gap explicit; `Process` re-expressed on it.
-- The verified-authorship benchmark built and rehearsed dry — twenty
+- The verified-authorship benchmark built and rehearsed dry: twenty
   referee-checked tasks, a frozen prompt card, the full
   generate → check → retry → simulate loop measured on recorded
   attempts; the paid model wave is deliberately deferred.
 
-## Now — M1, the demonstrable integration slice
+## Now: M1, the demonstrable integration slice
 
 The question this slice answers: can a realistic asynchronous
-integration seam — request, external partner, late callback — be
+integration seam (request, external partner, late callback) be
 built, simulated, and shown end to end, before its real systems
 exist? Scope, order, and evidence:
 [`docs/architecture/m1-slice.md`](docs/architecture/m1-slice.md).
 Public opening is **5 November 2026**.
 
-### Connector reorganization — 22 October
+### Connector reorganization (22 October)
 
 The [T5/T9 qualification](docs/architecture/connector-rework-qualification.md)
 records the shared standard definitions, per-Driver interfaces, hosted Driver
@@ -73,7 +73,7 @@ records the subsequent **package format 23 / diagnostic recording 4**:
 request. Lifecycle bytes and semantic hashes stay fixed; trigger text changes
 the affected causal traces, and the version changes package checksums.
 
-### Relative logical time — 24 October
+### Relative logical time (24 October)
 
 A-T1-12 now precedes the opening (D-2026-10-23-2): `LogicalTime(i64)`
 counts elapsed nanoseconds from zero; an immutable journal origin relates it
@@ -84,7 +84,7 @@ after Fable's review, preserving epoch-aligned tumbling windows. On Yoann's
 order, `main` was fast-forwarded to the reviewed tree on 25 October; the
 external review reads it from 26 October.
 
-### Human-review follow-up — 5 October
+### Human-review follow-up (5 October)
 
 The review's written valve has applied: **24 October** is the real freeze.
 The [consolidated human-review ledger](docs/architecture/human-review-m1.md)
@@ -97,7 +97,7 @@ the switch to public format 1 as a pre-publication TODO. The approved cutover
 used package 20 and recording 4; current formats are named in
 [identity.md](docs/spec/identity.md). No publication is authorized here.
 
-### Node realignment close-out — 15 October
+### Node realignment close-out (15 October)
 
 The Node-ontology realignment qualified **package 21 / diagnostic recording 4**.
 Its [identity inventory](docs/architecture/node-realignment-identity.md) records
@@ -124,7 +124,7 @@ this local qualification nor the browser suite closes the independent opening
 gates in the [release inventory](docs/architecture/release-qualification.md).
 No public push, tag or publication is authorized by this closure.
 
-### Dated close-out — 7 October
+### Dated close-out (7 October)
 
 The checkout then used **v20 / diagnostic recording v4**. The
 [human-review identity inventory](docs/architecture/human-review-v20-identity.md)
@@ -147,7 +147,7 @@ made by that pass. The embedded Retry workload then left only **512 B of heap**
 and **7,136 B of code** margin; the unchanged limits remain gates. M2 must
 reclaim bytes before growing the core on this workload.
 
-### Dated implementation checkpoints — superseded by the current ledger
+### Dated implementation checkpoints (superseded by the current ledger)
 
 The following records the migration sequence, including earlier candidate
 failures and footprint measurements; it is not the current completion status.
@@ -465,7 +465,7 @@ identified a missing runtime producer in bounded-join output-productibility
 analysis. The opening correction covers both `within` and `last`, independently
 in the checker and core, without changing the runtime, plan format or goldens.
 
-## Later — incident lab and safe dogfood
+## Later: incident lab and safe dogfood
 
 - Qualify derived Retry journal indexes before M2 durable storage: current
   prefix scans can make long histories quadratic in total work. Preserve the
@@ -483,7 +483,7 @@ in the checker and core, without changing the runtime, plan format or goldens.
   maintenance effort.
 - Test the same proof with selected design partners.
 
-## Then — transferability
+## Then: transferability
 
 - A third party installs Rastok from the documentation.
 - That party changes or writes a graph.

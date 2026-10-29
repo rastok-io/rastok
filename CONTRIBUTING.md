@@ -114,7 +114,7 @@ with its own trailer, including reviews relayed by the contributor. Use the
 confirmed model version, following the attribution rules in `AGENTS.md`.
 
 The `Signed-off-by` line is always the human contributor's own
-certification — never an assistant's — and every commit carries one
+certification, never an assistant's. Every commit carries one
 (`git commit -s`).
 
 Disclosure is contextual information, not a penalty. The same quality
@@ -152,7 +152,7 @@ This adds a `Signed-off-by: Name <email>` line certifying the
 [Developer Certificate of Origin](https://developercertificate.org):
 that you wrote the change, or otherwise have the right to submit it
 under the Apache License 2.0. The sign-off transfers no rights to the
-project beyond that license — it attests provenance, and it is the
+project beyond that license. It attests provenance and is the
 formal counterpart of the human-review attestation above. The CI job
 `DCO sign-off` checks every contribution commit for a trailer matching its
 author, including commits brought in through a merge. It checks the declared

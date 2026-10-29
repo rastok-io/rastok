@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — preparation for v0.1.0-alpha
+## Unreleased: preparation for v0.1.0-alpha
 
 This is not a released tag. Public release and crate publication await
 5 November 2026 and Yoann's explicit instruction.
@@ -26,10 +26,10 @@ External opening gates remain open; these capabilities are not a release claim.
 - Native outgoing-Call Retry, separate from Loop: the same prepared request,
   terminal-case policy, retained logical backoff, bounded whole-attempt
   disposition and exact-prefix recovery. Only the final attempt is published.
-- Deterministic Lab scenarios, record-level golden comparison and a read-only
+- Deterministic Lab scenarios, record-level golden trace comparison and a read-only
   simulation debugger with mailbox, instance, Retry and causal inspection.
 - Explicit simulation reference modes: `--compare <dir>` reads existing
-  traces without changing them; `--save <dir>` creates or replaces them.
+  golden traces without changing them; `--save <dir>` creates or replaces them.
   The modes are mutually exclusive, and neither supplies the Lab responses.
 - Process, bounded File and hosted HTTP/WebSocket Contracts; secret bindings,
   data-policy annotations and individual measurement inspection. M1 has no
@@ -47,8 +47,9 @@ External opening gates remain open; these capabilities are not a release claim.
   optional JSON members without conflating absence, null and observed zero.
 - Independently inspectable logical-time advances, original App-output
   inspection, compact envelope history and routing-derived instance labels.
-- Diagnostic `run --record` and `replay [--ui]`, without repeated external
-  effects; `rastok new` for an executable one-file starting point.
+- Recorded runs with `run --record` and their diagnostic `replay [--ui]`,
+  without repeated external effects; `rastok new` for an executable one-file
+  starting point.
 - Public Markdown content contract, six-chapter learning path, captures/GIF
   and editor highlighting. The Responses HTTP adapter has six Lab scenarios
   and local wire/browser qualification; no paid provider call is claimed.
