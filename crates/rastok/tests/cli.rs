@@ -159,6 +159,79 @@ fn a_ui_port_without_the_ui_is_a_usage_error() {
     assert!(stderr.contains("--ui-port requires --ui"), "{stderr}");
 }
 
+#[test]
+fn cli_information_help_uses_stdout_and_succeeds_for_every_alias() {
+    let mut help = None;
+    for argument in ["--help", "-h", "help"] {
+        let output = rastok().arg(argument).output().expect("the binary runs");
+        assert_eq!(output.status.code(), Some(0), "{argument}: {output:?}");
+        assert!(output.stderr.is_empty(), "{argument}: {output:?}");
+        let stdout = String::from_utf8(output.stdout).expect("UTF-8 help");
+        assert!(stdout.starts_with("usage: rastok "), "{stdout}");
+        for command in [
+            "new",
+            "connectors",
+            "check",
+            "run",
+            "replay",
+            "simulate",
+            "--resolve-open-api",
+        ] {
+            assert!(stdout.contains(&format!("rastok {command} ")), "{stdout}");
+        }
+        assert!(stdout.contains("--help") && stdout.contains("--version"));
+        if let Some(expected) = &help {
+            assert_eq!(&stdout, expected);
+        }
+        help = Some(stdout);
+    }
+}
+
+#[test]
+fn cli_information_version_uses_the_package_version_on_stdout() {
+    let output = rastok().arg("--version").output().expect("the binary runs");
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stdout).expect("UTF-8 version"),
+        format!("rastok {}\n", env!("CARGO_PKG_VERSION"))
+    );
+}
+
+#[test]
+fn cli_information_does_not_hide_missing_commands_or_extra_arguments() {
+    for arguments in [
+        vec![],
+        vec!["unknown"],
+        vec!["--help", "unexpected"],
+        vec!["-h", "unexpected"],
+        vec!["help", "unexpected"],
+        vec!["--version", "unexpected"],
+    ] {
+        let output = rastok().args(&arguments).output().expect("the binary runs");
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {output:?}");
+        assert!(output.stdout.is_empty(), "{arguments:?}: {output:?}");
+        assert!(String::from_utf8_lossy(&output.stderr).starts_with("usage: rastok "));
+    }
+}
+
+#[test]
+fn cli_information_help_and_the_guide_share_the_command_syntax() {
+    let output = rastok().arg("--help").output().expect("the binary runs");
+    assert!(output.status.success(), "{output:?}");
+    let guide = include_str!("../../../docs/site/guide/06-command-line.md");
+    for line in String::from_utf8(output.stdout)
+        .expect("UTF-8 help")
+        .lines()
+    {
+        let syntax = line.trim().strip_prefix("usage: ").unwrap_or(line.trim());
+        assert!(
+            guide.contains(syntax),
+            "undocumented command syntax: {syntax}"
+        );
+    }
+}
+
 #[cfg(feature = "hosted-ui")]
 #[test]
 fn simulate_ui_starts_paused_and_retains_the_completed_run_until_close() {

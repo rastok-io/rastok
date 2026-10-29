@@ -28,7 +28,7 @@ use std::process::ExitCode;
 
 mod connector_catalogue;
 
-const USAGE: &str = "usage: rastok new <name>\n       rastok connectors [--json]\n       rastok check <file.rkg>...\n       rastok run <file.rkg>... [--file-root <dir>] [--deployment <profile.json>] [--json-logs] [--record <file.rkrec>]\n       rastok replay <file.rkrec> [--ui [--ui-port <port>]]\n       rastok simulate <file.rkg>... [--deployment <profile.json>] [--compare <dir> | --save <dir>] [--ui [--ui-port <port>]]\n       rastok --resolve-open-api <project-dir> [--check]";
+const USAGE: &str = "usage: rastok new <name>\n       rastok connectors [--json]\n       rastok check <file.rkg>...\n       rastok run <file.rkg>... [--file-root <dir>] [--deployment <profile.json>] [--json-logs] [--record <file.rkrec>]\n       rastok replay <file.rkrec> [--ui [--ui-port <port>]]\n       rastok simulate <file.rkg>... [--deployment <profile.json>] [--compare <dir> | --save <dir>] [--ui [--ui-port <port>]]\n       rastok --resolve-open-api <project-dir> [--check]\n       rastok --help | -h | help\n       rastok --version";
 
 /// Comparing is read-only; saving explicitly creates or replaces reference traces.
 enum GoldenAction {
@@ -77,11 +77,20 @@ impl UiOptions {
     }
 }
 
-/// Parses the command line and dispatches to one sub-command. Usage
-/// errors exit with 2; a refused unit or a failed run exits with 1.
+/// Parses the command line and dispatches to one sub-command. Explicit help
+/// and version requests succeed on stdout. Usage errors exit with 2;
+/// a refused unit or a failed run exits with 1.
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let (command, paths) = match args.split_first() {
+        Some((command, [])) if matches!(command.as_str(), "--help" | "-h" | "help") => {
+            println!("{USAGE}");
+            return ExitCode::SUCCESS;
+        }
+        Some((command, [])) if command == "--version" => {
+            println!("rastok {}", env!("CARGO_PKG_VERSION"));
+            return ExitCode::SUCCESS;
+        }
         Some((command, paths)) if !paths.is_empty() || command == "connectors" => {
             (command.as_str(), paths)
         }

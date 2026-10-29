@@ -27,6 +27,10 @@ Without the browser, `rastok simulate hello.rkg` runs the same scenario.
 `rastok new` creates one file with a typed Operator and a Lab; it never
 overwrites an existing file. Change the source on disk, then run it again.
 
+Use `rastok --help` for the command syntax and `rastok --version` to identify
+your build. The [Command line chapter](guide/06-command-line.md) explains all
+commands, options, output streams and exit statuses.
+
 From a checkout, continue with [echo](examples/01-echo.md) for a real Process
 and an effect-free recorded replay. Then follow
 [webhook to partner](examples/04-webhook-to-partner.md): its command supplies
@@ -42,7 +46,7 @@ paths lead to the same place.
 
 - **By the book.** The [user guide](guide/01-a-program.md) reads the
   language in order: a program, types and expressions, Connectors and
-  outcomes, the Lab, running for real. Five short chapters.
+  outcomes, the Lab, running for real, then the command line. Six short chapters.
 - **By example.** Six examples, each built from a question, with a graph to
   read, a scenario to run, something to break and the first golden
   difference to read.

@@ -206,6 +206,8 @@ property.
 
 | Command | What it does |
 |---|---|
+| `rastok --help`, `rastok -h`, `rastok help` | prints command syntax on stdout and exits successfully |
+| `rastok --version` | prints the compiled package version on stdout and exits successfully |
 | `rastok new <name>` | writes a starter graph and its Lab to `<name>.rkg` |
 | `rastok check <file.rkg>...` | compiles the unit and prints its Node count and semantic hash |
 | `rastok simulate <file.rkg>... [--compare <dir> \| --save <dir>] [--ui]` | runs every Lab scenario; compares with or saves golden traces; serves the debugger |
@@ -214,9 +216,10 @@ property.
 | `rastok connectors [--json]` | lists the standard Contracts, modes, ports and installed implementations |
 | `rastok --resolve-open-api <project-dir> [--check]` | generates typed endpoints from OpenAPI 3.0 and 3.1 documents |
 
-The [implementation status page](docs/architecture/m1-implementation-status.md)
-describes each option, the deployment profile, the recording format and the
-golden-trace workflow.
+The [Command line chapter](docs/site/guide/06-command-line.md) explains every
+command, its options, output streams and exit statuses. The
+[implementation status page](docs/architecture/m1-implementation-status.md)
+records the deployment, recording and golden-trace qualification limits.
 
 ## Status and known limits
 

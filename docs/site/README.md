@@ -37,8 +37,8 @@ The required introductory pages are `index.md` (Overview, order 1) and
 pages live in `examples/`.
 
 The User Guide lives in `guide/`, between General and Examples in the site
-navigation. Its five opening chapters use only `title`, `description` and
-`order`, with unique positive orders 1 through 5. No extra front-matter field
+navigation. Its six opening chapters use only `title`, `description` and
+`order`, with unique positive orders 1 through 6. No extra front-matter field
 is needed for the guide or its diagrams.
 
 Every page has:
@@ -94,7 +94,9 @@ Each `guide/` chapter is 500 to 900 words and opens with “After this chapter
 you can”. It explains one part of the language using exact slices of the
 current files in `examples/`; removing common indentation is allowed,
 rewriting a slice is not. Cite the file and line range in the surrounding
-prose. Do not introduce another runnable example just for the guide.
+prose. The command-line chapter instead explains all commands and options;
+its command syntax is checked against the binary's help. Do not introduce
+another runnable example just for the guide.
 
 End with `Summary` and `Next` sections. `Next` links the following chapter
 and the hands-on example that demonstrates the same idea; the last chapter
