@@ -11,7 +11,6 @@ limits:
   - This counts bytes and checks emptiness; it is not a CSV parser.
   - Replacement is atomic for one file, not a transaction over multiple files.
   - The deployment root is explicit; directory operations and watch are not supported.
-replaces: 'NiFi: GetFile, content validation and PutFile; MuleSoft: File read, a transform and File write, without a claim of identical atomicity.'
 order: 2
 ---
 
@@ -85,9 +84,3 @@ watch. Atomic replacement concerns one target and depends on the Driver's
 supported filesystem boundary; failures are typed, never reported as success.
 The `directory` Lab scenario scripts that result; the real File tests qualify
 the actual filesystem refusal. This is byte validation and copy, not CSV parsing.
-
-## NiFi / MuleSoft equivalent
-
-A bounded file input, a validation/counting step and a file output. The source
-graph declares every failure destination, and the Lab can substitute both
-File Drivers while keeping their bookkeeping.

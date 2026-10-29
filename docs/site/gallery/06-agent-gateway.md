@@ -13,7 +13,6 @@ limits:
   - This trusted local bridge does not authenticate clients, redact arbitrary protocol payloads or price agent jobs.
   - The separate HTTP adapter uses an explicit projected Responses schema; local fixtures qualify it, not a live paid OpenAI call or arbitrary future API changes.
   - An unacknowledged system close becomes OutcomeUnknown, not a fabricated successful exit.
-replaces: 'NiFi: keyed session state plus a custom resident-process processor; MuleSoft: a stateful process adapter behind an integration flow.'
 order: 6
 ---
 
@@ -219,10 +218,3 @@ after restart. Details and the exact test commands live in the
 The service mock responds to inputs with frames and an optional terminal.
 Unsolicited/delayed scripted frames, system-close acknowledgements and `now()`
 in Session mocks remain named limits. The deployment journal is not durable.
-
-## NiFi / MuleSoft equivalent
-
-A keyed stateful flow around a resident-process adapter. The distinctive
-combination here is the typed DSL, independently checked contract, replaceable
-effect boundary and deterministic Lab scenarios—not a claim that other tools
-cannot host stateful processes.

@@ -51,7 +51,6 @@ Every page in `gallery/` additionally has:
 | `expected` | string | Observable result, not a promise or inferred behavior |
 | `break_it` | string | Exact source edit and rerun command that expose a difference |
 | `limits` | nonempty list of strings | Limitations visible without reading implementation notes |
-| `replaces` | string | NiFi / MuleSoft analogy, not a feature-parity claim |
 
 References never use absolute paths, `..`, external URLs or symlinks outside
 the checkout. The site reads the graph and golden from these fields; do not
@@ -72,7 +71,7 @@ on the previous one, and leaves the reader with a concrete next experiment.
 Every example is independently runnable; reading earlier chapters is optional.
 Use the same H2 sections for every gallery page: `Run`, `Read the graph`,
 `Expected result`, `Break it`, `Read the golden difference`, `Carry forward`,
-`Limits`, `NiFi / MuleSoft equivalent`. `Read the graph` names the few relevant
+`Limits`. `Read the graph` names the few relevant
 parts of the referenced source; it does not duplicate that source.
 `Carry forward` explains the transferable idea and links the adjacent published
 chapters. Announce unfinished chapters without a broken link or placeholder.

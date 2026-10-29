@@ -11,7 +11,6 @@ limits:
   - An instance key isolates state; it does not deduplicate requests.
   - The Lab substitutes Process responses; no model or real agent is called.
   - Idle lifetime and Retry attempts are different bounds; restart durability is not provided.
-replaces: 'NiFi: keyed processing plus RetryFlowFile and a nested process group; MuleSoft: scoped processing with bounded retry.'
 order: 3
 ---
 
@@ -88,9 +87,3 @@ select its reply. Only Alice's request at time zero is silent.
 No real language model or paid API is used. The instance key isolates state but
 does not guarantee deduplication or persistence across a deployment restart.
 The fixed backoff is one second; this example does not benchmark model latency.
-
-## NiFi / MuleSoft equivalent
-
-Keyed processing, a nested process group and a bounded retry policy. The visual
-debugger exposes state isolation and recorded attempts. A Loop would be the
-right tool for evolving an authored state; Retry repeats this same operation.

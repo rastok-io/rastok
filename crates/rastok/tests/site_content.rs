@@ -34,7 +34,6 @@ struct Gallery {
     expected: String,
     break_it: String,
     limits: Vec<String>,
-    replaces: String,
 }
 
 fn markdown(path: &Path) -> (String, String) {
@@ -100,7 +99,6 @@ fn public_pages_have_the_site_contract_and_existing_artifacts() {
             &page.command,
             &page.expected,
             &page.break_it,
-            &page.replaces,
         ] {
             assert!(!value.trim().is_empty(), "required field in {path:?}");
         }
@@ -117,7 +115,6 @@ fn public_pages_have_the_site_contract_and_existing_artifacts() {
             "Read the golden difference",
             "Carry forward",
             "Limits",
-            "NiFi / MuleSoft equivalent",
         ] {
             assert!(
                 body.contains(&format!("\n## {section}\n")),
@@ -199,6 +196,12 @@ fn incomplete_or_extended_site_frontmatter_refuses() {
         serde_yaml_ng::from_str::<Page>("title: A\ntitle: C\ndescription: B\norder: 1\n").is_err()
     );
     assert!(serde_yaml_ng::from_str::<Gallery>("title: A\ndescription: B\norder: 1\n").is_err());
+
+    let (front, _) = markdown(&root().join("docs/site/gallery/01-echo.md"));
+    serde_yaml_ng::from_str::<Gallery>(&front).expect("the current gallery schema is valid");
+    let error = serde_yaml_ng::from_str::<Gallery>(&format!("{front}\nreplaces: Example\n"))
+        .expect_err("the removed comparison field is not part of the gallery contract");
+    assert!(error.to_string().contains("unknown field `replaces`"));
 }
 
 #[test]

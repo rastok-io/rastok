@@ -11,7 +11,6 @@ limits:
   - The Lab authors probes and heartbeats; there is no live sensor or periodic Driver here.
   - JoinExpired means an unmatched rendezvous; an unsolicited unmatched heartbeat can expire too.
   - The reported duration is a local debug-build observation, not a throughput guarantee.
-replaces: 'NiFi: keyed stateful processing and timed correlation; MuleSoft: stateful threshold evaluation and timeout handling.'
 order: 5
 ---
 
@@ -87,9 +86,3 @@ join input can produce `JoinExpired`; the scenarios explicitly control which
 side is silent. Expiry DATA has no sensor field: its keyed instance and causal
 history supply that context. The benchmark tasks informed the example, but
 no claim is made that a published model wave authored it.
-
-## NiFi / MuleSoft equivalent
-
-Per-key stateful processing, two hysteresis thresholds and timed correlation.
-The Lab makes the waiting period an explicit input and the expiry an ordinary
-typed output that must have a destination.

@@ -11,7 +11,6 @@ limits:
   - Equal causal facts require equal inputs, responses and observable logical time.
   - Diagnostic replay reconstructs recorded facts; it does not execute a Lab scenario.
   - Recordings are sensitive local files, not a durable deployment journal or share-safe exports.
-replaces: 'NiFi: an input FlowFile, ExecuteStreamCommand and an output relationship; MuleSoft: a flow with an external-process boundary.'
 order: 1
 ---
 
@@ -88,10 +87,3 @@ digital signature. Timings measured by a real process need not match virtual
 time; only specified causal fields participate in the seal. Recordings are
 bounded, local diagnostics and currently refuse personal-data persistence and
 boot-dependent deployment profiles.
-
-## NiFi / MuleSoft equivalent
-
-Think of an input, an external-process step and an output relationship. NiFi
-also has provenance and replay; the point here is the combination of a typed
-DSL, a deterministic Lab, substitutable effects and causal comparison, not
-the claim that these capabilities exist nowhere else.

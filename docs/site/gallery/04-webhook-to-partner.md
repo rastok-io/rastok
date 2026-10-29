@@ -14,7 +14,6 @@ limits:
   - The partner must implement idempotent upsert by event_id; a DSL declaration cannot establish that external guarantee.
   - Emails and charges are synthetic; the example privacy profile is not production authority, and no real credential is needed.
   - The journal is in memory; Kafka, SQL, durable delivery and diagnostic recording of personal-data plans are not demonstrated.
-replaces: 'NiFi: HandleHttpRequest → ValidateRecord → DetectDuplicate → InvokeHTTP → RetryFlowFile; MuleSoft: HTTP listener, validation, idempotent processing and bounded retry.'
 order: 4
 ---
 
@@ -159,10 +158,3 @@ transfers and retention require deployment-specific review. No persistent
 personal-data journal or `run --record` is admitted by this example. Kafka
 and SQL are not shown. Modify the scenario on disk to try another world;
 there is no debugger branch or payload editor.
-
-## NiFi / MuleSoft equivalent
-
-An HTTP listener, validation, a duplicate cache, an outbound call and a bounded
-retry policy. The analogy is about the integration task, not feature parity:
-Rastok puts the typed graph, deterministic Lab, replaceable effects and
-record-level causal comparison together in versioned text.
