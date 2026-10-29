@@ -1472,7 +1472,12 @@ graph binary_err : App {
     fn two_real_runs_journal_identically() {
         let (once, first, _, _) = run(CAT_PROBE, "salut");
         let (twice, second, _, _) = run(CAT_PROBE, "salut");
-        assert_eq!(once.records(), twice.records());
+        // Call closure instants may differ between physical runs. identity.md
+        // §3 excludes them from causal comparison, not from recovery.
+        assert_eq!(
+            crate::golden::project(once.records()),
+            crate::golden::project(twice.records())
+        );
         assert_eq!(first, second);
     }
 
