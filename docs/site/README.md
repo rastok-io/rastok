@@ -29,12 +29,17 @@ No deployment or publication is authorized by these local file changes.
 Pages are ordinary UTF-8 Markdown with one leading YAML front-matter block.
 This README is the schema, not a page, and has no front-matter. The consumer
 must reject missing, unknown or wrongly typed fields, duplicate keys, broken
-references and duplicate gallery orders. Empty strings and empty lists do not
+references and duplicate orders within a section. Empty strings and empty lists do not
 meet a required field. No field is optional in the following tables.
 
 The required introductory pages are `index.md` (Overview, order 1) and
 `getting-started.md` (Getting Started, order 2). The six runnable example
 pages live in `examples/`.
+
+The User Guide lives in `guide/`, between General and Examples in the site
+navigation. Its five opening chapters use only `title`, `description` and
+`order`, with unique positive orders 1 through 5. No extra front-matter field
+is needed for the guide or its diagrams.
 
 Every page has:
 
@@ -82,6 +87,24 @@ chapters. Announce unfinished chapters without a broken link or placeholder.
 Getting Started links the complete published example sequence. Fence examples
 with their language (`sh`, `rkg`, `text`, `mermaid`). No imports, JSX, MDX or
 embedded components.
+
+### User Guide chapters
+
+Each `guide/` chapter is 500 to 900 words and opens with “After this chapter
+you can”. It explains one part of the language using exact slices of the
+current files in `examples/`; removing common indentation is allowed,
+rewriting a slice is not. Cite the file and line range in the surrounding
+prose. Do not introduce another runnable example just for the guide.
+
+End with `Summary` and `Next` sections. `Next` links the following chapter
+and the hands-on example that demonstrates the same idea; the last chapter
+continues into the examples. Link limitations to the Overview's `What is
+available today` section. Cite normative specification paths as plain text
+until the site renders the specification. Use no em dash, product
+comparison, unmeasured claim or present-tense promise of an absent feature.
+At most one Mermaid diagram belongs in a chapter, and only when it explains
+something more clearly than the text. Internal links must resolve in the
+pinned checkout, including heading fragments.
 
 ### Diagrams
 
