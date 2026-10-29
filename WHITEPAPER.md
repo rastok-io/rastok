@@ -1,4 +1,34 @@
-# Rastok — White Paper
+# Rastok: White Paper
+
+<!-- Public narrative: rastok-strategy/NARRATIF.md,
+     "Version courte de référence, deux paragraphes", English block, 870a82d.
+     Keep this copy verbatim; propose wording changes in the source. -->
+
+> An integration rarely fails on the happy path. It fails on the edge
+> cases: partners not ready, late or duplicate replies, implicit contracts,
+> test scenarios that drift. With large language models and AI agents,
+> writing a flow has never been faster; proving it will hold in real
+> conditions has become the real bottleneck. **Rastok is a simulation-first
+> integration platform.** An application's flows, their contracts and their
+> failure scenarios are written together, in a dedicated, typed language
+> versioned in Git. The test environment is source code: partner faults,
+> delays and silences are written next to the program. The *same* program
+> runs first in a simulated world, then, without a rewrite, in the real one.
+> You build and prove an integration before the partner systems are
+> available.
+>
+> Every run leaves a journal that can be replayed without repeating its
+> external effects. An incident becomes a scenario that protects the next
+> changes. The journal is also a record an auditor can read. Before anything
+> runs, you know which systems will be called, under which conditions, and
+> to what end. The compiler refuses a flow that leaves an outcome with
+> nowhere to go. A scenario proves the flow holds against the partner as
+> described; acceptance, with the same program, checks the description.
+> What an assistant writes goes through the same compiler and the same
+> scenarios as what a human writes; review focuses on the contracts and the
+> scenarios.
+
+**Status of this document**
 
 > **Format-24 (2026-10-24), diagnostic recording 5.**
 > The Node/Executor/Extension model, host-terminal Loop, exact-instance closure,
@@ -23,23 +53,9 @@
 > optional-access expressions, jq/SQL guests, Timer, Calendar,
 > Saga, experiment and coverage generation remain named gates.
 
-<!-- Public narrative: rastok-strategy/NARRATIF.md, "Version anglaise de référence".
-     Keep this copy verbatim; propose wording changes in the source. -->
-
-> Rastok is a simulation-first integration platform. A flow and its
-> failure scenarios are written together, in a dedicated, typed language
-> versioned in Git. The same program runs against a simulated world,
-> virtual time and faults included, or against the real systems: you build
-> and prove an integration before its partner systems are available.
->
-> Every run leaves a replayable journal. An incident becomes a scenario
-> that protects the next changes, and a record an auditor can read. The
-> language is constrained enough for code written or driven by AI to be
-> checked by the compiler and the simulation before it reaches production.
-
 > **Rastok is the boxes-and-arrows paradigm, rebuilt as an engineering
-> discipline.** The flows that organizations already draw —
-> integrations, sessions, agents — are written in a dedicated, typed
+> discipline.** The flows that organizations already draw (integrations,
+> sessions, agents) are written in a dedicated, typed
 > domain-specific language (DSL), versioned in Git, exercised through
 > deterministic simulation, and replayed from a causal journal. The same
 > source is designed to move through a standard GitOps delivery process,
@@ -90,11 +106,12 @@ to be linked into a simulation build.
 AI agents are a useful stress test: they combine long-lived state,
 external effects, variable cost, and probabilistic results in one
 operational flow. The same controls also apply to less probabilistic
-integrations — and when a particular model changes, the surrounding
+integrations. When a particular model changes, the surrounding
 flow still remains.
 
-The economics in one line: **programming languages let you build a
-workflow — Rastok lets you operate hundreds of them.**
+The economic aim is to reduce the work of operating a portfolio of
+integrations, not just the work of writing one flow. That benefit remains
+to be measured beyond the alpha's executable scope.
 
 This document is the white paper and statement of intent of Rastok. It
 is the first file a new contributor, adopter, investor, or
@@ -110,8 +127,8 @@ and roadmap refine the principles stated here.
 This document is comprehensive on purpose. Tactical guides live
 elsewhere; this is the conceptual constitution. Runtime internals are
 documented separately in [ARCHITECTURE.md](ARCHITECTURE.md), next to
-the implementation they describe. Comparisons with adjacent systems
-live in the annex (§9), after the model they compare.
+the implementation they describe. Conceptual inspirations and category-based
+positioning live in the annex (§9), after the model they inform.
 
 And for the reader who wants the model up front, in one formal
 sentence:
@@ -127,21 +144,39 @@ Every word of that sentence is unpacked in §2–§6.
 
 Rastok is named after **Rastoke**, the watermill village of Slunj,
 Croatia, built where the Slunjčica river branches into cascades before
-joining the Korana. The Croatian name comes from *ras-* + *tok* —
+joining the Korana. The Croatian name comes from *ras-* + *tok*,
 literally "the flow, branching apart." For centuries the village has
 channeled that branching water through its mills: every stream visible
 from the footbridges, every drop doing work on its way through, the
 whole thing legible at a glance and still running. A village-sized
-dataflow graph, powered by water — the name is a homage, and a design
+dataflow graph, powered by water: the name is a homage, and a design
 target.
 
 ---
 
 ## 1. Why Rastok
 
+Enterprise integration projects fail for reasons that are human before they
+are technical. The code may still be there when the knowledge needed to
+operate it has gone:
+
+- The person who understood the integration is unavailable, has left the
+  project, or has finished the vendor assignment.
+- Two teams understood the contract differently, and neither wrote it down.
+- Unit or integration tests were never written, or no longer reflect the flow.
+- An edge case that nobody anticipated reaches production.
+- Connected components have different lifecycles, and a change eventually
+  breaks their compatibility.
+
+These causes will not disappear. Rastok keeps the flow, its versioned external
+contracts, its fault scenarios and its journal in an artifact that can outlive
+the people, the project and the vendor. The flow and the scenarios are source
+code versioned in Git; the journal explains what a run did. Together they form
+an executable specification that the next team can read and test.
+
 ### 1.1 Problems Rastok is designed to solve
 
-Modern interactive systems — especially AI agents — combine several
+Modern interactive systems, including AI agents, combine several
 difficult operational properties:
 
 | Problem | What commonly goes wrong | Rastok's contract |
@@ -172,12 +207,12 @@ clock, and the journal seals that instant whenever it can affect behavior
 ### 1.2 Why use a DSL instead of a general-purpose language?
 
 Every example in this document can be written in Python, Java, Rust,
-or Node.js. An experienced developer — or an LLM — can produce a
-working version of the approval flow in §1.5 in an afternoon: a map,
+or Node.js. A developer, with or without an assistant, can write a
+working version of the approval flow in §1.5 using a map,
 two HTTP handlers, and a timer.
 
 That is not the expensive part. **Writing one workflow is cheap.
-Operating hundreds of them for years is not.** Without a shared
+Operating a portfolio of them for years is not.** Without a shared
 runtime, each team must design, build, test, and maintain its own
 keyed state, correlation, recovery, simulation, journal, supervision,
 backpressure, metering, and diagnostics.
@@ -189,8 +224,8 @@ every new flow.
 
 > Rastok does not replace a general-purpose programming language.
 > It provides the common platform that organizations otherwise build
-> around their flows. Programming languages let you build a workflow —
-> **Rastok lets you operate hundreds of them.**
+> around their flows. The intended benefit is a shared way to build, test
+> and operate a portfolio of integrations, not a measured scale claim.
 
 #### 1.2.1 The test environment is source code
 
@@ -198,16 +233,16 @@ One item above deserves to be pulled out, because it changes daily
 practice. In a flow platform or custom codebase, exercising a complete
 integration against its real boundaries often means having a database,
 the partner's API, a broker, credentials, test data, a staging
-environment, and an available partner team. Testing difficult
-cases — events out of order, a 48-hour timeout, a crash right after a
-payment, a reply that arrives too late — ranges from laborious to
+environment, and an available partner team. Testing edge cases (events out
+of order, a 48-hour timeout, a crash right after a payment, a reply that
+arrives too late) ranges from laborious to
 practically impossible.
 
 In Rastok, the world around the graph is part of the simulation
-specification: partners, processes, LLMs and databases are declared, while
-logical time is supplied explicitly — so the complete flow builds and runs on a laptop,
+specification: supported partner interactions are scripted through their
+Contracts, while logical time is supplied explicitly. The flow builds and runs on a laptop,
 whole-world simulated, **before the real systems are available**, and
-each difficult case is a few scenario lines (§1.5). This is not unit
+each edge case is expressed in a scenario (§1.5). This is not unit
 mocking: the simulation
 closes the *entire* world, controls time, arrival races and faults,
 and produces a deterministic, replayable trace.
@@ -217,30 +252,28 @@ and produces a deterministic, replayable trace.
 
 #### 1.2.2 Why organizations already buy integration platforms
 
-This value proposition is established. Organizations did not adopt
-NiFi, Talend, or BizTalk because boxes and arrows were impossible to
-program in Java. They adopted those platforms because *developing,
-deploying, supervising
-and maintaining hundreds of bespoke integrations* was expensive and
-risky — the demand served by workflow platforms such as Temporal. Rastok is that
+The demand for integration and workflow platforms is not that boxes and
+arrows are impossible to program in a general-purpose language. It is that
+*developing, deploying, supervising and maintaining a portfolio of bespoke
+integrations* is expensive and risky. Rastok takes that
 proposition, modernized: a textual source of truth instead of a
 canvas, types, Git and code review, deterministic whole-world
 simulation, a journal built for replay, LLM-friendly generation
-(§1.4) — with the visual graph still there, derived from the source
+(§1.4), with the visual graph still there, derived from the source
 that actually runs.
 
 The general-purpose language keeps its role: the *inside* of a
-Connector — native code against the real world — is Rust; your
+Connector (native code against the real world) is Rust; your
 services stay whatever they are. Rastok occupies the layer between
 them: the flow, its state, its time, and its evidence.
 
 ### 1.3 The Rastok answer
 
 The core move is an inversion. In many visual-flow tools, the diagram
-*is* the program — and even when its snapshots are versioned, a canvas
+*is* the program. Even when its snapshots are versioned, a canvas
 snapshot is neither an intentional, typed source a reviewer can read
 nor a world that can be closed for deterministic testing. In Rastok,
-**the program is text, and the diagram is a projection** — derived
+**the program is text, and the diagram is a projection**, derived
 from the source, always accurate, and never a second artifact to keep
 in sync. Text is what Git versions, reviewers compare, CI checks, type
 systems verify, and LLMs generate fluently.
@@ -255,16 +288,16 @@ The platform of §1.2 follows from four decisions:
    message can take is visible in the source. What cannot be enumerated
    cannot be tested, replayed, or proved.
 2. **All contact with an external system crosses a declared Connector**
-   (§2.7) — HTTP, processes and databases. Logical time is a separate,
-   explicit Execution input; `Timer` and `Calendar` are Connectors only when elapsed
-   or civil time must itself enter the graph as an event (§5). Mock the
+   (§2.7), including HTTP, processes and files today. Logical time is a separate,
+   explicit Execution input; the future `Timer` and `Calendar` Connectors would
+   introduce elapsed or civil time as graph events (§5). Mock the
    Connectors and control the timeline, and the graph becomes a closed,
    deterministic system. That makes simulation (§6) a first-class artifact
    instead of a best-effort test harness.
 3. **A Node may select its own logical instance by key** (§3), independently
    of its lifetime. An Operator's `var` remains private to that Operator. Processing
-   is serialized within one Executor instance and may run in parallel across addresses;
-   every keyed owner is also a future sharding boundary (§4).
+   is serialized within one Executor instance. Parallel Workers and sharding
+   across keyed boundaries remain future work (§4).
 4. **Every transaction is journaled.** A node consumes an envelope,
    updates its state, and emits atomically. The journal records the
    outcome of every arrival race. A run is a pure function of
@@ -284,7 +317,7 @@ behavior that has become stable. Finally, prove selected properties of
 the deterministic fragment when the necessary verification support
 exists.
 
-For example, begin with an LLM Connector that classifies support
+For example, begin with a Connector calling an LLM to classify support
 requests. The journal records its answers and each original annotated usage or
 monetary value, including those from a held Retry attempt. M1 supplies this
 evidence, not a cost report or automatic price calculation. Universal commit
@@ -294,53 +327,50 @@ requests become a stable rule, move that case into a typed Operator with
 statically declared outputs and keep the LLM only as a fallback for ambiguous
 requests. Replay the Lab
 scenarios and compare their traces before deploying the change. Each
-iteration shrinks the probabilistic surface — and the token bill —
-without a rewrite. Simulations check declared behavior; proving stronger
+iteration can reduce the work delegated to the model; any cost reduction
+must be measured. Simulations check declared behavior; proving stronger
 properties belongs to the future `theorem` level (§6.1).
 
-### 1.4 The DSL in the LLM era — the constraint is the accelerator
+### 1.4 The DSL in the LLM era: the constraint is the accelerator
 
-Ten years ago, a DSL's weakness was the cost of writing it: one more
-syntax to learn, no IDE muscle memory, a thin labor market. LLMs invert
-that economics. Structured, constrained text is exactly what a model
-generates best — and a general-purpose language is exactly what it
-verifies worst.
+A DSL has an adoption cost: one more syntax to learn, unfamiliar editor
+support and fewer experienced developers. Coding assistants may change
+that trade-off. Rastok tests the hypothesis that a constrained language
+and executable scenarios make their output easier to check. Gains from
+AI generation remain to be measured.
 
 Ask an LLM for the approval flow in Node.js and it will happily
-produce a hundred plausible implementations: different state models,
+produce different plausible implementations: different state models,
 different retry policies, different error conventions, different tests
 and instrumentation, architectures that resist comparison. All of them
-can work. None of them look alike — and each demands line-by-line
-review, then its own five years of operation. Ask for a Rastok graph
+can work, but each demands line-by-line review and its own operational
+conventions. Ask for a Rastok graph
 and the generation is fenced by a grammar, a type system, a static
 topology, one state model, a hard separation between pure logic and
 effects, and one runtime. The result is homogeneous, reviewable
-on one screen, immediately simulable against the declared scenarios,
+as text, simulable against the declared scenarios,
 immediately journaled, immediately visible as a diagram. A malformed
-graph is rejected by the compiler; a wrong one by the simulation —
-before anything touches the world.
+graph is rejected by the compiler; the simulation detects deviations from
+the scenario's expectations before anything touches the real world.
 
-The same afternoon produces, in one case, *a* solution; in the other,
-an artifact the whole ecosystem — simulator, journal, dashboards,
-auditors, the next developer, the next LLM — exploits without reading
-it twice. Generation is cheap either way. **Operation** is where the
-paths diverge:
+The intended result is an artifact shared by the simulator, journal,
+debugger, auditors, the next developer and the next assistant. The economic
+hypothesis concerns **operation**, not a promised generation speed:
 
-> An LLM makes code cheap to write.
-> Rastok makes flows cheap to operate, audit and evolve.
+> An assistant helps write the flow.
+> Rastok aims to reduce the work of operating, auditing and evolving it.
 
 This is also what makes the graph-generation workflow of §6.5
 credible: the LLM proposes, and the simulations constrain and check
 the proposal. A constrained language is not a cage; it is what turns
-machine-written flows into governable ones: **an LLM can generate
-another workflow — Rastok
-makes every generated workflow look, behave and operate the same.**
+machine-written flows into reviewable ones: **what an assistant writes
+passes through the same compiler and scenarios as what a human writes.**
 The loop does not stop at generating a happy path. Each counterexample,
 production incident, or failed experiment becomes another scenario
 that constrains the next candidate. This accumulating executable corpus
 is one of the project's central advantages.
 
-### 1.5 A first taste — correlating an approval
+### 1.5 A first taste: correlating an approval
 
 Two independent events must be correlated in either order, with a business
 deadline. A request arrives on one input; a decision arrives on the other.
@@ -425,7 +455,7 @@ timed/count-bounded joins make `JoinExpired` productible in both the compiler
 and the independent plan validator. Removing its destination is an
 `E-UNWIRED-OUTPUT`, not a dead-output warning.
 
-### 1.6 A second taste — a session gateway
+### 1.6 A second taste: a session gateway
 
 The same separation supports an agent gateway. The checked
 [agent-gateway.rkg](examples/agent-gateway.rkg) connects WebSocket conversations
@@ -480,9 +510,9 @@ proves a shipped thousand-session gateway.
 ### 1.7 When Rastok is more platform than you need
 
 Honesty about scope buys trust, so let us draw the lower bound: a
-fifty-line Python script does not need a dataflow runtime. A single
-Lambda gluing two APIs, a plain CRUD service in front of a database, a
-one-off migration, a notebook — none of these justify a DSL, and a
+small Python script does not need a dataflow runtime. A serverless function
+gluing two APIs, a plain CRUD service in front of a database, a
+one-off migration or a notebook need not justify a DSL, and a
 general-purpose language plus an LLM serves them perfectly. Rastok
 below its threshold is ceremony.
 
@@ -491,12 +521,12 @@ workflows sharing state and teams; effects that must be compensated
 and audited; LLM calls whose cost and behavior must be metered;
 long-lived sessions with processes attached; incidents that must be
 replayed rather than guessed at; compliance questions that name data
-paths. Each of those alone is a library. Together they are a platform —
-and that is the moment the afternoon prototype begins its second,
+paths. Each of those alone can be a library. Together they become a platform.
+That is the moment the prototype begins its second,
 invisible life as infrastructure. Adopt Rastok at the point where you
 would otherwise start building the platform of §1.2.
 
-### 1.8 Where this comes from — recurring graph traditions
+### 1.8 Where this comes from: recurring graph traditions
 
 Rastok's ancestry is the history of drawing systems as boxes and
 arrows. These waves overlap; this is not a sequence in which one
@@ -504,31 +534,26 @@ approach replaced the previous one:
 
 ```
 2000s+  SOA and ESB           flows in integration platforms and buses
-                             (BizTalk, Talend, NiFi)
 2000s+  distributed data     flows in pipelines
-                             (Hadoop, Spark, Kafka, Flink)
 2010s+  microservices        flows spread across deployed services
 2010s+  workflow platforms   flows return as explicit DAGs
-                             (Airflow, Kubeflow, Dagster)
 2010s+  low-code             flows reach a wider authoring audience
-                             (Zapier, Make, n8n)
 2020s+  agentic systems      flows include probabilistic calls, tools,
                              and human approvals
 ```
 
 Two constants run through the story. First, **the drawing keeps coming
-back** — whenever behavior is dominated by how data moves, engineers
+back**: whenever behavior is dominated by how data moves, engineers
 and business people alike reach for nodes and edges. The demand is
-structural: the graph is the one artifact business, ops, dev, auditors
-— and now LLMs — read together; the 3 a.m. questions ("where is the
+structural: the graph is an artifact business, ops, dev, auditors and
+coding assistants can read together. Operational questions ("where is the
 message stuck?", "what is upstream of this error?") are questions
 about the drawing; regulators literally ask for it ("show me how this
-data moves and who touched it"); and a newcomer in front of a map
-knows where they are within a day. Second, **the era that suppressed
+data moves and who touched it"); a map also gives a newcomer a way to
+locate the relevant behavior. Second, **the era that suppressed
 the drawing paid for it**: microservices scattered the flow across
-dozens of repositories, and the industry spent the next decade
-rebuilding sight of it — distributed tracing and OpenTelemetry are the
-graph, reconstructed after the fact, at runtime, from fragments.
+multiple repositories. Distributed tracing and telemetry reconstruct the
+graph at runtime, after the fact, from fragments.
 
 Rastok's choice is **text as the authored source, a graph as its projection**.
 The visual debugger makes recorded messages, instances and causal decisions
@@ -550,18 +575,16 @@ not a versioned feature scorecard.
 - **Product managers and product owners** writing simulations as
   specifications.
 - **Formal-methods reviewers** assessing the model and the invariants
-  it aims to make checkable — approvals, delivery guarantees, absence
+  it aims to make checkable: approvals, delivery guarantees, absence
   of deadlock (the future challenge and `theorem` levels, §6.1).
 - **LLM-assisted developers** generating graphs from simulations.
 
 Rastok deliberately synthesizes three traditions that have historically
-lived apart — deterministic dataflow (Lustre/SCADE, Kahn networks),
-supervised actors (Erlang/OTP, Orleans), and modern keyed stream
-processing (Flink, Kafka Streams) — for the agentic era: long-running
+lived apart: deterministic dataflow, supervised actors, and modern keyed stream
+processing, applied to long-running
 conversational sessions with LLMs, process-backed agents, multi-tenant
-SaaS. The full genealogy — what was taken from each tradition, what was
-left behind — and the practical positioning against Airflow, LangGraph,
-NiFi and friends live in the annex (§9).
+SaaS. The full genealogy (what was taken from each tradition and what was
+left behind) and the practical positioning by category live in the annex (§9).
 
 ---
 
@@ -2717,31 +2740,31 @@ application model.
 Rastok's working hypothesis is that this **combination** is useful for
 the specific shape of modern stateful and agentic systems.
 
-### 9.10 Practical positioning — adjacent systems
+### 9.10 Practical positioning: categories of use
 
 This is a map of overlapping use cases, not a current product-feature audit.
 No operational, performance, certification or ecosystem parity is claimed.
 
-- **Integration and visual flows** — NiFi, Camel, n8n, Make and Zapier are
-  relevant points of comparison for connecting systems. Rastok's chosen
-  authoring contract is typed RKG text, explicit dispositions and a read-only
-  diagram over the actual plan and journal.
-- **Workflow orchestration** — Airflow, Prefect, Dagster and Temporal overlap
-  with scheduling and effectful coordination. Rastok currently proves finite
-  Loop recurrence and deterministic simulations; civil scheduling, durable
-  deployment, backfill semantics and Saga are not shipped substitutes.
-- **Agent orchestration** — LangGraph, Semantic Kernel and ADK overlap with
-  agent/model/tool composition. Rastok focuses on typed integration boundaries,
+- **Integration and visual flows.** This category connects applications and
+  partner systems. Rastok's authoring contract is typed RKG text, explicit
+  outcomes and a read-only diagram over the actual plan and journal. Flows,
+  contracts and Lab scenarios are versioned together.
+- **Workflow orchestration.** This category coordinates external operations
+  and their timing. Rastok currently provides finite Loop recurrence, bounded
+  Retry and deterministic simulations. Civil scheduling, durable deployment,
+  backfill semantics and Saga remain future work.
+- **Agent orchestration.** This category composes models, tools and
+  conversations. Rastok focuses on typed integration boundaries,
   keyed state, effect visibility and reproducible scenarios. A complete AI
   gateway still needs provider adapters and deployment/security policy.
-- **Stream processing** — Beam, Flink and Kafka Streams are relevant to keyed
-  state and joins. Rastok uses bounded processing-time correlation; it does not
+- **Stream processing.** Keyed state and joins are relevant to continuous
+  data flows. Rastok uses bounded processing-time correlation; it does not
   claim event-time/watermark semantics or large-scale analytics performance.
-- **Safety-critical tooling** — Lustre/SCADE and Ada/SPARK inform the taste for
-  analyzability. Rastok's narrow Loop proof is not a certification, hard-real-time
-  guarantee or general theorem prover.
+- **Safety-critical tooling.** Explicit contracts and analyzability matter
+  when assessing a program. Rastok's narrow Loop proof is not a certification,
+  hard-real-time guarantee or general theorem prover.
 
-A useful evaluation compares a concrete workflow, its declared failure cases
+A useful evaluation compares a concrete flow, its declared fault scenarios
 and its operational constraints. The runnable examples and qualification
 ledgers are evidence for Rastok; future design sections are not.
 
