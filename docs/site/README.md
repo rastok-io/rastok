@@ -79,8 +79,9 @@ Use the same H2 sections for every gallery page: `Run`, `Read the graph`,
 parts of the referenced source; it does not duplicate that source.
 `Carry forward` explains the transferable idea and links the adjacent published
 chapters. Announce unfinished chapters without a broken link or placeholder.
-The index links the complete published sequence. Fence examples with their
-language (`sh`, `rkg`, `text`, `mermaid`). No imports, JSX, MDX or embedded components.
+Getting Started links the complete published example sequence. Fence examples
+with their language (`sh`, `rkg`, `text`, `mermaid`). No imports, JSX, MDX or
+embedded components.
 
 ### Diagrams
 

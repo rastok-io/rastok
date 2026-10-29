@@ -1,7 +1,7 @@
 ---
-title: Quickstart
+title: Getting Started
 description: Install the current Rastok CLI, create a typed graph with a Lab scenario, and inspect a simulation without external services.
-order: 3
+order: 2
 ---
 
 <!-- quickstart:start -->
@@ -34,6 +34,50 @@ the synthetic deployment profile and can open the same graph with `--ui`.
 No real server, partner or credential is required for that simulation.
 Downloadable binaries and two unaided timed installation trials are still required before
 this quickstart is qualified for opening. No elapsed-time claim is made yet.
+
+## Two ways to learn
+
+Some people read the book first; others open an example and break it. Both
+paths lead to the same place.
+
+- **By the book.** The [user guide](guide/01-a-program.md) reads the
+  language in order: a program, types and expressions, Connectors and
+  outcomes, the Lab, running for real. Five short chapters.
+- **By example.** Six examples, each built from a question, with a graph to
+  read, a scenario to run, something to break and the first golden
+  difference to read.
+
+| Example | Your question | What you learn to keep explicit |
+|---|---|---|
+| [1. Echo: one graph, two worlds](examples/01-echo.md) | Can I test a flow without starting its external program? | Computation, effects and the Lab |
+| [2. File pipeline: effects with a contract](examples/02-file-pipeline.md) | What may this flow read or replace, and what happens when it cannot? | Bounded I/O and failure destinations |
+| [3. Two tenants: whose state is this?](examples/03-two-tenants.md) | Can Alice retry while Bob is already done? | Instance ownership, finite retry and lifetime |
+| [4. Webhook to partner: put it together](examples/04-webhook-to-partner.md) | Can I qualify an integration before the partner is available? | Admission, validation, deduplication, effects and audit |
+| [5. Sensor alarm: make time an input](examples/05-sensor-alarm.md) | How do I test an absence, or a day of waiting? | Stateful decisions, timed joins and virtual time |
+| [6. Agent gateway: keep a conversation isolated](examples/06-agent-gateway.md) | Can Alice and Bob share a graph without sharing a child process? | Resident Sessions, protocol adaptation and exact closure |
+
+Chapter 6 now composes WebSockets with resident Process Sessions: Alice and
+Bob retain distinct children and correctly addressed JSON replies. A smaller
+dialogue primer remains available. Public authentication and the HTTP variant
+with model credentials and measured usage are still separate open work;
+neither a socket write nor a scripted answer is evidence of a token bill.
+
+## How to use the examples
+
+Read in order, or take the short
+route: [echo](examples/01-echo.md), then [webhook to partner](examples/04-webhook-to-partner.md).
+Every chapter runs independently from the checkout; no chapter requires files
+or state left by the previous one.
+
+Run the scenario, inspect the graph, make the suggested edit on disk, and read
+the first golden difference. Restore the edit before continuing. Keep a new
+scenario when you discover a useful failure: it becomes a check for your next
+revision. The debugger explains recorded execution; it does not edit the flow
+or fork an alternative world.
+
+By the end, the same ideas apply to a file, a partner API and an agent:
+who owns the state, where effects occur, what time means, and where each outcome
+goes. You do not need a different testing model for each integration.
 
 ## After the public opening
 

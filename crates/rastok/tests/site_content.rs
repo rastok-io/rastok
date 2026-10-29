@@ -75,9 +75,10 @@ fn reference(path: &str, extension: &str) {
 
 #[test]
 fn public_pages_have_the_site_contract_and_existing_artifacts() {
-    for name in ["index.md", "getting-started.md"] {
+    for (name, order) in [("index.md", 1), ("getting-started.md", 2)] {
         let (front, _) = markdown(&root().join("docs/site").join(name));
         let page: Page = serde_yaml_ng::from_str(&front).unwrap();
+        assert_eq!(page.order, order);
         assert!(
             !page.title.trim().is_empty() && !page.description.trim().is_empty() && page.order > 0
         );
@@ -133,7 +134,14 @@ fn public_pages_have_the_site_contract_and_existing_artifacts() {
 #[test]
 fn gallery_chapters_form_a_connected_learning_path() {
     let directory = root().join("docs/site/examples");
-    let (_, index) = markdown(&root().join("docs/site/index.md"));
+    let (_, index) = markdown(&root().join("docs/site/getting-started.md"));
+    let index = index
+        .split_once("\n## Two ways to learn\n")
+        .expect("Getting Started offers both learning paths")
+        .1
+        .split_once("\n## How to use the examples\n")
+        .expect("the example sequence precedes its reading instructions")
+        .0;
     let mut chapters: Vec<_> = std::fs::read_dir(directory)
         .unwrap()
         .map(|entry| {
@@ -148,6 +156,7 @@ fn gallery_chapters_form_a_connected_learning_path() {
         })
         .collect();
     chapters.sort_by_key(|(order, _, _)| *order);
+    assert_eq!(chapters.len(), 6);
     let mut previous_index_position = None;
     for (position, (order, filename, body)) in chapters.iter().enumerate() {
         assert_eq!(
@@ -157,10 +166,10 @@ fn gallery_chapters_form_a_connected_learning_path() {
         );
         let index_position = index
             .find(&format!("(examples/{filename})"))
-            .unwrap_or_else(|| panic!("index links {filename}"));
+            .unwrap_or_else(|| panic!("Getting Started links {filename}"));
         assert!(
             previous_index_position.is_none_or(|previous| previous < index_position),
-            "the index presents chapters in reading order"
+            "Getting Started presents examples in reading order"
         );
         previous_index_position = Some(index_position);
         let carry = body
