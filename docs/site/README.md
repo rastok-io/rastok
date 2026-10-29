@@ -5,7 +5,7 @@ The separate `rastok-site` repository consumes it at one explicit Git tag,
 together with `examples/`, the referenced goldens and the editor grammar.
 There is no site runtime, Node dependency, MDX or component import here.
 
-## Public destination handoff — 18 September 2026
+## Public destination handoff: 18 September 2026
 
 The confirmed documentation destination is `https://docs.rastok.com`; the
 homepage is `https://www.rastok.com`. The source and release destinations are
@@ -76,7 +76,16 @@ parts of the referenced source; it does not duplicate that source.
 `Carry forward` explains the transferable idea and links the adjacent published
 chapters. Announce unfinished chapters without a broken link or placeholder.
 The index links the complete published sequence. Fence examples with their
-language (`sh`, `rkg`, `text`). No imports, JSX, MDX or embedded components.
+language (`sh`, `rkg`, `text`, `mermaid`). No imports, JSX, MDX or embedded components.
+
+### Diagrams
+
+Use Mermaid only, inline in the Markdown that explains it. Show one idea per
+diagram, with about fifteen nodes at most. Name boxes and participants after
+the real Nodes, Contracts and commands. Derive diagrams from checked source
+or a versioned trace, never from imagined state. Do not use `%%{init}%%`
+directives or make color or style carry meaning; the site applies its theme.
+Put one lead sentence before each diagram saying what it shows.
 
 `quickstart.md` is the source of the README quickstart. The Markdown between
 `<!-- quickstart:start -->` and `<!-- quickstart:end -->` is copied verbatim

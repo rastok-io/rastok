@@ -1,5 +1,5 @@
 ---
-title: Echo — one graph, two worlds
+title: 'Echo: one graph, two worlds'
 description: Run one graph with a real cat process or scripted Lab responses, then inspect a recording without starting the process again.
 teaches: Operator, Connector, Graph, Lab, causal golden, diagnostic replay
 graph: examples/echo.rkg

@@ -1,5 +1,5 @@
 ---
-title: File pipeline — effects with a contract
+title: 'File pipeline: effects with a contract'
 description: Read a bounded file, reject an empty input, count its bytes and atomically replace a second file, then replay without disk access.
 teaches: File Contract, explicit deployment root, bounded read, atomic replacement, named refusal, recorded replay
 graph: examples/file-pipeline.rkg

@@ -1,5 +1,5 @@
 ---
-title: Two tenants — whose state is this?
+title: 'Two tenants: whose state is this?'
 description: Watch Bob finish once while Alice alone times out, waits for backoff and retries in an isolated keyed instance.
 teaches: Keyed instances, idle lifetime, nested Graph, native Retry, pinned requests and recorded attempts
 graph: examples/keyed-retry.rkg

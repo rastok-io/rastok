@@ -1,5 +1,5 @@
 ---
-title: Webhook to partner — put it together
+title: 'Webhook to partner: put it together'
 description: Admit a webhook, validate and deduplicate it, then exercise bounded partner retries with privacy, secret and cost evidence.
 teaches: HttpServer ACK, typed validation, explicit deduplication state, HttpClient, finite retry, personal-data policy, secret binding, exact reported cost
 graph: examples/webhook-to-partner.rkg

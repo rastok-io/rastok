@@ -1,5 +1,5 @@
 ---
-title: Agent gateway — keep a conversation isolated
+title: 'Agent gateway: keep a conversation isolated'
 description: Connect WebSocket conversations to resident JSONL processes, simulate interleaved app-server requests, and close one child without interrupting the other.
 teaches: WebSocket and Process Sessions, exact instance ownership, transparent JSON-RPC, match mocks and child closure
 graph: examples/agent-gateway.rkg

@@ -19,12 +19,12 @@ collect green tests.
 
 | Chapter | Your question | What you learn to keep explicit |
 |---|---|---|
-| [1. Echo — one graph, two worlds](gallery/01-echo.md) | Can I test a flow without starting its external program? | Computation, effects and the Lab |
-| [2. File pipeline — effects with a contract](gallery/02-file-pipeline.md) | What may this flow read or replace, and what happens when it cannot? | Bounded I/O and failure destinations |
-| [3. Two tenants — whose state is this?](gallery/03-two-tenants.md) | Can Alice retry while Bob is already done? | Instance ownership, finite retry and lifetime |
-| [4. Webhook to partner — put it together](gallery/04-webhook-to-partner.md) | Can I qualify an integration before the partner is available? | Admission, validation, deduplication, effects and audit |
-| [5. Sensor alarm — make time an input](gallery/05-sensor-alarm.md) | How do I test an absence, or a day of waiting? | Stateful decisions, timed joins and virtual time |
-| [6. Agent gateway — keep a conversation isolated](gallery/06-agent-gateway.md) | Can Alice and Bob share a graph without sharing a child process? | Resident Sessions, protocol adaptation and exact closure |
+| [1. Echo: one graph, two worlds](gallery/01-echo.md) | Can I test a flow without starting its external program? | Computation, effects and the Lab |
+| [2. File pipeline: effects with a contract](gallery/02-file-pipeline.md) | What may this flow read or replace, and what happens when it cannot? | Bounded I/O and failure destinations |
+| [3. Two tenants: whose state is this?](gallery/03-two-tenants.md) | Can Alice retry while Bob is already done? | Instance ownership, finite retry and lifetime |
+| [4. Webhook to partner: put it together](gallery/04-webhook-to-partner.md) | Can I qualify an integration before the partner is available? | Admission, validation, deduplication, effects and audit |
+| [5. Sensor alarm: make time an input](gallery/05-sensor-alarm.md) | How do I test an absence, or a day of waiting? | Stateful decisions, timed joins and virtual time |
+| [6. Agent gateway: keep a conversation isolated](gallery/06-agent-gateway.md) | Can Alice and Bob share a graph without sharing a child process? | Resident Sessions, protocol adaptation and exact closure |
 
 Chapter 6 now composes WebSockets with resident Process Sessions: Alice and
 Bob retain distinct children and correctly addressed JSON replies. A smaller

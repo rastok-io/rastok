@@ -1,5 +1,5 @@
 ---
-title: Sensor alarm — make time an input
+title: 'Sensor alarm: make time an input'
 description: Isolate hysteresis state by sensor, detect a missed heartbeat with a bounded join, and advance through a virtual day without waiting a day.
 teaches: Private state, instance keys, hysteresis, timed joins, JoinExpired, explicit logical time
 graph: examples/sensor-alarm.rkg
