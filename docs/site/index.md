@@ -34,6 +34,7 @@ neither a socket write nor a scripted answer is evidence of a token bill.
 
 ## How to use this book
 
+If you want the map before the path, read the [overview](overview.md) first.
 Install with the [quickstart](quickstart.md). Read in order, or take the short
 route: [echo](gallery/01-echo.md), then [webhook to partner](gallery/04-webhook-to-partner.md).
 Every chapter runs independently from the checkout; no chapter requires files

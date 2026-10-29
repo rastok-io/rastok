@@ -1,7 +1,7 @@
 ---
 title: Quickstart
 description: Install the current Rastok CLI, create a typed graph with a Lab scenario, and inspect a simulation without external services.
-order: 2
+order: 3
 ---
 
 <!-- quickstart:start -->
