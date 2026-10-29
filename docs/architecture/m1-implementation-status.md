@@ -94,7 +94,7 @@ records executed independent HTTP/WebSocket interop and the remaining
 ngtcp2/Autobahn qualifications without conflating them with workspace tests.
 
 The later [resident agent gateway](../../examples/agent-gateway.rkg) keeps one JSONL
-child per conversation. Its [gallery chapter](../site/gallery/06-agent-gateway.md)
+child per conversation. Its [gallery chapter](../site/examples/06-agent-gateway.md)
 and [evidence](agent-gateway-showcase.md) distinguish scripted
 protocol replies and real local composition tests from public authentication,
 live model qualification or per-job usage accounting.

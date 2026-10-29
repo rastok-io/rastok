@@ -75,14 +75,14 @@ fn reference(path: &str, extension: &str) {
 
 #[test]
 fn public_pages_have_the_site_contract_and_existing_artifacts() {
-    for name in ["index.md", "overview.md", "quickstart.md"] {
+    for name in ["index.md", "overview.md", "getting-started.md"] {
         let (front, _) = markdown(&root().join("docs/site").join(name));
         let page: Page = serde_yaml_ng::from_str(&front).unwrap();
         assert!(
             !page.title.trim().is_empty() && !page.description.trim().is_empty() && page.order > 0
         );
     }
-    let mut pages: Vec<_> = std::fs::read_dir(root().join("docs/site/gallery"))
+    let mut pages: Vec<_> = std::fs::read_dir(root().join("docs/site/examples"))
         .unwrap()
         .map(|entry| entry.unwrap().path())
         .collect();
@@ -132,7 +132,7 @@ fn public_pages_have_the_site_contract_and_existing_artifacts() {
 
 #[test]
 fn gallery_chapters_form_a_connected_learning_path() {
-    let directory = root().join("docs/site/gallery");
+    let directory = root().join("docs/site/examples");
     let (_, index) = markdown(&root().join("docs/site/index.md"));
     let mut chapters: Vec<_> = std::fs::read_dir(directory)
         .unwrap()
@@ -156,7 +156,7 @@ fn gallery_chapters_form_a_connected_learning_path() {
             "no missing published chapter"
         );
         let index_position = index
-            .find(&format!("(gallery/{filename})"))
+            .find(&format!("(examples/{filename})"))
             .unwrap_or_else(|| panic!("index links {filename}"));
         assert!(
             previous_index_position.is_none_or(|previous| previous < index_position),
@@ -197,7 +197,7 @@ fn incomplete_or_extended_site_frontmatter_refuses() {
     );
     assert!(serde_yaml_ng::from_str::<Gallery>("title: A\ndescription: B\norder: 1\n").is_err());
 
-    let (front, _) = markdown(&root().join("docs/site/gallery/01-echo.md"));
+    let (front, _) = markdown(&root().join("docs/site/examples/01-echo.md"));
     serde_yaml_ng::from_str::<Gallery>(&front).expect("the current gallery schema is valid");
     let error = serde_yaml_ng::from_str::<Gallery>(&format!("{front}\nreplaces: Example\n"))
         .expect_err("the removed comparison field is not part of the gallery contract");
@@ -216,7 +216,7 @@ fn readme_quickstart_is_a_verbatim_copy_of_the_site_source() {
             .0
             .to_owned()
     };
-    assert_eq!(block("README.md"), block("docs/site/quickstart.md"));
+    assert_eq!(block("README.md"), block("docs/site/getting-started.md"));
 }
 
 #[test]
@@ -550,7 +550,8 @@ fn publication_assets_have_the_documented_dimensions_and_retained_provenance() {
             .all(|pair| pair[0].as_u64() <= pair[1].as_u64())
     );
     let chapter =
-        std::fs::read_to_string(root().join("docs/site/gallery/04-webhook-to-partner.md")).unwrap();
+        std::fs::read_to_string(root().join("docs/site/examples/04-webhook-to-partner.md"))
+            .unwrap();
     for checkpoint in ["before", "backoff", "completed"] {
         let transition = evidence["screenshots"][checkpoint].as_u64().unwrap();
         assert!(

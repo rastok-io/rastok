@@ -127,7 +127,7 @@ unsolicited frames are supported. No timestamp is invented to enlarge the Lab.
   existing job tests and echo/JSONL/gauge witnesses remain required gates.
 - `examples/agent-dialogue.rkg`: two passing scenarios through the public CLI,
   new versioned traces in `tests/golden/gallery/agent-gateway`, and
-  [chapter 6](../site/gallery/06-agent-gateway.md).
+  [chapter 6](../site/examples/06-agent-gateway.md).
 - `examples/agent-gateway.rkg`: the subsequent resident WebSocket composition,
   with two protocol scenarios, a two-socket/real-child test and an immediate
   frame/opening-order regression. The [gateway evidence](agent-gateway-showcase.md)

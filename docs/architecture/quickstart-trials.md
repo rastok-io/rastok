@@ -9,7 +9,7 @@ and release binary. No invitation or result is implied by this document.
 
 Record the source commit/tag, website revision, binary target and SHA-256,
 OS version, and whether the person already has Rust. Both people read the same
-`docs/site/quickstart.md` as rendered by the preview site. The README's copied
+`docs/site/getting-started.md` as rendered by the preview site. The README's copied
 block remains covered by `site_content`.
 
 The observer may recover a broken recording tool, but cannot explain Rastok,

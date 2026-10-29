@@ -4,7 +4,7 @@ description: 'How Rastok works, seen from above: the situation it starts from, t
 order: 2
 ---
 
-This page is the map. The [quickstart](quickstart.md) and the
+This page is the map. The [quickstart](getting-started.md) and the
 [gallery](index.md#learning-path) are the path.
 
 ## Where it starts
@@ -88,7 +88,7 @@ scenario silence_expires "a mute shell times out" {
 Time is an input: `advance` moves the virtual clock by five seconds and the
 timeout becomes a typed fact the scenario asserts. No process starts.
 Adding a scenario changes nothing in the program's identity: the Lab is
-part of the source, not of the semantic hash. The [first chapter](gallery/01-echo.md)
+part of the source, not of the semantic hash. The [first chapter](examples/01-echo.md)
 runs this file, breaks it and reads the result.
 
 ## One source, one plan, two worlds
@@ -215,9 +215,9 @@ What exists today and what does not yet is kept on one dated list:
 
 ## Where to go next
 
-- Install and run a first graph: [quickstart](quickstart.md).
-- The short route through the gallery: [echo](gallery/01-echo.md), then
-  [webhook to partner](gallery/04-webhook-to-partner.md).
+- Install and run a first graph: [quickstart](getting-started.md).
+- The short route through the gallery: [echo](examples/01-echo.md), then
+  [webhook to partner](examples/04-webhook-to-partner.md).
 - What exists today and what does not yet:
   [what is available today](index.md#what-is-available-today).
 - The normative specification and architecture notes live in the repository,

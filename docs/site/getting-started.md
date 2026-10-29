@@ -27,9 +27,9 @@ Without the browser, `rastok simulate hello.rkg` runs the same scenario.
 `rastok new` creates one file with a typed Operator and a Lab; it never
 overwrites an existing file. Change the source on disk, then run it again.
 
-From a checkout, continue with [echo](gallery/01-echo.md) for a real Process
+From a checkout, continue with [echo](examples/01-echo.md) for a real Process
 and an effect-free recorded replay. Then follow
-[webhook to partner](gallery/04-webhook-to-partner.md): its command supplies
+[webhook to partner](examples/04-webhook-to-partner.md): its command supplies
 the synthetic deployment profile and can open the same graph with `--ui`.
 No real server, partner or credential is required for that simulation.
 Downloadable binaries and two unaided timed installation trials are still required before

@@ -106,10 +106,10 @@ reach `Hello, world`. The CLI reports `PASS smoke.roundtrip` when the scenario
 finishes. Close the viewer from its toolbar when done.
 <!-- quickstart:end -->
 
-The [public quickstart](docs/site/quickstart.md) owns this block. Continue with
+The [public quickstart](docs/site/getting-started.md) owns this block. Continue with
 the [learning path](docs/site/index.md): six chapters, from
-[echo](docs/site/gallery/01-echo.md) to a
-[resident agent gateway](docs/site/gallery/06-agent-gateway.md), each with a
+[echo](docs/site/examples/01-echo.md) to a
+[resident agent gateway](docs/site/examples/06-agent-gateway.md), each with a
 scenario to break.
 
 ## See it run
@@ -119,7 +119,7 @@ scenario to break.
 Native Retry in the debugger: a webhook is acknowledged, the partner call
 times out, a bounded retry is scheduled and the second attempt succeeds, all
 rendered from recorded simulation transitions. The
-[chapter](docs/site/gallery/04-webhook-to-partner.md) explains the inputs,
+[chapter](docs/site/examples/04-webhook-to-partner.md) explains the inputs,
 the recorded transitions and the visible limits.
 
 ## What you get

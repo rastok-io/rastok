@@ -32,6 +32,9 @@ must reject missing, unknown or wrongly typed fields, duplicate keys, broken
 references and duplicate gallery orders. Empty strings and empty lists do not
 meet a required field. No field is optional in the following tables.
 
+The required introductory pages are `index.md`, `overview.md` and
+`getting-started.md`. The six runnable example pages live in `examples/`.
+
 Every page has:
 
 | Field | Type | Meaning |
@@ -40,7 +43,7 @@ Every page has:
 | `description` | string | One-sentence summary for readers, search, JSON-LD and `llms.txt` |
 | `order` | positive integer | Navigation order within the containing section |
 
-Every page in `gallery/` additionally has:
+Every page in `examples/` additionally has:
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -87,7 +90,7 @@ or a versioned trace, never from imagined state. Do not use `%%{init}%%`
 directives or make color or style carry meaning; the site applies its theme.
 Put one lead sentence before each diagram saying what it shows.
 
-`quickstart.md` is the source of the README quickstart. The Markdown between
+`getting-started.md` is the source of the README quickstart. The Markdown between
 `<!-- quickstart:start -->` and `<!-- quickstart:end -->` is copied verbatim
 into the root README and checked by a repository test. No installation-time
 claim is made before two unaided external trials have been measured.
