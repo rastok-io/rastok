@@ -109,7 +109,7 @@ The advance visits the five-minute expiry before reaching its twenty-four-hour t
 ```mermaid
 flowchart LR
     probe["t = 0: app.probe"] --> advance["advance: target 24 hours"]
-    advance --> expiry["t = 5 minutes: watchdog.expired"]
+    advance --> expiry["t = 5 minutes: JoinExpired"]
     expiry --> expect["t = 24 hours: expect app.silent"]
 ```
 
