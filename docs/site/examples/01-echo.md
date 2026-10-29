@@ -90,6 +90,9 @@ Restore the line and rerun; do not approve a new golden merely to make a failure
 
 ## Carry forward
 
+For the concepts behind this example, read [A program](../guide/01-a-program.md)
+and [The Lab](../guide/04-the-lab.md).
+
 You now have a small behavior you can run, explain and change under a test.
 A failure is an input to the Lab, not a special copy of your application.
 Keep that distinction: it is how you can start integration work before a

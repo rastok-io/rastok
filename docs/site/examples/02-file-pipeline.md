@@ -90,6 +90,9 @@ and verify that the original golden matches again.
 
 ## Carry forward
 
+The guide explains the same source in [Types and expressions](../guide/02-types-and-expressions.md)
+and [Connectors and outcomes](../guide/03-connectors-and-outcomes.md).
+
 The Contract makes an effect reviewable: input, operation, bounds and outcomes
 travel together. Your application decides what to do with each result. A
 recording then lets you inspect what happened without repeating those effects;

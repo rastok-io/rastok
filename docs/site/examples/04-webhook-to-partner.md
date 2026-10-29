@@ -149,6 +149,10 @@ Three stills make the checkpoints easier to inspect:
 
 ## Carry forward
 
+Read [Connectors and outcomes](../guide/03-connectors-and-outcomes.md) for the
+admission boundary and [Running for real](../guide/05-running-for-real.md)
+for deployment settings, secrets and diagnostic evidence.
+
 This is the central exercise: one integration, several possible worlds, and
 a recorded explanation when a revision changes behavior. Keep the timeout,
 duplicate and 500 scenarios alongside the nominal one. Each describes a case

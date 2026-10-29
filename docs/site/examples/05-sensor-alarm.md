@@ -84,6 +84,9 @@ static error, not a runtime golden difference.
 
 ## Carry forward
 
+[The Lab](../guide/04-the-lab.md) explains this example's virtual clock and
+the observation window used by its expectations.
+
 Time, like an external response, is something you can supply deliberately.
 You can retain a missed heartbeat as a small regression scenario instead of
 waiting for the fault to recur on equipment. Types, state ownership and the
