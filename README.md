@@ -11,19 +11,33 @@
 **Simulation-first integration platform: a typed flow language, a runtime
 and a Lab to build and prove integrations before their systems exist.**
 
-<!-- Public narrative: rastok-strategy/NARRATIF.md, "Version anglaise de référence",
-     b650bc0. Keep this copy verbatim; propose wording changes in the source. -->
+<!-- Public narrative: rastok-strategy/NARRATIF.md,
+     "Version courte de référence, deux paragraphes", English block, 870a82d.
+     Keep this copy verbatim; propose wording changes in the source. -->
 
-> Rastok is a simulation-first integration platform. A flow and its
+> An integration rarely fails on the happy path. It fails on the edge
+> cases: partners not ready, late or duplicate replies, implicit contracts,
+> test scenarios that drift. With large language models and AI agents,
+> writing a flow has never been faster; proving it will hold in real
+> conditions has become the real bottleneck. **Rastok is a simulation-first
+> integration platform.** An application's flows, their contracts and their
 > failure scenarios are written together, in a dedicated, typed language
-> versioned in Git. The same program runs against a simulated world,
-> virtual time and faults included, or against the real systems: you build
-> and prove an integration before its partner systems are available.
+> versioned in Git. The test environment is source code: partner faults,
+> delays and silences are written next to the program. The *same* program
+> runs first in a simulated world, then, without a rewrite, in the real one.
+> You build and prove an integration before the partner systems are
+> available.
 >
-> Every run leaves a replayable journal. An incident becomes a scenario
-> that protects the next changes, and a record an auditor can read. The
-> language is constrained enough for code written or driven by AI to be
-> checked by the compiler and the simulation before it reaches production.
+> Every run leaves a journal that can be replayed without repeating its
+> external effects. An incident becomes a scenario that protects the next
+> changes. The journal is also a record an auditor can read. Before anything
+> runs, you know which systems will be called, under which conditions, and
+> to what end. The compiler refuses a flow that leaves an outcome with
+> nowhere to go. A scenario proves the flow holds against the partner as
+> described; acceptance, with the same program, checks the description.
+> What an assistant writes goes through the same compiler and the same
+> scenarios as what a human writes; review focuses on the contracts and the
+> scenarios.
 
 Rastok is an Apache-2.0 runtime and a dedicated domain-specific
 language (DSL) for stateful, effectful integration graphs. The DSL is
@@ -73,11 +87,13 @@ lab hello {
 }
 ```
 
+The output below omits the scenario description.
+
 ```sh
 $ rastok check hello.rkg
 ok: 2 node(s), semantic hash 6c3cb3ab…
 $ rastok simulate hello.rkg
-PASS smoke.roundtrip — a typed message becomes a greeting
+PASS smoke.roundtrip
 1 scenario(s), 0 failed
 ```
 
@@ -138,12 +154,13 @@ the recorded transitions and the visible limits.
   `replay --ui` opens a recorded real run without repeating its effects.
 - **Standard Connectors.** Process (job and resident service), File,
   HttpClient and HttpServer over HTTP/1.1, HTTP/2 and HTTP/3, WebSocket client
-  and server. Each has a Lab twin that runs without the network.
+  and server. Supported Lab modes run without the network; a declared
+  Contract does not imply that every mode has a scripted twin.
 - **Native Retry, Loop, keyed instances and lifetimes**, checked statically
-  and reconstructed from the journal on recovery.
+  and reconstructed from the in-memory journal on recovery.
 - **Data annotations.** `@sensitive`, `@secret`, `@personal` and `@measure`
-  travel with the schema; redaction applies before anything is printed or
-  logged.
+  travel with the schema; the CLI and debugger redact protected fields
+  before presentation. Diagnostic recordings are not redacted exports.
 - **A small, portable core.** `rastok-core` holds the semantics, builds
   without the standard library and is checked on bare-metal targets in CI.
 - **Editor support.** A data-only VS Code and JetBrains TextMate grammar in
@@ -161,26 +178,27 @@ a passive Graph scope or an Executor:
   Dispatch. They may update private `var` state but perform no external I/O.
 - **Connectors** are Executors. Each has one exact versioned **Contract**;
   its transition comes from that Contract and typed Driver events. Connectors are the explicit boundaries
-  to APIs, processes, databases, files, brokers and time sources.
+  to external systems. The alpha supplies HTTP, WebSocket, Process and File
+  Contracts; database, broker and time-source Connectors remain future work.
 
 An **Extension** is attached to one Node and may contribute attributes,
 bindings, commands, constraints and, only when necessary, ports. `App` marks
-the one public root Graph; `Loop` adds finite temporal recurrence through a
+the one public root Graph; `Loop` adds finite iteration through a
 journal-owned manager; `Retry` repeats the same outbound Call under a
 bounded, statically checked policy; `Saga` remains a future Extension. A manager is neither
-a Node nor an edge, so temporal recurrence never creates a spatial cycle.
+a Node nor an edge, so iteration and retry never create a spatial cycle.
 Loop contributes no port: exhaustion is a `LoopExpired` case on the host's
 resolved failure terminal (`err`, a custom terminal, or a Call's `exit`).
 
-This separation makes effects replaceable. In production, Connectors
+This separation makes effects replaceable. With physical Drivers, Connectors
 interact with real systems. In a simulation sandbox called the
 **Lab**, controlled Driver scripts replace those external systems while the
 same Operators and the same checked graph continue to run.
 
 The Lab controls inputs, time, boundary outcomes, and faults. A
-production incident can therefore become a local scenario: replay the
-causal path, test a fix, and compare the result without repeating the
-original real-world effects.
+production incident captured in a recording can be replayed locally without
+repeating its real-world effects. An author can then write a Lab scenario,
+test a fix, and compare golden traces; automatic conversion remains future work.
 
 ### Same program, different world
 
@@ -223,6 +241,15 @@ records the deployment, recording and golden-trace qualification limits.
 
 ## Status and known limits
 
+> **Status on 5 November 2026, v0.1.0-alpha.** Today: the language, the
+> compiler, the runtime, the standard connectors and the Lab, virtual time
+> and injected faults included; the journal, recorded runs and their replay,
+> golden traces; six runnable examples, from echo to an agent gateway. Next:
+> durable recovery after a stop (end of November); an incident turned into a
+> scenario in one step (mid-January); taking over a slice of an existing
+> integration (February); agents under approval, refusal and budgets
+> (April). Gains from AI generation remain to be measured.
+
 Rastok is at an early experimental stage. Its specification and
 implementation architecture are under active review, and the runtime
 does not yet make a production-readiness claim.
@@ -255,6 +282,16 @@ in the [implementation status page](docs/architecture/m1-implementation-status.m
 The [opening ledger](docs/architecture/opening-showcase.md) and the
 [release-qualification inventory](docs/architecture/release-qualification.md)
 distinguish local qualification from the external evidence still open.
+
+## How Rastok is built
+
+> **How Rastok is built.** Rastok is designed and developed by its founder
+> with coding agents. The language and the runtime are described in a
+> specification kept in the repository, the deterministic core is isolated
+> in `rastok-core`, and golden traces are enforced in CI. The human review
+> of the core is recorded file by file in the repository and continues; an
+> independent Rust review is under way. Known limits are listed in the
+> README.
 
 ## Documentation
 
