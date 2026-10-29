@@ -1,7 +1,7 @@
 # Rastok: White Paper
 
 <!-- Public narrative: rastok-strategy/NARRATIF.md,
-     "Version courte de référence, deux paragraphes", English block, 870a82d.
+     "Version courte de référence, deux paragraphes", English block, 77c4637.
      Keep this copy verbatim; propose wording changes in the source. -->
 
 > An integration rarely fails on the happy path. It fails on the edge
