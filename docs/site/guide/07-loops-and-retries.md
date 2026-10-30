@@ -115,7 +115,7 @@ attribute. See `docs/spec/retry.md`, `docs/spec/effects-and-sagas.md` and the
 
 ## Next
 
-Continue with privacy, secrets and measurements. Practice the distinction
+Continue with [Privacy, secrets and measurements](08-privacy-secrets-and-measurements.md). Practice the distinction
 in [Countdown](../examples/07-countdown.md) and
 [Webhook to partner](../examples/04-webhook-to-partner.md): identify the
 verdict or terminal that permits each recurrence before advancing time.
