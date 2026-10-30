@@ -140,6 +140,11 @@ interprets that plan. `rastok simulate` supplies scripted boundary responses
 and virtual time; `rastok run` uses physical Drivers and explicit elapsed
 time.
 
+The core reads no clock, network or randomness: CI builds it for targets
+without an operating system and runs the RP2350 spike under Cortex-M33
+emulation; [Sensor alarm](examples/05-sensor-alarm.md#carry-forward) states
+the tested boundary and the physical-board limit.
+
 ### The rule that makes two worlds possible
 
 Operators decide. Connectors act. Outcomes return as typed observations

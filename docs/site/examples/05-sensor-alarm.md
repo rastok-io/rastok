@@ -92,6 +92,13 @@ You can retain a missed heartbeat as a small regression scenario instead of
 waiting for the fault to recur on equipment. Types, state ownership and the
 same causal comparison still apply; the device domain needs no special Lab.
 
+The core evaluating this graph has no clock, network access or randomness;
+time and external outcomes enter as explicit inputs. CI compiles `rastok-core`
+for targets without an operating system: `thumbv8m.main-none-eabihf`,
+`thumbv7m-none-eabi` and `riscv32imac-unknown-none-elf`. It also runs the
+RP2350 spike under QEMU's Cortex-M33 emulation. Running this sensor example
+on a physical board is not part of the alpha.
+
 Previous: [Webhook to partner](04-webhook-to-partner.md).
 Next: [Agent gateway](06-agent-gateway.md): keep a separate resident process
 for each conversation and interleave several turns. Before moving on, try
