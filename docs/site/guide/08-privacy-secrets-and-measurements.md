@@ -128,6 +128,6 @@ are in `docs/spec/annotations.md`, `docs/spec/observability.md` and
 
 ## Next
 
-Continue with the command line. Practice with the deployment profile in
+Continue with [Command line](09-command-line.md). Practice with the deployment profile in
 [Webhook to partner](../examples/04-webhook-to-partner.md), then compare absent
 and zero usage in the [HTTP model adapter](../examples/08-model-adapter.md).

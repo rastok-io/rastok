@@ -219,7 +219,7 @@ fn cli_information_does_not_hide_missing_commands_or_extra_arguments() {
 fn cli_information_help_and_the_guide_share_the_command_syntax() {
     let output = rastok().arg("--help").output().expect("the binary runs");
     assert!(output.status.success(), "{output:?}");
-    let guide = include_str!("../../../docs/site/guide/06-command-line.md");
+    let guide = include_str!("../../../docs/site/guide/09-command-line.md");
     for line in String::from_utf8(output.stdout)
         .expect("UTF-8 help")
         .lines()

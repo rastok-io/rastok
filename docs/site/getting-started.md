@@ -28,7 +28,7 @@ Without the browser, `rastok simulate hello.rkg` runs the same scenario.
 overwrites an existing file. Change the source on disk, then run it again.
 
 Use `rastok --help` for the command syntax and `rastok --version` to identify
-your build. The [Command line chapter](guide/06-command-line.md) explains all
+your build. The [Command line chapter](guide/09-command-line.md) explains all
 commands, options, output streams and exit statuses.
 
 From a checkout, continue with [echo](examples/01-echo.md) for a real Process
@@ -46,10 +46,23 @@ paths lead to the same place.
 
 - **By the book.** The [user guide](guide/01-a-program.md) reads the
   language in order: a program, types and expressions, Connectors and
-  outcomes, the Lab, running for real, then the command line. Six short chapters.
+  outcomes, the Lab, running for real, instances, recurrence, data policy,
+  then the command line. Nine short chapters.
 - **By example.** Eight examples, each built from a question, with a graph to
   read, a scenario to run, something to break and the first golden
   difference to read.
+
+| Guide chapter | What it explains |
+|---|---|
+| [1. A program](guide/01-a-program.md) | Graphs, Nodes, ports and wiring |
+| [2. Types and expressions](guide/02-types-and-expressions.md) | Values and typed decisions |
+| [3. Connectors and outcomes](guide/03-connectors-and-outcomes.md) | External boundaries and explicit dispositions |
+| [4. The Lab](guide/04-the-lab.md) | Scenarios, mocks and golden comparisons |
+| [5. Running for real](guide/05-running-for-real.md) | Deployment and diagnostic replay |
+| [6. Instances, state and time](guide/06-instances-state-and-time.md) | Ownership, lifetimes and bounded waits |
+| [7. Loops and retries](guide/07-loops-and-retries.md) | Finite progression and safe repetition |
+| [8. Privacy, secrets and measurements](guide/08-privacy-secrets-and-measurements.md) | Data policy and original quantities |
+| [9. Command line](guide/09-command-line.md) | Commands, options and exit statuses |
 
 | Example | Your question | What you learn to keep explicit |
 |---|---|---|

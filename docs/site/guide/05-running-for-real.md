@@ -129,7 +129,8 @@ The recording contract is `docs/architecture/diagnostic-recording.md`.
 
 ## Next
 
-Continue with [Command line](06-command-line.md) for every command and its
+Continue with [Instances, state and time](06-instances-state-and-time.md) for
+state ownership, lifetimes and bounded closure. [Command line](09-command-line.md) lists every command and its
 options, or try [Webhook to partner](../examples/04-webhook-to-partner.md).
 Run its synthetic scenarios, inspect the bounded retry, then review what a
 real partner and deployment must supply. Return to

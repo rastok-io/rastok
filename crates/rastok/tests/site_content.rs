@@ -235,7 +235,7 @@ fn guide_chapters_have_a_checked_learning_path() {
         .map(|entry| entry.unwrap().path())
         .collect();
     chapters.sort();
-    assert_eq!(chapters.len(), 6);
+    assert_eq!(chapters.len(), 9);
     let mut orders = std::collections::BTreeSet::new();
     for (index, path) in chapters.iter().enumerate() {
         let (front, body) = markdown(path);
@@ -396,7 +396,7 @@ fn book_dsl_blocks_are_exact_slices_of_shipped_examples() {
             count += 1;
         }
         // The CLI chapter's syntax is compared with the binary's help in cli.rs.
-        if path.file_name().unwrap() != "06-command-line.md" {
+        if path.file_name().unwrap() != "09-command-line.md" {
             assert!(count > 0, "{path:?}: read the actual program");
         }
     }

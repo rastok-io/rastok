@@ -37,8 +37,8 @@ The required introductory pages are `index.md` (Overview, order 1) and
 pages live in `examples/`.
 
 The User Guide lives in `guide/`, between General and Examples in the site
-navigation. Its six opening chapters use only `title`, `description` and
-`order`, with unique positive orders 1 through 6. No extra front-matter field
+navigation. Its nine opening chapters use only `title`, `description` and
+`order`, with unique positive orders 1 through 9. No extra front-matter field
 is needed for the guide or its diagrams.
 
 Every page has:

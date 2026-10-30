@@ -234,7 +234,7 @@ property.
 | `rastok connectors [--json]` | lists the standard Contracts, modes, ports and installed implementations |
 | `rastok --resolve-open-api <project-dir> [--check]` | generates typed endpoints from OpenAPI 3.0 and 3.1 documents |
 
-The [Command line chapter](docs/site/guide/06-command-line.md) explains every
+The [Command line chapter](docs/site/guide/09-command-line.md) explains every
 command, its options, output streams and exit statuses. The
 [implementation status page](docs/architecture/m1-implementation-status.md)
 records the deployment, recording and golden-trace qualification limits.

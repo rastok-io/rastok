@@ -1,7 +1,7 @@
 ---
 title: Command line
 description: Choose a Rastok command, supply its options, and distinguish read-only checks from real execution and file writes.
-order: 6
+order: 9
 ---
 
 After this chapter you can choose a CLI command and interpret its output
@@ -162,6 +162,6 @@ an intentional new baseline. Success is not a deployment guarantee; read the
 
 ## Next
 
-Try [Echo](../examples/01-echo.md) through check, simulation, real execution
-and replay. For deployment settings and real partner guarantees, return to
-[Running for real](05-running-for-real.md).
+Try [Echo](../examples/01-echo.md) through simulation and replay.
+Previous: [Privacy, secrets and measurements](08-privacy-secrets-and-measurements.md).
+Deployment: [Running for real](05-running-for-real.md).
