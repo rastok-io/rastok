@@ -29,11 +29,14 @@ a standalone HTML/vanilla-JavaScript client served by the same App.
 ## Executable examples
 
 The opening catalogue below includes the smaller reference programs as well
-as the six-chapter path. The webhook page
+as the eight-chapter path. The webhook page
 includes the required synthetic deployment profile in its CLI command; the
 HTTP model adapter also needs the profile and fixture bindings listed below.
 The other examples need none. The [opening ledger](../architecture/opening-showcase.md)
-tracks the six-page public gallery separately from these executable examples.
+tracks the public gallery separately from these executable examples. The
+[Countdown chapter](../site/examples/07-countdown.md) and
+[HTTP model adapter chapter](../site/examples/08-model-adapter.md) complete
+the eight-example reading sequence.
 The [documentation audit](../architecture/documentation-audit-2026-09-09.md)
 retains the earlier checkpoint; its bounded-join destination finding is now
 corrected and regression-tested.

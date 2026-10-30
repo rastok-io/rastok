@@ -47,7 +47,7 @@ paths lead to the same place.
 - **By the book.** The [user guide](guide/01-a-program.md) reads the
   language in order: a program, types and expressions, Connectors and
   outcomes, the Lab, running for real, then the command line. Six short chapters.
-- **By example.** Six examples, each built from a question, with a graph to
+- **By example.** Eight examples, each built from a question, with a graph to
   read, a scenario to run, something to break and the first golden
   difference to read.
 
@@ -59,12 +59,13 @@ paths lead to the same place.
 | [4. Webhook to partner: put it together](examples/04-webhook-to-partner.md) | Can I qualify an integration before the partner is available? | Admission, validation, deduplication, effects and audit |
 | [5. Sensor alarm: make time an input](examples/05-sensor-alarm.md) | How do I test an absence, or a day of waiting? | Stateful decisions, timed joins and virtual time |
 | [6. Agent gateway: keep a conversation isolated](examples/06-agent-gateway.md) | Can Alice and Bob share a graph without sharing a child process? | Resident Sessions, protocol adaptation and exact closure |
+| [7. Countdown: a bounded loop](examples/07-countdown.md) | Can I prove that repeated work finishes? | Manager commands and a decreasing measure |
+| [8. HTTP model adapter](examples/08-model-adapter.md) | What usage did the model actually report? | Typed responses, original measurements and absent versus zero |
 
-Chapter 6 now composes WebSockets with resident Process Sessions: Alice and
-Bob retain distinct children and correctly addressed JSON replies. A smaller
-dialogue primer remains available. Public authentication and the HTTP variant
-with model credentials and measured usage are still separate open work;
-neither a socket write nor a scripted answer is evidence of a token bill.
+Chapter 6 connects WebSockets to resident Process Sessions: Alice and Bob
+keep distinct children and correctly addressed JSON replies. Chapter 8 sends
+independent HTTP jobs and inspects typed usage supplied by the model. A
+scripted answer exercises the adapter; it is not evidence of a real token bill.
 
 ## How to use the examples
 

@@ -156,7 +156,7 @@ fn gallery_chapters_form_a_connected_learning_path() {
         })
         .collect();
     chapters.sort_by_key(|(order, _, _)| *order);
-    assert_eq!(chapters.len(), 6);
+    assert_eq!(chapters.len(), 8);
     let mut previous_index_position = None;
     for (position, (order, filename, body)) in chapters.iter().enumerate() {
         assert_eq!(

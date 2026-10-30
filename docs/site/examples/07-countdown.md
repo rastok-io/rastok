@@ -84,8 +84,8 @@ output rather than saving over the reference.
 
 Previous: [Agent gateway](06-agent-gateway.md). Separate a resource's lifetime
 from a finite algorithm's progress. A Loop advances authored state; a Retry
-repeats a prepared operation. Next comes the HTTP model adapter, which adds
-typed usage evidence to an external response.
+repeats a prepared operation. Next: [HTTP model adapter](08-model-adapter.md),
+which adds typed usage evidence to an external response.
 
 ## Limits
 

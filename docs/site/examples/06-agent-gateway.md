@@ -156,41 +156,15 @@ does not edit the graph, the Lab or recorded data.
 
 ## Inspect a typed model response
 
-The smaller [HTTP variant](../../../examples/agent-http.rkg) makes one
-non-streaming OpenAI Responses request per job. Unlike the resident bridge,
-it does not keep a conversation inside a child process. The input carries
-`session`, `job` and `prompt`; the first two remain in the response's META.
-Try its six scenarios without a real credential or model call:
+The [HTTP model adapter](08-model-adapter.md) makes one non-streaming OpenAI
+Responses request per job. It selects a typed JSON response, retains original
+usage samples with their job and session, and distinguishes missing usage
+from an observed zero. Its six scenarios run with synthetic boot bindings.
 
-```sh
-RASTOK_SHOWCASE_MODEL_TOKEN=lab-only-not-a-credential RASTOK_SHOWCASE_MODEL_TOKEN_VERSION=fixture-v1 rastok simulate examples/agent-http.rkg --deployment examples/agent-http.deployment.json --ui
-```
-
-Read `ModelResponse`, then `model`: `output out: ModelResponse` and
-`json_profile = projected` deserialize the declared fields before an emission is
-recorded. Additional JSON members are omitted; absent nullable fields become
-null; a wrong type still gives `DecodeFailed`. This is an explicit selected
-view of Responses, not a new rule that makes every struct open.
-
-Inspect `model.out`. Its original `input_tokens`, `output_tokens` and
-`total_tokens` carry `@measure` annotations; no downstream Operator extracts
-or counts them again. Three scripted jobs retain their own measurements and
-session association. An absent `usage` produces no sample; an observed zero
-remains zero. The three quantities are separate evidence, **not three numbers
-to add together**. No token price or currency amount is invented.
-
-The other scenarios cover incompatible schema, a timeout, and HTTP failures.
-A decoded 500 is `ServerError`; an error body incompatible with the selected
-schema is `DecodeFailed` instead. There is no automatic Retry or invented
-idempotence guarantee for an inference that could be charged twice.
-
-The Lab supplies typed outcomes; separate tests exercise complete wire JSON
-and a real local HTTP server. No live OpenAI invocation was performed for this
-qualification. To compare all six scenarios, use the same command without
-`--ui` and add `--compare crates/rastok/tests/golden/gallery/agent-http`.
-Change `Hello from the simulated model.` to `A different model answer.`
-in that example's mock: its count assertions still pass, but the golden
-names the changed record. Restore the reply afterward; do not use `--save`.
+Use that chapter for the reproducible command, projected-schema rules,
+secret boundary and golden comparison. A resident process preserves a
+conversation across messages; this adapter sends independent jobs and does
+not retry an inference that could be charged twice.
 
 ## Break it
 
@@ -216,6 +190,9 @@ your own typed adapter. Model-specific
 usage evidence belongs at that adapter boundary, not in a protocol hidden
 inside Process. The HTTP variant above shows the typed boundary; it makes
 no claim of a billing report or measured usage from arbitrary app-server JSON.
+
+Next: [Countdown](07-countdown.md), where a decreasing measure proves that
+authored recurrence finishes.
 
 ## Limits
 
