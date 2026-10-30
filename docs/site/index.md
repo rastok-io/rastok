@@ -235,6 +235,9 @@ installation trials.
 
 ## Where to go next
 
+Use [Reference](reference/types.md) to look up types, expressions, Contracts,
+Lab syntax and diagnostics.
+
 - Install and run a first graph: [getting started](getting-started.md).
 - The short route through the examples: [echo](examples/01-echo.md), then
   [webhook to partner](examples/04-webhook-to-partner.md).

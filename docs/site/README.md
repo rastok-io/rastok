@@ -108,6 +108,20 @@ At most one Mermaid diagram belongs in a chapter, and only when it explains
 something more clearly than the text. Internal links must resolve in the
 pinned checkout, including heading fragments.
 
+### Reference pages
+
+The `reference/` section follows Examples. Its five pages use only `title`,
+`description` and `order`: `types.md` (1), `expressions.md` (2),
+`contracts.md` (3), `lab.md` (4) and `diagnostics.md` (5). Orders are unique
+within the section. The same link and typography checks apply to these pages.
+
+Reference text is factual lookup material: tables, signatures and short
+examples, without a tutorial opening or a reading-time claim. Document the
+executable surface in the body. Put specified but unavailable capabilities
+in a closing `Specified, not shipped` table, with their specification paths.
+Keep diagnostics that are specified but not emitted separate from the
+emitted-code table. Quote message excerpts only from a run or a test.
+
 ### Diagrams
 
 Use Mermaid only, inline in the Markdown that explains it. Show one idea per

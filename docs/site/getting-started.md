@@ -44,6 +44,9 @@ this quickstart is qualified for opening. No elapsed-time claim is made yet.
 Some people read the book first; others open an example and break it. Both
 paths lead to the same place.
 
+Keep [Reference](reference/types.md) open for types, expressions, Contracts,
+Lab syntax and diagnostic codes while following either path.
+
 - **By the book.** The [user guide](guide/01-a-program.md) reads the
   language in order: a program, types and expressions, Connectors and
   outcomes, the Lab, running for real, instances, recurrence, data policy,

@@ -266,12 +266,37 @@ fn guide_chapters_have_a_checked_learning_path() {
 }
 
 #[test]
+fn reference_pages_have_the_simple_ordered_contract() {
+    let directory = root().join("docs/site/reference");
+    assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 5);
+    let mut orders = std::collections::BTreeSet::new();
+    for (index, filename) in [
+        "types.md",
+        "expressions.md",
+        "contracts.md",
+        "lab.md",
+        "diagnostics.md",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let (front, body) = markdown(&directory.join(filename));
+        let page: Page = serde_yaml_ng::from_str(&front).unwrap();
+        assert!(!page.title.trim().is_empty() && !page.description.trim().is_empty());
+        assert!(orders.insert(page.order), "duplicate reference order");
+        assert_eq!(page.order as usize, index + 1);
+        assert!(!body.contains("After this chapter"));
+        assert!(body.contains("\n## Specified, not shipped\n"));
+    }
+}
+
+#[test]
 fn public_page_links_and_typography_are_valid() {
     let mut paths = vec![
         root().join("docs/site/index.md"),
         root().join("docs/site/getting-started.md"),
     ];
-    for directory in ["guide", "examples"] {
+    for directory in ["guide", "examples", "reference"] {
         paths.extend(
             std::fs::read_dir(root().join("docs/site").join(directory))
                 .unwrap()
