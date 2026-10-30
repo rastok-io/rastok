@@ -13,13 +13,13 @@ the external program.
 Open `examples/echo.rkg` in the checkout. Its first declaration is a Graph
 named `echo`. A Graph contains children and the connections between them.
 It also defines the boundary through which the surrounding program can send
-and receive data. It is not a function that secretly runs between its
-children: a Graph has no application handler or private `var` state.
+and receive data. Its children own the application handlers and private
+`var` state.
 
 The `: App` annotation attaches the App Extension. It marks this Graph as
 the public root of the compiled unit. There must be exactly one such root
-among the files compiled together. One file is convenient for this example,
-but the language does not equate a file with an application.
+among the files compiled together. A unit can span several files; this
+example fits in one.
 
 This is the complete Graph, from `examples/echo.rkg`, lines 5–22:
 
@@ -49,27 +49,25 @@ graph echo : App {
 The `relay` Operator owns the decision. Its handler reacts to an envelope
 on `in`; `data` refers to that envelope's payload. The guard rejects the
 empty string. On the accepted path, assigning to `out` emits the payload.
-No subprocess or network request is hidden in that expression. Operators
-perform pure computation and may keep declared private state; this one
+Operators perform pure computation and may keep declared private state; this one
 needs none.
 
 The `shell` Connector owns the external boundary. `Process` names its
 Contract, while `mode = job` selects a finite child-process invocation.
 `command` and `codec` describe the requested external work and framing.
-The timeout bounds waiting for that invocation. These are checked settings,
-not arbitrary arguments passed to an unknown plugin.
+The timeout bounds waiting for that invocation. The compiler checks these
+settings against the Process Contract.
 
 A Driver implements the Contract. With `run`, the physical Process Driver
 starts `cat`. With `simulate`, a Lab mock supplies its outcomes. The
-Operator and the wiring remain the same. Calling both components Nodes
-does not erase their different responsibilities.
+Operator and the wiring remain the same.
 
 ## Account for every possible output
 
 The final three lines are the wiring. `->` carries values in one direction;
 the abbreviated chain uses the resolved default ports. The App input feeds
 `relay`, its accepted output feeds `shell`, and the echoed text crosses the
-App output boundary. A connection does not itself run a command.
+App output boundary.
 
 The two remaining outputs matter. Process `err` carries stderr, while
 `exit` carries the typed terminal outcome of the invocation, including a
@@ -78,8 +76,8 @@ discard, not an unwired output that the runtime happens to ignore.
 
 Every output the compiler considers possible needs a destination. A
 statically proven impossible output is exempt. Removing either discard
-from this Graph produces `E-UNWIRED-OUTPUT`. Discarding an output does not
-hide its emission from the journal or from a Lab expectation.
+from this Graph produces `E-UNWIRED-OUTPUT`. A discarded emission remains
+visible in the journal and in Lab expectations.
 
 ## Check before running
 

@@ -66,9 +66,9 @@ does not promise crash durability. Directories are refused by name rather
 than traversed as an implicit collection of files.
 
 A mode resolves the operation's direction, exchange and port behavior.
-It does not select a vendor or library. The physical Driver and the Lab
-model implement the same checked Contract. Simulation substitutes the
-external work; it does not bypass request validation or invent new ports.
+The physical Driver and the Lab model implement the same checked Contract.
+Simulation substitutes the external work while preserving request validation
+and the declared ports. Driver selection is a deployment choice.
 
 ## Data is not the terminal outcome
 

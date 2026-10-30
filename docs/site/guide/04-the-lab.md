@@ -11,7 +11,8 @@ still needs a physical boundary test.
 
 ## Keep the program, supply its world
 
-The Lab belongs beside the graph in the source. `lab echo` names the twin
+The real world (App) uses physical Drivers; the virtual world (Lab) supplies
+scripted outcomes and time to the same graph. `lab echo` names the twin
 of the App named `echo`; `simulation smoke on app` groups shared boundary
 behavior and named scenarios for that App. The Lab is not deployed and
 does not enter the program's semantic hash.
@@ -55,8 +56,7 @@ lab echo {
 The mock supplies the Process response, not the Operator's decision. The
 real `relay` handler still filters the input. In `roundtrip`, the script
 returns the request data and one successful terminal. That response passes
-through the normal Contract and journal machinery; the mock does not
-construct journal records itself.
+through the normal Contract and journal machinery, which creates its records.
 
 ## Silence must be explicit
 
@@ -116,8 +116,7 @@ flowchart LR
 Ready computations take no virtual time. The simulator processes due
 obligations in time order, including work they cause, then reaches the
 requested target. This tests a day-long timeline without sleeping for a
-day. It does not claim that a day of physical sensor traffic was captured
-or that this run takes a particular number of milliseconds.
+day.
 
 ## Know the evidence boundary
 

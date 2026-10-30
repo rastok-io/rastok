@@ -31,8 +31,8 @@ rastok simulate examples/echo.rkg --compare crates/rastok/tests/golden/gallery/e
 Read the App's wiring, then its Operator and `shell` Connector. The Operator
 filters and forwards data; `Process` is the explicit external effect. Finally,
 read the `lab` block: its mock supplies the world's response while the
-application graph stays the same. The Graph composes these parts; it does not
-hide an extra handler.
+application graph stays the same. The Graph composes these parts through
+their declared ports.
 
 ## Expected result
 
@@ -56,7 +56,7 @@ sequenceDiagram
 
 Three scenarios pass. A nonempty line is echoed, an empty line never calls the
 Process, and a silent Process produces `TimeoutExpired` after virtual time
-advances. Simulation uses the Lab; it never starts `cat`.
+advances.
 
 For the same `salut` input used by the roundtrip scenario:
 
@@ -74,7 +74,7 @@ responses and observable logical time; a recording is not automatic Lab extracti
 The standalone commands also retain different ingress provenance (`cli` versus
 `lab`). Their raw seals therefore **do not match by default**, even for the same
 displayed text. This page proves run-to-recorded-replay equality and lets you
-compare the Lab's output separately; it does not erase provenance to force a match.
+compare the Lab's output separately.
 
 ## Break it
 
@@ -94,7 +94,8 @@ For the concepts behind this example, read [A program](../guide/01-a-program.md)
 and [The Lab](../guide/04-the-lab.md).
 
 You now have a small behavior you can run, explain and change under a test.
-A failure is an input to the Lab, not a special copy of your application.
+An injected fault belongs to the virtual world (Lab); the application stays
+the same as in the real world (App).
 Keep that distinction: it is how you can start integration work before a
 partner environment exists.
 
@@ -103,8 +104,8 @@ two file operations and ask what each effect is allowed to do.
 
 ## Limits
 
-`run` requires `cat` on PATH. Golden files contain causal evidence, not a
-digital signature. Timings measured by a real process need not match virtual
+`run` requires `cat` on PATH. Golden files contain causal evidence.
+Timings measured by a real process need not match virtual
 time; only specified causal fields participate in the seal. Recordings are
 bounded, local diagnostics and currently refuse personal-data persistence and
 boot-dependent deployment profiles.

@@ -40,15 +40,15 @@ rastok simulate examples/agent-gateway.rkg --compare crates/rastok/tests/golden/
 Start at `clients.out`: each WebSocket message enters `conversation`, where
 `instance = { key = meta.ext.session_id }` scopes its children. The first
 message opens `Process(mode = service)`; later messages write to the same
-child. `route_reply` remembers that socket address and restores it on child
-responses. It does not share a global last-request variable between clients.
+child. Each `route_reply` instance remembers its socket address and restores
+it on that child's responses.
 
 The real command is `codex app-server --listen stdio://`. The client, not
 Process, speaks its JSON-RPC protocol: initialize, acknowledge initialization,
 start a thread, send a turn. Requests, replies and notifications pass through
 as JSON, including client replies without a `method` field. The Lab's `match`
-replaces the child; it never launches Codex. Its `peer` input is an explicit
-fixture seam, not an invented WebSocket upgrade.
+replaces the child; it never launches Codex. Its `peer` input supplies the
+scenario's incoming messages.
 
 Follow `finish.out -> model.instance.stop` last. An authored `close` input
 requests that exact child generation's Closing, not every Process or the
@@ -151,8 +151,7 @@ Quit still requests process closure, not deletion of files.
 The page selects the app-server read-only sandbox and no-approval policy;
 this is a trusted local example, not a security boundary. Do not expose the
 listeners publicly or send credentials through the chat. Editing the HTML
-changes its embedded asset: restart `run` to load the new file. The browser
-does not edit the graph, the Lab or recorded data.
+changes its embedded asset: restart `run` to load the new file.
 
 ## Inspect a typed model response
 
@@ -188,8 +187,8 @@ resident resource, explicit shutdown, and a controlled external world. Try
 the standalone browser client above, or the smaller resident primer to add
 your own typed adapter. Model-specific
 usage evidence belongs at that adapter boundary, not in a protocol hidden
-inside Process. The HTTP variant above shows the typed boundary; it makes
-no claim of a billing report or measured usage from arbitrary app-server JSON.
+inside Process. The HTTP variant above shows the typed boundary and retains
+the quantities declared by its response schema.
 
 Next: [Countdown](07-countdown.md), where a decreasing measure proves that
 authored recurrence finishes.
@@ -207,10 +206,9 @@ sockets with harmless shell children, not a model or a credential.
 Process has no `secret()` binding. An installed Codex can use its existing
 local authentication; do not transmit credentials through this gateway.
 Unannotated protocol payloads remain visible in the in-memory journal.
-Neither secret-free arbitrary payloads nor legal compliance are claimed.
 No token count or cost is invented from missing usage, message counts or
-Session writes. The HTTP adapter targets OpenAI Responses, not a surrogate
-model API. Its [projected profile](../../architecture/openai-responses-hydration.md)
+Session writes. The HTTP adapter targets OpenAI Responses.
+Its [projected profile](../../architecture/openai-responses-hydration.md)
 is qualified locally, including original samples from a held Retry attempt
 on an inert test endpoint. This does not authorize retrying model inference.
 `secret()` is bound only at the HttpClient Driver boundary; its bearer is not

@@ -14,7 +14,7 @@ contents satisfy your application.
 A port carries an envelope. Its `data` is the payload the Operator works
 on; `meta` carries separate provenance and application metadata. The
 payload has one resolved logical type. Leaving off an annotation asks the
-compiler to infer that type. It does not turn the port into untyped data.
+compiler to infer that type before execution.
 
 The webhook example names the shape it needs. This declaration is from
 `examples/webhook-to-partner.rkg`, lines 3–7:
@@ -65,10 +65,10 @@ operator validate {
 
 `is` asks whether the value fits a type or union case. On the successful
 branch, member access such as `data.amount` is checked with the narrower
-shape. `as` requests a checked conversion; it is not a promise to ignore
-an incompatible value. The final `_` branch makes the alternative visible.
+shape. `as` requests a conversion that succeeds only for a compatible value.
+The final `_` branch makes the alternative visible.
 
-The two failures here are expected application outcomes. They become
+The two rejections here are expected application outcomes. They become
 ordinary emissions on `failed`, with a typed `Rejected` payload. A decoded
 object with a negative amount is not the same problem as malformed JSON
 that the boundary could not decode. The next chapter follows that distinction
@@ -76,8 +76,7 @@ through the Connector.
 
 ## Keep bytes and text distinct
 
-File reads produce `bytes`. The file example does not claim to parse CSV or
-infer text from the contents. Its inspection Operator, from
+File reads produce `bytes`. Its inspection Operator, from
 `examples/file-pipeline.rkg`, lines 28–37, accepts only nonempty bytes:
 
 ```rkg

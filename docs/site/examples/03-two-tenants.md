@@ -36,10 +36,9 @@ for Alice and Bob. `Retry.attempts = 2` bounds Calls for one retained request,
 including the first; `lifetime` bounds how long an idle instance lives. They
 solve different problems.
 Then read `model : Process + Retry`: `Retry.on = [TimeoutExpired]` selects
-the terminal that permits another attempt. The request does not carry an
-attempt counter and is never rebuilt. `answer` only decodes the final Process
-frame; it does not decide whether to retry.
-The nested `audit` Graph adds composition, not another execution model.
+the terminal that permits another attempt. Retry retains the original request
+across attempts. `answer` decodes the final Process frame after the Retry
+manager has selected it. The nested `audit` Graph composes another branch.
 
 ## Expected result
 
@@ -80,8 +79,7 @@ of silence, then proves that a new admission uses a fresh instance generation.
 `⧉` counts instances. The Instances tab's Retry table shows Bob's one attempt
 and Alice's two distinct Calls. Alice's timeout is recorded as **Held**, not
 delivered to the `failed` output; the final attempt is **Published**. The audit
-runs once per incoming request, not again for an internal retry. No `⟳` Loop
-dial or temporal back-edge is invented for Retry.
+runs once per incoming request, not again for an internal retry.
 
 ## Break it
 
@@ -114,4 +112,4 @@ The Process mock is stateless: the admitted request and explicit logical time
 select its reply. Only Alice's request at time zero is silent.
 No real language model or paid API is used. The instance key isolates state but
 does not guarantee deduplication or persistence across a deployment restart.
-The fixed backoff is one second; this example does not benchmark model latency.
+The fixed backoff is one second.

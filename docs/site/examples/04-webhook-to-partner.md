@@ -19,7 +19,7 @@ order: 4
 
 You know how to replace an effect, route its outcomes and isolate state. Now
 use those ideas for a familiar integration: receive a webhook and deliver it
-to a partner that is not always available. Build the flow and its failure
+to a partner that is not always available. Build the flow and its fault
 scenarios together, before you need a live partner environment.
 
 All six scenarios have versioned goldens. The captures below show native
@@ -128,8 +128,8 @@ Add
 `--compare crates/rastok/tests/golden/gallery/webhook-to-partner`.
 The CLI names the first differing record and field, expected versus actual,
 and recorded causal context. This classified graph deliberately redacts
-values in divergence messages; it does not expose an email to explain a
-failure. Recorded operation facts can differ before the final answer does.
+values in divergence messages. Recorded operation facts can differ before
+the final answer does.
 The versioned goldens contain **only the synthetic fixture data**; they are
 not sanitised exports suitable for real personal data.
 

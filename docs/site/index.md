@@ -14,7 +14,7 @@ Flows break for human reasons before technical ones, and those reasons do
 not go away.
 
 Rastok puts that knowledge in a file that outlives the people and the
-project: the flow, the scenarios that test it, failures included, and a
+project: the flow, the scenarios that test it, faults included, and a
 journal that explains each run. Within the supported Contract and Lab
 profiles, the same checked program runs against scripted partners in the
 Lab or against real systems in the App, without rewriting the graph.
@@ -29,7 +29,7 @@ Four moments in the life of an integration, and what the file changes at each.
 
 ```mermaid
 flowchart LR
-    design["Design: scripted partner, failure scenarios"] --> acceptance["Acceptance: same program, real Drivers"]
+    design["Design: scripted partner, fault scenarios"] --> acceptance["Acceptance: same program, real Drivers"]
     acceptance --> incident["Incident: recorded facts, replayed"]
     incident --> change["Change: compared against the goldens"]
     change --> design
@@ -37,7 +37,7 @@ flowchart LR
 
 | Moment | What teams usually have | What the file gives |
 |---|---|---|
-| Design | A partner that is not ready, a contract nobody has exercised | A scripted partner in the Lab, with failure scenarios from the first day |
+| Design | A partner that is not ready, a contract nobody has exercised | A scripted partner in the Lab, with fault scenarios from the first day |
 | Acceptance | A second version of the flow for the real environment | The same checked program, with real Drivers |
 | Incident | Logs that say what happened, not why | Recorded facts, replayed without side effects, then a scenario that reproduces them |
 | Change | The fear of breaking what works | `--compare` against the reviewed goldens, with the first divergence named |
@@ -90,14 +90,14 @@ Three kinds of Node appear here, and one Extension.
   explicit destination, including `nothing` for a deliberate discard.
   An output proven impossible needs no destination.
 
-Two other Extensions exist in the alpha. `Loop` adds finite temporal
-recurrence. `Retry` repeats the same outbound Call under a bounded policy
+Two other Extensions exist in the alpha. `Loop` adds finite recurrence
+over time. `Retry` repeats the same outbound Call under a bounded policy
 the compiler checks. The executable standard Contract families are
 `Process`, `File`, `HttpClient`, `HttpServer`, `WebSocketClient` and
 `WebSocketServer`; `rastok connectors` lists their modes, installed
 implementations and Lab limits.
 
-The Lab lives in the same file. This is the scenario that tests the failure
+The Lab lives in the same file. This is the scenario that tests the fault
 case, a process that never answers:
 
 ```rkg
@@ -119,15 +119,15 @@ runs this file, breaks it and reads the result.
 
 ### One source, one plan, two worlds
 
-The App and the Lab share compilation and journal semantics, and use
-different Drivers.
+The real world (App) and the virtual world (Lab) use different Drivers
+around the same compiled graph and journal semantics.
 
 ```mermaid
 flowchart TD
     source["flow.rkg: graph and Lab scenarios"] --> compiler["Compiler: types, wiring, Contracts"]
     compiler --> plan["One executable plan"]
-    plan --> lab["Lab world: scripted outcomes, virtual time"]
-    plan --> app["App world: physical Drivers, elapsed time"]
+    plan --> lab["Virtual world (Lab): scripted outcomes, virtual time"]
+    plan --> app["Real world (App): physical Drivers, elapsed time"]
     lab --> journal["Journal: what came in, what was decided, what went out"]
     app --> journal
 ```
@@ -155,7 +155,7 @@ Lab simulation   : effect_intents -> controlled outcomes
 
 The runtime commits an outbound obligation before asking its Driver to
 perform the effect. A scripted partner can therefore stand in for one that
-is not ready. Supported failures and timeouts become scenarios, while the
+is not ready. Supported faults and timeouts become scenarios, while the
 same checked program can later use real Drivers.
 
 ### What a run leaves behind

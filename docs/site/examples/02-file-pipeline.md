@@ -8,7 +8,6 @@ command: rastok simulate examples/file-pipeline.rkg --compare crates/rastok/test
 expected: Four scenarios pass; eleven ASCII bytes or three UTF-8 bytes reach the writer, while empty inputs and directory refusals never do.
 break_it: 'Change size(data) > 0 to size(data) > 20, then rerun the command without --save.'
 limits:
-  - This counts bytes and checks emptiness; it is not a CSV parser.
   - Replacement is atomic for one file, not a transaction over multiple files.
   - The deployment root is explicit; directory operations and watch are not supported.
 order: 2
@@ -95,8 +94,7 @@ and [Connectors and outcomes](../guide/03-connectors-and-outcomes.md).
 
 The Contract makes an effect reviewable: input, operation, bounds and outcomes
 travel together. Your application decides what to do with each result. A
-recording then lets you inspect what happened without repeating those effects;
-it is not a filesystem undo button.
+recording then lets you inspect what happened without repeating those effects.
 
 Previous: [Echo](01-echo.md). Next: [Two tenants](03-two-tenants.md), where the
 new question is who owns the state when several requests share a graph.
@@ -106,6 +104,6 @@ new question is who owns the state when several requests share a graph.
 `max_read` bounds the complete input: no partial bytes are published on a read
 refusal. `File` does not implement recursive directory operations, append or
 watch. Atomic replacement concerns one target and depends on the Driver's
-supported filesystem boundary; failures are typed, never reported as success.
+supported filesystem boundary; refusals have typed outcomes.
 The `directory` Lab scenario scripts that result; the real File tests qualify
-the actual filesystem refusal. This is byte validation and copy, not CSV parsing.
+the actual filesystem refusal. The example validates and copies bytes.
