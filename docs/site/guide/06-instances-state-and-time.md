@@ -117,6 +117,6 @@ outside the [current alpha scope](../index.md#what-is-available-today).
 
 ## Next
 
-Continue with Loops and retries, then compare [Two tenants](../examples/03-two-tenants.md)
+Continue with [Loops and retries](07-loops-and-retries.md), then compare [Two tenants](../examples/03-two-tenants.md)
 and [Sensor alarm](../examples/05-sensor-alarm.md). Explain which instance owns
 each pending Call or unmatched probe before running the scenario.
