@@ -367,6 +367,9 @@ fn book_dsl_blocks_are_exact_slices_of_shipped_examples() {
         "file-pipeline",
         "webhook-to-partner",
         "sensor-alarm",
+        "keyed-retry",
+        "countdown",
+        "agent-http",
     ]
     .map(|name| std::fs::read_to_string(root().join(format!("examples/{name}.rkg"))).unwrap())
     .into();
