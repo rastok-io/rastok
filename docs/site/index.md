@@ -213,12 +213,12 @@ flowchart LR
 
 ## What is available today
 
-Checked on 29 October 2026 for the planned 5 November `v0.1.0-alpha`
+Checked on 30 October 2026 for the planned 5 November `v0.1.0-alpha`
 opening. Rastok is experimental. The
 deployment journal is in memory; durable storage is later work. Diagnostic
-replay restores recorded facts, not the world. The six examples are
-executable; the complete AI gateway and the full opening qualification
-remain in progress. No reading-time claim is made before independent
+replay restores recorded facts, not the world. Eight runnable examples cover
+echo through agents, including the resident gateway and typed HTTP model adapter.
+The full opening qualification remains in progress. No reading-time claim is made before independent
 installation trials.
 
 ## Vocabulary

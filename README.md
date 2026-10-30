@@ -123,9 +123,9 @@ finishes. Close the viewer from its toolbar when done.
 <!-- quickstart:end -->
 
 The [Getting Started page](docs/site/getting-started.md) owns this block. Continue with
-the [learning path](docs/site/getting-started.md#two-ways-to-learn): six examples, from
-[echo](docs/site/examples/01-echo.md) to a
-[resident agent gateway](docs/site/examples/06-agent-gateway.md), each with a
+the [learning path](docs/site/getting-started.md#two-ways-to-learn): eight examples, from
+[echo](docs/site/examples/01-echo.md) to agents and a
+[typed HTTP model adapter](docs/site/examples/08-model-adapter.md), each with a
 scenario to break.
 
 ## See it run
@@ -244,7 +244,7 @@ records the deployment, recording and golden-trace qualification limits.
 > **Status on 5 November 2026, v0.1.0-alpha.** Today: the language, the
 > compiler, the runtime, the standard connectors and the Lab, virtual time
 > and injected faults included; the journal, recorded runs and their replay,
-> golden traces; six runnable examples, from echo to an agent gateway. Next:
+> golden traces; eight runnable examples, from echo to agents. Next:
 > durable recovery after a stop (end of November); an incident turned into a
 > scenario in one step (mid-January); taking over a slice of an existing
 > integration (February); agents under approval, refusal and budgets

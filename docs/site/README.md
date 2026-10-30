@@ -13,7 +13,7 @@ recorded in the [release inventory](../architecture/release-qualification.md#pub
 No front-matter field changes with this handoff.
 
 For the authorized 5 November opening, prefer a minimal Starlight deployment
-serving the quickstart and six gallery chapters. If that cannot be ready,
+serving the quickstart and eight gallery chapters. If that cannot be ready,
 serve a 301 from the documentation domain to the actual gallery page on
 `www.rastok.com`, replacing it with the documentation site in November. The
 fallback gallery path must be confirmed in `rastok-site`, not invented here.
@@ -33,7 +33,7 @@ references and duplicate orders within a section. Empty strings and empty lists 
 meet a required field. No field is optional in the following tables.
 
 The required introductory pages are `index.md` (Overview, order 1) and
-`getting-started.md` (Getting Started, order 2). The six runnable example
+`getting-started.md` (Getting Started, order 2). The eight runnable example
 pages live in `examples/`.
 
 The User Guide lives in `guide/`, between General and Examples in the site
@@ -69,7 +69,7 @@ scenario files named `<simulation>.<scenario>.trace`.
 
 No additional field has been introduced. Any extension is documented here
 before use and reported to Yoann for coordination with the site consumer.
-The page set can grow while preparing the opening; all six gallery pages
+The page set can grow while preparing the opening; all eight gallery pages
 must exist before the release candidate. Do not publish incomplete placeholders.
 
 ## Body contract
