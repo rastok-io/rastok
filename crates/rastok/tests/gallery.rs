@@ -20,6 +20,7 @@ fn opening_examples_match_versioned_scenario_goldens() {
         ("agent-dialogue", "agent-gateway", 2),
         ("agent-gateway", "agent-gateway", 2),
         ("agent-http", "agent-http", 6),
+        ("countdown", "countdown", 2),
     ] {
         let mut command = Command::new(env!("CARGO_BIN_EXE_rastok"));
         command.current_dir(&root).args([
@@ -101,6 +102,12 @@ fn each_gallery_break_it_edit_exposes_a_record_difference_without_saving() {
             "agent-http",
             "Hello from the simulated model.",
             "A different model answer.",
+        ),
+        (
+            "countdown",
+            "countdown",
+            "out = \"liftoff\"",
+            "out = \"changed\"",
         ),
     ] {
         let source = std::fs::read_to_string(root.join(format!("examples/{graph}.rkg"))).unwrap();
