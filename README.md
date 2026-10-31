@@ -130,7 +130,7 @@ scenario to break.
 
 ## See it run
 
-![A recorded webhook timeout, backoff and successful retry in the debugger](docs/site/assets/webhook-tour.gif)
+![A recorded webhook timeout, backoff and successful retry in the debugger](docs/site/assets/webhook-tour.png)
 
 Native Retry in the debugger: a webhook is acknowledged, the partner call
 times out, a bounded retry is scheduled and the second attempt succeeds, all

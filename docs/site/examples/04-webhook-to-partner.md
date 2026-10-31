@@ -139,7 +139,7 @@ second attempt. During the backoff, Retry retains the failed batch without
 delivering it to `decide`; only the final result is published. These are real
 debugger views of a simulation, not live HTTP requests or an edited branch.
 
-![Thirty seconds through the recorded timeout and retry transitions](../assets/webhook-tour.gif)
+![Thirty seconds through the recorded timeout and retry transitions](../assets/webhook-tour.png)
 
 Three stills make the checkpoints easier to inspect:
 

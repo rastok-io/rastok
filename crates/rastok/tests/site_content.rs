@@ -722,6 +722,7 @@ fn publication_assets_have_the_documented_dimensions_and_retained_provenance() {
         "webhook-before.png",
         "webhook-backoff.png",
         "webhook-completed.png",
+        "webhook-tour.png",
     ] {
         let png = std::fs::read(assets.join(name)).unwrap();
         assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
@@ -736,16 +737,39 @@ fn publication_assets_have_the_documented_dimensions_and_retained_provenance() {
             "{name}"
         );
     }
-    let gif = std::fs::read(assets.join("webhook-tour.gif")).unwrap();
-    assert_eq!(&gif[..6], b"GIF89a");
-    assert_eq!(u16::from_le_bytes(gif[6..8].try_into().unwrap()), 1352);
-    assert_eq!(u16::from_le_bytes(gif[8..10].try_into().unwrap()), 760);
+    let animation = std::fs::read(assets.join("webhook-tour.png")).unwrap();
+    let mut offset = 8;
+    let mut animation_controls = 0;
+    let mut frames = 0;
+    while offset < animation.len() {
+        let length = u32::from_be_bytes(animation[offset..offset + 4].try_into().unwrap()) as usize;
+        let kind = &animation[offset + 4..offset + 8];
+        let data = &animation[offset + 8..offset + 8 + length];
+        match kind {
+            b"acTL" => {
+                animation_controls += 1;
+                assert_eq!(u32::from_be_bytes(data[..4].try_into().unwrap()), 120);
+                assert_eq!(u32::from_be_bytes(data[4..8].try_into().unwrap()), 0);
+            }
+            b"fcTL" => {
+                frames += 1;
+                // The capture holds each recorded position for a quarter second.
+                assert_eq!(u16::from_be_bytes(data[20..22].try_into().unwrap()), 1);
+                assert_eq!(u16::from_be_bytes(data[22..24].try_into().unwrap()), 4);
+            }
+            _ => {}
+        }
+        offset += length + 12;
+    }
+    assert_eq!(animation_controls, 1);
+    assert_eq!(frames, 120);
     let evidence: serde_json::Value =
         serde_json::from_slice(&std::fs::read(assets.join("webhook-capture.json")).unwrap())
             .unwrap();
     assert_eq!(evidence["scenario"], "webhook.timeout_then_success");
-    assert_eq!(evidence["gif"]["seconds"], 30);
-    let transitions = evidence["gif"]["transitions"].as_array().unwrap();
+    assert_eq!(evidence["animation"]["format"], "apng");
+    assert_eq!(evidence["animation"]["seconds"], 30);
+    let transitions = evidence["animation"]["transitions"].as_array().unwrap();
     assert_eq!(transitions.len(), 120);
     assert_eq!(transitions.first().unwrap(), 0);
     assert_eq!(

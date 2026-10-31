@@ -137,12 +137,12 @@ into the root README and checked by a repository test. No installation-time
 claim is made before two unaided external trials have been measured.
 
 Assets live in `assets/`. Record the scenario, viewport (1352 × 760), selected
-transition and capture command in the opening ledger. A 30-second GIF and
+transition and capture command in the opening ledger. A 30-second animated PNG (APNG) and
 three flagship captures are required, not generated diagrams of imagined state.
 Editor syntax is `editors/vscode/rastok-dsl/syntaxes/rkg.tmLanguage.json`.
 
 The gallery uses ordinary relative Markdown image links for these assets;
 no new front-matter field is needed. `assets/webhook-capture.json` is capture
 provenance, not a documentation page: the site must treat `assets/` as files,
-not front-matter-bearing content. The replay GIF maps every frame to a recorded
+not front-matter-bearing content. The replay animation maps every frame to a recorded
 transition and contains no generated scene or external credential.

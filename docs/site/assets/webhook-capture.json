@@ -10,7 +10,8 @@
     "backoff": 20,
     "completed": 34
   },
-  "gif": {
+  "animation": {
+    "format": "apng",
     "seconds": 30,
     "framesPerSecond": 4,
     "transitions": [

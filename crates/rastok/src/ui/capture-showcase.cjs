@@ -102,16 +102,16 @@ const rasterSize = { width: 1352, height: 760 };
     assert.deepEqual(consoleErrors, []);
     const ffmpeg = spawn(process.env.RASTOK_FFMPEG || "ffmpeg", [
       "-v", "error", "-n", "-framerate", "4", "-i", path.join(frames, "%03d.png"),
-      "-filter_complex", "split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer",
-      "-loop", "0", path.join(destination, "webhook-tour.gif"),
+      "-c:v", "apng", "-pix_fmt", "rgba", "-pred", "mixed", "-compression_level", "9",
+      "-plays", "0", "-final_delay", "1/4", "-f", "apng", path.join(destination, "webhook-tour.png"),
     ], { stdio: "inherit" });
     await new Promise((resolve, reject) => {
       ffmpeg.once("error", reject);
       ffmpeg.once("exit", code => code === 0 ? resolve() : reject(new Error(`ffmpeg exited ${code}`)));
     });
-    const manifest = { example: "examples/webhook-to-partner.rkg", scenario: "webhook.timeout_then_success", viewport: rasterSize, screenshots: { before: 0, backoff: waiting, completed: head }, gif: { seconds: 30, framesPerSecond: 4, transitions }, evidence: "Real headless Chromium rendering of retained snapshots; no external audit or model call." };
+    const manifest = { example: "examples/webhook-to-partner.rkg", scenario: "webhook.timeout_then_success", viewport: rasterSize, screenshots: { before: 0, backoff: waiting, completed: head }, animation: { format: "apng", seconds: 30, framesPerSecond: 4, transitions }, evidence: "Real headless Chromium rendering of retained snapshots; no external audit or model call." };
     await fs.writeFile(path.join(destination, "webhook-capture.json"), `${JSON.stringify(manifest, null, 2)}\n`);
-    console.log(JSON.stringify({ screenshots: manifest.screenshots, gif: "30 seconds", output: destination }));
+    console.log(JSON.stringify({ screenshots: manifest.screenshots, animation: "30 seconds, APNG", output: destination }));
   } finally {
     await browser?.close();
     child.kill("SIGTERM");
