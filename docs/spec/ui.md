@@ -206,15 +206,21 @@ Connectors and the already placed flow. Return pipes retain their original
 endpoints and directions. A clear forward span uses one curve with horizontal
 ends; returns and obstructed spans use straight tracks with rounded corners.
 Routing checks node bodies and unrelated port labels, excluding the pipe's
-own endpoint labels. Arrivals at the same input share a short final approach;
-their route identities, mailbox selection and causal links remain separate.
+own endpoint labels. Track selection accounts for previously drawn straight
+spans, with adjacent lanes for parallel detours. Node and label avoidance takes
+priority where space is constrained. Arrivals at the same input share a short
+final approach; their route identities, mailbox selection and causal links
+remain separate. Forward arrivals from a child output to the parent boundary
+stay between the vertical positions of those pins. Node ports follow opposite
+port anchors and favor a lower position for forward pipes that skip columns.
 Boundary positions follow retained neighboring port anchors. An ambiguous
 composition seam does not acquire an invented Graph port. **Status: shipped.**
 
-Empty mailbox counters use a transparent background and muted text. Occupied
-mailboxes and counters selected or emphasized through their connected node
-retain contrast. Hover or keyboard focus on an Operator, Connector or pipe
-emphasizes its connections and dims unrelated pipes. The same FIFO remains
+Empty mailbox counters use a transparent background and muted text, with a
+text halo that masks the pipe behind the count. Occupied mailboxes and counters
+selected or emphasized through their connected node retain contrast. Hover or
+keyboard focus on an Operator, Connector or pipe emphasizes its connections and
+dims unrelated pipes. The same FIFO remains
 reachable by pointer and keyboard at zero occupancy. **Status: shipped.**
 
 - Graphs enclose children; Operator and Connector bodies are visually distinct.

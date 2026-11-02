@@ -461,23 +461,27 @@
 
   function placeMovablePorts(nodes, edges, layout) {
     const byId = new Map(nodes.map((node) => [node.id, node]));
-    const nodeSamples = new Map();
-    for (const edge of edges) {
-      const sourcePosition = layout.positions.get(edge.source.id);
-      const targetPosition = layout.positions.get(edge.target.id);
-      if (!sourcePosition || !targetPosition) continue;
-      addSample(
-        nodeSamples,
-        portKey(edge.source.id, "output", edge.source.port),
-        boxCenterY(targetPosition),
-      );
-      addSample(
-        nodeSamples,
-        portKey(edge.target.id, "input", edge.target.port),
-        boxCenterY(sourcePosition),
-      );
-    }
-    allocateNodePorts(nodes, layout, nodeSamples);
+    const nodePortSamples = () => {
+      const samples = new Map();
+      for (const edge of edges) {
+        const sourcePosition = layout.positions.get(edge.source.id);
+        const targetPosition = layout.positions.get(edge.target.id);
+        if (!sourcePosition || !targetPosition) continue;
+        const sourceKey = portKey(edge.source.id, "output", edge.source.port);
+        const targetKey = portKey(edge.target.id, "input", edge.target.port);
+        const sameOwner = byId.get(edge.source.id).owner === byId.get(edge.target.id).owner;
+        const skippedRanks = sameOwner && targetPosition.x > sourcePosition.x
+          ? Math.max(0, layout.rank.get(edge.target.id) - layout.rank.get(edge.source.id) - 1) : 0;
+        // Long forward pipes need a lower bypass around intermediate bodies.
+        // Real opposite pins keep short connections in their existing order.
+        addSample(samples, sourceKey,
+          (layout.portAnchors.get(targetKey)?.y ?? boxCenterY(targetPosition)) + skippedRanks * TRACK_SPACING);
+        addSample(samples, targetKey,
+          (layout.portAnchors.get(sourceKey)?.y ?? boxCenterY(sourcePosition)) + skippedRanks * TRACK_SPACING);
+      }
+      return samples;
+    };
+    allocateNodePorts(nodes, layout, nodePortSamples());
 
     const descendantOwners = ownerDescendants(layout.owners, layout.ownerChildren);
     const ownerSamples = new Map();
@@ -615,17 +619,9 @@
     }
 
     // Boundary movement changes the useful target of adjacent Node ports.
-    // Re-derive once; this converges because only side positions, never ranks,
-    // are mutable in this phase.
-    const refreshedSamples = new Map();
-    for (const edge of edges) {
-      const sourcePosition = layout.positions.get(edge.source.id);
-      const targetPosition = layout.positions.get(edge.target.id);
-      if (!sourcePosition || !targetPosition) continue;
-      addSample(refreshedSamples, portKey(edge.source.id, "output", edge.source.port), boxCenterY(targetPosition));
-      addSample(refreshedSamples, portKey(edge.target.id, "input", edge.target.port), boxCenterY(sourcePosition));
-    }
-    allocateNodePorts(nodes, layout, refreshedSamples);
+    // Refresh from the retained opposite anchors after that movement.
+    // Only port positions, never columns or body positions, change here.
+    allocateNodePorts(nodes, layout, nodePortSamples());
   }
 
   function allocateNodePorts(nodes, layout, samples) {
@@ -709,6 +705,7 @@
     const routes = new Map();
     const occupiedVertical = [];
     const occupiedSegments = [];
+    const occupiedPresentation = [];
     const labelObstacles = graphLabelObstacles(graph, layout);
     const bodies = graph.nodes.filter(node => node.kind !== "boundary" && node.kind !== "discard")
       .map(node => layout.positions.get(node.id));
@@ -776,7 +773,14 @@
         ...candidate.portals.map(portal => ({ x: portal.x, y: portal.y }))];
       // Multiple pipes keep their identities and join the same short approach
       // to the receiving pin. They do not create a shared semantic mailbox.
-      if (targetFan.count > 1) presentationPoints.push({ x: candidate.end.x - FAN_STUB * 2, y: candidate.end.y });
+      if (targetFan.count > 1) {
+        const targetKey = candidate.target.kind === "boundary"
+          ? scopePortKey(candidate.target.owner, candidate.target.direction, candidate.target.ports[0].name)
+          : portKey(candidate.target.id, "input", candidate.edge.target.port);
+        const targetLabel = labelObstacles.find(box => box.portKey === targetKey);
+        // Finish the bend before the receiving label, even at readable size.
+        presentationPoints.push({ x: Math.min(candidate.end.x - FAN_STUB * 2, targetLabel?.x ?? candidate.end.x), y: candidate.end.y });
+      }
       presentationPoints.push(candidate.end);
       const ownPorts = new Set([
         portKey(candidate.source.id, "output", candidate.edge.source.port),
@@ -788,9 +792,15 @@
       }
       const obstacles = [...labelObstacles.filter(box => !ownPorts.has(box.portKey)), ...bodies, ...headers];
       const clearPoints = [];
+      const lastPortal = candidate.portals.at(-1);
       for (let index = 1; index < presentationPoints.length; index += 1) {
-        appendPoints(clearPoints, routePresentationSpan(presentationPoints[index - 1], presentationPoints[index],
-          obstacles, layout.scopes.get(layout.rootOwner)));
+        const from = presentationPoints[index - 1], to = presentationPoints[index];
+        const parentArrival = index === candidate.portals.length + 1 && lastPortal?.direction === "output"
+          && candidate.target.kind === "boundary" && candidate.target.owner === layout.owners.get(lastPortal.owner)?.parent;
+        const span = routePresentationSpan(from, to, obstacles, layout.scopes.get(layout.rootOwner),
+          occupiedPresentation, parentArrival, targetFan.count > 1 && index === presentationPoints.length - 2);
+        appendPoints(clearPoints, span);
+        occupiedPresentation.push({ from, to, tracks: presentationTracks(span) });
       }
       const route = {
         start: candidate.start,
@@ -1018,7 +1028,17 @@
     return portLabelObstacles;
   }
 
-  function routePresentationSpan(from, to, obstacles, bounds) {
+  function presentationTracks(points) {
+    return curvedCorridorSegments(points).filter(segment =>
+      [segment.c1, segment.c2, segment.to].every(point => point.y === segment.from.y)
+      || [segment.c1, segment.c2, segment.to].every(point => point.x === segment.from.x))
+      .map(segment => ({ a: segment.from, b: segment.to }));
+  }
+
+  function routePresentationSpan(from, to, obstacles, bounds, occupied, parentArrival, joining) {
+    // Only the same retained portal span or short fan-in tail may be shared.
+    const tracks = occupied.filter(span => span.from.x !== from.x || span.from.y !== from.y
+      || span.to.x !== to.x || span.to.y !== to.y).flatMap(span => span.tracks);
     const score = points => {
       const samples = sampleCurvedCorridor(points, CORNER_RADIUS, 32);
       let collisions = 0;
@@ -1033,17 +1053,35 @@
             && point.y > box.y + 0.5 && point.y < box.y + box.height - 0.5) collisions += 1;
         }
       }
-      return { points, collisions, cost: collisions * 1_000_000 + length + points.length * 8 };
+      let crowding = 0;
+      for (const segment of presentationTracks(points)) {
+        const horizontal = segmentOrientation(segment) === "horizontal";
+        for (const track of tracks) {
+          if (segmentOrientation(track) !== segmentOrientation(segment)) continue;
+          const distance = Math.abs(horizontal ? segment.a.y - track.a.y : segment.a.x - track.a.x);
+          if (distance >= TRACK_SPACING) continue;
+          const aligned = horizontal
+            ? { a: { x: track.a.x, y: segment.a.y }, b: { x: track.b.x, y: segment.a.y } }
+            : { a: { x: segment.a.x, y: track.a.y }, b: { x: segment.a.x, y: track.b.y } };
+          crowding += collinearOverlapLength(segment, aligned) * (TRACK_SPACING - distance);
+        }
+      }
+      return { points, collisions, crowding,
+        cost: crowding * 100 + length + points.length * 8 };
     };
     const gap = to.x - from.x;
     const direct = score([from, { ...to, curve: true }]);
-    if (gap > 0 && !direct.collisions) return direct.points;
-    const lanes = [...new Set([
+    if (gap > 0 && !direct.collisions && !direct.crowding) return direct.points;
+    const laneCenters = [
       (from.y + to.y) / 2,
       ...obstacles.flatMap(box => [box.y - CORNER_RADIUS, box.y + box.height + CORNER_RADIUS]),
-    ])].filter(y => y >= bounds.y + SCOPE_HEADER && y <= bounds.y + bounds.height)
+      ...tracks.filter(track => segmentOrientation(track) === "horizontal").map(track => track.a.y),
+    ];
+    const lanes = [...new Set(laneCenters.flatMap(y => [y, y - TRACK_SPACING, y + TRACK_SPACING]))]
+      .filter(y => y >= bounds.y + SCOPE_HEADER && y <= bounds.y + bounds.height
+        && (!parentArrival || gap <= 0 || (y >= Math.min(from.y, to.y) && y <= Math.max(from.y, to.y))))
       .sort((a, b) => a - b);
-    let best = null;
+    let best = gap > 0 ? direct : null;
     for (const lane of lanes) {
       for (const stub of [24, 48, 72]) {
         const departure = gap > 0 ? Math.min(stub, gap / 3) : stub;
@@ -1053,11 +1091,13 @@
           { x: from.x + departure, y: from.y },
           { x: from.x + departure, y: lane },
           { x: to.x - arrival, y: lane },
-          { x: to.x - arrival, y: to.y },
-          to,
+          // Keep arrivals distinct until the common tail, instead of adding
+          // another coincident horizontal stub before that shared approach.
+          ...(joining ? [{ ...to, curve: true }] : [{ x: to.x - arrival, y: to.y }, to]),
         ]);
         const candidate = score(points);
-        if (!best || candidate.cost < best.cost) best = candidate;
+        if (!best || candidate.collisions < best.collisions
+          || (candidate.collisions === best.collisions && candidate.cost < best.cost)) best = candidate;
       }
     }
     return best?.points || [from, to];

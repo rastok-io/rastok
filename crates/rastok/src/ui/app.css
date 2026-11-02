@@ -224,7 +224,7 @@ main { display: flex; flex: 1 1 auto; min-height: 0; flex-direction: column; gap
 .edge-counter rect { fill: rgba(0, 0, 0, .72); stroke: var(--hairline-strong); stroke-width: 1; }
 .edge-counter text { fill: #f2f5f3; font: 700 var(--graph-mono-font-size) var(--mono); }
 .edge-counter.empty-mailbox rect { fill: transparent; stroke: transparent; }
-.edge-counter.empty-mailbox text { fill: var(--muted); font-weight: 400; }
+.edge-counter.empty-mailbox text { fill: var(--muted); font-weight: 400; stroke: var(--bg); stroke-width: 6px; paint-order: stroke; }
 .graph-edge:is(.selected, .node-selected, .connection-related) .empty-mailbox rect,
 .empty-mailbox:is(:hover, :focus-visible) rect { fill: var(--surface-raised); stroke: var(--hairline-strong); }
 .graph-edge:is(.selected, .node-selected, .connection-related) .empty-mailbox text,

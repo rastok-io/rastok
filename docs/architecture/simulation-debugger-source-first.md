@@ -47,14 +47,22 @@ meaning and removes no validated edge. Clear forward spans use a single cubic
 curve with horizontal endpoints. Obstructed and return spans retain orthogonal
 tracks with rounded corners. Their sampled geometry is checked against node
 bodies, scope headers and unrelated port labels; a pipe excludes its own labels.
-Multiple arrivals share a short final approach without merging their semantic
-routes. Boundary pins use neighboring retained port anchors. Ambiguous flattened
-composition metadata remains explicit rather than inventing a boundary port.
+Those obstacles take priority over track crowding. Previously drawn straight
+spans reserve their tracks, with adjacent lanes available to later detours.
+A repeated retained portal span and the short final approach may remain shared;
+separate arrivals curve into that approach before the receiving label.
+A forward span from a child output to its parent boundary stays within the
+vertical interval of its endpoint pins. Multiple arrivals keep their semantic
+routes. Node ports use the opposite retained anchors and favor a lower position
+for forward pipes that skip columns. Boundary pins use neighboring retained port
+anchors. Ambiguous flattened composition metadata remains explicit rather than
+inventing a boundary port.
 
 Empty mailbox badges retain their hit area and accessible count, with muted text
-and a transparent background. Occupancy, selection, hover and keyboard focus
-restore contrast. Hover or focus on an Operator, Connector or pipe emphasizes
-its connections and dims unrelated pipes without changing the selected prefix.
+and a transparent background. A text halo masks the pipe behind an empty count.
+Occupancy, selection, hover and keyboard focus restore contrast. Hover or focus
+on an Operator, Connector or pipe emphasizes its connections and dims unrelated
+pipes without changing the selected prefix.
 
 Selecting a graph node reveals and highlights its source block without switching
 inspector tabs. Instances retains decision evidence, node information and manager

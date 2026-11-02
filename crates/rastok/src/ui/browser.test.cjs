@@ -1141,6 +1141,74 @@ test("cyclic chat layout separates forward work, quiet mailboxes and focused con
   await capture(page, 'graph-chat-1024-light');
 });
 
+test("chat route details preserve separate tracks and legible arrivals", { timeout: 60000 }, async t => {
+  const page = await openTour(t, { width: 1440, height: 760 }, 'examples/agent-chat.rkg');
+  await capture(page, 'graph-chat-track-details');
+  const routes = await page.evaluate(() => {
+    const graph = graphLayout.materializeGraph(currentSnapshot.topology);
+    const layout = graphLayout.layoutGraph(graph.nodes, graph.edges, currentSnapshot.topology.owners);
+    const routed = graphLayout.routeGraphEdges(graph, layout);
+    return Object.fromEntries(graph.edges.map(edge => {
+      const route = routed.get(edge.index);
+      return [edge.route, { ...route, segments: graphLayout.curvedCorridorSegments(route.presentationPoints) }];
+    }));
+  });
+  await t.test('unrelated horizontal tracks do not merge', () => {
+    for (const [left, right] of [
+      ['.peer>validate.in', 'validate.accepted>conversation.admit.in'],
+      ['validate.rejected>clients.in', 'conversation.address_reply.out>clients.in'],
+    ]) {
+      for (const a of routes[left].segments.filter(s => s.from.y === s.to.y)) {
+        for (const b of routes[right].segments.filter(s => s.from.y === s.to.y)) {
+          const overlap = Math.min(Math.max(a.from.x, a.to.x), Math.max(b.from.x, b.to.x))
+            - Math.max(Math.min(a.from.x, a.to.x), Math.min(b.from.x, b.to.x));
+          const sharedArrival = left.endsWith('>clients.in') && right.endsWith('>clients.in')
+            && Math.min(a.from.x, a.to.x, b.from.x, b.to.x) >= routes[left].end.x - 32
+            && a.from.y === routes[left].end.y;
+          if (!sharedArrival && overlap > 1) assert.ok(Math.abs(a.from.y - b.from.y) >= 10,
+            `${left} and ${right} need distinct horizontal tracks`);
+        }
+      }
+    }
+  });
+  await t.test('direct requests leave above the bypass to remember', () => {
+    const request = routes['conversation.admit.request>conversation.model.in'];
+    const remember = routes['conversation.admit.remember>conversation.address_reply.remember'];
+    assert.ok(request.start.y < remember.start.y, 'the short request precedes the lower bypass');
+    assert.ok(request.end.y < remember.end.y, 'the real target anchors preserve the same order');
+  });
+  await t.test('the close scope output reaches reply without vertical overshoot', () => {
+    const route = routes['conversation.address_reply.out>.reply'];
+    const portal = route.portals.at(-1);
+    assert.ok(portal, 'the retained conversation.out portal exists');
+    const tail = route.segments.filter(segment => segment.from.x >= portal.x);
+    assert.ok(tail.length);
+    for (const segment of tail) {
+      for (const point of [segment.from, segment.c1, segment.c2, segment.to]) {
+        assert.ok(point.y >= Math.min(portal.y, route.end.y) - 0.01
+          && point.y <= Math.max(portal.y, route.end.y) + 0.01,
+        'the final approach stays between the scope output and parent pin');
+      }
+    }
+  });
+  await t.test('empty counters mask the wire behind their text', async () => {
+    const style = await page.locator('.edge-counter.empty-mailbox text').first().evaluate(text => {
+      const style = getComputedStyle(text);
+      return { stroke: style.stroke, width: parseFloat(style.strokeWidth), order: style.paintOrder };
+    });
+    assert.notEqual(style.stroke, 'none');
+    assert.ok(style.width >= 4);
+    assert.match(style.order, /^stroke/);
+  });
+  if (process.env.RASTOK_UI_CAPTURES) {
+    await page.setViewportSize({ width: 2560, height: 1200 });
+    await page.getByRole('button', { name: 'Fit graph', exact: true }).click();
+    await page.locator('.graph-canvas').screenshot({ path: path.join(process.env.RASTOK_UI_CAPTURES, 'graph-chat-tracks-detail-dark.png') });
+    await page.emulateMedia({ colorScheme: 'light', reducedMotion: 'reduce' });
+    await page.locator('.graph-canvas').screenshot({ path: path.join(process.env.RASTOK_UI_CAPTURES, 'graph-chat-tracks-detail-light.png') });
+  }
+});
+
 test("graph selection reveals the source block without a Definition tab or execution", { timeout: 60000 }, async t => {
   const page = await openTour(t, undefined, 'examples/agent-chat.rkg');
   const commands = [];
