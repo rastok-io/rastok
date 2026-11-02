@@ -272,7 +272,18 @@ fn guide_chapters_have_a_checked_learning_path() {
 #[test]
 fn reference_pages_have_the_simple_ordered_contract() {
     let directory = root().join("docs/site/reference");
-    assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 5);
+    assert_eq!(
+        std::fs::read_dir(&directory)
+            .unwrap()
+            .filter(|entry| entry
+                .as_ref()
+                .unwrap()
+                .path()
+                .extension()
+                .is_some_and(|ext| ext == "md"))
+            .count(),
+        5
+    );
     let mut orders = std::collections::BTreeSet::new();
     for (index, filename) in [
         "types.md",
@@ -295,18 +306,82 @@ fn reference_pages_have_the_simple_ordered_contract() {
 }
 
 #[test]
+fn connector_reference_pages_have_checked_declarations() {
+    let directory = root().join("docs/site/reference/connectors");
+    assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 6);
+    for (index, (slug, node, inbound)) in [
+        ("file", "read_file", false),
+        ("process", "shell", false),
+        ("http-client", "network", false),
+        ("http-server", "network", true),
+        ("websocket-client", "network", false),
+        ("websocket-server", "clients", true),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let (front, body) = markdown(&directory.join(format!("{slug}.md")));
+        let page: Page = serde_yaml_ng::from_str(&front).unwrap();
+        assert_eq!(page.order as usize, index + 1);
+        for heading in [
+            "Declaration",
+            "Ports and completion",
+            "Exit union",
+            "Settings",
+            "Qualification inventory",
+        ] {
+            assert!(
+                body.contains(&format!("\n## {heading}\n")),
+                "{slug}: {heading}"
+            );
+        }
+        let excerpt = body
+            .split_once("```rkg\n")
+            .unwrap()
+            .1
+            .split_once("```")
+            .unwrap()
+            .0;
+        let input = if *inbound {
+            String::new()
+        } else {
+            format!("in -> {node}\n")
+        };
+        let stderr = if *slug == "process" {
+            format!("{node}.err -> nothing\n")
+        } else {
+            String::new()
+        };
+        let source = format!(
+            "graph reference : App {{\n{excerpt}\n{input}{node}.out -> out\n{node}.exit -> nothing\n{stderr}}}"
+        );
+        rastok::compiler::compile(
+            &[&source],
+            &rastok::connector::contract::ContractCatalog::try_m0().unwrap(),
+        )
+        .unwrap_or_else(|bag| panic!("{slug}: {bag:#?}"));
+    }
+}
+
+#[test]
 fn public_page_links_and_typography_are_valid() {
     let mut paths = vec![
         root().join("docs/site/index.md"),
         root().join("docs/site/getting-started.md"),
         root().join("docs/site/debugger.md"),
     ];
-    for directory in ["guide", "examples", "reference"] {
-        paths.extend(
-            std::fs::read_dir(root().join("docs/site").join(directory))
-                .unwrap()
-                .map(|entry| entry.unwrap().path()),
-        );
+    let mut directories = ["guide", "examples", "reference"]
+        .map(|directory| root().join("docs/site").join(directory))
+        .to_vec();
+    while let Some(directory) = directories.pop() {
+        for entry in std::fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                directories.push(path);
+            } else if path.extension().is_some_and(|extension| extension == "md") {
+                paths.push(path);
+            }
+        }
     }
     paths.sort();
     let checkout = root().canonicalize().unwrap();

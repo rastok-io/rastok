@@ -111,10 +111,14 @@ pinned checkout, including heading fragments.
 
 ### Reference pages
 
-The `reference/` section follows Examples. Its five pages use only `title`,
-`description` and `order`: `types.md` (1), `expressions.md` (2),
-`contracts.md` (3), `lab.md` (4) and `diagnostics.md` (5). Orders are unique
-within the section. The same link and typography checks apply to these pages.
+The `reference/` section follows Examples. Its five index-level pages use only
+`title`, `description` and `order`: `types.md` (1), `expressions.md` (2),
+`contracts.md` (3), `lab.md` (4) and `diagnostics.md` (5). After the contract
+index, a nested Connectors group contains six pages under
+`reference/connectors/`: `file.md` (1), `process.md` (2), `http-client.md` (3),
+`http-server.md` (4), `websocket-client.md` (5) and `websocket-server.md` (6).
+Orders are unique within each containing folder. Connector declarations are
+checked in an App wrapper; all links and typography checks include these pages.
 
 Reference text is factual lookup material: tables, signatures and short
 examples, without a tutorial opening or a reading-time claim. Document the

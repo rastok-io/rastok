@@ -53,7 +53,7 @@ Open `examples/echo.rkg` and read from top to bottom.
 an Operator, with wiring between their ports.
 
 The Connector `shell : Process` talks to an external program under the
-[Process contract](../reference/contracts.md#process).
+[Process contract](../reference/connectors/process.md).
 Here `mode = job` starts a child for each Call, `command = "cat"` selects the
 program, and `codec = lines` exchanges lines of text. `timeout = duration("5s")`
 bounds the wait. The declarations of idempotence and deterministic behavior
