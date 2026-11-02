@@ -20,23 +20,43 @@ fn protected(value: &JsonValue) -> bool {
 
 fn summary(kind: &str, value: Option<&JsonValue>, tab: &str, owner: &str) -> JsonValue {
     let redacted = value.is_some_and(protected);
-    let rendering = match value {
-        None => "Value unavailable at this transition".to_owned(),
-        Some(value) if value.get("redacted") == Some(&json!(true)) => "[REDACTED]".to_owned(),
-        Some(value) => {
-            let text = value.to_string();
-            let short: String = text.chars().take(220).collect();
-            format!(
-                "{short}{}{}",
-                if text.chars().count() > 220 {
-                    "…"
-                } else {
-                    ""
-                },
-                if redacted { " [REDACTED]" } else { "" }
-            )
+    let display = |value: &JsonValue| {
+        if value["redacted"] == true {
+            "[REDACTED]".to_owned()
+        } else {
+            value.get("content").unwrap_or(value).to_string()
         }
     };
+    let text = match value {
+        None => "Value unavailable at this transition".to_owned(),
+        Some(value) if value.get("data").is_some() => format!(
+            "DATA {} · META app {} · ext {}",
+            display(&value["data"]),
+            display(&value["meta"]["app"]),
+            display(&value["meta"]["ext"])
+        ),
+        Some(value) if value.get("reference").is_some() && value.get("state").is_some() => format!(
+            "{} · {} · state {}",
+            value["label"].as_str().unwrap_or("Instance"),
+            value["phase"].as_str().unwrap_or("unavailable"),
+            display(&value["state"])
+        ),
+        Some(value) => display(value),
+    };
+    let short: String = text.chars().take(220).collect();
+    let rendering = format!(
+        "{short}{}{}",
+        if text.chars().count() > 220 {
+            "…"
+        } else {
+            ""
+        },
+        if redacted && !short.contains("[REDACTED]") {
+            " [REDACTED]"
+        } else {
+            ""
+        }
+    );
     json!({"kind": kind, "rendering": rendering, "redacted": redacted,
         "available": value.is_some(), "inspector": {"tab": tab, "node_path": owner,
         "envelope_id": value.and_then(|value| value.get("envelope_id"))}})
@@ -415,6 +435,22 @@ pub(super) fn tokens(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn port_summaries_reserve_transport_identifiers_for_the_inspector() {
+        let value = json!({"envelope_id": "transport-identifier", "instance": {"address": "transport-address"},
+            "data": {"content": {"amount": 7}}, "meta": {"sys": {"id": "transport-identifier"}, "app": {"request": "r"}, "ext": {}}});
+        let result = summary("port envelope", Some(&value), "envelope", "partner");
+        let rendered = result["rendering"].as_str().unwrap();
+        assert!(
+            rendered.contains("DATA")
+                && rendered.contains("META")
+                && rendered.contains("amount")
+                && rendered.contains("request")
+        );
+        assert!(!rendered.contains("transport-"));
+        assert_eq!(result["inspector"]["envelope_id"], "transport-identifier");
+    }
 
     #[test]
     fn inline_definitions_keep_identifier_scope_exact() {

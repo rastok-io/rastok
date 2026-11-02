@@ -423,6 +423,8 @@ async function bothRunsWaiting(page) {
 async function capture(page, name) {
   if (!process.env.RASTOK_UI_CAPTURES) return;
   await fs.mkdir(process.env.RASTOK_UI_CAPTURES, { recursive: true });
+  await page.evaluate(() => document.fonts.ready);
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   await page.screenshot({ path: path.join(process.env.RASTOK_UI_CAPTURES, `${name}.png`) });
 }
 
@@ -1052,4 +1054,120 @@ test('source positions, keyboard summaries and graph selection share the selecte
   await seek(page, 0);
   assert.equal(await page.locator('#source-code [aria-current="step"]').count(), 0);
   assert.match(await page.locator('#source-status').innerText(), /before admission/);
+});
+
+test('source-first webhook qualification covers timeout, redaction, Retry, Reset and viewport preferences', { timeout: 90000 }, async t => {
+  const instructions = await fs.readFile(path.join(root, 'docs/site/examples/04-webhook-to-partner.md'), 'utf8');
+  const fixture = instructions.match(/RASTOK_SHOWCASE_PARTNER_TOKEN=([^\s]+)/)[1];
+  const source = 'examples/webhook-to-partner.rkg';
+  const page = await openTour(t, { width: 1440, height: 760 }, source,
+    ['simulate', source, '--ui', '--deployment', 'examples/webhook-to-partner.deployment.json'], {
+      RASTOK_SHOWCASE_PARTNER_TOKEN: fixture,
+      RASTOK_SHOWCASE_PARTNER_TOKEN_VERSION: 'fixture-v1',
+    });
+  await page.locator('[data-source-view="0"]').click();
+  await page.locator('#scenario-select').selectOption('webhook\u0000timeout_then_success');
+  await page.locator('#select-scenario').click();
+  await page.locator('#timeline-position').filter({ hasText: /^LIVE · Session 1 · transition 0$/ }).waitFor();
+  const step = async () => {
+    const revision = await page.evaluate(() => currentSnapshot.revision);
+    await page.locator('#step').click();
+    await page.waitForFunction(previous => currentSnapshot.revision > previous && pendingCommandRevision === null, revision);
+    assert.ok(!(await page.evaluate(() => JSON.stringify(currentSnapshot))).includes(fixture), 'fixture material never enters the projection');
+  };
+  const settled = async () => {
+    await page.waitForTimeout(400);
+    const marker = page.locator('#source-code [aria-current="step"]');
+    if (await marker.count()) assert.equal(await marker.evaluate(line => {
+      const pane = document.querySelector('#source-code').getBoundingClientRect();
+      const rect = line.getBoundingClientRect();
+      return rect.top >= pane.top && rect.bottom <= pane.bottom;
+    }), true, 'the marker stays inside the source viewport');
+    assert.equal(await page.evaluate(() => scrollY), 0, 'source scrolling does not move the page');
+  };
+  await step();
+  await settled();
+  await capture(page, 'source-webhook-first-transition-1440-dark');
+  for (let count = 0; count < 60; count += 1) {
+    if (await page.evaluate(() => currentSnapshot.retry_operations.some(operation => operation.phase === 'AwaitingAdmission'))) break;
+    await step();
+  }
+  assert.equal(await page.evaluate(() => currentSnapshot.retry_operations[0].attempts[0].terminal), 'TimeoutExpired');
+  await settled();
+  await capture(page, 'source-webhook-after-timeout-1440-dark');
+  const partner = page.locator('#source-code [data-source-token]').filter({ hasText: /^partner$/ }).first();
+  await partner.hover();
+  assert.match(await page.locator('#source-tooltip').innerText(), /port envelope.*\[REDACTED\]/s);
+  await capture(page, 'source-webhook-partner-port-redacted');
+  const credential = page.locator('#source-code [data-source-token]').filter({ hasText: /^auth_bearer$/ });
+  await credential.focus();
+  assert.match(await page.locator('#source-tooltip').innerText(), /secret binding.*\[REDACTED\]/s);
+  await capture(page, 'source-webhook-secret-binding-redacted');
+  const retry = page.locator('#source-code [data-source-token]').filter({ hasText: /^Retry.attempts$/ });
+  await retry.focus();
+  assert.match(await page.locator('#source-tooltip').innerText(), /Retry counter.*"attempt":"1".*"limit":"2"/s);
+  await capture(page, 'source-webhook-retry-counter');
+  await retry.press('Tab');
+  await page.keyboard.press('Enter');
+  assert.equal(await page.locator('#tab-instances').getAttribute('aria-selected'), 'true');
+  await page.locator('[data-source-view="graph"]').click();
+  await page.evaluate(() => selectTopologyItem(null));
+  await page.locator('.graph-node-name').filter({ hasText: /^partner$/ }).click();
+  assert.equal(await page.evaluate(() => selectedTopologyItemView(currentSnapshot.topology).path), 'deliver.partner');
+  assert.equal(await page.evaluate(() => selectedSourceDefinition.first_line), await page.evaluate(() => selectedTopologyItemView(currentSnapshot.topology).definition.first_line));
+  await page.mouse.move(3, 3);
+  await capture(page, 'source-webhook-graph-selection-sync');
+  await page.locator('[data-source-view="0"]').click();
+  await settled();
+  assert.ok(await page.locator('#source-code .selected-definition').count());
+  for (const width of [1440, 1024]) {
+    await page.setViewportSize({ width, height: 760 });
+    for (const colorScheme of ['dark', 'light']) {
+      await page.emulateMedia({ colorScheme });
+      await capture(page, `source-webhook-${width}-${colorScheme}`);
+    }
+  }
+  await page.emulateMedia({ reducedMotion: 'reduce', colorScheme: 'dark' });
+  await page.evaluate(() => {
+    const pane = document.querySelector('#source-code');
+    const scroll = pane.scrollTo.bind(pane);
+    pane.scrollTo = options => { globalThis.sourceScrollBehavior = options.behavior; scroll(options); };
+  });
+  await seek(page, 1);
+  assert.equal(await page.evaluate(() => sourceScrollBehavior), 'auto');
+  await capture(page, 'source-webhook-1024-reduced-motion');
+  await page.locator('#return-live').click();
+  await page.locator('[data-command="reset-scenario"]').click();
+  await page.locator('#timeline-position').filter({ hasText: /^LIVE · Session 2 · transition 0$/ }).waitFor();
+  assert.equal(await page.locator('#source-code [aria-current="step"], #source-code .selected-definition').count(), 0);
+  assert.equal(await page.locator('[data-source-view="0"]').getAttribute('aria-selected'), 'true');
+  assert.equal(await page.locator('#source-pane input, #source-pane form, #source-pane [contenteditable=true], #source-tooltip input').count(), 0);
+  await capture(page, 'source-webhook-reset');
+});
+
+test('source-first countdown qualification exposes the changing Loop counter', { timeout: 60000 }, async t => {
+  const page = await openTour(t, { width: 1440, height: 760 }, 'examples/countdown.rkg');
+  await page.locator('[data-source-view="0"]').click();
+  for (let count = 0; count < 40; count += 1) {
+    if (await page.evaluate(() => currentSnapshot.loop_runs.some(run => run.active && run.application === '2'))) break;
+    const revision = await page.evaluate(() => currentSnapshot.revision);
+    await page.locator('#step').click();
+    await page.waitForFunction(previous => currentSnapshot.revision > previous && pendingCommandRevision === null, revision);
+  }
+  const loop = page.locator('#source-code [data-source-token]').filter({ hasText: /^Loop.measure$/ });
+  await loop.focus();
+  assert.match(await page.locator('#source-tooltip').innerText(), /Loop counter.*"application":"2"/s);
+  for (const width of [1440, 1024]) {
+    await page.setViewportSize({ width, height: 760 });
+    for (const colorScheme of ['dark', 'light']) {
+      await page.emulateMedia({ colorScheme });
+      await loop.focus();
+      await capture(page, `source-countdown-counter-${width}-${colorScheme}`);
+    }
+  }
+  await loop.press('Escape');
+  await page.locator('[data-command="reset-scenario"]').click();
+  await page.locator('#timeline-position').filter({ hasText: /^LIVE · Session 1 · transition 0$/ }).waitFor();
+  assert.equal(await page.locator('#source-code [aria-current="step"]').count(), 0);
+  await capture(page, 'source-countdown-reset');
 });

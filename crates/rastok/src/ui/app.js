@@ -319,7 +319,8 @@ function scrollSourceLine(number) {
   if (!line || document.querySelector("#source-pane").hidden) return;
   const box = pane.getBoundingClientRect();
   const target = line.getBoundingClientRect();
-  if (target.top < box.top || target.bottom > box.bottom) {
+  const margin = Math.min(110, pane.clientHeight / 4);
+  if (target.top < box.top + margin || target.bottom > box.bottom - margin) {
     pane.scrollTo({ top: pane.scrollTop + target.top - box.top - pane.clientHeight / 3,
       behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
   }
