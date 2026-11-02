@@ -752,11 +752,18 @@ function renderRelatedPanels(snapshot) {
   envelope.className = "";
   envelope.replaceChildren(envelopePanel(snapshot));
   renderMailbox(snapshot.topology);
-  const definition = document.querySelector("#definition");
-  definition.className = "";
-  definition.replaceChildren(scenarioDefinitionActive
-    ? scenarioDefinitionPanel(snapshot.scenario?.current)
-    : definitionPanel(selectedTopologyItemView(snapshot.topology)));
+  const item = selectedTopologyItemView(snapshot.topology);
+  const context = document.querySelector("#node-context");
+  context.hidden = !item;
+  if (item) {
+    if (context.dataset.node !== item.id) context.open = true;
+    context.dataset.node = item.id;
+    context.querySelector("summary").textContent = `${item.path || "App"} · Node information`;
+    document.querySelector("#node-info").replaceChildren(nodeInfoPanel(item));
+  } else {
+    delete context.dataset.node;
+    document.querySelector("#node-info").replaceChildren();
+  }
   renderHistory(snapshot.history, selection);
   renderInjections(snapshot, selection);
   renderInstances(snapshot.instances, selection);
@@ -949,57 +956,7 @@ function inspectScenarioDefinition() {
   renderSource(currentSnapshot);
   renderTopology(currentSnapshot?.topology, false);
   if (currentSnapshot) renderRelatedPanels(currentSnapshot);
-  activateInspectorTab("definition");
-}
-
-function scenarioDefinitionPanel(scenario) {
-  const panel = document.createElement("aside");
-  panel.className = `node-definition${scenario ? " populated" : " empty"}`;
-  panel.setAttribute("aria-label", "Selected scenario definition");
-  if (!scenario) {
-    const title = document.createElement("h3");
-    title.textContent = "Scenario definition";
-    panel.append(title);
-    return panel;
-  }
-  const heading = document.createElement("div");
-  heading.className = "node-definition-heading";
-  const identity = document.createElement("div");
-  const eyebrow = document.createElement("p");
-  eyebrow.className = "node-definition-kind";
-  eyebrow.textContent = "scenario";
-  const title = document.createElement("h3");
-  title.textContent = `${scenario.simulation || "?"}.${scenario.scenario || "?"}`;
-  identity.append(eyebrow, title);
-  const close = document.createElement("button");
-  close.type = "button";
-  close.className = "node-definition-close secondary";
-  close.textContent = "Close";
-  close.setAttribute("aria-label", "Close scenario definition");
-  close.addEventListener("click", () => {
-    scenarioDefinitionActive = false;
-    selectedSourceDefinition = null;
-    renderSource(currentSnapshot);
-    renderRelatedPanels(currentSnapshot);
-    activateInspectorTab("envelope");
-  });
-  heading.append(identity, close);
-  const progress = document.createElement("p");
-  progress.className = "scenario-definition-progress";
-  progress.textContent = `A${scenario.next_action_index || 0}/${scenario.action_count || 0} · ${scenario.complete ? "scenario complete" : `next: ${scenario.next_action || "—"}`}`;
-  panel.append(heading, progress);
-  const definition = scenario.definition;
-  if (typeof definition?.code === "string") {
-    const note = document.createElement("p");
-    note.textContent = "Recorded actions are selectable in the source pane.";
-    panel.append(note);
-  } else {
-    const note = document.createElement("p");
-    note.className = "scenario-source-limit";
-    note.textContent = definition?.reason || "Authored scenario source is unavailable in this snapshot.";
-    panel.append(note);
-  }
-  return panel;
+  if (!selectedSourceDefinition) setCommandStatus(definition?.reason || "Authored scenario source is unavailable in this snapshot.");
 }
 
 function updateControls() {
@@ -1988,36 +1945,36 @@ function envelopeZones(meta, data) {
   return zones;
 }
 
-function definitionPanel(item) {
+function nodeInfoPanel(item) {
   const panel = document.createElement("aside");
-  panel.className = `node-definition${item ? " populated" : " empty"}`;
-  panel.setAttribute("aria-label", "Selected Node definition");
+  panel.className = "node-info";
+  panel.setAttribute("aria-label", "Selected Node information");
   if (!item?.definition) {
     const title = document.createElement("h3");
-    title.textContent = "Node definition";
+    title.textContent = "Node source unavailable";
     panel.append(title);
     return panel;
   }
 
   const heading = document.createElement("div");
-  heading.className = "node-definition-heading";
+  heading.className = "node-info-heading";
   const identity = document.createElement("div");
   const eyebrow = document.createElement("p");
-  eyebrow.className = "node-definition-kind";
+  eyebrow.className = "node-info-kind";
   eyebrow.textContent = item.kind || "node";
   const title = document.createElement("h3");
   title.textContent = item.path || item.label || "App";
   identity.append(eyebrow, title);
   const close = document.createElement("button");
   close.type = "button";
-  close.className = "node-definition-close secondary";
-  close.textContent = "Close";
-  close.setAttribute("aria-label", "Close Node definition");
+  close.className = "node-info-close secondary";
+  close.textContent = "Clear selection";
+  close.setAttribute("aria-label", "Clear Node selection");
   close.addEventListener("click", () => selectTopologyItem(item.id));
   heading.append(identity, close);
 
   const badges = document.createElement("div");
-  badges.className = "node-definition-badges";
+  badges.className = "node-info-badges";
   const extensions = [...new Set(item.extensions || [])];
   for (const label of [extensions.includes(item.type) ? null : item.type, ...extensions.map((extension) => `+ ${extension}`)]) {
     if (!label) continue;
@@ -2026,7 +1983,7 @@ function definitionPanel(item) {
     badges.append(badge);
   }
   const location = document.createElement("p");
-  location.className = "node-definition-location";
+  location.className = "node-info-location";
   const lineLabel = item.definition.first_line === item.definition.last_line
     ? `line ${item.definition.first_line}`
     : `lines ${item.definition.first_line}–${item.definition.last_line}`;

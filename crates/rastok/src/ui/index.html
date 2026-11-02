@@ -97,7 +97,6 @@
           <div class="inspector-tabs" role="tablist" aria-label="Inspector views">
             <button id="tab-envelope" role="tab" aria-controls="panel-envelope" aria-selected="true" data-inspector-tab="envelope">Envelope</button>
             <button id="tab-mailbox" role="tab" aria-controls="panel-mailbox" aria-selected="false" data-inspector-tab="mailbox" tabindex="-1">Mailbox</button>
-            <button id="tab-definition" role="tab" aria-controls="panel-definition" aria-selected="false" data-inspector-tab="definition" tabindex="-1">Definition</button>
             <button id="tab-instances" role="tab" aria-controls="panel-instances" aria-selected="false" data-inspector-tab="instances" tabindex="-1">Instances</button>
             <button id="tab-history" role="tab" aria-controls="panel-history" aria-selected="false" data-inspector-tab="history" tabindex="-1">History</button>
             <button id="tab-assertion" role="tab" aria-controls="panel-assertion" aria-selected="false" data-inspector-tab="assertion" tabindex="-1">Assertion</button>
@@ -105,8 +104,8 @@
           </div>
           <div id="panel-envelope" class="inspector-panel" role="tabpanel" aria-labelledby="tab-envelope"><div id="envelope" class="empty">No envelope selected.</div></div>
           <div id="panel-mailbox" class="inspector-panel mailbox-panel" role="tabpanel" aria-labelledby="tab-mailbox" hidden><div id="mailbox" class="empty">Select a mailbox in the graph.</div></div>
-          <div id="panel-definition" class="inspector-panel" role="tabpanel" aria-labelledby="tab-definition" hidden><div id="definition" class="empty">Select a Graph or Node.</div></div>
           <div id="panel-instances" class="inspector-panel runtime-panel" role="tabpanel" aria-labelledby="tab-instances" hidden>
+            <details id="node-context" class="node-context" hidden><summary>Selected node</summary><div id="node-info"></div></details>
             <details class="instance-section" data-label="Injections"><summary>Injections</summary><div id="injections" class="empty">No admitted injection.</div></details>
             <details class="instance-section" data-label="Instances and private state"><summary>Instances and private state</summary><div id="state" class="empty">No active instance.</div></details>
             <details class="instance-section" data-label="Loop runs"><summary>Loop runs</summary><div id="loop-runs" class="empty">No admitted Loop run.</div></details>

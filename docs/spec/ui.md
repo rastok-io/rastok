@@ -210,7 +210,7 @@ Connectors. The UI never infers execution from geometry.
   its latest recorded output. This references the original emission, not an
   extra observation or synthetic emission at the App boundary.
 - Only physical edges are pipes. `Loop.next`, `Loop.again` and `Loop.done`
-  are listed as manager commands in definitions and source-port details,
+  are listed as manager commands in node information and source-port details,
   never rendered as ports or back-edges. A command-only disposition labels
   its source `retry ⇢ Loop.next`. Exhaustion uses the host's resolved ordinary
   terminal; no `Loop.expired` pin or extra pipe exists.
@@ -223,10 +223,12 @@ Connectors. The UI never infers execution from geometry.
   limit. The tab still exposes the complete in-memory FIFO in bounded slices.
 - `⧉ n` counts currently opened instances, derived from lifecycle facts.
   Selecting it opens the filtered Instances tab; keys do not clutter the graph.
-- Selecting a node/scope filters related panels without forcing Definition.
-  Definition shows the node's identity, source location, decision evidence and
-  manager commands, with a link back to source. Source text appears in the
-  source pane. Scenario progress selects its retained DSL; recorded actions
+- Selecting a node/scope reveals and highlights its source block and filters
+  related panels without changing the active inspector tab. Instances includes
+  collapsible information for the selected node: identity, source location,
+  decision evidence and manager commands, with a link back to source. There is
+  no Definition tab. Source text appears in the source pane. Scenario progress
+  selects its retained DSL without changing inspector tabs; recorded actions
   there navigate to their transitions. Before admission there is no current
   transition marker. History selection synchronizes source and node context.
   Clicking the background clears selection. Replacing a graph frame preserves
@@ -258,7 +260,7 @@ renders runs as a table, not raw JSON.
 
 History displays r2 facts as `opened`, `admitted`, `advanced`, `closed` and
 `expired`. These are the facts' registry names, not `l:` triggers.
-Definition shows each Extension once, including the root App.
+Node information shows each Extension once, including the root App.
 Retry history separately names admission, holding, scheduling, final publication
 and stopping. A held batch can highlight its consumed input, never an outgoing
 public/discard route inferred from static topology. The future strip shows a
@@ -271,7 +273,7 @@ and the browser regression `Retry keeps held attempts inspectable…`; execution
 status is explicit in [C4](../architecture/retry-c4-inspection.md).
 
 The page has a compact transport row, a timeline row, source tabs, a complementary
-Graph canvas and Envelope / Mailbox / Definition / Instances / History /
+Graph canvas and Envelope / Mailbox / Instances / History /
 Assertion / Compare inspector tabs.
 Tabs wrap without overlapping their panel. Instances, History and a selected
 Mailbox show entry counts; Assertion names an evaluated result. Instances
@@ -361,7 +363,7 @@ browser regression checks the same absence in LIVE, HISTORY and REPLAY.
 Scenario source is a physical compiler side table, not a reconstruction from
 values. Until source-level redaction exists, a program with classified ports,
 state or owner bindings exposes no raw scenario text: an injection, mock or
-assertion literal must not bypass DATA redaction through Definition. Unclassified
+assertion literal must not bypass DATA redaction through source inspection. Unclassified
 scenario source retains comments and original line numbers without changing
 the plan or semantic hash.
 
@@ -414,9 +416,9 @@ append a record or modify the live machine.
   and the Loop run/application/fuel/due instant/resolved exhaustion terminal.
   Capacity is the actual shared instance-mailbox capacity, not an invented
   independent budget per pipe. Missing resolved type information says unavailable.
-- **Decisions.** Selecting an Operator transaction in history and opening
-  Definition explains its decision while source highlights the chosen authored
-  arm. The read model resolves consumed
+- **Decisions.** Selecting an Operator transaction in history and opening its
+  node information in Instances explains its decision while source highlights
+  the chosen authored arm. The read model resolves consumed
   ids from journal routes/cursors, folds private state up to but **not including**
   this transaction, and reconstructs recorded META, logical time, immutable
   bindings, named join inputs and Loop state. The core's pure Dispatch evaluator
@@ -425,6 +427,7 @@ append a record or modify the live machine.
   Compiler source spans are a debug side table, never part of plan identity.
   A chosen outer arm does not highlight unchosen nested arms.
   A case-routed pipe highlights the case of its selected/latest source envelope.
+  **Status: shipped.**
 - **Causal links.** Envelope selection highlights the recorded origin lineage in
   pipes, nodes and journal rows. Origin and parent links navigate to recorded
   envelopes; system metadata without a DATA observation says so. Command links explicitly

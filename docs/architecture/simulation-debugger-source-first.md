@@ -19,7 +19,7 @@ inspector above the complementary Graph pane. The columns start at equal widths
 and the right panes at equal heights.
 The source pane shows line numbers, syntax coloring and a current-transition
 marker. The inspector remains on the right with Envelope, Mailbox,
-Definition, Instances, History, Assertion and Compare. Graph keeps the
+Instances, History, Assertion and Compare. Graph keeps the
 existing layout engine, ports, iteration dial and interaction. Selecting a graph
 node scrolls to its definition in the source tab and selects its inspector context.
 The current source marker identifies that node in Graph. The transport,
@@ -39,11 +39,13 @@ retryable fault. Scenario changes take effect from the selector; its progress
 button selects the scenario source. The history-session selector appears when
 more than one session exists.
 
-Definition retains decision evidence, node information and manager commands;
-source text appears once, in the primary pane. Recorded scenario actions are
-selectable there. A history record selects the same source definition and graph
-node. Instance sections show counts and start folded when empty; a user's fold
-persists while a section remains populated. The inspector retains its tabs.
+Selecting a graph node reveals and highlights its source block without switching
+inspector tabs. Instances retains decision evidence, node information and manager
+commands in a collapsible section for the selected node. There is no Definition
+tab; source text appears once, in the primary pane. Recorded scenario actions
+are selectable there without switching inspector tabs. A history record selects
+the same source definition and graph node. Instance sections show counts and
+start folded when empty; a user's fold persists while a section remains populated.
 
 Source typography uses embedded JetBrains Mono regular and semibold faces with
 ligatures. Same-origin font routes retain capability authorization and the

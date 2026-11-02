@@ -176,7 +176,7 @@ fn resolve(
         return summary(
             "secret binding",
             Some(&json!({"redacted": true})),
-            "definition",
+            "instances",
             owner,
         );
     }
@@ -301,7 +301,7 @@ fn resolve(
             }
         }
     }
-    summary("identifier", None, "definition", owner)
+    summary("identifier", None, "instances", owner)
 }
 
 pub(super) fn tokens(
@@ -442,7 +442,7 @@ pub(super) fn tokens(
                 .unwrap_or_default();
             let hover = (kind == "identifier").then(|| {
                 if ambiguous {
-                    let mut value = summary("identifier", None, "definition", "");
+                    let mut value = summary("identifier", None, "instances", "");
                     value["rendering"] = json!(
                         "Scope unavailable: identical retained declarations share this source line"
                     );

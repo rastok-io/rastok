@@ -748,8 +748,9 @@ test('Operator decisions highlight the exact authored arm and ordered predicate 
     await seek(page, transition);
     const node = page.locator('.graph-node-name').filter({ hasText: /^decide$/ });
     if (await node.locator('..').getAttribute('aria-pressed') !== 'true') await node.click();
-    await page.locator('#tab-definition').click();
+    await page.locator('#tab-instances').click();
     assert.match(await page.locator('.decision-explanation').innerText(), new RegExp(`Selected case: ${expected}`));
+    assert.match(await page.locator('#node-info').innerText(), /Manager commands.*Loop.next/s);
     assert.ok((await page.locator('#source-code .source-line.fired').allTextContents()).some(line => line.includes(`${expected} =>`)));
     await capture(page, `decision-${expected}`);
   }
@@ -757,7 +758,7 @@ test('Operator decisions highlight the exact authored arm and ordered predicate 
   await finish(sample);
   const decision = await sample.evaluate(() => boundaryForRecord(currentSnapshot.history.records.findLast(record => record.owner === 'classify' && record.decision).record_index));
   await seek(sample, decision);
-  await sample.evaluate(() => { selectTopologyItem(currentSnapshot.topology.nodes.find(node => node.path === 'classify').id); activateInspectorTab('definition'); });
+  await sample.evaluate(() => { selectTopologyItem(currentSnapshot.topology.nodes.find(node => node.path === 'classify').id); activateInspectorTab('instances'); });
   assert.match(await sample.locator('.decision-explanation').innerText(), /data < 0 = false.*seen == 0 = true/s);
   const fired = (await sample.locator('#source-code .source-line.fired').allTextContents()).join('\n');
   assert.match(fired, /true =>/);
@@ -883,7 +884,7 @@ test('the explanatory path is reachable with Tab and keyboard alone', { timeout:
   assert.match(await page.locator('#graph-tooltip').innerText(), /waiting until/);
   assert.match(await page.locator('.graph-loop-dial').evaluate(element => element.firstChild.textContent), /⟳ 1\/2.*⏱/);
   await search('decide');
-  await inspector('definition');
+  await inspector('instances');
   await page.keyboard.press('Enter');
   assert.match(await page.locator('.decision-explanation').innerText(), /TimeoutExpired/);
   await tabTo(page.locator('#timeline'));
@@ -957,7 +958,7 @@ for (const example of ['echo', 'jsonl', 'gauge', 'countdown', 'keyed-retry', 'fi
     };
     await assertText();
     await finish(page);
-    for (const tab of ['envelope', 'instances', 'history', 'definition', 'mailbox']) { await page.locator(`#tab-${tab}`).click(); await assertText(); }
+    for (const tab of ['envelope', 'instances', 'history', 'mailbox']) { await page.locator(`#tab-${tab}`).click(); await assertText(); }
     await seek(page, 0);
     await assertText();
     await page.locator('[data-command="resume"]').click();
@@ -1098,7 +1099,38 @@ test("visible buffered Play honors both selected speeds", { timeout: 60000 }, as
   assert.ok(fast >= 180 && fast < slow * 0.6, `4 events/s interval ${fast} ms, 1 event/s ${slow} ms`);
 });
 
-test("keyboard node selection retains focus and does not force Definition", { timeout: 60000 }, async t => {
+test("graph selection reveals the source block without a Definition tab or execution", { timeout: 60000 }, async t => {
+  const page = await openTour(t, undefined, 'examples/agent-chat.rkg');
+  const commands = [];
+  page.on('request', request => { if (request.method() === 'POST') commands.push(new URL(request.url()).pathname); });
+  assert.equal(await page.locator('#tab-definition, #panel-definition').count(), 0);
+  assert.deepEqual(await page.locator('[data-inspector-tab]').evaluateAll(tabs => tabs.map(tab => tab.dataset.inspectorTab)),
+    ['envelope', 'mailbox', 'instances', 'history', 'assertion', 'compare']);
+  await page.locator('.graph-node-name').filter({ hasText: /^validate$/ }).click();
+  const definition = await page.evaluate(() => selectedTopologyItemView(currentSnapshot.topology).definition);
+  const selected = await page.locator('#source-code .selected-definition').evaluateAll(lines => lines.map(line => Number(line.dataset.line)));
+  assert.deepEqual(selected, Array.from({ length: definition.last_line - definition.first_line + 1 }, (_, index) => definition.first_line + index));
+  assert.equal(await page.locator('#tab-envelope').getAttribute('aria-selected'), 'true');
+  assert.equal(await page.locator('#timeline').inputValue(), '0');
+  await page.locator('#tab-instances').click();
+  assert.ok(await page.locator('#node-context').isVisible());
+  assert.match(await page.locator('#node-info').innerText(), /validate/);
+  await page.waitForFunction(line => {
+    const source = document.querySelector('#source-code').getBoundingClientRect();
+    const selected = document.querySelector(`#source-code .source-line[data-line="${line}"]`).getBoundingClientRect();
+    return selected.top >= source.top && selected.bottom <= source.bottom;
+  }, definition.first_line);
+  assert.equal(await page.evaluate(() => scrollY), 0, 'selection scrolls only the source pane');
+  await capture(page, 'node-chat-source-selection');
+  await page.locator('#node-context > summary').click();
+  await page.locator('#scenario-status').click();
+  assert.equal(await page.locator('#tab-instances').getAttribute('aria-selected'), 'true');
+  assert.ok(await page.locator('#source-code .selected-definition').count());
+  assert.equal(await page.locator('#node-context').isVisible(), false);
+  assert.deepEqual(commands, [], 'source and inspector navigation never execute a command');
+});
+
+test("keyboard node selection retains focus and the inspector tab", { timeout: 60000 }, async t => {
   const page = await openTour(t);
   const node = page.locator('.graph-node[role="button"]').first();
   await node.focus();
@@ -1161,7 +1193,7 @@ test("narrow history keeps Return live and session navigation reachable", { time
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
 });
 
-test("scenario Definition shows authored DSL and reset selects a fresh B0", { timeout: 60000 }, async t => {
+test("scenario selection shows authored DSL and reset selects a fresh B0", { timeout: 60000 }, async t => {
   const page = await openTour(t);
   await page.locator("#scenario-status").click();
   assert.match(await page.locator("#source-code .selected-definition").allTextContents().then(lines => lines.join('\n')), /app.in = \{ tenant = "alice"/);
@@ -1335,7 +1367,12 @@ test('source-first webhook qualification covers timeout, redaction, Retry, Reset
   const credential = page.locator('#source-code [data-source-token]').filter({ hasText: /^auth_bearer$/ });
   await credential.focus();
   assert.match(await page.locator('#source-tooltip').innerText(), /secret binding.*\[REDACTED\]/s);
+  assert.equal(await page.locator('#source-tooltip a').getAttribute('href'), '#panel-instances');
   await capture(page, 'source-webhook-secret-binding-redacted');
+  await credential.press('Tab');
+  await page.keyboard.press('Enter');
+  assert.equal(await page.locator('#tab-instances').getAttribute('aria-selected'), 'true');
+  assert.match(await page.locator('#node-info').innerText(), /deliver.partner/);
   const retry = page.locator('#source-code [data-source-token]').filter({ hasText: /^Retry.attempts$/ });
   await retry.focus();
   assert.match(await page.locator('#source-tooltip').innerText(), /Retry counter.*attempt 1\/2/s);
@@ -1427,7 +1464,7 @@ test('source, inspector and graph share two persistent accessible splitters', { 
   const sourceCode = await page.locator('#source-code').boundingBox();
   assert.ok(scenarioStatus.y >= heading.y + heading.height && scenarioStatus.y + scenarioStatus.height <= sourceCode.y,
     'scenario progress fits between the source header and code');
-  assert.equal(await page.locator('[data-inspector-tab]').count(), 7);
+  assert.equal(await page.locator('[data-inspector-tab]').count(), 6);
   assert.equal(await page.locator('[data-source-view="graph"]').count(), 0, 'graph does not replace the source');
   const boundary = await page.locator('#timeline').inputValue();
   const drag = async (selector, dx, dy) => {
@@ -1599,9 +1636,9 @@ test('audit: history selection keeps source and node context together', { timeou
   assert.equal(await page.evaluate(() => selectedSourceDefinition?.first_line),
     await page.evaluate(() => selectedTopologyItemView(currentSnapshot.topology).definition.first_line));
   assert.equal(await page.locator('.graph-node.selected').count(), 1);
-  await page.locator('#tab-definition').click();
-  assert.equal(await page.locator('#definition .node-definition-code').count(), 0, 'source text is shown once');
-  assert.ok(await page.locator('#definition .decision-explanation').isVisible());
+  await page.locator('#tab-instances').click();
+  assert.equal(await page.locator('#node-info pre').count(), 0, 'source text is shown once');
+  assert.ok(await page.locator('#node-info .decision-explanation').isVisible());
   await capture(page, 'audit-history-source-selection');
 });
 
