@@ -38,6 +38,9 @@ const INDEX_HTML: &str = include_str!("index.html");
 const APP_CSS: &str = include_str!("app.css");
 const GRAPH_LAYOUT_JS: &str = include_str!("graph_layout.js");
 const APP_JS: &str = include_str!("app.js");
+const SOURCE_FONT: &[u8] = include_bytes!("fonts/JetBrainsMono-Regular.woff2");
+const SOURCE_FONT_SEMIBOLD: &[u8] = include_bytes!("fonts/JetBrainsMono-SemiBold.woff2");
+const SOURCE_FONT_LICENSE: &str = include_str!("fonts/OFL.txt");
 const COMMAND_CAPACITY: usize = 32;
 const SNAPSHOT_CAPACITY: usize = 1;
 const SSE_CAPACITY: usize = 8;
@@ -427,6 +430,17 @@ async fn handle(
             (&Method::GET, "/app.js") => {
                 response(StatusCode::OK, "text/javascript; charset=utf-8", APP_JS)
             }
+            (&Method::GET, "/fonts/JetBrainsMono-Regular.woff2") => {
+                response(StatusCode::OK, "font/woff2", SOURCE_FONT)
+            }
+            (&Method::GET, "/fonts/JetBrainsMono-SemiBold.woff2") => {
+                response(StatusCode::OK, "font/woff2", SOURCE_FONT_SEMIBOLD)
+            }
+            (&Method::GET, "/fonts/OFL.txt") => response(
+                StatusCode::OK,
+                "text/plain; charset=utf-8",
+                SOURCE_FONT_LICENSE,
+            ),
             (&Method::GET, "/api/snapshot") => historical_snapshot(&request, &context),
             (&Method::GET, "/api/timeline") => timeline_response(&context),
             (&Method::GET, "/api/events") => sse_response(context.revision.subscribe()),
@@ -868,7 +882,7 @@ mod tests {
         .expect("static timeline JSON")
     }
 
-    fn request(address: SocketAddr, request: &str) -> String {
+    fn request_bytes(address: SocketAddr, request: &str) -> Vec<u8> {
         let mut stream = std::net::TcpStream::connect(address).expect("loopback server accepts");
         stream
             .set_read_timeout(Some(Duration::from_secs(2)))
@@ -876,11 +890,62 @@ mod tests {
         stream
             .write_all(request.as_bytes())
             .expect("request writes");
-        let mut response = String::new();
-        stream
-            .read_to_string(&mut response)
-            .expect("response reads");
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).expect("response reads");
         response
+    }
+
+    fn request(address: SocketAddr, request: &str) -> String {
+        String::from_utf8(request_bytes(address, request)).expect("text response")
+    }
+
+    #[test]
+    fn source_fonts_and_license_are_embedded_and_capability_protected() {
+        let server = UiServer::start(None, initial()).expect("server starts");
+        for (path, content_type, expected) in [
+            (
+                "/fonts/JetBrainsMono-Regular.woff2",
+                "font/woff2",
+                SOURCE_FONT,
+            ),
+            (
+                "/fonts/JetBrainsMono-SemiBold.woff2",
+                "font/woff2",
+                SOURCE_FONT_SEMIBOLD,
+            ),
+            (
+                "/fonts/OFL.txt",
+                "text/plain; charset=utf-8",
+                SOURCE_FONT_LICENSE.as_bytes(),
+            ),
+        ] {
+            let unauthorized = request(
+                server.address,
+                &format!(
+                    "GET {path} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+                    server.address
+                ),
+            );
+            assert!(unauthorized.starts_with("HTTP/1.1 401"));
+            let authorized = request_bytes(
+                server.address,
+                &format!(
+                    "GET {path} HTTP/1.1\r\nHost: {}\r\nCookie: rastok_ui={}\r\nConnection: close\r\n\r\n",
+                    server.address, server.capability
+                ),
+            );
+            let split = authorized
+                .windows(4)
+                .position(|bytes| bytes == b"\r\n\r\n")
+                .expect("HTTP header terminator");
+            let headers = std::str::from_utf8(&authorized[..split]).expect("text headers");
+            assert!(headers.starts_with("HTTP/1.1 200"));
+            assert!(headers.contains(&format!("content-type: {content_type}")));
+            assert!(headers.contains("default-src 'self'"));
+            assert!(!headers.contains("unsafe-inline"));
+            assert_eq!(&authorized[split + 4..], expected);
+        }
+        assert_eq!(server.try_command(), None);
     }
 
     #[test]

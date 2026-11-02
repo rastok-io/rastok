@@ -20,6 +20,38 @@ before(async () => {
 });
 after(async () => { await browser?.close(); });
 
+test('source ligatures use embedded JetBrains Mono and change glyphs without changing text', { timeout: 60000 }, async t => {
+  const page = await openTour(t, { width: 1440, height: 760 }, 'examples/echo.rkg');
+  const faces = await page.evaluate(async () => {
+    const loaded = await document.fonts.load('13px "Rastok Source"', '-> != ==');
+    return loaded.map(face => ({ family: face.family, status: face.status }));
+  });
+  assert.ok(faces.length > 0 && faces.every(face => face.status === 'loaded'), 'source fonts load from embedded assets, independently of installed fonts');
+  const client = await page.context().newCDPSession(page);
+  await client.send('DOM.enable');
+  await client.send('CSS.enable');
+  const { root: documentNode } = await client.send('DOM.getDocument');
+  const { nodeId } = await client.send('DOM.querySelector', { nodeId: documentNode.nodeId, selector: '#source-code .syntax-punctuation' });
+  const { fonts } = await client.send('CSS.getPlatformFontsForNode', { nodeId });
+  assert.ok(fonts.some(font => font.isCustomFont && font.familyName === 'JetBrains Mono' && font.glyphCount > 0), 'the rendered source uses the bundled face');
+  for (const [name, spelling] of [['arrow', '->'], ['not-equal', '!='], ['equal', '==']]) {
+    const operator = page.locator('#source-code .syntax-punctuation').filter({ hasText: new RegExp(`^${spelling}$`) }).first();
+    const enabled = await operator.screenshot({ animations: 'disabled' });
+    await operator.evaluate(element => { element.style.fontFeatureSettings = '"calt" 0, "liga" 0'; });
+    const disabled = await operator.screenshot({ animations: 'disabled' });
+    assert.ok(!enabled.equals(disabled), `${spelling} changes its drawn glyphs when ligatures are enabled`);
+    assert.equal(await operator.textContent(), spelling, 'the original operator text stays intact');
+    await operator.evaluate(element => element.style.removeProperty('font-feature-settings'));
+    if (process.env.RASTOK_UI_CAPTURES) {
+      await fs.mkdir(process.env.RASTOK_UI_CAPTURES, { recursive: true });
+      await fs.writeFile(path.join(process.env.RASTOK_UI_CAPTURES, `ligature-${name}-on.png`), enabled);
+      await fs.writeFile(path.join(process.env.RASTOK_UI_CAPTURES, `ligature-${name}-off.png`), disabled);
+    }
+  }
+  assert.equal(await page.locator('#timeline').inputValue(), '0');
+  await capture(page, 'ligature-echo-jetbrains');
+});
+
 test('source regions fold with the keyboard and reveal the actual transition', { timeout: 60000 }, async t => {
   const page = await openTour(t, { width: 1440, height: 760 }, 'examples/echo.rkg');
   const fold = line => page.locator(`.source-line[data-line="${line}"] .source-fold`);

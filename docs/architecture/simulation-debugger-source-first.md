@@ -45,10 +45,12 @@ selectable there. A history record selects the same source definition and graph
 node. Instance sections show counts and start folded when empty; a user's fold
 persists while a section remains populated. The inspector retains its tabs.
 
-Source typography enables ligatures with the installed Fira Code first in the
-font stack and the existing monospace fallbacks. No font is downloaded. The
-source string and Unicode columns are unchanged. Multiline brace regions come
-from retained lexer tokens, excluding string and comment contents. A region
+Source typography uses embedded JetBrains Mono regular and semibold faces with
+ligatures. Same-origin font routes retain capability authorization and the
+existing content security policy. The font license is included in the binary
+and available through a static route. No installed font or external service is
+required. The source string and Unicode columns are unchanged. Multiline brace
+regions come from retained lexer tokens, excluding string and comment contents. A region
 crossing unavailable recording lines has no folding control. A closing line
 shared with another statement stays visible. Nested folds persist per source
 within the tab, separately from the execution prefix. Transition and definition

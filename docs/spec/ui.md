@@ -30,7 +30,7 @@ rastok simulate app.rkg [lab.rkg] --ui [--ui-port PORT]
 The port is nonzero, specified at most once and requires `--ui`; otherwise
 the OS chooses a free loopback port. The server binds only `127.0.0.1`,
 prints its capability-bearing URL and does not open a browser automatically.
-The page is embedded HTML/CSS/JS: no frontend dependency, asset filesystem
+The page and source fonts are embedded assets: no frontend build, asset filesystem
 lookup or build service. `run --ui` and `check --ui` refuse before effects.
 A build without the capability refuses by name.
 
@@ -169,8 +169,9 @@ its pane and respects reduced motion. Source tab selection and splitters remain
 physical UI state. The controller, transport commands, iteration dial and
 recording format are unchanged. **Status: shipped.**
 
-Source typography enables coding ligatures when the installed font supports
-them; the underlying text and columns stay unchanged. Gutter controls fold
+Source typography uses embedded JetBrains Mono with coding ligatures, without
+requiring installed fonts or an external font service. The underlying text and
+columns stay unchanged. Gutter controls fold
 multiline brace regions from retained tokens, excluding comments, strings and
 unavailable recording lines. Folded ranges preserve original line numbers.
 Nested folds persist within the browser tab. Navigation to a transition or
