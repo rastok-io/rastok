@@ -1613,7 +1613,7 @@ fn simulate_fails_loudly_on_a_broken_expectation() {
     let path = std::env::temp_dir().join("rastok-cli-evidence-broken.rkg");
     std::fs::write(
         &path,
-        source.replace("data == \"salut\"", "data == \"autre\""),
+        source.replace("data == \"hello\"", "data == \"other\""),
     )
     .expect("a writable temp dir");
     let output = rastok()
@@ -1653,7 +1653,7 @@ fn simulate_saves_then_compares_reference_traces() {
     assert!(output.status.success(), "{output:?}");
     assert_eq!(std::fs::read_to_string(&path).unwrap(), stored);
     // A changed reference is named, not hex-dumped or overwritten.
-    let changed = stored.replace("73616c7574", "6175747265");
+    let changed = stored.replace("68656c6c6f", "6f74686572");
     std::fs::write(&path, &changed).expect("the alteration");
     let output = rastok()
         .args(["simulate"])
@@ -1667,7 +1667,7 @@ fn simulate_saves_then_compares_reference_traces() {
     assert!(stdout.contains("FAIL smoke.roundtrip"), "{stdout}");
     assert!(stdout.contains("golden divergence"), "{stdout}");
     assert!(
-        stdout.contains("expected \"autre\"; got \"salut\""),
+        stdout.contains("expected \"other\"; got \"hello\""),
         "{stdout}"
     );
     assert!(stdout.contains("cause: INGRESS"), "{stdout}");

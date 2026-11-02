@@ -36,7 +36,7 @@ their declared ports.
 
 ## Expected result
 
-In `smoke.roundtrip`, `relay` forwards `salut` and the Lab supplies the
+In `smoke.roundtrip`, `relay` forwards `hello` and the Lab supplies the
 `shell` response without starting a process.
 
 ```mermaid
@@ -45,12 +45,12 @@ sequenceDiagram
     participant app as echo
     participant relay as relay
     participant shell as shell: Process
-    lab->>app: in = salut
-    app->>relay: in = salut
-    relay->>shell: out to in = salut
+    lab->>app: in = hello
+    app->>relay: in = hello
+    relay->>shell: out to in = hello
     shell->>lab: Scripted Call request
-    lab-->>shell: out = salut, exit = Exited(0)
-    shell-->>app: out = salut
+    lab-->>shell: out = hello, exit = Exited(0)
+    shell-->>app: out = hello
     Note over shell: Exited is disposed to nothing
 ```
 
@@ -58,15 +58,15 @@ Three scenarios pass. A nonempty line is echoed, an empty line never calls the
 Process, and a silent Process produces `TimeoutExpired` after virtual time
 advances.
 
-For the same `salut` input used by the roundtrip scenario:
+For the same `hello` input used by the roundtrip scenario:
 
 ```sh
-printf 'salut\n' | rastok run examples/echo.rkg --record echo.rkrec
+printf 'hello\n' | rastok run examples/echo.rkg --record echo.rkrec
 rastok replay echo.rkrec
 rastok replay echo.rkrec --ui
 ```
 
-The real run and recorded replay print `salut` without a port prefix: Echo has
+The real run and recorded replay print `hello` without a port prefix: Echo has
 one App output. Their summary lines report the same causal seal.
 Only the first command starts `cat`. The recording viewer needs neither the
 source nor the original process. Use a new filename for another recording.
