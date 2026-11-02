@@ -990,7 +990,7 @@ function updateControls() {
           : "not legal at the current execution state";
       }
     }
-    button.title = reason ? `${base} — unavailable: ${reason}.` : base;
+    button.title = reason ? `${base}. Unavailable: ${reason}.` : base;
     button.setAttribute("aria-label", reason ? `${base}. Unavailable: ${reason}.` : base);
   }
   const playing = bufferedPlayback || liveSnapshot?.execution?.state === "running" || liveSnapshot?.execution?.state === "pause-requested";
@@ -1005,7 +1005,7 @@ function updateControls() {
   const back = document.querySelector("#back-boundary");
   back.disabled = frames.findIndex((frame) => Number(frame.boundary) === boundary) <= 0;
   back.title = back.disabled
-    ? "Back — no earlier recorded transition exists on this session."
+    ? "Back: no earlier recorded transition exists on this session."
     : "Back: view the previous recorded transition";
   document.querySelector("#take-control").hidden = controls;
   updateScenarioGutter();
@@ -1072,7 +1072,7 @@ function renderScenario(scenario, enabled) {
       options.push({
         value: `${simulation.name}\u0000${item.name}`,
         label: item.label
-          ? `${simulation.name}.${item.name} — ${item.label}`
+          ? `${simulation.name}.${item.name} · ${item.label}`
           : `${simulation.name}.${item.name}`,
       });
     }
