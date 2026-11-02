@@ -36,6 +36,7 @@ let scenarioDefinitionActive = false;
 let graphResizeObserver = null;
 let graphTextSync = null;
 let activeSourceView = sessionStorage.getItem("rastok-source-view") || null;
+let lastSourcePoint = null;
 const sourceScroll = new Map();
 const sourceValues = new Map();
 const graphViewport = { scale: 1, x: 0, y: 0 };
@@ -195,6 +196,11 @@ function selectSourceView(view, focus = false) {
 
 function renderSource(snapshot) {
   const sources = snapshot?.sources || [];
+  const position = snapshot?.current_position;
+  const point = `${snapshot?.timeline?.session}:${snapshot?.timeline?.boundary}`;
+  const advanced = point !== lastSourcePoint;
+  lastSourcePoint = point;
+  if (advanced && activeSourceView !== "graph" && position?.status === "available") activeSourceView = String(position.source_index);
   if (!activeSourceView || (activeSourceView !== "graph" && !sources.some(source => String(source.index) === activeSourceView))) {
     activeSourceView = sources.length ? String(sources[0].index) : "graph";
   }
@@ -244,7 +250,15 @@ function renderSource(snapshot) {
   }
   source.text.split("\n").slice(0, source.line_count).forEach((text, index) => {
     const line = document.createElement("span");
-    line.className = "source-line";
+    const atSource = position?.status === "available" && position.source_index === source.index;
+    const current = atSource && index + 1 >= position.first_line && index + 1 <= position.last_line;
+    const fired = atSource && (position.fired_lines || []).includes(index + 1);
+    line.className = `source-line${current ? " current-range" : ""}${fired ? " fired" : ""}`;
+    if (atSource && index + 1 === position.first_line) {
+      line.classList.add("current-position");
+      line.setAttribute("aria-current", "step");
+      line.dataset.nodePath = position.node_path ?? "";
+    }
     line.dataset.line = String(index + 1);
     const chars = Array.from(text);
     let offset = 0;
@@ -266,7 +280,24 @@ function renderSource(snapshot) {
   });
   pane.scrollLeft = previousScroll[0];
   pane.scrollTop = previousScroll[1];
-  text("source-status", source.redacted ? "Lab source withheld by data policy" : source.complete ? "Read-only source" : "Recorded excerpts · missing source is marked");
+  const policy = source.redacted ? " · Lab source withheld by data policy" : source.complete ? "" : " · recorded excerpts";
+  text("source-status", (position?.status === "available"
+    ? `Transition ${snapshot.timeline.boundary} · ${position.node_path || "App"}${position.port ? `.${position.port}` : ""} · line ${position.first_line}`
+    : position?.reason || "Read-only source") + policy);
+  if (advanced) scrollSourceLine(position?.source_index === source.index ? position.first_line : null);
+}
+
+function scrollSourceLine(number) {
+  if (!number) return;
+  const pane = document.querySelector("#source-code");
+  const line = pane.querySelector(`[data-line="${number}"]`);
+  if (!line || document.querySelector("#source-pane").hidden) return;
+  const box = pane.getBoundingClientRect();
+  const target = line.getBoundingClientRect();
+  if (target.top < box.top || target.bottom > box.bottom) {
+    pane.scrollTo({ top: pane.scrollTop + target.top - box.top - pane.clientHeight / 3,
+      behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+  }
 }
 
 function renderLiveExecutionState() {

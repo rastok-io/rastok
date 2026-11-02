@@ -362,3 +362,8 @@ tr.timeline-record:focus { outline: 1px solid var(--boundary); outline-offset: -
 .syntax-number { color: var(--scope); }
 .syntax-punctuation { color: var(--muted); }
 #source-code:focus-visible { outline: 1px solid var(--boundary); outline-offset: -1px; }
+
+#source-code .current-range { background: var(--boundary-soft); }
+#source-code .source-line.fired { border-left: 0; box-shadow: inset 2px 0 var(--boundary); }
+#source-code .current-position::before { content: "▶ " attr(data-line); color: var(--boundary); font-weight: 700; }
+@media (prefers-reduced-motion: reduce) { #source-code { scroll-behavior: auto; } }
