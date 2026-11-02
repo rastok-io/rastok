@@ -26,7 +26,7 @@ lab <App-name> {
 |---|---|
 | `lab <App-name>` | Matches the compilation unit's App; same-named fragments merge across source files |
 | `simulation <name> on app` | Shared mocks and scenarios for the complete App |
-| `mock <connector-path>` | Names an actual Connector; paths are relative to the App root |
+| `mock <connector-path>` | Names an actual Connector: name a child of the App root directly, or a top-level declaration by its name |
 | `scenario <name> "label"` | Independent run with its own mocks, origin and sequence of actions; label optional |
 | Scenario-level mock | Replaces the whole shared mock for that Connector; branches are not merged |
 | Unit-level `val` | Available in mocks, injections, predicates and durations; Graph-local bindings do not escape into the Lab |
@@ -118,7 +118,7 @@ rastok simulate examples/echo.rkg --save examples/traces/echo
 | `--compare <dir>` | Compare with stored traces, without modifying them |
 | `--save <dir>` | Write or replace reference traces for intentional review |
 | Both | Usage error |
-| `--ui` | Inspect simulation boundaries and run them step by step in the debugger |
+| `--ui` | Inspect simulation boundaries and run them step by step in the debugger (requires a `hosted-ui` build) |
 
 Each file is `<simulation>.<scenario>.trace`. The stored format is
 deterministic CBOR rendered as one lowercase hexadecimal line per causal

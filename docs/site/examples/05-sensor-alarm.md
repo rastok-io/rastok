@@ -76,12 +76,8 @@ independent state. A keyed join pairs a probe with a heartbeat within five
 minutes; only the unanswered probe expires in the silent-sensor scenario.
 The final scenario advances twenty-four virtual hours in one authored action.
 
-On the local macOS arm64 reference host, three warm invocations of the debug
-CLI running **all three scenarios** took **12.118 ms, 8.899 ms and 7.616 ms**.
-Compilation and golden comparison were excluded. These are measured process
-wall times, not a promise about another machine or a production workload.
-A prior cold invocation took 10.94 s; neither number changes logical time.
-Reproduce the warm measurement with an external monotonic timer:
+With Ruby and the built `target/debug/rastok` available, this command measures
+process wall time on your machine; it does not change the scenario's logical time:
 
 ```sh
 ruby -e '3.times { t = Process.clock_gettime(Process::CLOCK_MONOTONIC); ok = system(*ARGV); puts format("elapsed_cli_seconds=%.6f", Process.clock_gettime(Process::CLOCK_MONOTONIC) - t); exit 1 unless ok }' target/debug/rastok simulate examples/sensor-alarm.rkg

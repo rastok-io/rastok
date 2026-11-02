@@ -50,9 +50,9 @@ the next change can be checked against it.
 
 - Types include exact decimals, timestamps with and without zones, structs, arrays, maps and unions; projections target JSON Schema, Avro, Arrow and OpenAPI. [Types and schemas](reference/types.md), [guide](guide/02-types-and-expressions.md)
 - Expressions combine `match`, `is` and `as`; wiring provides bounded static fan-out. [Expressions and dispatch](reference/expressions.md)
-- Keys scope instances by client, with `persistent`, `idle`, `fixed`, `single_pass` and `tumbling` lifetimes, and joins bound waiting. [Instances, state and time](guide/06-instances-state-and-time.md)
+- Keys scope instances by tenant, sensor or event, with `persistent`, `idle`, `fixed`, `single_pass` and `tumbling` lifetimes, and joins bound waiting. [Instances, state and time](guide/06-instances-state-and-time.md)
 - Loop can prove termination through a decreasing measure; Retry checks the safe-repetition rule. [Loops and retries](guide/07-loops-and-retries.md)
-- Typed Contracts define HTTP/1.1 to HTTP/3, WebSocket, process and file exchanges. [Standard contracts](reference/contracts.md), [guide](guide/03-connectors-and-outcomes.md)
+- Typed Contracts define HTTP/1.1 to HTTP/3 (HTTP/3 behind the `hosted-http3` feature), WebSocket, process and file exchanges. [Standard contracts](reference/contracts.md), [guide](guide/03-connectors-and-outcomes.md)
 - The Lab supplies mocks, scenarios, virtual time, injected faults and golden traces. [The Lab](reference/lab.md), [guide](guide/04-the-lab.md)
 - The journal records execution; recording, replay and the debugger expose those facts for inspection. [Running for real](guide/05-running-for-real.md)
 - Schema annotations declare personal data, secrets and measurements. [Privacy, secrets and measurements](guide/08-privacy-secrets-and-measurements.md)
@@ -107,7 +107,7 @@ over time. `Retry` repeats the same outbound Call under a bounded policy
 the compiler checks. The executable standard Contract families are
 `Process`, `File`, `HttpClient`, `HttpServer`, `WebSocketClient` and
 `WebSocketServer`; `rastok connectors` lists their modes, installed
-implementations and Lab limits.
+implementations, Lab bindings and untested cases.
 
 The Lab lives in the same file. This is the scenario that tests the fault
 case, a process that never answers:
@@ -152,9 +152,9 @@ interprets that plan. `rastok simulate` supplies scripted boundary responses
 and virtual time; `rastok run` uses physical Drivers and explicit elapsed
 time.
 
-The core reads no clock, network or randomness: CI builds it for targets
-without an operating system and runs the RP2350 spike under Cortex-M33
-emulation; [Sensor alarm](examples/05-sensor-alarm.md#carry-forward) states
+The core reads no clock, network or randomness: CI checks it for three targets
+without an operating system and builds and runs the RP2350 spike under
+Cortex-M33 emulation; [Sensor alarm](examples/05-sensor-alarm.md#carry-forward) states
 the tested boundary and the physical-board limit.
 
 ### The rule that makes two worlds possible

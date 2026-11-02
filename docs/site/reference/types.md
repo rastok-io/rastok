@@ -44,7 +44,7 @@ For `time`, `timestamp`, `timestamp_ntz` and `duration`, the unit is
 | `interval(month_day_millis_unsigned)` | Unsigned 32-bit months, days and milliseconds | Avro duration constraints, distinct from the Arrow interval |
 
 Timestamp carriers contain signed i64 seconds and a nonnegative nanosecond
-fraction. The unit limits precision, not that seconds range. Arithmetic
+fraction. The unit limits precision, not the seconds range. Arithmetic
 outside the carrier refuses. Logical execution time and civil timestamps
 are separate: `now()` observes the recorded origin plus the transaction's
 logical instant.
@@ -93,7 +93,7 @@ using it inside a larger expression. See [Expressions and dispatch](expressions.
 
 ## Schema projection rules
 
-The hosted `schema_projection` APIs report a path and a named loss reason.
+The schema projection adapters report a path and a named loss reason.
 Reverse projection succeeds only when projecting the result back preserves
 the logical type. Source field order, physical union indexes and layout do
 not become type identity.
@@ -177,7 +177,7 @@ untouched. `--check` reports a missing or stale generated file without writing.
 | Unknown format, discriminator, `readOnly` or `writeOnly` | `UnsupportedSource` |
 | Dynamic endpoint, no matching document or ambiguous document | Resolver refusal; no guessed endpoint |
 
-The model adapter's projected JSON codec is a separate boundary policy:
+The HttpClient `json_profile = projected` setting is a separate boundary policy:
 it can skip extra fields and fill omitted nullable fields with null. It
 still rejects a wrong type or missing required field. It does not widen the
 OpenAPI schema projection above.

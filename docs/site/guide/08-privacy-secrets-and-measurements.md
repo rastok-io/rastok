@@ -40,7 +40,7 @@ processing and recipients before execution. The supplied webhook profile is
 synthetic evidence for the demonstration, not authority for real processing.
 
 `@sensitive(level = ...)` orders `internal`, `confidential` and `restricted`.
-Copies preserve policy; derived values conservatively carry relevant taint.
+Copies preserve policy; derived values conservatively carry relevant classification.
 The CLI and debugger redact before formatting. Redaction of a screen is not
 an erasure policy for stored data, nor a promise that arbitrary unannotated
 payloads are safe to share.

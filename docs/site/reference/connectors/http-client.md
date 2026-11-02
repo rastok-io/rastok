@@ -76,7 +76,7 @@ and the distinction between a Contract, a Lab model and an installed Driver.
 | all | `versions` | `array<http/1.1 \| http/2 \| http/3>` | `["http/3", "http/2", "http/1.1"]` | plan |
 | all | `zero_rtt` | `disabled` | `disabled` | plan |
 
-`codec = json` permits an explicit `output out: Response`. `json_profile = projected` additionally skips extra members and fills absent nullable fields, while rejecting malformed required values. `auth_bearer = secret(...)` and `url = env(...)` use the declared boot-reference seam even though the table lists each setting's latest general phase. There is no automatic redirect or Retry: the graph declares its Retry policy.
+`codec = json` permits an explicit `output out: Response`. `json_profile = projected` additionally skips extra members and fills absent nullable fields, while rejecting malformed required values. `auth_bearer = secret(...)` and `url = env(...)` use the declared boot-reference seam even though the table lists each setting's latest general phase. Those references are resolved from deployment configuration at startup, not from an input envelope. There is no automatic redirect or Retry: the graph declares its Retry policy.
 
 ## Qualification inventory
 

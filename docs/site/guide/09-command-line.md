@@ -123,7 +123,7 @@ rastok connectors [--json]
 ```
 
 The human view lists Contracts, modes, ports, settings, installed
-implementations and Lab limits. `--json` produces the machine-readable
+implementations, Lab bindings and untested cases. `--json` produces the machine-readable
 catalogue on stdout. Neither constructs a Driver nor probes a service.
 Checker support, a compiled implementation and successful deployment remain
 different questions.

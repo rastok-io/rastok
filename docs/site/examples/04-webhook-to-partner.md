@@ -13,7 +13,7 @@ limits:
   - Deduplication lasts until five minutes of inactivity and does not survive a restart.
   - The partner must implement idempotent upsert by event_id; a DSL declaration cannot establish that external guarantee.
   - Emails and charges are synthetic; the example privacy profile is not production authority, and no real credential is needed.
-  - The journal is in memory; Kafka, SQL, durable delivery and diagnostic recording of personal-data plans are not demonstrated.
+  - The journal is in memory; a message broker, SQL, durable delivery and diagnostic recording of personal-data plans are not demonstrated.
 order: 4
 ---
 
@@ -202,7 +202,7 @@ and recorded causal context. This classified graph deliberately redacts
 values in divergence messages. Recorded operation facts can differ before
 the final answer does.
 The versioned goldens contain **only the synthetic fixture data**; they are
-not sanitised exports suitable for real personal data.
+not sanitized exports suitable for real personal data.
 
 The following 30-second sequence visits recorded states of
 `webhook.timeout_then_success`: admission, timeout, backoff and successful
@@ -254,7 +254,7 @@ An instance key isolates state; `seen` does the deduplication. This is
 accept-once within an **idle** retention window: duplicates extend that
 window, and a permanently failed job is still considered seen until expiry.
 It is not exactly-once delivery, a durable outbox, or automatic resubmission
-after failure. A restart loses that state. The partner must honour the stable
+after a fault. A restart loses that state. The partner must honor the stable
 idempotency key, upsert by `event_id`; the request and key remain identical
 between attempts. Both retry paths rely on that external property. The example
 does not test a real partner's idempotence.
@@ -262,6 +262,6 @@ does not test a real partner's idempotence.
 The supplied privacy profile describes a local synthetic demonstration, not
 legal authority for production processing. Real purposes, recipients,
 transfers and retention require deployment-specific review. No persistent
-personal-data journal or `run --record` is admitted by this example. Kafka
+personal-data journal or `run --record` is admitted by this example. A message broker
 and SQL are not shown. Modify the scenario on disk to try another world;
 there is no debugger branch or payload editor.

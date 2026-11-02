@@ -76,7 +76,7 @@ explains expectations and observation windows; `advance` supplies virtual time.
 The CLI ends with `2 scenario(s), 0 failed`.
 
 Inspect the positive trace: ordinary Operator transactions produce commands;
-`l:loop` transactions record the manager's progress. Four applications and
+Manager transactions, labeled `l:loop` in the trace, record its progress. Four applications and
 three recurrences are different counts. Each application has its own causal
 identity even when it belongs to the same run.
 

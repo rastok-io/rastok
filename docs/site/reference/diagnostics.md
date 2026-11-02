@@ -6,6 +6,8 @@ order: 5
 
 A graph that leaves a possible outcome with nowhere to go does not compile.
 `E-UNWIRED-OUTPUT` enforces that rule, including outputs that carry a fault.
+This page lists errors; `W-DEAD-GRAPH`, `W-DEAD-OUTPUT` and `W-LOOP-REPEAT`
+are warnings, not refusals.
 
 Codes identify refusals; messages explain the particular source location.
 The code and structured fields are stable, while message wording can change.
@@ -95,7 +97,7 @@ Independent plan validation can also surface these semantic refusals.
 | `E-MULTI-EMIT-ARITY` | The output tuple and value tuple have different lengths. | Provide one value per output or use broadcast syntax. | “this atomic multi-emission has 3 targets but 2 tuple values” |
 | `E-MULTI-EMIT-DUPLICATE` | An atomic emission lists the same output twice. | Name each output once. | “output `left` appears twice in one atomic multi-emission” |
 | `E-NODE-ANNOTATION` | A Node's Contract and Extension annotation is invalid. | Declare the Contract and compatible Extensions in the required order. | “a Connector requires its exact Contract first, before every Extension” |
-| `E-PORT-CONFLICT` | A port is redeclared or inferred with incompatible roles. | Give the port one declaration and direction. | “`chan` is already an input port; it cannot also be an output (an emission target)” |
+| `E-PORT-CONFLICT` | A port is redeclared or inferred with incompatible roles. | Give the port one declaration and direction. | “`in` is already an input port of the graph; it cannot also be an output” |
 | `E-PORT-DIRECTION` | A port is used as a source, destination or emission against its direction. | Reverse the wiring or select the appropriate port. | “`chan` is an input port; an emission targets an output port” |
 | `E-PORT-TYPE` | A destination cannot accept the inferred value. | Constrain the port or narrow the value without an implicit lossy conversion. | “the boundary port `in` has no effective payload type; add a type constraint” |
 | `E-PORT-UNKNOWN` | A Node has no port with the referenced name. | Use a declared port from that Node or Contract. | “`o` exposes no port named `mystery`” |
@@ -131,7 +133,7 @@ type or discard an outcome. Its message is exercised by
 
 ## Simulate
 
-The current runner reports scenario failures, missing observations and golden
+The current runner reports failed scenarios, missing observations and golden
 differences as scenario results, not as additional structured `E-…` codes.
 For a golden mismatch it names the scenario, record, expected and obtained
 values, and cause. Correct the graph or the scenario; save a new trace only
@@ -160,8 +162,8 @@ Source registry: `docs/spec/diagnostics.md`, “Registry”.
 |---|---|---|
 | `E-LAB-DUP` | Lab fragments merge; duplicate declarations use `E-DUP-LAB-IDENTITY`. | `docs/spec/grammar.md` |
 | `E-EXPERIMENT-PROFILE` | Experiments refuse at the parser's deferred-syntax boundary. | `docs/spec/grammar.md` |
-| `E-SAGA-DURABILITY` | Saga durability checking is a deferred tool surface. | `docs/spec/effects-and-sagas.md` |
-| `E-COMPENSATE-KEY` | Compensation-key checking is deferred with Saga. | `docs/spec/effects-and-sagas.md` |
+| `E-SAGA-DURABILITY` | Saga durability checking is a deferred tool surface. | `docs/spec/diagnostics.md`, Registry |
+| `E-COMPENSATE-KEY` | Compensation-key checking is deferred with Saga. | `docs/spec/diagnostics.md`, Registry |
 | `E-REPLAY-VERSION-MISMATCH` | Replay checks compatibility, but does not emit this structured code. | `docs/spec/identity.md` |
 | `E-LOOP-CONTEXT` | The name occurs in an execution refusal, not a structured compiler diagnostic. | `docs/spec/loop.md` |
 | `E-DUP-EDGE` | Declared but not emitted; duplicate destinations use `E-ROUTE-DUPLICATE`. | `docs/spec/envelope.md` |

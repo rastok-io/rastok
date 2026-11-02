@@ -7,7 +7,7 @@ order: 7
 After this chapter you can choose Loop for state progression and Retry for
 repeating one operation, explain their bounds, and identify the guarantee
 needed before repeating a visible external effect. Both use a journal-owned
-manager. Neither introduces a backwards edge into the graph's DAG.
+manager. Neither introduces a backwards edge into the directed acyclic graph (DAG).
 
 ## Advance a state with Loop
 
@@ -80,7 +80,8 @@ Fixed delay uses `after`. Exponential delay uses `first` and `ceiling`, with
 `first <= ceiling`; after failed attempt i its delay is
 `min(first * 2^(i - 1), ceiling)`. It starts at the winning Call closure,
 not when a delayed manager happens to run. Each attempt remains in the
-journal; only the final batch is delivered downstream. Exhaustion forwards
+journal; only the final batch, its response frames and terminal outcome,
+is delivered downstream. Exhaustion forwards
 the last terminal unchanged, without a new Retry error case.
 
 ## Check repetition safety separately

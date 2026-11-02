@@ -23,11 +23,12 @@ closing = { drain_for = duration("1s"); settle_for = duration("1s") }
 The key selects Alice's or Bob's App instance before delivery. Its descendants
 belong to that selected parent instance: an unkeyed child is a singleton
 inside each parent, not a global singleton shared by both tenants. Each
-Executor instance owns its mailbox, state and open exchanges. A Graph owns
+Node has an instance: an Operator owns its mailbox and state; a Connector
+owns its open exchanges. A Graph owns
 containment and lifecycle, not a shared application transaction.
 
 The key reads the entering envelope and permitted enclosing immutable
-values. Its type must be valid on every admitting input. Changing DATA later
+values. Its type must be valid on every admitting input. Changing the payload (DATA) later
 does not move the current instance. When an address closes and later opens
 again, a new generation separates its clean state from old deliveries and
 deadlines. The journal records that exact destination generation.
@@ -62,17 +63,17 @@ Lifetime is independent of the key. The attribute has the shape
 | `persistent` | No lifetime deadline; this is also the omitted policy |
 | `idle` | Close after admission silence, with `after = duration("10s")` |
 | `fixed` | Close at a fixed age from the creating admission, using `after` |
-| `single_pass` | Admit one root into a generation, then request Closing |
+| `single_pass` | Admit one entering envelope into a generation, then request Closing |
 | `tumbling` | Select the epoch-aligned processing-time box at admission, with `every = duration("5m")` |
 
 Traffic refreshes an idle deadline, not a fixed one. An open Call alone is
 not admission activity. Tumbling boundaries are independent of boot time;
-the run's immutable civil origin maps them onto the logical timeline.
+the run's recorded start timestamp maps them onto the logical timeline.
 
 ## Close with explicit budgets
 
 The example's `closing` policy first permits admitted work to drain, then
-allows cancelled Calls to settle. Both durations are positive. A confirmed
+allows canceled Calls to settle. Both durations are positive. A confirmed
 terminal outcome stays its normal typed exit; an unconfirmed outcome at the
 settlement deadline becomes `OutcomeUnknown`.
 

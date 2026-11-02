@@ -38,7 +38,7 @@ expression itself fits.
 
 | Signature | Result | Availability and constraints |
 |---|---|---|
-| `size(text \| bytes \| array<T> \| map<K,V> \| struct)` | `int` | Unicode character count for text, byte count for bytes, entry/field count otherwise |
+| `size(text \| bytes \| array<T> \| map<K,V> \| variant)` | `int` | Unicode character count for text, byte count for bytes, entry count otherwise |
 | `has(object.member)` | `bool` | Final-member presence on a closed struct or text-keyed map; present null is true; only dotted selection |
 | `now()` | `timestamp` | One transaction-fixed civil instant, derived from the run origin and logical time; handler context only |
 | `duration(text)` | `duration` | Signed units `h`, `m`, `s`, `ms`, `us`, `ns`; combined or fractional quantities; no `min`, `d` or `w` |
@@ -78,8 +78,8 @@ but duplicate destinations for one case refuse.
 
 ## Fan-out and emission
 
-The shipped fan-out is bounded by the graph and the selected Dispatch leaf.
-There is no collection-iteration statement in that leaf.
+The shipped fan-out is bounded by the graph and the selected match arm.
+There is no collection-iteration statement in that arm.
 
 | Form | Result |
 |---|---|
@@ -108,7 +108,8 @@ applications outside the spatial DAG.
 | `Loop.state` | Envelope admitted to the current Loop application | Replaced through a manager command, not mutated directly |
 | `<port>.data`, `<port>.meta` | Named inputs in a join | Emissions select a named source explicitly |
 
-Metadata leaves contain scalars, scalar arrays or text maps of scalar arrays.
+In this build a metadata leaf is a scalar (`int`, not `uint`; no duration
+or timestamp) or an array of scalars.
 The `app` and `ext` namespaces have prefix-free field names. Heavy or nested
 payload structures belong in `data`. A Lab cannot introduce application
 metadata fields absent from the production graph.
@@ -126,20 +127,20 @@ the transaction commit; children do not inherit it.
 | `json! <JSON value>` | `variant` | One complete JSON value; duplicate keys refuse and numbers stay exact |
 | `text! { ... }` | `text` | Verbatim text, closing-delimiter margin, no interpolation |
 | `base64! { ... }` | `bytes` | Padded standard base64; whitespace ignored |
-| `jq!(data) { ... }` | Frontend-checked guest result | Pure guest program; typed outputs are checked after evaluation |
 
 The name and `!` are adjacent. A frontend fills a complete value position,
 not an expression atom. Bind its result before combining it with arithmetic.
 `base64!("image/png") { ... }` may also declare content type in a whole-payload
-position. Guest metadata writes are not admitted; author them in the DSL.
+position.
 
 ## Specified, not shipped
 
 | Item | Specification |
 |---|---|
 | Per-item fan-out (`foreach` is reserved); `for item in` is not accepted | `docs/spec/grammar.md`, reserved-keyword section |
-| Expression macros `exists`, `all`, `map`, `filter` and optional-access syntax | `docs/spec/grammar.md`, expression production; current subset in `docs/spec/expressions.md` §1.1 |
-| SQL and additional registered guest-language implementations | `docs/spec/expressions.md` §§2–3 |
+| Expression macros `exists`, `exists_one`, `all`, `map`, `filter`, optional-access syntax and the `in` operator | `docs/spec/grammar.md`, expression production; current subset in `docs/spec/expressions.md` §1.1 |
+| jq, SQL and additional registered guest-language implementations | `docs/spec/expressions.md` §§2–3 |
+| `map<text, array<scalar>>` metadata leaves | `docs/spec/envelope.md` §0 |
 | Unit/App boot values using `env` or `secret` outside the declared settings | `docs/spec/expressions.md` §1 |
 
 Sources: `docs/spec/expressions.md`, `docs/spec/grammar.md`,

@@ -6,12 +6,13 @@ order: 3
 
 This inventory follows `rastok connectors --json` in its emitted order.
 Contract availability, Lab models and installed physical Drivers are separate
-facts. The captured local default-feature binary lists File and Process
+facts. A binary built with default features (no networking) lists File and Process
 Drivers; networking requires the hosted networking features. Run the command
 on the binary you deploy to inspect that assembly.
 
 A setting's latest phase is its evaluation ceiling: plan, boot, instance or
-invocation. The compiler selects the earliest phase where its expression
+invocation. A setting may depend on values available by that phase, but
+not on values that become available later. The compiler selects the earliest phase where its expression
 closes. Omitted defaults become effective settings. Optional means absent,
 not null. Byte sizes use `B`, `KiB`, `MiB` or `GiB`.
 
@@ -21,7 +22,8 @@ HTTP-derived Contracts share `headers` (a sparse typed record containing
 Certificate and private-key settings must be supplied together.
 Declared version preferences are HTTP/3, HTTP/2, HTTP/1.1; the Driver uses
 only compiled backends. `hosted-http12`, `hosted-http3` and
-`hosted-websocket` select those capabilities.
+`hosted-websocket` select those capabilities. `hosted-network` enables the
+hosted networking group.
 
 `idempotent` is a repetition guarantee. `behavior` describes whether equal
 requests in equal external state yield equal answers. They are distinct;
@@ -41,7 +43,7 @@ Sessions have no per-message Call exit or Retry attribute.
 
 | Item | Specification |
 |---|---|
-| File `watch`: listed as unavailable by the checker, with no ports or implementation | `docs/spec/stdlib.md` §3.7 |
+| File `watch`: listed as checker deferred; attributes only, no Driver, Lab model, fixture or example | `docs/spec/stdlib.md` §3.7 |
 | Timer: elapsed-time source | `docs/spec/stdlib.md` §3.4 |
 | Calendar: civil schedule source | `docs/spec/stdlib.md` §3.5 |
 | Memory: bounded append/snapshot store | `docs/spec/stdlib.md` §3.6 |

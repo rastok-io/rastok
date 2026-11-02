@@ -9,7 +9,7 @@ Release binaries target macOS Apple silicon and Linux x86-64. Intel Macs and
 other platforms build from source using the same command below.
 
 Build from the repository with Rust **1.97.1** while release binaries are being
-prepared. This installs HTTP/1.1–2, WebSocket and the debugger, not HTTP/3.
+prepared. This installs HTTP/1.1, HTTP/2, WebSocket and the debugger, not HTTP/3.
 
 ```sh
 cargo install --path crates/rastok --locked --features hosted-ui,hosted-websocket
@@ -75,7 +75,7 @@ Lab syntax and diagnostic codes while following either path.
 | Example | Your question | What you learn to keep explicit |
 |---|---|---|
 | [1. Echo: one graph, two worlds](examples/01-echo.md) | Can I test a flow without starting its external program? | Computation, effects and the Lab |
-| [2. File pipeline: effects with a contract](examples/02-file-pipeline.md) | What may this flow read or replace, and what happens when it cannot? | Bounded I/O and failure destinations |
+| [2. File pipeline: effects with a contract](examples/02-file-pipeline.md) | What may this flow read or replace, and what happens when it cannot? | Bounded I/O and fault destinations |
 | [3. Two tenants: whose state is this?](examples/03-two-tenants.md) | Can Alice retry while Bob is already done? | Instance ownership, finite retry and lifetime |
 | [4. Webhook to partner: put it together](examples/04-webhook-to-partner.md) | Can I qualify an integration before the partner is available? | Admission, validation, deduplication, effects and audit |
 | [5. Sensor alarm: make time an input](examples/05-sensor-alarm.md) | How do I test an absence, or a day of waiting? | Stateful decisions, timed joins and virtual time |
