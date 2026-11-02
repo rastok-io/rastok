@@ -1096,7 +1096,7 @@ mod tests {
         assert!(INDEX_HTML.contains("<span>Next action</span>"));
         assert!(INDEX_HTML.contains("<span>Run to expect</span>"));
         assert!(INDEX_HTML.contains("<span>Finish</span>"));
-        assert!(INDEX_HTML.contains("<span>Replay</span>"));
+        assert!(INDEX_HTML.contains("<span>Play</span>"));
         assert!(INDEX_HTML.contains("<span>Take control</span>"));
         assert!(INDEX_HTML.contains("src=\"/graph-layout.js\""));
         assert!(!INDEX_HTML.contains("id=\"guidance\""));

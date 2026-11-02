@@ -17,9 +17,11 @@ fn echo_retention_bytes_are_pinned_independently_of_the_codec_location() {
     // The record tuple includes inline unsealed deadlines. Its digest is
     // independent of the recording header, including its version and origin.
     // The original pin is inventoried in human-review-v20-identity.md.
+    // The current pin includes the Echo scenarios' deliberate hello inputs;
+    // their recorded payloads and derived envelope identities changed, not the codec.
     assert_eq!(
         blake3::hash(&bytes).to_hex().as_str(),
-        "6130123972daf8e882d56c726361a0ca26a4b6ac320613e697848e6bca6abb4d"
+        "c5c183d7538defe68e551fbf0eb42e87ec101c5600b0eab51a966ce3d98ca565"
     );
 }
 
