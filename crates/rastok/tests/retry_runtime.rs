@@ -1186,6 +1186,7 @@ fn a_retry_recording_restores_held_batches_at_every_selected_prefix() {
         labs: vec![],
         source_definitions: vec![],
         scenario_definitions: vec![],
+        sources: vec![],
     };
     let recording =
         rastok::recording::Recording::capture(&compilation, &journal, execution.logical_time())
@@ -2875,6 +2876,7 @@ fn assert_original_attempt_measurements(
         labs: vec![],
         source_definitions: vec![],
         scenario_definitions: vec![],
+        sources: vec![],
     };
     let journal = MemJournal::from_records(
         GraphVersion(1),

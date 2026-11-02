@@ -75,7 +75,10 @@ fn port_value<'a>(
             .collect();
         return (
             if instances.len() == 1 {
-                pending.first().copied()
+                pending
+                    .iter()
+                    .copied()
+                    .min_by_key(|value| value["position"].as_u64())
             } else {
                 None
             },
@@ -190,6 +193,22 @@ fn resolve(
         .nodes
         .iter()
         .find(|node| node.path.to_string() == owner);
+    if path
+        .get(1)
+        .is_some_and(|field| matches!(*field, "data" | "meta"))
+        && node.is_some_and(|node| node.ports.iter().any(|port| port.port.name() == root))
+    {
+        let (envelope, tab) = port_value(snapshot, owner, root);
+        let mut value = summary(
+            "port field",
+            envelope.and_then(|value| path_value(&value[path[1]], &path[2..])),
+            tab,
+            owner,
+        );
+        value["inspector"]["envelope_id"] =
+            envelope.map_or(JsonValue::Null, |value| value["envelope_id"].clone());
+        return value;
+    }
     if root == "instance" || node.is_some_and(|node| node.vars().iter().any(|var| var.name == root))
     {
         let values: Vec<_> = rows(&snapshot["instances"])
@@ -276,6 +295,20 @@ pub(super) fn tokens(
             continue;
         };
         let index = source["index"].as_u64().unwrap_or(0) as u32;
+        // Exact retained excerpts disambiguate nested declarations on one line.
+        // Repeated identical excerpts remain unavailable instead of choosing a scope.
+        let scopes: Vec<_> = definitions
+            .iter()
+            .filter(|definition| definition.source.index() == index)
+            .flat_map(|definition| {
+                code.match_indices(definition.code.as_str())
+                    .filter_map(move |(offset, _)| {
+                        let line = code[..offset].bytes().filter(|byte| *byte == b'\n').count() + 1;
+                        (line == definition.first_line)
+                            .then_some((definition, offset..offset + definition.code.len()))
+                    })
+            })
+            .collect();
         let mut lexer = Lexer::new(SourceId::new(index), code);
         let mut bag = Bag::new();
         let mut tokens = Vec::new();
@@ -343,22 +376,35 @@ pub(super) fn tokens(
                 TokenKind::Int | TokenKind::Float => "number",
                 _ => "punctuation",
             };
-            let owner = definitions
+            let scope = scopes
                 .iter()
-                .filter(|definition| {
-                    definition.source.index() == index
-                        && (definition.first_line..=definition.last_line).contains(&line)
+                .filter(|(_, range)| range.contains(&start) && end <= range.end)
+                .min_by_key(|(_, range)| range.len());
+            let ambiguous = scope.is_some_and(|(definition, range)| {
+                scopes.iter().any(|(other, other_range)| {
+                    other.owner != definition.owner && other_range == range
                 })
-                .min_by_key(|definition| definition.last_line - definition.first_line)
-                .map(|definition| definition.owner.to_string())
+            });
+            let owner = scope
+                .map(|(definition, _)| definition.owner.to_string())
                 .unwrap_or_default();
-            let hover = (kind == "identifier").then(|| resolve(snapshot, plan, &owner, &name));
+            let hover = (kind == "identifier").then(|| {
+                if ambiguous {
+                    let mut value = summary("identifier", None, "definition", "");
+                    value["rendering"] = json!(
+                        "Scope unavailable: identical retained declarations share this source line"
+                    );
+                    value
+                } else {
+                    resolve(snapshot, plan, &owner, &name)
+                }
+            });
             // Multiline literals stay ordinary source text; no false one-line span.
             if !code[start..end].contains('\n') {
                 result.push(json!({"source_index": index, "line": line,
                     "column": code[line_start..start].chars().count() + 1,
                     "end_column": code[line_start..end].chars().count() + 1,
-                    "kind": kind, "name": name, "node_path": owner, "value": hover}));
+                    "kind": kind, "name": name, "node_path": if ambiguous { None } else { Some(&owner) }, "value": hover}));
             }
             cursor += 1;
         }
@@ -369,6 +415,25 @@ pub(super) fn tokens(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inline_definitions_keep_identifier_scope_exact() {
+        let source = "graph echo : App { input in: text; output out: text; operator a { input in: text; output out: text; on in { out = data } } in -> a -> out }";
+        let compilation = crate::compiler::compile(
+            &[source],
+            &crate::connector::contract::ContractCatalog::try_m0().unwrap(),
+        )
+        .unwrap();
+        let frame = json!({"sources": super::super::source::units(&compilation.plan, &compilation.sources, &compilation.source_definitions)});
+        let values = tokens(&frame, &compilation.plan, &compilation.source_definitions);
+        let input = values
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|token| token["name"] == "data")
+            .unwrap();
+        assert_eq!(input["node_path"], "a");
+    }
 
     #[test]
     fn redacted_paths_and_absent_values_have_stable_summaries() {

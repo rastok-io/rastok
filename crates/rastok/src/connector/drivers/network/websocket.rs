@@ -607,16 +607,20 @@ impl<'plan> HostedWebSocket<'plan> {
         let h3_listeners = bind_h3_listeners(&routes, config)?;
         let listeners = bind_listeners(routes)?;
         #[cfg(test)]
-        let mut local_addresses = listeners
+        let local_addresses = listeners
             .iter()
             .filter_map(|binding| binding.listener.local_addr().ok())
             .collect::<Vec<_>>();
         #[cfg(all(test, feature = "hosted-http3"))]
-        local_addresses.extend(
-            h3_listeners
-                .iter()
-                .filter_map(|binding| binding.socket.local_addr().ok()),
-        );
+        let local_addresses = {
+            let mut addresses = local_addresses;
+            addresses.extend(
+                h3_listeners
+                    .iter()
+                    .filter_map(|binding| binding.socket.local_addr().ok()),
+            );
+            addresses
+        };
         let limits = config.limits().map_err(|error| error.to_string())?;
         let engine =
             HostedNetworkEngine::start("rastok-websocket-server", limits, move |runtime| {

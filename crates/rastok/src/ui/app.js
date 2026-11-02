@@ -201,6 +201,10 @@ function selectSourceView(view, focus = false) {
 }
 
 function renderSource(snapshot) {
+  if (!selectedTopologyItem) {
+    selectedSourceDefinition = null;
+    sourceSelectionPending = false;
+  }
   const sources = snapshot?.sources || [];
   const position = snapshot?.current_position;
   const point = `${snapshot?.timeline?.session}:${snapshot?.timeline?.boundary}`;

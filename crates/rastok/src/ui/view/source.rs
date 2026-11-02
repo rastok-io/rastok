@@ -149,6 +149,7 @@ pub(super) fn position(
     let mut first = definition.first_line;
     let mut last = definition.last_line;
     let mut column = None;
+    let mut definition_offset = 0;
     let source = sources
         .iter()
         .find(|source| source.index == definition.source.index());
@@ -163,6 +164,7 @@ pub(super) fn position(
                 break;
             }
             if declaration && token.text == port {
+                definition_offset = token.span.range().start;
                 first += definition.code[..token.span.range().start]
                     .bytes()
                     .filter(|byte| *byte == b'\n')
@@ -218,8 +220,24 @@ pub(super) fn position(
             arms = &arm.children;
         }
     }
-    if let Some(line) = source.and_then(|source| source.text.lines().nth(first.saturating_sub(1))) {
-        column = Some(line.chars().take_while(|ch| ch.is_whitespace()).count() + 1);
+    if let Some(source) = source.filter(|_| selected_arm.is_null()) {
+        let mut offsets = source
+            .text
+            .match_indices(definition.code.as_str())
+            .filter_map(|(offset, _)| {
+                let line = source.text[..offset]
+                    .bytes()
+                    .filter(|byte| *byte == b'\n')
+                    .count()
+                    + 1;
+                (line == definition.first_line).then_some(offset + definition_offset)
+            });
+        if let Some(offset) = offsets.next().filter(|_| offsets.next().is_none()) {
+            let start = source.text[..offset]
+                .rfind('\n')
+                .map_or(0, |start| start + 1);
+            column = Some(source.text[start..offset].chars().count() + 1);
+        }
     }
     json!({"status": "available", "reason": null, "source_index": definition.source.index(),
         "first_line": first, "last_line": last, "column": column,
