@@ -222,7 +222,7 @@ on an inert test endpoint. This does not authorize retrying model inference.
 recorded or displayed. That boot-dependent profile still refuses diagnostic
 recording, rather than persisting deployment secrets or inventing replay inputs.
 
-Disconnecting a socket is not the same as cancelling an agent turn. The idle
+Disconnecting a socket is not the same as canceling an agent turn. The idle
 lifetime bounds abandoned conversations but does not restore child memory
 after restart. Details and the exact test commands live in the
 [composition evidence](../../architecture/agent-gateway-showcase.md).

@@ -471,7 +471,7 @@ append a record or modify the live machine.
 - **Pending work.** The dotted Pending control beside the timeline head lists
   queued deliveries, their unsealed deadline facts, active lifetime/Closing
   deadlines, and Loop readmissions waiting on a recorded due instant. Call
-  closures remove cancelled timeouts even while the claimed head awaits
+  closures remove canceled timeouts even while the claimed head awaits
   consumption. Times come from `deadlines`, never timeout-duration arithmetic
   performed at inspection time. The list is an inventory, not a predicted order
   of future transactions. A Session handshake already removed from its mailbox

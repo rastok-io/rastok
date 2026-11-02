@@ -31,7 +31,7 @@ pub(super) fn future(inspection: &ExecutionInspection, records: &[Record]) -> Js
                 (DeadlineKind::SessionHandshake, "handshake timeout"),
             ] {
                 // A won Call closure keeps its head claimed until consumption;
-                // its timeout is already cancelled, not a future obligation.
+                // its timeout is already canceled, not a future obligation.
                 let settled = records.iter().any(|record| {
                     matches!(record,
                     Record::Egress(EgressRecord::Call(call)) if call.intent.emitting_id == id
