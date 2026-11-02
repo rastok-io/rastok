@@ -66,7 +66,8 @@ rastok replay echo.rkrec
 rastok replay echo.rkrec --ui
 ```
 
-The real run and recorded replay print `salut` and the same causal seal.
+The real run and recorded replay print `salut` without a port prefix: Echo has
+one App output. Their summary lines report the same causal seal.
 Only the first command starts `cat`. The recording viewer needs neither the
 source nor the original process. Use a new filename for another recording.
 Comparing a real run with a Lab execution additionally requires equal external

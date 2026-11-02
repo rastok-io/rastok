@@ -92,7 +92,9 @@ printf 'hello\n' | rastok run examples/echo.rkg --record echo.rkrec
 
 This uses physical Drivers and can start processes, write files or contact
 services. Each stdin line is a text submission; public App outputs go to
-stdout. Lab scenarios are not executed.
+stdout. With one declared App output port, each envelope prints its value alone.
+With several output ports, each line keeps the `port: value` prefix, even if
+only one port emits. Lab scenarios are not executed.
 
 - `--file-root` enables the physical File Driver within an explicit root.
 - `--deployment` reads typed boot settings, secret coordinates, attestations
@@ -114,7 +116,9 @@ rastok replay <file.rkrec> [--ui [--ui-port <port>]]
 ```
 
 `rastok replay echo.rkrec` prints App outputs on stdout and a record-count/seal
-summary on stderr, without Driver I/O. `--ui` uses simulation's port rules and
+summary on stderr, without Driver I/O. It uses the same output format as `run`:
+values alone for a single App output, `port: value` for several outputs.
+`--ui` uses simulation's port rules and
 opens read-only source history, with a marker and value summaries. Recordings
 retain node excerpts; missing source lines are explicit. Replay needs no
 original source or external systems, does not load changed source from disk,

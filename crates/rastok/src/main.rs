@@ -457,6 +457,7 @@ struct CliSupervision<'a> {
     recorder: &'a mut Option<rastok::recording::Recorder>,
     log_projector: &'a mut Option<rastok::observability::JournalLogProjector>,
     printed_outputs: usize,
+    single_output: bool,
 }
 
 impl rastok::worker::Supervision for CliSupervision<'_> {
@@ -494,7 +495,7 @@ impl rastok::worker::Supervision for CliSupervision<'_> {
         if let Some(projector) = self.log_projector {
             let _ = projector.project_journal(journal);
         }
-        print_new_outputs(execution, &mut self.printed_outputs);
+        print_new_outputs(execution, &mut self.printed_outputs, self.single_output);
         Ok(())
     }
 
@@ -633,6 +634,7 @@ fn run(
         recorder: &mut recorder,
         log_projector: &mut log_projector,
         printed_outputs: 0,
+        single_output: has_single_output(&compilation.plan),
     });
     if let Err(error) = result {
         if matches!(error, rastok::worker::RunError::Processing(_))
@@ -743,7 +745,7 @@ fn replay(arguments: &[String]) -> ExitCode {
     let _ = ui;
     match recording.inspect(recording.records().len()) {
         Ok((_, execution)) => {
-            print_new_outputs(&execution, &mut 0);
+            print_new_outputs(&execution, &mut 0, has_single_output(recording.plan()));
             ExitCode::SUCCESS
         }
         Err(error) => {
@@ -807,16 +809,26 @@ fn cli_submission(inbound_path: &node::Path, line: String) -> IngressProposal {
     }
 }
 
-/// Prints the boundary outputs produced since the previous call, one line
-/// per envelope as `port: data`.
-fn print_new_outputs(execution: &Execution<'_>, printed_outputs: &mut usize) {
+/// The declared interface, not the observed traffic, determines output labels.
+fn has_single_output(plan: &rastok::plan::ValidatedExecutionPlan) -> bool {
+    plan.boundary()
+        .iter()
+        .filter(|port| port.direction == node::PortDirection::Output)
+        .count()
+        == 1
+}
+
+/// Prints new boundary envelopes, retaining port names only for a multi-output App.
+fn print_new_outputs(execution: &Execution<'_>, printed_outputs: &mut usize, single_output: bool) {
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
     for output in &execution.outputs()[*printed_outputs..] {
+        if !single_output {
+            let _ = write!(out, "{}: ", output.port);
+        }
         let _ = writeln!(
             out,
-            "{}: {}",
-            output.port,
+            "{}",
             render_data(
                 output.envelope.data(),
                 execution.boundary_annotations(&output.port),

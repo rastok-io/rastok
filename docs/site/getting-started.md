@@ -36,6 +36,8 @@ and an effect-free recorded replay. Then follow
 [webhook to partner](examples/04-webhook-to-partner.md): its command supplies
 the synthetic deployment profile and can open the same graph with `--ui`.
 No real server, partner or credential is required for that simulation.
+`rastok run` prints each App output value on its own line when the App declares
+one output port. An App with several output ports prints `port: value` instead.
 Downloadable binaries and two unaided timed installation trials are still required before
 this quickstart is qualified for opening. No elapsed-time claim is made yet.
 

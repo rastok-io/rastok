@@ -802,7 +802,7 @@ fn run_echoes_a_line_through_a_real_child_process() {
         .expect("stdin accepts");
     let output = child.wait_with_output().expect("the run completes");
     assert!(output.status.success(), "{output:?}");
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "out: salut\n");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "salut\n");
 }
 
 #[test]
@@ -846,10 +846,7 @@ fn run_can_bind_the_real_file_driver_with_an_explicit_root() {
         .expect("stdin accepts");
     let output = child.wait_with_output().expect("the run completes");
     assert!(output.status.success(), "{output:?}");
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
-        "out: file payload\n"
-    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "file payload\n");
     std::fs::remove_dir_all(root).expect("the File root is removable");
 }
 
@@ -919,7 +916,8 @@ fn a_recorded_file_run_replays_after_the_world_and_source_are_removed() {
         "{}",
         String::from_utf8_lossy(&replay.stderr)
     );
-    assert_eq!(replay.stdout, original.stdout);
+    assert_eq!(original.stdout, b"original world\n");
+    assert_eq!(replay.stdout, b"original world\n");
     let captured = rastok::recording::Recording::read(&recording).unwrap();
     assert!(captured.finished());
     let seal = rastok::golden::project(captured.records()).seal_hex();
@@ -1106,6 +1104,7 @@ fn the_gallery_file_pipeline_replaces_once_and_replay_does_not_touch_the_world()
         .output()
         .unwrap();
     assert!(replayed.status.success(), "{replayed:?}");
+    assert_eq!(original.stdout, b"bytes_read: Materialized(Int(11))\n");
     assert_eq!(original.stdout, replayed.stdout);
     assert_eq!(
         std::fs::read(root.join("input.txt")).unwrap(),
