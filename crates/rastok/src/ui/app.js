@@ -35,6 +35,9 @@ let activeInspectorTab = "envelope";
 let scenarioDefinitionActive = false;
 let graphResizeObserver = null;
 let graphTextSync = null;
+let activeSourceView = sessionStorage.getItem("rastok-source-view") || null;
+const sourceScroll = new Map();
+const sourceValues = new Map();
 const graphViewport = { scale: 1, x: 0, y: 0 };
 
 const COMMAND_HINTS = Object.freeze({
@@ -172,11 +175,98 @@ function renderSnapshot(snapshot) {
       : `session:${snapshot.timeline?.session ?? 0}:boundary:${activity.ordinal}`
     : null;
   const animateBoundary = Boolean(activity) && activityKey !== lastAnimatedActivity;
+  renderSource(snapshot);
   renderTopology(snapshot.topology, animateBoundary);
   if (animateBoundary) lastAnimatedActivity = activityKey;
   renderRelatedPanels(snapshot);
   renderTimeline();
   updateControls();
+}
+
+function selectSourceView(view, focus = false) {
+  const pane = document.querySelector("#source-code");
+  if (activeSourceView && activeSourceView !== "graph") sourceScroll.set(activeSourceView, [pane.scrollLeft, pane.scrollTop]);
+  activeSourceView = view;
+  sessionStorage.setItem("rastok-source-view", view);
+  renderSource(currentSnapshot);
+  if (view === "graph") renderTopology(currentSnapshot?.topology, false);
+  if (focus) document.querySelector(`[data-source-view="${CSS.escape(view)}"]`)?.focus();
+}
+
+function renderSource(snapshot) {
+  const sources = snapshot?.sources || [];
+  if (!activeSourceView || (activeSourceView !== "graph" && !sources.some(source => String(source.index) === activeSourceView))) {
+    activeSourceView = sources.length ? String(sources[0].index) : "graph";
+  }
+  const tabs = document.querySelector("#source-tabs");
+  const focusedTab = tabs.contains(document.activeElement) ? document.activeElement.dataset.sourceView : null;
+  tabs.replaceChildren();
+  const views = [...sources.map(source => ({ id: String(source.index), name: source.display_name })), { id: "graph", name: "Graph" }];
+  for (const view of views) {
+    const tab = document.createElement("button");
+    tab.type = "button";
+    tab.id = `source-tab-${view.id}`;
+    tab.dataset.sourceView = view.id;
+    tab.setAttribute("role", "tab");
+    tab.setAttribute("aria-controls", view.id === "graph" ? "graph" : "source-pane");
+    tab.setAttribute("aria-selected", String(activeSourceView === view.id));
+    tab.tabIndex = activeSourceView === view.id ? 0 : -1;
+    tab.textContent = view.name;
+    tab.addEventListener("click", () => selectSourceView(view.id));
+    tab.addEventListener("keydown", event => {
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      const index = views.findIndex(candidate => candidate.id === view.id);
+      const next = event.key === "Home" ? 0 : event.key === "End" ? views.length - 1
+        : (index + (event.key === "ArrowRight" ? 1 : -1) + views.length) % views.length;
+      selectSourceView(views[next].id, true);
+    });
+    tabs.append(tab);
+  }
+  document.querySelector("#graph").hidden = activeSourceView !== "graph";
+  const panel = document.querySelector("#source-pane");
+  panel.hidden = activeSourceView === "graph";
+  panel.setAttribute("aria-labelledby", `source-tab-${activeSourceView}`);
+  if (focusedTab) document.querySelector(`[data-source-view="${CSS.escape(focusedTab)}"]`)?.focus({ preventScroll: true });
+  if (activeSourceView === "graph") return;
+  const source = sources.find(source => String(source.index) === activeSourceView);
+  if (!source) return;
+  const pane = document.querySelector("#source-code");
+  const previousScroll = pane.dataset.sourceIndex === activeSourceView ? [pane.scrollLeft, pane.scrollTop] : sourceScroll.get(activeSourceView) || [0, 0];
+  pane.dataset.sourceIndex = activeSourceView;
+  pane.replaceChildren();
+  sourceValues.clear();
+  const tokens = (snapshot.source_tokens || []).filter(token => token.source_index === source.index);
+  const byLine = new Map();
+  for (const token of tokens) {
+    if (!byLine.has(token.line)) byLine.set(token.line, []);
+    byLine.get(token.line).push(token);
+  }
+  source.text.split("\n").slice(0, source.line_count).forEach((text, index) => {
+    const line = document.createElement("span");
+    line.className = "source-line";
+    line.dataset.line = String(index + 1);
+    const chars = Array.from(text);
+    let offset = 0;
+    for (const token of byLine.get(index + 1) || []) {
+      line.append(document.createTextNode(chars.slice(offset, token.column - 1).join("")));
+      const span = document.createElement("span");
+      span.className = `syntax-${token.kind}`;
+      span.textContent = chars.slice(token.column - 1, token.end_column - 1).join("");
+      if (token.value) {
+        const key = `${token.source_index}:${token.line}:${token.column}`;
+        span.dataset.sourceToken = key;
+        sourceValues.set(key, token);
+      }
+      line.append(span);
+      offset = token.end_column - 1;
+    }
+    line.append(document.createTextNode(chars.slice(offset).join("")));
+    pane.append(line);
+  });
+  pane.scrollLeft = previousScroll[0];
+  pane.scrollTop = previousScroll[1];
+  text("source-status", source.redacted ? "Lab source withheld by data policy" : source.complete ? "Read-only source" : "Recorded excerpts · missing source is marked");
 }
 
 function renderLiveExecutionState() {

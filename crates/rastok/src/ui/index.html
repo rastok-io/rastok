@@ -81,8 +81,8 @@
       <p id="fault-commit" class="commit-note"></p>
     </section>
     <div class="workspace">
-      <section class="graph-section" aria-labelledby="graph-title">
-        <div class="graph-heading"><h2 id="graph-title">Graph</h2><button id="open-search" title="Search node, port or id (/)" aria-label="Search node, port or id">Search /</button></div>
+      <section class="graph-section source-section" aria-label="Source and graph">
+        <div class="graph-heading"><div id="source-tabs" role="tablist" aria-label="Source and graph views"></div><button id="open-search" title="Search node, port or id (/)" aria-label="Search node, port or id">Search /</button></div>
         <div id="search-panel" hidden><input id="search" type="search" placeholder="Node, port or id" aria-label="Search node, port or id"><div id="search-results"></div></div>
         <div id="scenario-panel" class="graph-scenario simulation-only" hidden>
           <button id="scenario-definition" class="scenario-definition" type="button" title="Inspect the selected scenario">Scenario</button>
@@ -90,9 +90,13 @@
           <button id="select-scenario" class="secondary">Select</button>
           <span id="scenario-status" class="section-summary"></span>
         </div>
-        <div id="graph" class="empty">Waiting for a validated topology.</div>
+        <section id="source-pane" role="tabpanel" aria-label="Source">
+          <div id="source-status" class="source-status" aria-live="polite"></div>
+          <pre id="source-code" tabindex="0" aria-label="Read-only source"></pre>
+        </section>
+        <div id="graph" class="empty" role="tabpanel" aria-label="Graph" hidden>Waiting for a validated topology.</div>
       </section>
-      <div id="workspace-splitter" class="workspace-splitter" role="separator" aria-label="Resize graph and inspector" aria-orientation="vertical" aria-valuemin="280" aria-valuemax="720" aria-valuenow="360" tabindex="0"></div>
+      <div id="workspace-splitter" class="workspace-splitter" role="separator" aria-label="Resize source and inspector" aria-orientation="vertical" aria-valuemin="280" aria-valuemax="720" aria-valuenow="360" tabindex="0"></div>
       <aside class="inspector" aria-label="Execution inspector">
         <div class="inspector-tabs" role="tablist" aria-label="Inspector views">
           <button id="tab-envelope" role="tab" aria-controls="panel-envelope" aria-selected="true" data-inspector-tab="envelope">Envelope</button>
