@@ -20,6 +20,7 @@ static EMPTY_ANNOTATIONS: AnnotationTable = AnnotationTable::empty();
 
 mod expectation;
 mod explanation;
+mod hover;
 mod retry;
 mod source;
 pub use expectation::expectation_json;
@@ -322,6 +323,7 @@ pub fn snapshot(input: SnapshotInput<'_>) -> Result<UiSnapshot, serde_json::Erro
         })),
     });
     value["current_position"] = source::position(&value, definitions, sources, activity, journal);
+    value["source_tokens"] = hover::tokens(&value, plan, definitions);
     UiSnapshot::new(revision, &value)
 }
 

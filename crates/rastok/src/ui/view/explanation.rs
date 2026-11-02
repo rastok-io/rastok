@@ -312,6 +312,17 @@ pub(super) fn history(plan: &ValidatedExecutionPlan, records: &[Record]) -> Hist
                     .iter()
                     .filter_map(|id| envelopes.get(id).map(|(envelope, _)| *envelope))
                     .collect();
+                // Preserve the exact consumed-port context for read-only variables.
+                // Policy is applied at that port before this value reaches JSON.
+                extra["inputs"] = json!(tx.consumed.iter().filter_map(|position| {
+                    let id = consumed_id(&positions, position)?;
+                    let (envelope, _) = envelopes.get(&id)?;
+                    let endpoint = plan.edges().iter().find(|edge| plan.edge_text(edge) == position.edge)?.to.as_ref()?;
+                    Some(json!({"node": tx.owner_path.to_string(), "port": endpoint.port.name(),
+                        "instance": instance_ref_json(&tx.instance), "envelope_id": id.to_string(),
+                        "meta": meta_json(envelope.meta()),
+                        "data": port_data_json(plan, tx.owner_path.as_node_path(), &endpoint.port, envelope.data())}))
+                }).collect::<Vec<_>>());
                 let slot = plan
                     .nodes
                     .iter()

@@ -317,6 +317,7 @@ mod tests {
             )
             .unwrap();
             let mut positions = Vec::new();
+            let mut counters = BTreeSet::new();
             let mut activity = None;
             for boundary in 0..500 {
                 let view = super::super::snapshot(SnapshotInput {
@@ -336,6 +337,11 @@ mod tests {
                 })
                 .unwrap();
                 let frame: JsonValue = serde_json::from_slice(&view.json).unwrap();
+                for token in frame["source_tokens"].as_array().unwrap() {
+                    if token["name"] == "Loop.measure" && token["value"]["available"] == true {
+                        counters.insert(token["value"]["rendering"].to_string());
+                    }
+                }
                 let position = frame["current_position"].clone();
                 assert!(position.get("status").is_some());
                 if position["status"] == "available" {
@@ -365,6 +371,10 @@ mod tests {
                     .any(|position| position["port"].is_string())
             );
             if source.contains("graph countdown") {
+                assert!(
+                    counters.len() > 1,
+                    "counter values must follow the selected transition"
+                );
                 assert!(
                     positions
                         .iter()
