@@ -25,6 +25,8 @@ rastok simulate examples/countdown.rkg --compare examples/traces/countdown
 
 Add `--ui` to inspect each admitted application and its manager transition.
 
+For the controls and source view, see [the debugger tour](../debugger.md).
+
 ## Read the program
 
 The App wires `in -> count -> out`. Inside `count`, a positive integer produces

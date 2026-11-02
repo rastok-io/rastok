@@ -75,7 +75,11 @@ fn reference(path: &str, extension: &str) {
 
 #[test]
 fn public_pages_have_the_site_contract_and_existing_artifacts() {
-    for (name, order) in [("index.md", 1), ("getting-started.md", 2)] {
+    for (name, order) in [
+        ("index.md", 1),
+        ("getting-started.md", 2),
+        ("debugger.md", 3),
+    ] {
         let (front, _) = markdown(&root().join("docs/site").join(name));
         let page: Page = serde_yaml_ng::from_str(&front).unwrap();
         assert_eq!(page.order, order);
@@ -295,6 +299,7 @@ fn public_page_links_and_typography_are_valid() {
     let mut paths = vec![
         root().join("docs/site/index.md"),
         root().join("docs/site/getting-started.md"),
+        root().join("docs/site/debugger.md"),
     ];
     for directory in ["guide", "examples", "reference"] {
         paths.extend(
@@ -723,6 +728,10 @@ fn publication_assets_have_the_documented_dimensions_and_retained_provenance() {
         "webhook-backoff.png",
         "webhook-completed.png",
         "webhook-tour.png",
+        "debugger-overview.png",
+        "debugger-hover.png",
+        "debugger-assertion.png",
+        "debugger-selection.png",
     ] {
         let png = std::fs::read(assets.join(name)).unwrap();
         assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
@@ -792,5 +801,23 @@ fn publication_assets_have_the_documented_dimensions_and_retained_provenance() {
             )),
             "{checkpoint} caption must name the transition captured in the manifest"
         );
+    }
+    let guide: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(assets.join("debugger-capture.json")).unwrap())
+            .unwrap();
+    assert_eq!(guide["viewport"]["width"], 1352);
+    assert_eq!(guide["viewport"]["height"], 760);
+    assert_eq!(guide["screenshots"].as_object().unwrap().len(), 4);
+    assert_eq!(guide["screenshots"]["debugger-overview"]["badges"], 7);
+    assert_eq!(
+        guide["screenshots"]["debugger-overview"]["scenario"],
+        "webhook.timeout_then_success"
+    );
+    for (name, capture) in guide["screenshots"].as_object().unwrap() {
+        assert!(assets.join(format!("{name}.png")).is_file());
+        let digest = capture["sha256"].as_str().unwrap();
+        assert_eq!(digest.len(), 64);
+        assert!(digest.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert!(capture["transition"].as_u64().is_some());
     }
 }

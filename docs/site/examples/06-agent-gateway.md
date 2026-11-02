@@ -42,6 +42,8 @@ sections show counts and keep empty sections folded. For the reproducible CLI ch
 rastok simulate examples/agent-gateway.rkg --compare examples/traces/agent-gateway
 ```
 
+For the controls and source view, see [the debugger tour](../debugger.md).
+
 ## Read the program
 
 Start at `clients.out`: each WebSocket message enters `conversation`, where

@@ -1,0 +1,39 @@
+{
+  "revision": "101337ecdd99d46f0ff40eaee4cacdab73ca9034",
+  "binary_sha256": "35d3e5c240ebd6e68f4827f36bcf1dfec08457a956138cd4686af34c44b13c78",
+  "viewport": {
+    "width": 1352,
+    "height": 760
+  },
+  "screenshots": {
+    "debugger-overview": {
+      "source": "examples/webhook-to-partner.rkg",
+      "scenario": "webhook.timeout_then_success",
+      "transition": 20,
+      "sha256": "6a62fb06880d251a4084d86a3e7435244feaf398f64711fc136803215f93ab64",
+      "badges": 7
+    },
+    "debugger-selection": {
+      "source": "rastok new hello",
+      "scenario": "smoke.roundtrip",
+      "transition": 5,
+      "sha256": "630c024b89d6dd159b5d771cf5c4e20a6af5ac33ddf76d1c9ea9c94cdd29561b",
+      "selected": "greet"
+    },
+    "debugger-hover": {
+      "source": "rastok new hello",
+      "scenario": "smoke.roundtrip",
+      "transition": 5,
+      "sha256": "8a9b61a28bee8d85c0cf8f560a76a62ebdd2045629eb8b1f9cb0eaa17741f2ab",
+      "identifier": "greet"
+    },
+    "debugger-assertion": {
+      "source": "rastok new hello; app.in changed to monde",
+      "scenario": "smoke.roundtrip",
+      "transition": 5,
+      "sha256": "8f0530a5d7eb7cbfb2ba15f171b82d305913b87719adafb6a6d68c8eee6ef54f"
+    }
+  },
+  "capture": "RASTOK_UI_ASSETS=docs/site/assets node tools/debugger-guide-capture.cjs",
+  "evidence": "Running debugger captured with installed Chrome and Playwright; numbered badges inserted into the DOM before the overview capture. No image editing or model call."
+}

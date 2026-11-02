@@ -43,6 +43,8 @@ For real deployments, supply secret material out of band, never in source,
 profile JSON or shell command text. The profile contains only its coordinate
 and version. The same Contract is used with a scripted or physical Driver.
 
+For the controls and source view, see [the debugger tour](../debugger.md).
+
 ## Read the program
 
 Follow the main path first: `listener` admits, `validate` checks the business

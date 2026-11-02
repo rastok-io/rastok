@@ -23,6 +23,9 @@ reach `Hello, world`. The CLI reports `PASS smoke.roundtrip: a typed message bec
 finishes. Close the viewer from its toolbar when done.
 <!-- quickstart:end -->
 
+Debug: follow [The debugger, a guided tour](debugger.md) for its controls,
+source view and assertion evidence.
+
 Without the browser, `rastok simulate hello.rkg` runs the same scenario.
 `rastok new` creates one file with a typed Operator and a Lab; it never
 overwrites an existing file. Change the source on disk, then run it again.

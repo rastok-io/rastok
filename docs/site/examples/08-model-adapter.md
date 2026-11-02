@@ -32,6 +32,8 @@ RASTOK_SHOWCASE_MODEL_TOKEN=lab-only-not-a-credential RASTOK_SHOWCASE_MODEL_TOKE
 Add `--ui` for the paused debugger. The Lab never contacts the profile's
 configured model URL. These fixture values are not credentials.
 
+For the controls and source view, see [the debugger tour](../debugger.md).
+
 ## Read the program
 
 Start with `ResponseUsage` and `ModelResponse`. The former marks the three

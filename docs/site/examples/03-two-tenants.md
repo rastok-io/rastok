@@ -29,6 +29,8 @@ rastok simulate examples/keyed-retry.rkg --compare examples/traces/two-tenants
 
 Add `--ui` to follow the same checked scenario in the debugger.
 
+For the controls and source view, see [the debugger tour](../debugger.md).
+
 ## Read the program
 
 Start with `instance = { key = data.tenant }`: it selects independent state

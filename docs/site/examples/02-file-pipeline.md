@@ -23,6 +23,8 @@ refusals visible before the flow runs?
 rastok simulate examples/file-pipeline.rkg --compare examples/traces/file-pipeline
 ```
 
+For the controls and source view, see [the debugger tour](../debugger.md).
+
 ## Read the program
 
 Find the two `File` Connectors: one reads, one replaces. Their modes describe
