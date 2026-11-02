@@ -216,6 +216,12 @@ port anchors and favor a lower position for forward pipes that skip columns.
 Boundary positions follow retained neighboring port anchors. An ambiguous
 composition seam does not acquire an invented Graph port. **Status: shipped.**
 
+Parallel straight spans keep a small clearance from Node bodies and Graph
+frames. Layout reserves room for return tracks between node rows and child
+scopes. A pipe crosses its own node's clearance at its actual pin. Return tracks
+keep their tangent continuous through the final rounded turn into an input.
+**Status: shipped.**
+
 Empty mailbox counters use a transparent background and muted text, with a
 text halo that masks the pipe behind the count. Occupied mailboxes and counters
 selected or emphasized through their connected node retain contrast. Hover or

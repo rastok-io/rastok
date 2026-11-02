@@ -47,10 +47,16 @@ meaning and removes no validated edge. Clear forward spans use a single cubic
 curve with horizontal endpoints. Obstructed and return spans retain orthogonal
 tracks with rounded corners. Their sampled geometry is checked against node
 bodies, scope headers and unrelated port labels; a pipe excludes its own labels.
+Body and header obstacles include a small margin, with entry and exit passages
+at the pipe's actual node pins. Parallel tracks also reserve clearance from
+Graph borders. Perpendicular crossings keep the retained composition information.
+Vertical spacing leaves routing room between rows and child scopes and around
+scope contents. Return arrivals keep orthogonal tracks through their final
+rounded turn, preserving the tangent into the input.
 Those obstacles take priority over track crowding. Previously drawn straight
 spans reserve their tracks, with adjacent lanes available to later detours.
 A repeated retained portal span and the short final approach may remain shared;
-separate arrivals curve into that approach before the receiving label.
+forward arrivals curve into that approach before the receiving label.
 A forward span from a child output to its parent boundary stays within the
 vertical interval of its endpoint pins. Multiple arrivals keep their semantic
 routes. Node ports use the opposite retained anchors and favor a lower position

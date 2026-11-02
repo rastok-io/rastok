@@ -20,6 +20,7 @@
   const SCOPE_PADDING = 12;
   const PORT_SPACING = 20;
   const TRACK_SPACING = 12;
+  const BOX_EDGE_CLEARANCE = 6;
   const PORT_STUB = 8;
   const FAN_STUB = 16;
   const ROOT_INPUT_GUTTER = 82;
@@ -242,8 +243,10 @@
       ownerRankX.set(ownerId, coordinates);
     }
 
-    const rowGap = 20;
-    const scopeGap = 16;
+    // Leave routing tracks between bands as well as clearance at each box.
+    const rowGap = BOX_EDGE_CLEARANCE * 2 + TRACK_SPACING * 2;
+    const scopeGap = rowGap;
+    const verticalPadding = SCOPE_PADDING + TRACK_SPACING;
     const measured = new Map();
     const directHeight = new Map();
     function measureOwner(ownerId) {
@@ -271,7 +274,7 @@
         ownerPorts.filter((port) => port.direction === "input").length,
         ownerPorts.filter((port) => port.direction === "output").length + discardCount,
       ) * PORT_SPACING;
-      const height = SCOPE_HEADER + SCOPE_PADDING * 2
+      const height = SCOPE_HEADER + verticalPadding * 2
         + Math.max(36, portBand, bandHeight + contentGap + childHeight);
       measured.set(ownerId, height);
       return height;
@@ -283,7 +286,7 @@
     function placeOwner(ownerId, top, depth) {
       const height = measured.get(ownerId);
       scopeVertical.set(ownerId, { y: top, height, depth });
-      let cursorY = top + SCOPE_HEADER + SCOPE_PADDING;
+      let cursorY = top + SCOPE_HEADER + verticalPadding;
       const bandHeight = directHeight.get(ownerId) || 0;
       const ownerGroups = new Map();
       for (const node of directNodes.get(ownerId) || []) {
@@ -709,7 +712,12 @@
     const labelObstacles = graphLabelObstacles(graph, layout);
     const bodies = graph.nodes.filter(node => node.kind !== "boundary" && node.kind !== "discard")
       .map(node => layout.positions.get(node.id));
-    const headers = [...layout.scopes.values()].map(scope => ({ ...scope, height: SCOPE_HEADER }));
+    const headers = [...layout.scopes.values()].map(scope => expandBox({ ...scope, height: SCOPE_HEADER }, BOX_EDGE_CLEARANCE));
+    const frameTracks = [...layout.scopes.values()].flatMap(scope => orthogonalSegments([
+      { x: scope.x, y: scope.y }, { x: scope.x + scope.width, y: scope.y },
+      { x: scope.x + scope.width, y: scope.y + scope.height }, { x: scope.x, y: scope.y + scope.height },
+      { x: scope.x, y: scope.y },
+    ]));
     const ordered = [...candidates].sort((left, right) =>
       left.portals.length - right.portals.length
       || left.start.x - right.start.x
@@ -773,7 +781,8 @@
         ...candidate.portals.map(portal => ({ x: portal.x, y: portal.y }))];
       // Multiple pipes keep their identities and join the same short approach
       // to the receiving pin. They do not create a shared semantic mailbox.
-      if (targetFan.count > 1) {
+      const returning = (candidate.portals.at(-1)?.x ?? candidate.start.x) >= candidate.end.x;
+      if (targetFan.count > 1 && !returning) {
         const targetKey = candidate.target.kind === "boundary"
           ? scopePortKey(candidate.target.owner, candidate.target.direction, candidate.target.ports[0].name)
           : portKey(candidate.target.id, "input", candidate.edge.target.port);
@@ -790,7 +799,8 @@
       for (const endpoint of [candidate.source, candidate.target]) {
         if (endpoint.kind === "boundary") ownPorts.add(scopePortKey(endpoint.owner, endpoint.direction, endpoint.ports[0].name));
       }
-      const obstacles = [...labelObstacles.filter(box => !ownPorts.has(box.portKey)), ...bodies, ...headers];
+      const obstacles = [...labelObstacles.filter(box => !ownPorts.has(box.portKey)),
+        ...bodies.map(body => ({ ...expandBox(body, BOX_EDGE_CLEARANCE), body })), ...headers];
       const clearPoints = [];
       const lastPortal = candidate.portals.at(-1);
       for (let index = 1; index < presentationPoints.length; index += 1) {
@@ -798,7 +808,7 @@
         const parentArrival = index === candidate.portals.length + 1 && lastPortal?.direction === "output"
           && candidate.target.kind === "boundary" && candidate.target.owner === layout.owners.get(lastPortal.owner)?.parent;
         const span = routePresentationSpan(from, to, obstacles, layout.scopes.get(layout.rootOwner),
-          occupiedPresentation, parentArrival, targetFan.count > 1 && index === presentationPoints.length - 2);
+          occupiedPresentation, frameTracks, parentArrival, targetFan.count > 1 && !returning && index === presentationPoints.length - 2);
         appendPoints(clearPoints, span);
         occupiedPresentation.push({ from, to, tracks: presentationTracks(span) });
       }
@@ -1035,7 +1045,7 @@
       .map(segment => ({ a: segment.from, b: segment.to }));
   }
 
-  function routePresentationSpan(from, to, obstacles, bounds, occupied, parentArrival, joining) {
+  function routePresentationSpan(from, to, obstacles, bounds, occupied, frameTracks, parentArrival, joining) {
     // Only the same retained portal span or short fan-in tail may be shared.
     const tracks = occupied.filter(span => span.from.x !== from.x || span.from.y !== from.y
       || span.to.x !== to.x || span.to.y !== to.y).flatMap(span => span.tracks);
@@ -1049,33 +1059,46 @@
         if (point.x < bounds.x || point.x > bounds.x + bounds.width
           || point.y < bounds.y + SCOPE_HEADER || point.y > bounds.y + bounds.height) collisions += 1;
         for (const box of obstacles) {
-          if (point.x > box.x + 0.5 && point.x < box.x + box.width - 0.5
-            && point.y > box.y + 0.5 && point.y < box.y + box.height - 0.5) collisions += 1;
+          // The pipe may cross its own body's clearance only at its pin.
+          if (box.body && ((from.x === box.body.x + box.body.width
+            && from.y >= box.body.y && from.y <= box.body.y + box.body.height && point.x >= from.x
+            && Math.hypot(point.x - from.x, point.y - from.y) <= BOX_EDGE_CLEARANCE)
+            || (to.x === box.body.x && to.y >= box.body.y && to.y <= box.body.y + box.body.height && point.x <= to.x
+              && Math.hypot(point.x - to.x, point.y - to.y) <= BOX_EDGE_CLEARANCE))) continue;
+          if (point.x > box.x && point.x < box.x + box.width
+            && point.y > box.y && point.y < box.y + box.height) collisions += 1;
         }
       }
       let crowding = 0;
+      let frameCrowding = 0;
       for (const segment of presentationTracks(points)) {
         const horizontal = segmentOrientation(segment) === "horizontal";
-        for (const track of tracks) {
+        for (const track of [...tracks, ...frameTracks]) {
           if (segmentOrientation(track) !== segmentOrientation(segment)) continue;
           const distance = Math.abs(horizontal ? segment.a.y - track.a.y : segment.a.x - track.a.x);
-          if (distance >= TRACK_SPACING) continue;
+          const frame = frameTracks.includes(track);
+          const clearance = frame ? BOX_EDGE_CLEARANCE : TRACK_SPACING;
+          if (distance >= clearance) continue;
           const aligned = horizontal
             ? { a: { x: track.a.x, y: segment.a.y }, b: { x: track.b.x, y: segment.a.y } }
             : { a: { x: segment.a.x, y: track.a.y }, b: { x: segment.a.x, y: track.b.y } };
-          crowding += collinearOverlapLength(segment, aligned) * (TRACK_SPACING - distance);
+          const penalty = collinearOverlapLength(segment, aligned) * (clearance - distance);
+          if (frame) frameCrowding += penalty;
+          else crowding += penalty;
         }
       }
-      return { points, collisions, crowding,
+      return { points, collisions, crowding, frameCrowding,
         cost: crowding * 100 + length + points.length * 8 };
     };
     const gap = to.x - from.x;
     const direct = score([from, { ...to, curve: true }]);
-    if (gap > 0 && !direct.collisions && !direct.crowding) return direct.points;
+    if (gap > 0 && !direct.collisions && !direct.crowding && !direct.frameCrowding) return direct.points;
     const laneCenters = [
       (from.y + to.y) / 2,
       ...obstacles.flatMap(box => [box.y - CORNER_RADIUS, box.y + box.height + CORNER_RADIUS]),
       ...tracks.filter(track => segmentOrientation(track) === "horizontal").map(track => track.a.y),
+      ...frameTracks.filter(track => segmentOrientation(track) === "horizontal")
+        .flatMap(track => [track.a.y - BOX_EDGE_CLEARANCE, track.a.y + BOX_EDGE_CLEARANCE]),
     ];
     const lanes = [...new Set(laneCenters.flatMap(y => [y, y - TRACK_SPACING, y + TRACK_SPACING]))]
       .filter(y => y >= bounds.y + SCOPE_HEADER && y <= bounds.y + bounds.height
@@ -1085,6 +1108,9 @@
     for (const lane of lanes) {
       for (const stub of [24, 48, 72]) {
         const departure = gap > 0 ? Math.min(stub, gap / 3) : stub;
+        // A return turns vertically before entering the input instead of
+        // reversing its leftward track into a rightward cubic. A longer entry
+        // also lets a pipe leave a child scope without crossing its header.
         const arrival = departure;
         const points = compactOrthogonalPoints([
           from,
@@ -1097,7 +1123,8 @@
         ]);
         const candidate = score(points);
         if (!best || candidate.collisions < best.collisions
-          || (candidate.collisions === best.collisions && candidate.cost < best.cost)) best = candidate;
+          || (candidate.collisions === best.collisions && (candidate.frameCrowding < best.frameCrowding
+            || (candidate.frameCrowding === best.frameCrowding && candidate.cost < best.cost)))) best = candidate;
       }
     }
     return best?.points || [from, to];

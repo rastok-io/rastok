@@ -1163,7 +1163,7 @@ test("chat route details preserve separate tracks and legible arrivals", { timeo
           const overlap = Math.min(Math.max(a.from.x, a.to.x), Math.max(b.from.x, b.to.x))
             - Math.max(Math.min(a.from.x, a.to.x), Math.min(b.from.x, b.to.x));
           const sharedArrival = left.endsWith('>clients.in') && right.endsWith('>clients.in')
-            && Math.min(a.from.x, a.to.x, b.from.x, b.to.x) >= routes[left].end.x - 32
+            && Math.max(Math.min(a.from.x, a.to.x), Math.min(b.from.x, b.to.x)) >= routes[left].end.x - 32
             && a.from.y === routes[left].end.y;
           if (!sharedArrival && overlap > 1) assert.ok(Math.abs(a.from.y - b.from.y) >= 10,
             `${left} and ${right} need distinct horizontal tracks`);
@@ -1207,6 +1207,53 @@ test("chat route details preserve separate tracks and legible arrivals", { timeo
     await page.emulateMedia({ colorScheme: 'light', reducedMotion: 'reduce' });
     await page.locator('.graph-canvas').screenshot({ path: path.join(process.env.RASTOK_UI_CAPTURES, 'graph-chat-tracks-detail-light.png') });
   }
+});
+
+test("chat return tracks clear frames and keep rounded turns", { timeout: 60000 }, async t => {
+  const page = await openTour(t, { width: 1440, height: 760 }, 'examples/agent-chat.rkg');
+  await capture(page, 'graph-chat-clearance');
+  const drawing = await page.evaluate(() => {
+    const graph = graphLayout.materializeGraph(currentSnapshot.topology);
+    const layout = graphLayout.layoutGraph(graph.nodes, graph.edges, currentSnapshot.topology.owners);
+    const routes = graphLayout.routeGraphEdges(graph, layout);
+    return {
+      boxes: [...layout.scopes.values(), ...graph.nodes.filter(node => !['boundary', 'discard'].includes(node.kind))
+        .map(node => layout.positions.get(node.id))],
+      routes: graph.edges.map(edge => ({ name: edge.route, ...routes.get(edge.index),
+        segments: graphLayout.curvedCorridorSegments(routes.get(edge.index).presentationPoints) })),
+    };
+  });
+  await t.test('straight pipes have a visible gap from parallel box borders', () => {
+    for (const route of drawing.routes) for (const segment of route.segments) {
+      for (const [along, across, length] of [['x', 'y', 'width'], ['y', 'x', 'height']]) {
+        if (![segment.c1, segment.c2, segment.to].every(point => point[across] === segment.from[across])) continue;
+        for (const box of drawing.boxes) {
+          const overlap = Math.min(Math.max(segment.from[along], segment.to[along]), box[along] + box[length])
+            - Math.max(Math.min(segment.from[along], segment.to[along]), box[along]);
+          if (overlap <= 1) continue;
+          const thickness = across === 'x' ? box.width : box.height;
+          for (const border of [box[across], box[across] + thickness]) {
+            assert.ok(Math.abs(segment.from[across] - border) >= 5.99,
+              `${route.name} needs clearance from the ${across}=${border} frame`);
+          }
+        }
+      }
+    }
+  });
+  await t.test('return bends have continuous tangents instead of reversing into a curve', () => {
+    for (const route of drawing.routes.filter(route => (route.portals.at(-1)?.x ?? route.start.x) > route.end.x)) {
+      const tangent = (segment, start) => {
+        const dx = start ? segment.c1.x - segment.from.x : segment.to.x - segment.c2.x;
+        const dy = start ? segment.c1.y - segment.from.y : segment.to.y - segment.c2.y;
+        return Math.hypot(dx, dy) > 0.001 ? [dx, dy] : [segment.to.x - segment.from.x, segment.to.y - segment.from.y];
+      };
+      for (let index = 1; index < route.segments.length; index += 1) {
+        const a = tangent(route.segments[index - 1], false), b = tangent(route.segments[index], true);
+        const cosine = (a[0] * b[0] + a[1] * b[1]) / (Math.hypot(...a) * Math.hypot(...b));
+        assert.ok(cosine > 0.999, `${route.name} has an abrupt turn at segment ${index}`);
+      }
+    }
+  });
 });
 
 test("graph selection reveals the source block without a Definition tab or execution", { timeout: 60000 }, async t => {
