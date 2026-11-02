@@ -28,8 +28,12 @@ answer.
 rastok simulate examples/agent-gateway.rkg --ui
 ```
 
-The debugger starts paused. Follow one input, then inspect the instance and
-Session tables. For the reproducible CLI check:
+The debugger starts paused in the source view. Follow one input with
+**Next transition** and watch the source marker. Hover a port identifier, or
+focus it with Tab, to inspect its recorded value and open the full object in
+the inspector. The instance and Session tables show the recorded ownership.
+Use the **Graph** tab to follow connections; selecting a node also selects its
+source definition and inspector context. For the reproducible CLI check:
 
 ```sh
 rastok simulate examples/agent-gateway.rkg --compare crates/rastok/tests/golden/gallery/agent-gateway

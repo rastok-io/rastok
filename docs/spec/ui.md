@@ -139,23 +139,23 @@ disposable debugger state, not another causal ledger or a durable backup.
 
 ## 4. Source, graph and inspector
 
-The source pane will be the primary view, with one tab per source unit, line
-numbers and syntax coloring. Graph will be a secondary tab beside the sources;
-the inspector will remain on the right. Source indexes, inclusive line ranges,
-optional columns, node paths, ports and selected arms will be disposable read
-model fields. Simulation source units will retain full text except where the
-existing policy withholds Lab source. Replay will expose retained excerpts and
-explicitly identify missing source. Per-node definitions will remain compatible.
-**Status: specified, not shipped.**
+The source pane is the primary view, with one tab per source unit, line
+numbers and syntax coloring. Graph is a secondary tab beside the sources;
+the inspector remains on the right. Source indexes, inclusive line ranges,
+optional columns, node paths, ports and selected arms are disposable read
+model fields. Simulation source units retain full text except where the
+existing policy withholds Lab source. Replay exposes retained excerpts and
+explicitly identifies missing source. Per-node definitions remain compatible.
+**Status: shipped.**
 
-The current-transition marker will follow the selected recorded prefix, landing
+The current-transition marker follows the selected recorded prefix, landing
 on the transition's node, port or selected arm. An unavailable source location
-will have an explicit reason. Graph selection will scroll to the node definition
-and select its inspector context; the source marker will highlight the node in
-Graph. Source scrolling will stay inside its pane and respect reduced motion.
-View selection and splitters will remain physical UI state. The existing
-controller, transport commands, iteration dial and recording format will remain
-unchanged. **Status: specified, not shipped.**
+has an explicit reason. Graph selection prepares the node definition for the
+source tab and selects its inspector context; the source marker highlights
+the node in Graph. The chosen view stays open. Source scrolling stays inside
+its pane and respects reduced motion. View selection and splitters remain
+physical UI state. The controller, transport commands, iteration dial and
+recording format are unchanged. **Status: shipped.**
 
 Containment and actual ports come from the validated Node table, including
 the App root and nested Graphs. Node bodies distinguish Graphs, Operators and
@@ -227,8 +227,9 @@ Evidence: `retry_inspection_agrees_in_steps_batch_and_every_recorded_prefix`
 and the browser regression `Retry keeps held attempts inspectable…`; execution
 status is explicit in [C4](../architecture/retry-c4-inspection.md).
 
-The existing page has a compact transport row, a timeline row, a graph canvas and
-Envelope / Mailbox / Definition / Instances / History / Assertion / Compare tabs.
+The page has a compact transport row, a timeline row, source tabs, a secondary
+Graph canvas and Envelope / Mailbox / Definition / Instances / History /
+Assertion / Compare inspector tabs.
 Tabs wrap without overlapping their panel. Instances includes
 exchanges and injection history. The canvas pans/zooms;
 a splitter resizes the inspector. Initial fit uses the available space.
@@ -320,16 +321,24 @@ recipe or permission to reveal a redacted value.
 
 ## 6. Explanatory projection
 
-Positioned identifiers in source will offer read-only value summaries for ports,
+Positioned identifiers in source offer read-only value summaries for ports,
 instance state, Loop and Retry counters, scenario inputs, DATA and META paths,
-and pending deadlines. Summaries will identify their kind, short rendering,
-redaction status and inspector target. Missing or ambiguous values will say so.
-They will use the selected prefix and existing policy-filtered projections,
-without executing expressions or decoding opaque DATA. Classified source will
-remain withheld under section 5. Hover and keyboard focus will open the same
-tooltip; Escape will close it, and its link will select the matching inspector
-tab. No input, editable field, form, POST route or command will be added by this
-projection. **Status: specified, not shipped.**
+and pending deadlines. Summaries identify their kind, short rendering,
+redaction status and inspector target. Missing or ambiguous values say so.
+They use the selected prefix and existing policy-filtered projections,
+without executing expressions or decoding opaque DATA. Classified source
+remains withheld under section 5. Hover and keyboard focus open the same
+tooltip; Escape closes it, and its link selects the matching inspector
+tab. This projection adds no input, editable field, form, POST route or command.
+**Status: shipped.**
+
+Positions use one-based lines and Unicode scalar columns when the retained
+source permits an exact location. Decision arms retain line ranges only.
+Missing columns are null; missing locations have an unavailable reason.
+Identifier scopes follow checked node definitions. Ambiguous retained
+declarations or multiple possible active instances do not acquire an invented
+value. Port summaries show DATA and application META; their inspector links
+retain the recorded envelope reference. **Status: shipped.**
 
 All evidence below is disposable and scoped to the selected snapshot and journal
 prefix. Inspection does not execute a handler, call a Driver, decode opaque DATA,
@@ -455,3 +464,9 @@ branch authoring, source hot reload, input/state editing, breakpoints,
 cross-process attachment, durable UI history, remote access, user accounts,
 exact commit timestamps and OTLP. A terminal debugger is a later consumer of
 the same controller/read model, with spelling and interaction still undecided.
+
+A future Debug Adapter Protocol adapter could reuse source indexes, positions,
+node and instance scopes, variable summaries and the existing stepping
+controller. Variable-reference lifetimes, column encoding, incomplete recording
+source and adapter transport would need explicit decisions. No adapter is
+included in this implementation. **Status: specified, not shipped.**

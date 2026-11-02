@@ -118,6 +118,14 @@ obligations in time order, including work they cause, then reaches the
 requested target. This tests a day-long timeline without sleeping for a
 day.
 
+## Inspect source
+
+`--ui` opens the source debugger. **Next transition** marks the recorded node,
+port or selected arm. Hover or focus an identifier for a read-only summary;
+Escape closes it. The tooltip links to the inspector and preserves redaction.
+**Graph** is secondary; selecting a node prepares its source definition and
+inspector context.
+
 ## Know the evidence boundary
 
 Run `rastok simulate examples/echo.rkg` to check its three scenarios.

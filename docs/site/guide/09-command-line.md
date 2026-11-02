@@ -74,10 +74,11 @@ A unit without a Lab refuses.
 - `--deployment` supplies boot values and attestations needed by the graph,
   even when the external responses are mocked.
 
-`--ui` starts paused and prints a token-bearing loopback URL. Open that URL
-to step, finish or select a scenario. It requires a `hosted-ui` build.
-`--ui-port` chooses a nonzero TCP port and requires `--ui`; otherwise the
-OS selects a free port. The CLI does not open a browser automatically.
+`--ui` requires `hosted-ui` and prints a token-bearing loopback URL to open.
+It starts paused with source, transition marker and inspector.
+Hover or keyboard focus opens read-only summaries with redaction;
+**Graph** is secondary. `--ui-port` requires `--ui` and selects a nonzero TCP
+port; otherwise the OS chooses one.
 
 ## Execute the App: run
 
@@ -112,11 +113,12 @@ stdout. Lab scenarios are not executed.
 rastok replay <file.rkrec> [--ui [--ui-port <port>]]
 ```
 
-`rastok replay echo.rkrec` prints the recorded App outputs on stdout and a
-record-count/seal summary on stderr. It needs neither the source nor the
-original external systems and performs no Driver I/O. `--ui` opens recorded
-history with the same port rules as simulation, but cannot execute the
-program. Replay does not import the recording into a Lab scenario.
+`rastok replay echo.rkrec` prints App outputs on stdout and a record-count/seal
+summary on stderr, without Driver I/O. `--ui` uses simulation's port rules and
+opens read-only source history, with a marker and value summaries. Recordings
+retain node excerpts; missing source lines are explicit. Replay needs no
+original source or external systems, does not load changed source from disk,
+and cannot execute the program or create a Lab scenario.
 
 ## Inspect capabilities: connectors
 
