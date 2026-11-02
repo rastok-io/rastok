@@ -279,7 +279,7 @@ fn debugger_url_is_plain_text_when_stdout_is_piped() {
             &format!("POST /api/command/close?token={token}"),
             &headers
         )
-        .starts_with("HTTP/1.1 200")
+        .starts_with("HTTP/1.1 202")
     );
     assert!(child.wait().unwrap().success());
 }

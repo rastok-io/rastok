@@ -604,7 +604,7 @@ test('a real recording is navigable without any execution command or Driver', { 
   await page.locator('[data-command="resume"]').click();
   await page.locator('#timeline-position').filter({ hasText: /^REPLAY/ }).waitFor();
   await page.locator('[data-command="pause"]').click();
-  assert.match(await page.locator('#execution-state').innerText(), /replay paused/);
+  assert.match(await page.locator('#execution-state').innerText(), /playback paused/);
   const paused = await page.locator('#timeline').inputValue();
   await page.waitForTimeout(1200);
   assert.equal(await page.locator('#timeline').inputValue(), paused);
@@ -668,13 +668,14 @@ test("transitions have explicit transport names, a first-contact hint and an hon
     ["step", "Next transition F10", "advance one recorded transition"],
     ["next-scenario-action", "Next action", "run one authored action to its effect"],
     ["run-to-completion", "Finish", "run to completion"],
-    ["resume", "Replay F8", "replay recorded transitions at the selected speed"],
+    ["resume", "Play F8", "advance through recorded transitions at the selected speed"],
   ]) {
     const button = page.locator(`[data-command="${command}"]`);
     assert.equal((await button.innerText()).replace(/\s+/g, ' '), label);
     assert.ok((await button.getAttribute("title")).includes(hint));
   }
   assert.equal(await page.locator('.timeline-bar').getAttribute('aria-label'), 'Recorded execution timeline');
+  assert.equal(await page.locator('#playback-speed').getAttribute('aria-label'), 'Playback speed');
   assert.equal(await page.locator('#timeline').getAttribute('aria-label'), 'Recorded transition');
   assert.match(await page.locator('#command-status').innerText(), /Paused before admission/);
   assert.match(await page.locator('#timeline-position').innerText(), /^LIVE · Main · transition 0$/);
@@ -813,7 +814,7 @@ test('scenario actions select their recorded transition and all navigation is ke
   await page.keyboard.press(' ');
   await page.locator('#timeline-position').filter({ hasText: /^REPLAY/ }).waitFor();
   await page.keyboard.press(' ');
-  assert.match(await page.locator('#execution-state').innerText(), /replay paused/);
+  assert.match(await page.locator('#execution-state').innerText(), /playback paused/);
 });
 
 test('the explanatory path is reachable with Tab and keyboard alone', { timeout: 90000 }, async t => {
@@ -911,7 +912,7 @@ test('the explanatory path is reachable with Tab and keyboard alone', { timeout:
   await page.keyboard.press(' ');
   await page.locator('#timeline-position').filter({ hasText: /^REPLAY/ }).waitFor();
   await page.keyboard.press(' ');
-  assert.match(await page.locator('#execution-state').innerText(), /replay paused/);
+  assert.match(await page.locator('#execution-state').innerText(), /playback paused/);
 });
 
 test('failed expect shows the observed field difference and expect nothing shows the offender', { timeout: 60000 }, async t => {
@@ -1316,7 +1317,7 @@ test("history navigation clears replay messages and keeps transport positions st
   await page.locator("#timeline-position").filter({ hasText: /transition 0$/ }).waitFor();
   await page.locator('[data-command="resume"]').click();
   await page.locator('[data-command="pause"]').click();
-  assert.match(await page.locator("#command-status").innerText(), /Replay paused/);
+  assert.match(await page.locator("#command-status").innerText(), /Playback paused/);
   const paused = await reset.boundingBox();
   const visible = await reset.evaluate(element => {
     const button = element.getBoundingClientRect();
@@ -1710,7 +1711,7 @@ test('debugger function keys use existing controls and preserve native input sho
   await page.keyboard.press('F8');
   await page.locator('#timeline-position').filter({ hasText: /^REPLAY/ }).waitFor();
   await page.keyboard.press('F8');
-  await page.locator('#execution-state').filter({ hasText: /^replay paused$/ }).waitFor();
+  await page.locator('#execution-state').filter({ hasText: /^playback paused$/ }).waitFor();
   assert.equal(commands.length, before, 'function keys navigate retained history without executing commands');
   const boundary = await page.locator('#timeline').inputValue();
   await page.locator('#open-search').click();

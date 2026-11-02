@@ -50,8 +50,8 @@ const graphViewport = { scale: 1, x: 0, y: 0, fitScale: 1, fitX: 0, fitY: 0 };
 let graphViewportResizeObserver = null;
 
 const COMMAND_HINTS = Object.freeze({
-  resume: "Replay: replay recorded transitions at the selected speed (F8 or Space)",
-  pause: "Pause: stop replay or execution at the next safe transition (F8 or Space)",
+  resume: "Play: advance through recorded transitions at the selected speed",
+  pause: "Pause: stop playback or execution at the next safe transition (F8 or Space)",
   step: "Next transition: advance one recorded transition (F10 or n)",
   "retry-step": "Retry: retry the reserved transaction",
   "run-to-completion": "Finish: run to completion",
@@ -592,7 +592,7 @@ function renderExecutionState(snapshot) {
   const recording = snapshot?.mode === "replay";
   pill.title = recording ? "Read-only recording; no execution engine is running" : `Engine ${liveState}; ${atLive ? "viewing the live head" : "viewing a recorded transition"}`;
   if (!atLive && (bufferedPlayback || replayPaused)) {
-    text("execution-state", replayPaused ? "replay paused" : "replaying");
+    text("execution-state", replayPaused ? "playback paused" : "playing");
     pill.className = `execution-state state-${replayPaused ? "paused" : "running"}`;
     return;
   }
@@ -696,7 +696,7 @@ function pauseBufferedPlayback() {
   updateControls();
   const session = Number(currentSnapshot?.timeline?.session || 0);
   const boundary = Number(currentSnapshot?.timeline?.boundary || 0);
-  setCommandStatus(`Replay paused on ${sessionName(session)} · transition ${boundary}; the engine head was not changed.`);
+  setCommandStatus(`Playback paused on ${sessionName(session)} · transition ${boundary}; the engine head was not changed.`);
 }
 
 function renderTimeline() {
@@ -735,7 +735,7 @@ function renderTimeline() {
         : "HISTORY";
   text("timeline-position", `${view} · ${sessionName(session)} · transition ${boundary}`);
   const engine = recording ? "recording · " : bufferedPlayback
-    ? (liveSnapshot?.execution?.state === "completed" ? "engine completed · replay in progress · " : "engine finishing, then replay · ")
+    ? (liveSnapshot?.execution?.state === "completed" ? "engine completed · playback in progress · " : "engine finishing, then playback · ")
     : atLive ? "" : `engine ${liveSnapshot?.execution?.state || "paused"} · `;
   text("timeline-head", `${engine}head ${liveBoundary}`);
   const returnLive = document.querySelector("#return-live");
@@ -986,7 +986,7 @@ function updateControls() {
         reason = "available in LIVE only; select Return live";
       } else if (!legal.has(command)) {
         reason = command === "next-scenario-action" && liveSnapshot?.execution?.state === "paused"
-          ? "the current scenario action is still executing; use Next transition or Replay"
+          ? "the current scenario action is still executing; use Next transition or Play"
           : "not legal at the current execution state";
       }
     }

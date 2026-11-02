@@ -36,7 +36,7 @@ A build without the capability refuses by name.
 
 For a diagnostic recording, `rastok replay capture.rkrec --ui [--ui-port PORT]`
 opens at the empty prefix. Each subsequent transition selects one more recorded
-record. Next transition/Finish navigate locally; Replay/Pause, Back and the
+record. Next transition/Finish navigate locally; Play/Pause, Back and the
 slider inspect the recorded timeline. Reset, retry, scenario actions and all
 server execution commands refuse. The reader never constructs a physical
 Driver. Checkpoint observation times are not exact record-commit timestamps.
@@ -74,7 +74,7 @@ Every selection starts paused at B0, before admission. Controls are:
   Intermediate states are retained before the controller pauses at quiescence;
   executing an `advance` does not compress its ready transactions into one frame.
 - **Run to expect**: stop before the next assertion.
-- **Replay / Pause**: present the same recorded transitions at one or four events
+- **Play / Pause**: present the same recorded transitions at one or four events
   per second; Pause stops buffered playback even after the engine completes.
 - **Finish**: run to completion without pedagogical pacing.
 - **Retry transaction**: shown in the fault panel only when a refusal still owns
@@ -86,11 +86,11 @@ At B0 the source header reads `Paused before admission · Next transition advanc
 one step`; the first navigation gesture dismisses it. Command status shares that
 header with the current source position, without reserving an empty row.
 There is no tour or modal. Tooltips retain their action description and append a
-reason when disabled. Replay and Pause share one visible playback control; Back
+reason when disabled. Play and Pause share one visible playback control; Back
 and Next transition are adjacent. **Status: shipped.**
 
-The server may run ahead while the browser reads recorded frames. Replay first
-finishes the engine when necessary: `engine finishing, then replay`. The header
+The server may run ahead while the browser reads recorded frames. Play first
+finishes the engine when necessary: `engine finishing, then playback`. The header
 distinguishes engine state from buffered playback or historical inspection.
 Pacing never changes logical time, scheduling or causal facts. Simulation time
 advances through Lab actions; viewing a paused frame cannot age a timeout.
@@ -109,7 +109,7 @@ inspector instead of clipping record/transition positions. Summaries have full
 tooltips and origin ids are abbreviated without repeating the column label.
 Lifecycle facts remain stepable and labelled as lifecycle, not disguised as
 application transactions or extra deliveries. Fan-out remains one atomic
-transition. Replay, repeated Next transition and Finish retain the same execution.
+transition. Play, repeated Next transition and Finish retain the same execution.
 
 A transaction refusal commits nothing. A physical boundary failure after a
 previous commit must not claim rollback; its message says what remains
@@ -303,6 +303,9 @@ status is explicit in [C4](../architecture/retry-c4-inspection.md).
 The page has a compact transport row, a timeline row, source tabs, a complementary
 Graph canvas and Envelope / Mailbox / Instances / History /
 Assertion / Compare inspector tabs.
+The Play control advances through recorded transitions at the selected speed;
+its speed selector is labeled `Playback speed`. This playback control is not
+the `rastok replay` command that opens a diagnostic recording.
 Tabs wrap without overlapping their panel. Instances, History and a selected
 Mailbox show entry counts; Assertion names an evaluated result. Instances
 includes exchanges and injection history in collapsible sections, each with a
@@ -485,7 +488,7 @@ append a record or modify the live machine.
   shapes retain the assertion and envelope evidence, without an invented field
   diff. Unknown predicate evaluation is unknown, never zero matches.
 - **Keyboard.** Left/right select transitions, `n` advances one transition, `a`
-  one authored action, Space toggles Replay/Pause, Enter opens the selected
+  one authored action, Space toggles Play/Pause, Enter opens the selected
   envelope, Escape dismisses an overlay/selection, and `/` opens node/port/id
   search. Native inputs and tab controls keep their own keys. Focus is visible;
   redraw preserves focus on surviving graph targets. Escape restores an enabled
@@ -497,7 +500,7 @@ append a record or modify the live machine.
   highlighted. Missing transitions say not recorded. Alignment by ordinal is not
   an assertion of semantic equivalence and no equality is called a replay proof.
 
-F8 aliases Replay/Pause and F10 aliases Next transition when the browser
+F8 aliases Play/Pause and F10 aliases Next transition when the browser
 delivers those keys to the page. The buttons advertise these shortcuts visually,
 in tooltips and through `aria-keyshortcuts`. Space and `n` remain alternatives
 when a browser or keyboard reserves function keys. Native inputs, composition,
