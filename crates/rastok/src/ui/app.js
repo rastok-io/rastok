@@ -37,6 +37,8 @@ let graphResizeObserver = null;
 let graphTextSync = null;
 let activeSourceView = sessionStorage.getItem("rastok-source-view") || null;
 let lastSourcePoint = null;
+let selectedSourceDefinition = null;
+let sourceSelectionPending = false;
 const sourceScroll = new Map();
 const sourceValues = new Map();
 let sourceTooltipAnchor = null;
@@ -188,6 +190,7 @@ function renderSnapshot(snapshot) {
 }
 
 function selectSourceView(view, focus = false) {
+  hideSourceTooltip();
   const pane = document.querySelector("#source-code");
   if (activeSourceView && activeSourceView !== "graph") sourceScroll.set(activeSourceView, [pane.scrollLeft, pane.scrollTop]);
   activeSourceView = view;
@@ -258,7 +261,9 @@ function renderSource(snapshot) {
     const atSource = position?.status === "available" && position.source_index === source.index;
     const current = atSource && index + 1 >= position.first_line && index + 1 <= position.last_line;
     const fired = atSource && (position.fired_lines || []).includes(index + 1);
-    line.className = `source-line${current ? " current-range" : ""}${fired ? " fired" : ""}`;
+    const selected = selectedSourceDefinition?.source_index === source.index
+      && index + 1 >= selectedSourceDefinition.first_line && index + 1 <= selectedSourceDefinition.last_line;
+    line.className = `source-line${current ? " current-range" : ""}${fired ? " fired" : ""}${selected ? " selected-definition" : ""}`;
     if (atSource && index + 1 === position.first_line) {
       line.classList.add("current-position");
       line.setAttribute("aria-current", "step");
@@ -296,6 +301,10 @@ function renderSource(snapshot) {
     ? `Transition ${snapshot.timeline.boundary} · ${position.node_path || "App"}${position.port ? `.${position.port}` : ""} · line ${position.first_line}`
     : position?.reason || "Read-only source") + policy);
   if (advanced) scrollSourceLine(position?.source_index === source.index ? position.first_line : null);
+  if (sourceSelectionPending && selectedSourceDefinition?.source_index === source.index) {
+    scrollSourceLine(selectedSourceDefinition.first_line);
+    sourceSelectionPending = false;
+  }
   if (focusKey) pane.querySelector(`[data-source-token="${CSS.escape(focusKey)}"]`)?.focus({ preventScroll: true });
 }
 
@@ -1122,7 +1131,7 @@ function renderTopology(topology, animateBoundary = false) {
   for (const owner of orderedOwners) {
     const position = layout.scopes.get(owner.id);
     if (!position) continue;
-    const active = activity?.node === owner.path;
+    const active = activity?.node === owner.path || currentSnapshot?.current_position?.node_path === owner.path;
     const selectable = Boolean(owner.definition);
     const selected = selectedTopologyItem === owner.id;
     const group = svgElement("g", {
@@ -1349,7 +1358,7 @@ function renderTopology(topology, animateBoundary = false) {
   for (const node of graph.nodes) {
     const position = layout.positions.get(node.id);
     if (!position) continue;
-    const active = activity?.node === node.path;
+    const active = activity?.node === node.path || currentSnapshot?.current_position?.node_path === node.path;
     const selectable = Boolean(node.definition);
     const selected = selectedTopologyItem === node.id;
     const boundary = node.kind === "boundary" || node.kind === "discard";
@@ -1547,6 +1556,10 @@ function selectTopologyItem(id) {
   selectedMailboxRoute = null;
   selectedLoopInstance = null;
   selectedTopologyItem = selectedTopologyItem === id ? null : id;
+  selectedSourceDefinition = selectedTopologyItemView(currentSnapshot?.topology)?.definition || null;
+  sourceSelectionPending = Boolean(selectedSourceDefinition);
+  if (activeSourceView !== "graph" && selectedSourceDefinition) activeSourceView = String(selectedSourceDefinition.source_index);
+  renderSource(currentSnapshot);
   renderTopology(currentSnapshot?.topology, false);
   if (currentSnapshot) renderRelatedPanels(currentSnapshot);
 }

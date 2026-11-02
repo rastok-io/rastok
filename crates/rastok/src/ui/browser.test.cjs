@@ -51,6 +51,9 @@ async function openTour(t, viewport = { width: 1352, height: 760 }, source = "cr
   page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
   await page.goto(url);
   await page.locator("#step:enabled").waitFor();
+  assert.equal(await page.locator("#source-pane").isVisible(), true, "source is the initial primary view");
+  // Existing graph qualification explicitly selects the complementary view.
+  await page.evaluate(() => selectSourceView("graph"));
   return page;
 }
 
@@ -1005,4 +1008,45 @@ test("the complete tour stays inspectable by mouse and keyboard", { timeout: 600
   assert.equal(Number(await finish(page)), boundaries.at(-1), "Continue and Step have the same boundary count");
   const continuous = await readSnapshot();
   assert.deepEqual(continuous.history, stepped.history, "the causal records and observed envelopes are identical");
+});
+
+
+test('source positions, keyboard summaries and graph selection share the selected transition', { timeout: 60000 }, async t => {
+  const page = await openTour(t, { width: 1440, height: 900 }, 'examples/countdown.rkg');
+  await page.locator('[data-source-view="0"]').click();
+  assert.equal(await page.locator('#source-code .syntax-keyword').first().innerText(), 'graph');
+  assert.equal(await page.locator('#source-pane input, #source-pane form, #source-pane [contenteditable=true]').count(), 0);
+  await finish(page);
+  const transition = await page.evaluate(async () => {
+    const frames = timelineIndex.sessions.find(session => session.session === currentSnapshot.timeline.session).frames;
+    for (const frame of frames) {
+      const view = await fetch(`/api/snapshot?session=${currentSnapshot.timeline.session}&boundary=${frame.boundary}`).then(response => response.json());
+      if (view.current_position.selected_arm && view.loop_runs.some(run => run.active)) return frame.boundary;
+    }
+  });
+  assert.ok(transition);
+  await seek(page, transition);
+  assert.equal(await page.locator('#source-code [aria-current="step"]').getAttribute('data-line'), String(await page.evaluate(() => currentSnapshot.current_position.first_line)));
+  const counter = page.locator('#source-code [data-source-token]').filter({ hasText: /^Loop.measure$/ });
+  await counter.focus();
+  assert.match(await page.locator('#source-tooltip').innerText(), /Loop counter.*application/s);
+  await counter.press('Tab');
+  assert.equal(await page.locator('#source-tooltip a').evaluate(link => link === document.activeElement), true);
+  await page.keyboard.press('Enter');
+  assert.equal(await page.locator('#tab-instances').getAttribute('aria-selected'), 'true');
+  await counter.focus();
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('#source-tooltip').isVisible(), false);
+  assert.equal(await counter.evaluate(token => token === document.activeElement), true);
+  await page.locator('[data-source-view="graph"]').click();
+  assert.match(await page.locator('.graph-node.active').textContent(), /count/);
+  await page.evaluate(() => selectTopologyItem(null));
+  await page.locator('.graph-node-name').filter({ hasText: /^count$/ }).click();
+  assert.equal(await page.evaluate(() => selectedTopologyItemView(currentSnapshot.topology).path), 'count');
+  await page.locator('[data-source-view="0"]').click();
+  assert.ok(await page.locator('#source-code .selected-definition').count() > 0);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await seek(page, 0);
+  assert.equal(await page.locator('#source-code [aria-current="step"]').count(), 0);
+  assert.match(await page.locator('#source-status').innerText(), /before admission/);
 });

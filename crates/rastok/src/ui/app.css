@@ -374,3 +374,5 @@ tr.timeline-record:focus { outline: 1px solid var(--boundary); outline-offset: -
 #source-tooltip pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0; font: 12px/1.5 var(--mono); }
 #source-tooltip a { color: var(--boundary); }
 #source-tooltip a:focus-visible { outline: 1px solid var(--boundary); }
+
+#source-code .selected-definition { box-shadow: inset 3px 0 var(--selection); }
