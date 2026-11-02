@@ -139,9 +139,10 @@ disposable debugger state, not another causal ledger or a durable backup.
 
 ## 4. Source, graph and inspector
 
-The source pane is the primary view, with one tab per source unit, line
-numbers and syntax coloring. Graph is a secondary tab beside the sources;
-the inspector remains on the right. Source indexes, inclusive line ranges,
+The source pane is the primary view on the left, with one tab per source unit,
+line numbers and syntax coloring. The inspector sits above the complementary
+Graph pane on the right. Both columns start at equal widths; the right panes
+start at equal heights. Source indexes, inclusive line ranges,
 optional columns, node paths, ports and selected arms are disposable read
 model fields. Simulation source units retain full text except where the
 existing policy withholds Lab source. Replay exposes retained excerpts and
@@ -150,12 +151,19 @@ explicitly identifies missing source. Per-node definitions remain compatible.
 
 The current-transition marker follows the selected recorded prefix, landing
 on the transition's node, port or selected arm. An unavailable source location
-has an explicit reason. Graph selection prepares the node definition for the
+has an explicit reason. Graph selection scrolls to the node definition in the
 source tab and selects its inspector context; the source marker highlights
-the node in Graph. The chosen view stays open. Source scrolling stays inside
-its pane and respects reduced motion. View selection and splitters remain
+the node in Graph. All panes remain visible. Source scrolling stays inside
+its pane and respects reduced motion. Source tab selection and splitters remain
 physical UI state. The controller, transport commands, iteration dial and
 recording format are unchanged. **Status: shipped.**
+
+The vertical divider resizes source and details; the horizontal divider resizes
+inspector and Graph. Both support pointer dragging, the arrows along their axis,
+and Home/End for their size limits. Proportions persist within the browser tab
+and survive viewport changes. Each pane keeps its own scrolling. Narrow screens
+stack source above the inspector and Graph, with their horizontal divider still
+available. **Status: shipped.**
 
 Containment and actual ports come from the validated Node table, including
 the App root and nested Graphs. Node bodies distinguish Graphs, Operators and
@@ -227,12 +235,12 @@ Evidence: `retry_inspection_agrees_in_steps_batch_and_every_recorded_prefix`
 and the browser regression `Retry keeps held attempts inspectable…`; execution
 status is explicit in [C4](../architecture/retry-c4-inspection.md).
 
-The page has a compact transport row, a timeline row, source tabs, a secondary
+The page has a compact transport row, a timeline row, source tabs, a complementary
 Graph canvas and Envelope / Mailbox / Definition / Instances / History /
 Assertion / Compare inspector tabs.
 Tabs wrap without overlapping their panel. Instances includes
 exchanges and injection history. The canvas pans/zooms;
-a splitter resizes the inspector. Initial fit uses the available space.
+two splitters resize the panes. Initial fit uses the available space.
 Zoom percentages are relative to Fit graph (100%), not an absolute SVG scale.
 Toolbar zoom anchors at the canvas centre; wheel zoom anchors at the pointer.
 The label exposes those conventions in its tooltip. Injection history names
@@ -401,6 +409,14 @@ append a record or modify the live machine.
   state, application, remaining fuel, phase and due instant, with value differences
   highlighted. Missing transitions say not recorded. Alignment by ordinal is not
   an assertion of semantic equivalence and no equality is called a replay proof.
+
+F8 aliases Replay/Pause and F10 aliases Next transition when the browser
+delivers those keys to the page. The buttons advertise these shortcuts visually,
+in tooltips and through `aria-keyshortcuts`. Space and `n` remain alternatives
+when a browser or keyboard reserves function keys. Native inputs, composition,
+modified function keys, F5 and F11 keep their browser behavior; holding a
+function key does not repeat a command. F10 advances a recorded transition,
+without introducing a function-call stepping model. **Status: shipped.**
 
 Classified programs suppress predicate values and assertion/source evidence
 conservatively: these must not become side channels around DATA redaction. Opaque

@@ -14,16 +14,20 @@ edit a value, author a branch or add a command.
 
 ## Views and physical state
 
-The center pane contains one tab per source unit and a secondary Graph tab.
+The left pane contains one tab per source unit. The right side contains the
+inspector above the complementary Graph pane. The columns start at equal widths
+and the right panes at equal heights.
 The source pane shows line numbers, syntax coloring and a current-transition
 marker. The inspector remains on the right with Envelope, Mailbox,
 Definition, Instances, History, Assertion and Compare. Graph keeps the
 existing layout engine, ports, iteration dial and interaction. Selecting a graph
-node selects its definition for the source tab and its inspector context;
-the chosen view stays open. The current source marker identifies that node in
-Graph. The transport, future details and fault panel retain their behavior.
-Tab selection, scroll, pan, zoom and the inspector splitter remain physical
-UI state.
+node scrolls to its definition in the source tab and selects its inspector context.
+The current source marker identifies that node in Graph. The transport,
+future details and fault panel retain their behavior.
+Source tab selection, scroll, pan, zoom and both splitter proportions remain
+physical UI state. Pointer dragging and axis-aligned arrows resize the panes;
+Home/End reach their size limits. Stored proportions survive reload and viewport
+changes. Narrow screens stack source above the right panes.
 
 ## Source and position model
 
@@ -61,6 +65,12 @@ retained prefix. The transport keeps Pause, Next transition, Finish, Reset
 and the iteration dial unchanged. Scrolling is confined to the source pane;
 reduced motion disables animated scrolling.
 
+F8 toggles Replay/Pause; F10 advances one recorded transition. These are aliases
+for the existing controls, with Space and `n` retained when function keys are
+reserved by the browser or keyboard. Inputs, composition and modified function
+keys keep native behavior. The toolbar and accessible shortcut metadata expose
+the bindings. No function-call stepping model is implied.
+
 ## Read-only hover values
 
 Positioned, resolved identifiers offer summaries for ports, state fields,
@@ -78,6 +88,8 @@ have unavailable values; the projection does not evaluate arbitrary expressions.
 
 Hover and keyboard focus open the same tooltip. Escape dismisses it;
 its link selects the inspector tab containing the full recorded object.
+Tab reaches the link, then continues through the source and into the other
+panes. Shift+Tab returns from the link to its identifier.
 The source and tooltip contain no editable fields, inputs or forms.
 
 ## Limits and adapter follow-up

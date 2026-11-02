@@ -34,9 +34,9 @@
       </div>
       <nav class="transport" aria-label="Execution controls">
         <button id="back-boundary" class="transport-button" title="View the previous recorded transition"><svg><use href="#icon-back"/></svg><span>Back</span></button>
-        <button data-command="resume" class="transport-button" title="Replay: replay recorded transitions at the selected speed"><svg><use href="#icon-play"/></svg><span>Replay</span></button>
-        <button data-command="pause" class="transport-button" title="Pause: stop replay or execution at the next safe transition"><svg><use href="#icon-pause"/></svg><span>Pause</span></button>
-        <button id="step" data-command="step" class="transport-button primary" title="Next transition: advance one recorded transition"><svg><use href="#icon-step"/></svg><span>Next transition</span></button>
+        <button data-command="resume" class="transport-button" aria-keyshortcuts="F8 Space" title="Replay: replay recorded transitions at the selected speed"><svg><use href="#icon-play"/></svg><span>Replay</span><kbd>F8</kbd></button>
+        <button data-command="pause" class="transport-button" aria-keyshortcuts="F8 Space" title="Pause: stop replay or execution at the next safe transition"><svg><use href="#icon-pause"/></svg><span>Pause</span></button>
+        <button id="step" data-command="step" class="transport-button primary" aria-keyshortcuts="F10 n ArrowRight" title="Next transition: advance one recorded transition"><svg><use href="#icon-step"/></svg><span>Next transition</span><kbd>F10</kbd></button>
         <button data-command="retry-step" class="transport-button" title="Retry: retry the reserved transaction"><svg><use href="#icon-retry"/></svg><span>Retry</span></button>
         <button data-command="run-to-completion" class="transport-button" title="Finish: run to completion"><svg><use href="#icon-complete"/></svg><span>Finish</span></button>
         <label class="speed-control" title="Replay speed"><span>Speed</span>
@@ -70,10 +70,10 @@
       <details id="future" class="future"><summary>Pending</summary><div id="future-items"></div></details>
       <button id="return-live" class="timeline-action" title="Return to the live execution head" aria-label="Return to the live execution head" hidden><svg><use href="#icon-live"/></svg><span>Return live</span></button>
     </div>
-    <div id="command-status" class="command-status" aria-live="polite">Paused before admission · Next transition advances one step</div>
   </header>
 
   <main>
+    <div id="command-status" class="command-status" aria-live="polite">Paused before admission · Next transition advances one step</div>
     <section id="fault-panel" class="fault-panel" hidden aria-live="assertive">
       <h2 id="fault-title">Execution fault</h2>
       <p id="fault-message" class="fault-message"></p>
@@ -81,8 +81,8 @@
       <p id="fault-commit" class="commit-note"></p>
     </section>
     <div class="workspace">
-      <section class="graph-section source-section" aria-label="Source and graph">
-        <div class="graph-heading"><div id="source-tabs" role="tablist" aria-label="Source and graph views"></div><button id="open-search" title="Search node, port or id (/)" aria-label="Search node, port or id">Search /</button></div>
+      <section id="source-section" class="source-section" aria-label="Source">
+        <div class="graph-heading"><div id="source-tabs" role="tablist" aria-label="Source files"></div><button id="open-search" title="Search node, port or id (/)" aria-label="Search node, port or id">Search /</button></div>
         <div id="search-panel" hidden><input id="search" type="search" placeholder="Node, port or id" aria-label="Search node, port or id"><div id="search-results"></div></div>
         <div id="scenario-panel" class="graph-scenario simulation-only" hidden>
           <button id="scenario-definition" class="scenario-definition" type="button" title="Inspect the selected scenario">Scenario</button>
@@ -94,40 +94,46 @@
           <div id="source-status" class="source-status" aria-live="polite"></div>
           <pre id="source-code" tabindex="0" aria-label="Read-only source"></pre>
         </section>
-        <div id="graph" class="empty" role="tabpanel" aria-label="Graph" hidden>Waiting for a validated topology.</div>
       </section>
-      <div id="workspace-splitter" class="workspace-splitter" role="separator" aria-label="Resize source and inspector" aria-orientation="vertical" aria-valuemin="280" aria-valuemax="720" aria-valuenow="360" tabindex="0"></div>
-      <aside class="inspector" aria-label="Execution inspector">
-        <div class="inspector-tabs" role="tablist" aria-label="Inspector views">
-          <button id="tab-envelope" role="tab" aria-controls="panel-envelope" aria-selected="true" data-inspector-tab="envelope">Envelope</button>
-          <button id="tab-mailbox" role="tab" aria-controls="panel-mailbox" aria-selected="false" data-inspector-tab="mailbox" tabindex="-1">Mailbox</button>
-          <button id="tab-definition" role="tab" aria-controls="panel-definition" aria-selected="false" data-inspector-tab="definition" tabindex="-1">Definition</button>
-          <button id="tab-instances" role="tab" aria-controls="panel-instances" aria-selected="false" data-inspector-tab="instances" tabindex="-1">Instances</button>
-          <button id="tab-history" role="tab" aria-controls="panel-history" aria-selected="false" data-inspector-tab="history" tabindex="-1">History</button>
-          <button id="tab-assertion" role="tab" aria-controls="panel-assertion" aria-selected="false" data-inspector-tab="assertion" tabindex="-1">Assertion</button>
-          <button id="tab-compare" role="tab" aria-controls="panel-compare" aria-selected="false" data-inspector-tab="compare" tabindex="-1">Compare</button>
-        </div>
-        <div id="panel-envelope" class="inspector-panel" role="tabpanel" aria-labelledby="tab-envelope"><div id="envelope" class="empty">No envelope selected.</div></div>
-        <div id="panel-mailbox" class="inspector-panel mailbox-panel" role="tabpanel" aria-labelledby="tab-mailbox" hidden><div id="mailbox" class="empty">Select a mailbox in the graph.</div></div>
-        <div id="panel-definition" class="inspector-panel" role="tabpanel" aria-labelledby="tab-definition" hidden><div id="definition" class="empty">Select a Graph or Node.</div></div>
-        <div id="panel-instances" class="inspector-panel runtime-panel" role="tabpanel" aria-labelledby="tab-instances" hidden>
-          <section><h2>Injections</h2><div id="injections" class="empty">No admitted injection.</div></section>
-          <section><h2>Instances and private state</h2><div id="state" class="empty">No active instance.</div></section>
-          <section><h2>Loop runs</h2><div id="loop-runs" class="empty">No admitted Loop run.</div></section>
-          <section><h2>Retry operations</h2><div id="retry-operations" class="empty">No recorded Retry operation.</div></section>
-          <section><h2>Calls and Sessions</h2><div id="exchanges" class="empty">No open exchange.</div></section>
-        </div>
-        <div id="panel-history" class="inspector-panel history-panel" role="tabpanel" aria-labelledby="tab-history" hidden>
-          <div class="history-heading"><p id="history-summary" class="section-summary">No committed records.</p><button id="show-older" class="secondary" hidden>Older</button></div>
-          <div id="history" class="empty">No committed records.</div>
-        </div>
-        <div id="panel-assertion" class="inspector-panel" role="tabpanel" aria-labelledby="tab-assertion" hidden><div id="assertion" class="empty">No assertion at this transition.</div></div>
-        <div id="panel-compare" class="inspector-panel" role="tabpanel" aria-labelledby="tab-compare" hidden>
-          <label>Compare <select id="compare-mode"><option value="instances">Loop instances</option><option value="sessions">Simulation sessions</option></select></label>
-          <div class="compare-selectors"><select id="compare-left" aria-label="Left comparison"></select><select id="compare-right" aria-label="Right comparison"></select></div>
-          <div id="comparison" class="empty">Select two instances or sessions.</div>
-        </div>
-      </aside>
+      <div id="workspace-splitter" class="pane-splitter" role="separator" aria-label="Resize source and details" aria-controls="source-section details-pane" aria-orientation="vertical" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50" tabindex="0"></div>
+      <section id="details-pane" class="details-pane" aria-label="Inspector and graph">
+        <aside id="inspector" class="inspector" aria-label="Execution inspector">
+          <div class="inspector-tabs" role="tablist" aria-label="Inspector views">
+            <button id="tab-envelope" role="tab" aria-controls="panel-envelope" aria-selected="true" data-inspector-tab="envelope">Envelope</button>
+            <button id="tab-mailbox" role="tab" aria-controls="panel-mailbox" aria-selected="false" data-inspector-tab="mailbox" tabindex="-1">Mailbox</button>
+            <button id="tab-definition" role="tab" aria-controls="panel-definition" aria-selected="false" data-inspector-tab="definition" tabindex="-1">Definition</button>
+            <button id="tab-instances" role="tab" aria-controls="panel-instances" aria-selected="false" data-inspector-tab="instances" tabindex="-1">Instances</button>
+            <button id="tab-history" role="tab" aria-controls="panel-history" aria-selected="false" data-inspector-tab="history" tabindex="-1">History</button>
+            <button id="tab-assertion" role="tab" aria-controls="panel-assertion" aria-selected="false" data-inspector-tab="assertion" tabindex="-1">Assertion</button>
+            <button id="tab-compare" role="tab" aria-controls="panel-compare" aria-selected="false" data-inspector-tab="compare" tabindex="-1">Compare</button>
+          </div>
+          <div id="panel-envelope" class="inspector-panel" role="tabpanel" aria-labelledby="tab-envelope"><div id="envelope" class="empty">No envelope selected.</div></div>
+          <div id="panel-mailbox" class="inspector-panel mailbox-panel" role="tabpanel" aria-labelledby="tab-mailbox" hidden><div id="mailbox" class="empty">Select a mailbox in the graph.</div></div>
+          <div id="panel-definition" class="inspector-panel" role="tabpanel" aria-labelledby="tab-definition" hidden><div id="definition" class="empty">Select a Graph or Node.</div></div>
+          <div id="panel-instances" class="inspector-panel runtime-panel" role="tabpanel" aria-labelledby="tab-instances" hidden>
+            <section><h2>Injections</h2><div id="injections" class="empty">No admitted injection.</div></section>
+            <section><h2>Instances and private state</h2><div id="state" class="empty">No active instance.</div></section>
+            <section><h2>Loop runs</h2><div id="loop-runs" class="empty">No admitted Loop run.</div></section>
+            <section><h2>Retry operations</h2><div id="retry-operations" class="empty">No recorded Retry operation.</div></section>
+            <section><h2>Calls and Sessions</h2><div id="exchanges" class="empty">No open exchange.</div></section>
+          </div>
+          <div id="panel-history" class="inspector-panel history-panel" role="tabpanel" aria-labelledby="tab-history" hidden>
+            <div class="history-heading"><p id="history-summary" class="section-summary">No committed records.</p><button id="show-older" class="secondary" hidden>Older</button></div>
+            <div id="history" class="empty">No committed records.</div>
+          </div>
+          <div id="panel-assertion" class="inspector-panel" role="tabpanel" aria-labelledby="tab-assertion" hidden><div id="assertion" class="empty">No assertion at this transition.</div></div>
+          <div id="panel-compare" class="inspector-panel" role="tabpanel" aria-labelledby="tab-compare" hidden>
+            <label>Compare <select id="compare-mode"><option value="instances">Loop instances</option><option value="sessions">Simulation sessions</option></select></label>
+            <div class="compare-selectors"><select id="compare-left" aria-label="Left comparison"></select><select id="compare-right" aria-label="Right comparison"></select></div>
+            <div id="comparison" class="empty">Select two instances or sessions.</div>
+          </div>
+        </aside>
+        <div id="details-splitter" class="pane-splitter" role="separator" aria-label="Resize inspector and graph" aria-controls="inspector graph-section" aria-orientation="horizontal" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50" tabindex="0"></div>
+        <section id="graph-section" class="graph-section" aria-labelledby="graph-title">
+          <h2 id="graph-title">Graph</h2>
+          <div id="graph" class="empty">Waiting for a validated topology.</div>
+        </section>
+      </section>
     </div>
   </main>
   <aside id="source-tooltip" role="tooltip" hidden></aside>

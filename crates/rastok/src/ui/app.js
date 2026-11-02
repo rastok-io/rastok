@@ -47,9 +47,9 @@ let dismissingSourceTooltip = false;
 const graphViewport = { scale: 1, x: 0, y: 0 };
 
 const COMMAND_HINTS = Object.freeze({
-  resume: "Replay: replay recorded transitions at the selected speed",
-  pause: "Pause: stop replay or execution at the next safe transition",
-  step: "Next transition: advance one recorded transition",
+  resume: "Replay: replay recorded transitions at the selected speed (F8 or Space)",
+  pause: "Pause: stop replay or execution at the next safe transition (F8 or Space)",
+  step: "Next transition: advance one recorded transition (F10 or n)",
   "retry-step": "Retry: retry the reserved transaction",
   "run-to-completion": "Finish: run to completion",
   "next-scenario-action": "Next action: run one authored action to its effect",
@@ -192,11 +192,10 @@ function renderSnapshot(snapshot) {
 function selectSourceView(view, focus = false) {
   hideSourceTooltip();
   const pane = document.querySelector("#source-code");
-  if (activeSourceView && activeSourceView !== "graph") sourceScroll.set(activeSourceView, [pane.scrollLeft, pane.scrollTop]);
+  if (activeSourceView) sourceScroll.set(activeSourceView, [pane.scrollLeft, pane.scrollTop]);
   activeSourceView = view;
   sessionStorage.setItem("rastok-source-view", view);
   renderSource(currentSnapshot);
-  if (view === "graph") renderTopology(currentSnapshot?.topology, false);
   if (focus) document.querySelector(`[data-source-view="${CSS.escape(view)}"]`)?.focus();
 }
 
@@ -210,21 +209,21 @@ function renderSource(snapshot) {
   const point = `${snapshot?.timeline?.session}:${snapshot?.timeline?.boundary}`;
   const advanced = point !== lastSourcePoint;
   lastSourcePoint = point;
-  if (advanced && activeSourceView !== "graph" && position?.status === "available") activeSourceView = String(position.source_index);
-  if (!activeSourceView || (activeSourceView !== "graph" && !sources.some(source => String(source.index) === activeSourceView))) {
-    activeSourceView = sources.length ? String(sources[0].index) : "graph";
+  if (advanced && position?.status === "available") activeSourceView = String(position.source_index);
+  if (!sources.some(source => String(source.index) === activeSourceView)) {
+    activeSourceView = sources.length ? String(sources[0].index) : null;
   }
   const tabs = document.querySelector("#source-tabs");
   const focusedTab = tabs.contains(document.activeElement) ? document.activeElement.dataset.sourceView : null;
   tabs.replaceChildren();
-  const views = [...sources.map(source => ({ id: String(source.index), name: source.display_name })), { id: "graph", name: "Graph" }];
+  const views = sources.map(source => ({ id: String(source.index), name: source.display_name }));
   for (const view of views) {
     const tab = document.createElement("button");
     tab.type = "button";
     tab.id = `source-tab-${view.id}`;
     tab.dataset.sourceView = view.id;
     tab.setAttribute("role", "tab");
-    tab.setAttribute("aria-controls", view.id === "graph" ? "graph" : "source-pane");
+    tab.setAttribute("aria-controls", "source-pane");
     tab.setAttribute("aria-selected", String(activeSourceView === view.id));
     tab.tabIndex = activeSourceView === view.id ? 0 : -1;
     tab.textContent = view.name;
@@ -239,15 +238,18 @@ function renderSource(snapshot) {
     });
     tabs.append(tab);
   }
-  document.querySelector("#graph").hidden = activeSourceView !== "graph";
   const panel = document.querySelector("#source-pane");
-  panel.hidden = activeSourceView === "graph";
-  panel.setAttribute("aria-labelledby", `source-tab-${activeSourceView}`);
+  if (activeSourceView) panel.setAttribute("aria-labelledby", `source-tab-${activeSourceView}`);
+  else panel.removeAttribute("aria-labelledby");
   if (focusedTab) document.querySelector(`[data-source-view="${CSS.escape(focusedTab)}"]`)?.focus({ preventScroll: true });
-  if (activeSourceView === "graph") return;
   const source = sources.find(source => String(source.index) === activeSourceView);
-  if (!source) return;
   const pane = document.querySelector("#source-code");
+  if (!source) {
+    pane.replaceChildren();
+    sourceValues.clear();
+    text("source-status", "Source unavailable in this snapshot.");
+    return;
+  }
   const previousScroll = pane.dataset.sourceIndex === activeSourceView ? [pane.scrollLeft, pane.scrollTop] : sourceScroll.get(activeSourceView) || [0, 0];
   pane.dataset.sourceIndex = activeSourceView;
   const focusKey = pane.contains(document.activeElement) ? document.activeElement.dataset.sourceToken : null;
@@ -357,6 +359,16 @@ function showSourceTooltip(anchor) {
   const target = token.value.inspector;
   link.href = `#panel-${target.tab}`;
   link.textContent = `Inspect in ${target.tab.charAt(0).toUpperCase() + target.tab.slice(1)}`;
+  link.addEventListener("keydown", event => {
+    if (event.key !== "Tab" || event.ctrlKey || event.metaKey || event.altKey) return;
+    event.preventDefault();
+    const tokens = [...document.querySelectorAll("#source-code [data-source-token]")];
+    const splitter = document.querySelector("#workspace-splitter");
+    const next = event.shiftKey ? anchor : tokens[tokens.indexOf(anchor) + 1]
+      || (splitter.offsetWidth ? splitter : document.querySelector('[data-inspector-tab][aria-selected="true"]'));
+    hideSourceTooltip();
+    next.focus();
+  });
   link.addEventListener("click", event => {
     event.preventDefault();
     const item = [...(currentSnapshot?.topology?.nodes || []), ...(currentSnapshot?.topology?.owners || [])]
@@ -383,6 +395,9 @@ function showSourceTooltip(anchor) {
 function sourceTooltipKeydown(event) {
   if (event.key === "Tab" && !event.shiftKey && !document.querySelector("#source-tooltip").hidden) {
     event.preventDefault();
+    // Keyboard navigation follows its focused identifier even if scrolling
+    // has moved another identifier under the pointer.
+    showSourceTooltip(event.currentTarget);
     document.querySelector("#source-tooltip a")?.focus();
   }
 }
@@ -1563,7 +1578,7 @@ function selectTopologyItem(id) {
   selectedTopologyItem = selectedTopologyItem === id ? null : id;
   selectedSourceDefinition = selectedTopologyItemView(currentSnapshot?.topology)?.definition || null;
   sourceSelectionPending = Boolean(selectedSourceDefinition);
-  if (activeSourceView !== "graph" && selectedSourceDefinition) activeSourceView = String(selectedSourceDefinition.source_index);
+  if (selectedSourceDefinition) activeSourceView = String(selectedSourceDefinition.source_index);
   renderSource(currentSnapshot);
   renderTopology(currentSnapshot?.topology, false);
   if (currentSnapshot) renderRelatedPanels(currentSnapshot);
@@ -2548,60 +2563,81 @@ function formatLogicalTime(value) {
   return `${prefix}${secondsText}`;
 }
 
-function installWorkspaceSplitter() {
-  const workspace = document.querySelector(".workspace");
-  const splitter = document.querySelector("#workspace-splitter");
-  const stored = Number(sessionStorage.getItem("rastok-inspector-width"));
-  let width = Number.isFinite(stored) && stored > 0 ? stored : 360;
-  const limits = () => ({
-    minimum: 280,
-    maximum: Math.max(280, Math.min(720, workspace.getBoundingClientRect().width - 305)),
-  });
-  const apply = (candidate) => {
-    const { minimum, maximum } = limits();
-    width = Math.min(maximum, Math.max(minimum, candidate));
-    workspace.style.setProperty("--inspector-width", `${Math.round(width)}px`);
+function installWorkspaceSplitter(container, splitter, vertical, property, storageKey, minimumSize, description) {
+  const stored = Number(sessionStorage.getItem(storageKey));
+  let share = Number.isFinite(stored) && stored > 0 && stored < 1 ? stored : .5;
+  const limits = () => {
+    const available = vertical
+      ? container.clientWidth - splitter.offsetWidth
+      : container.clientHeight - splitter.offsetHeight;
+    const minimum = Math.min(minimumSize, available / 2);
+    return { available, minimum, maximum: available - minimum };
+  };
+  const apply = () => {
+    const { available, minimum, maximum } = limits();
+    if (available <= 0) return;
+    const size = Math.min(maximum, Math.max(minimum, available * share));
+    container.style.setProperty(property, String(size / available));
     splitter.setAttribute("aria-valuemin", String(minimum));
     splitter.setAttribute("aria-valuemax", String(maximum));
-    splitter.setAttribute("aria-valuenow", String(Math.round(width)));
-    sessionStorage.setItem("rastok-inspector-width", String(Math.round(width)));
+    splitter.setAttribute("aria-valuenow", String(Math.round(size)));
+    splitter.setAttribute("aria-valuetext", `${Math.round(size / available * 100)}% ${description}`);
+  };
+  const resize = (candidate) => {
+    const { available, minimum, maximum } = limits();
+    if (available <= 0) return;
+    share = Math.min(maximum, Math.max(minimum, candidate)) / available;
+    sessionStorage.setItem(storageKey, String(share));
+    apply();
   };
   let dragging = false;
   splitter.addEventListener("pointerdown", (event) => {
     if (event.button !== 0) return;
+    event.preventDefault();
     dragging = true;
-    workspace.classList.add("resizing");
+    splitter.focus();
+    splitter.classList.add("resizing");
     splitter.setPointerCapture(event.pointerId);
   });
   splitter.addEventListener("pointermove", (event) => {
     if (!dragging) return;
-    const bounds = workspace.getBoundingClientRect();
-    apply(bounds.right - event.clientX);
+    const bounds = container.getBoundingClientRect();
+    resize(vertical
+      ? event.clientX - bounds.left - container.clientLeft - splitter.offsetWidth / 2
+      : event.clientY - bounds.top - container.clientTop - splitter.offsetHeight / 2);
   });
   const stop = (event) => {
     if (!dragging) return;
     dragging = false;
-    workspace.classList.remove("resizing");
+    splitter.classList.remove("resizing");
     if (splitter.hasPointerCapture(event.pointerId)) splitter.releasePointerCapture(event.pointerId);
   };
   splitter.addEventListener("pointerup", stop);
   splitter.addEventListener("pointercancel", stop);
   splitter.addEventListener("keydown", (event) => {
-    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    const backward = vertical ? "ArrowLeft" : "ArrowUp";
+    const forward = vertical ? "ArrowRight" : "ArrowDown";
+    if (![backward, forward, "Home", "End"].includes(event.key)) return;
     event.preventDefault();
     const { minimum, maximum } = limits();
+    const size = Number(splitter.getAttribute("aria-valuenow"));
     const next = event.key === "Home"
       ? minimum
       : event.key === "End"
         ? maximum
-        : width + (event.key === "ArrowLeft" ? 24 : -24);
-    apply(next);
+        : size + (event.key === backward ? -24 : 24);
+    resize(next);
   });
-  window.addEventListener("resize", () => apply(width));
-  apply(width);
+  // Keep the user's proportion across viewport changes, even when a small
+  // viewport temporarily clamps a pane to its readable minimum.
+  new ResizeObserver(apply).observe(container);
+  apply();
 }
 
-installWorkspaceSplitter();
+installWorkspaceSplitter(document.querySelector(".workspace"), document.querySelector("#workspace-splitter"),
+  true, "--source-share", "rastok-source-share", 280, "source width");
+installWorkspaceSplitter(document.querySelector("#details-pane"), document.querySelector("#details-splitter"),
+  false, "--inspector-share", "rastok-inspector-share", 160, "inspector height");
 
 for (const button of document.querySelectorAll("button[data-command]")) {
   button.addEventListener("click", async () => {
@@ -2830,7 +2866,7 @@ document.querySelector('#open-search').addEventListener('click', openSearch);
 document.querySelector('#search').addEventListener('input', renderSearchResults);
 for (const id of ['compare-mode', 'compare-left', 'compare-right']) document.getElementById(id).addEventListener('change', renderComparison);
 document.addEventListener('keydown', event => {
-  if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
+  if (event.defaultPrevented || event.isComposing || event.ctrlKey || event.metaKey || event.altKey) return;
   if (event.key === 'Escape') {
     event.preventDefault();
     document.querySelector('#search-panel').hidden = true;
@@ -2842,13 +2878,18 @@ document.addEventListener('keydown', event => {
     return;
   }
   if (event.target.closest('input, select, textarea, [contenteditable=true]')) return;
+  // Shift+F10 remains the native context-menu shortcut. Function-key aliases
+  // only apply when delivered to this page, never to browser or OS controls.
+  if (['F8', 'F10'].includes(event.key) && (event.shiftKey || event.repeat)) return;
   const command = name => document.querySelector(`[data-command="${name}"]:not(:disabled)`)?.click();
   switch (event.key) {
     case '/': event.preventDefault(); openSearch(); break;
     case 'ArrowLeft': event.preventDefault(); document.querySelector('#back-boundary:not(:disabled)')?.click(); break;
     case 'ArrowRight': event.preventDefault(); stepForward(); break;
+    case 'F10':
     case 'n': event.preventDefault(); stepForward(); break;
     case 'a': event.preventDefault(); command('next-scenario-action'); break;
+    case 'F8':
     case ' ': event.preventDefault(); command(bufferedPlayback || liveSnapshot?.execution?.state === 'running' ? 'pause' : 'resume'); break;
     case 'Enter':
       if (!event.target.closest('button, a, [role=button], summary')) { event.preventDefault(); activateInspectorTab('envelope', true); }

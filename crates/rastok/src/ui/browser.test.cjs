@@ -52,8 +52,7 @@ async function openTour(t, viewport = { width: 1352, height: 760 }, source = "cr
   await page.goto(url);
   await page.locator("#step:enabled").waitFor();
   assert.equal(await page.locator("#source-pane").isVisible(), true, "source is the initial primary view");
-  // Existing graph qualification explicitly selects the complementary view.
-  await page.evaluate(() => selectSourceView("graph"));
+  assert.equal(await page.locator("#graph").isVisible(), true, "graph remains visible beside the source");
   return page;
 }
 
@@ -221,6 +220,9 @@ test('the flagship keeps readable graph text clear of badges, ports and pipes', 
     RASTOK_SHOWCASE_PARTNER_TOKEN: 'browser-fixture-not-a-real-credential',
     RASTOK_SHOWCASE_PARTNER_TOKEN_VERSION: 'fixture-v1',
   });
+  // Use the dividers to give the complete drawing room above its readability floor.
+  await page.locator('#workspace-splitter').press('Home');
+  await page.locator('#details-splitter').press('Home');
   for (const transition of ['initial', 1, 'completed', 8, 'narrow']) {
     if (transition === 1) {
       await page.locator('#step').click();
@@ -438,13 +440,13 @@ async function presentResponse(page, release) {
 test("transitions have explicit transport names, a first-contact hint and an honest delayed dial", { timeout: 60000 }, async t => {
   const page = await openTour(t);
   for (const [command, label, hint] of [
-    ["step", "Next transition", "advance one recorded transition"],
+    ["step", "Next transition F10", "advance one recorded transition"],
     ["next-scenario-action", "Next action", "run one authored action to its effect"],
     ["run-to-completion", "Finish", "run to completion"],
-    ["resume", "Replay", "replay recorded transitions at the selected speed"],
+    ["resume", "Replay F8", "replay recorded transitions at the selected speed"],
   ]) {
     const button = page.locator(`[data-command="${command}"]`);
-    assert.equal(await button.innerText(), label);
+    assert.equal((await button.innerText()).replace(/\s+/g, ' '), label);
     assert.ok((await button.getAttribute("title")).includes(hint));
   }
   assert.equal(await page.locator('.timeline-bar').getAttribute('aria-label'), 'Recorded execution timeline');
@@ -471,7 +473,8 @@ test("transitions have explicit transport names, a first-contact hint and an hon
     await page.locator('#timeline-position').filter({ hasText: new RegExp(`transition ${transition}$`) }).waitFor();
     const dial = await page.locator('.graph-loop-dial').evaluate(el => el.firstChild.textContent);
     assert.match(dial, /⟳ 1\/2.*⏱/);
-    assert.doesNotMatch(await page.locator('body').innerText(), /\bboundary\b/i);
+    const interfaceText = (await page.locator('.app-bar, #command-status, #source-status, #details-pane').allInnerTexts()).join('\n');
+    assert.doesNotMatch(interfaceText, /\bboundary\b/i);
   }
 });
 
@@ -589,7 +592,9 @@ test('the explanatory path is reachable with Tab and keyboard alone', { timeout:
   const page = await openTour(t);
   const tabTo = async locator => {
     const target = locator.first();
-    for (let count = 0; count < 240; count += 1) {
+    const limit = await page.locator('button, input, select, a[href], summary, [tabindex="0"]').count()
+      + await page.locator('#source-code [data-source-token]').count();
+    for (let count = 0; count <= limit; count += 1) {
       if (await target.evaluate(element => element === document.activeElement)) return;
       await page.keyboard.press('Tab');
     }
@@ -934,7 +939,7 @@ test("scenario Definition shows authored DSL and reset selects a fresh B0", { ti
   const page = await openTour(t);
   await page.locator("#scenario-definition").click();
   assert.match(await page.locator("#definition").innerText(), /app.in = \{ tenant = "alice"/);
-  assert.match(await page.locator('.source-line[aria-current="step"]').innerText(), /app.in/);
+  assert.match(await page.locator('#definition .source-line[aria-current="step"]').innerText(), /app.in/);
   const head = await finish(page);
   await page.locator('[data-command="reset-scenario"]').click();
   await page.locator("#timeline-position").filter({ hasText: /^LIVE · Session 1 · transition 0$/ }).waitFor();
@@ -973,6 +978,9 @@ test("the complete tour stays inspectable by mouse and keyboard", { timeout: 600
   assert.ok(await page.locator(".timeline-record").count() >= 10);
   assert.equal(await page.locator('.causal-history-table td').first().evaluate(cell => cell.scrollWidth <= cell.clientWidth), true, 'record and transition positions are never clipped');
   await capture("completed-history");
+  await page.locator('#workspace-splitter').press('Home');
+  await page.locator('#workspace-splitter').press('ArrowRight');
+  await page.locator('#details-splitter').press('Home');
   const graph = await page.locator(".graph-canvas").boundingBox();
   const scope = await page.locator(".graph-scope.root .graph-scope-body").boundingBox();
   assert.ok(scope.x >= graph.x && scope.x + scope.width <= graph.x + graph.width);
@@ -994,7 +1002,7 @@ test("the complete tour stays inspectable by mouse and keyboard", { timeout: 600
   await splitter.focus();
   const width = Number(await splitter.getAttribute("aria-valuenow"));
   await page.keyboard.press("ArrowLeft");
-  assert.equal(Number(await splitter.getAttribute("aria-valuenow")), width + 24);
+  assert.equal(Number(await splitter.getAttribute("aria-valuenow")), width - 24);
   await page.locator("#back-boundary").click();
   await page.locator("#timeline-position").filter({ hasText: /^HISTORY/ }).waitFor();
   await page.locator(".graph-instance-badge").first().click();
@@ -1043,7 +1051,6 @@ test('source positions, keyboard summaries and graph selection share the selecte
   await page.keyboard.press('Escape');
   assert.equal(await page.locator('#source-tooltip').isVisible(), false);
   assert.equal(await counter.evaluate(token => token === document.activeElement), true);
-  await page.locator('[data-source-view="graph"]').click();
   assert.match(await page.locator('.graph-node.active').textContent(), /count/);
   await page.evaluate(() => selectTopologyItem(null));
   await page.locator('.graph-node-name').filter({ hasText: /^count$/ }).click();
@@ -1108,9 +1115,10 @@ test('source-first webhook qualification covers timeout, redaction, Retry, Reset
   assert.match(await page.locator('#source-tooltip').innerText(), /Retry counter.*"attempt":"1".*"limit":"2"/s);
   await capture(page, 'source-webhook-retry-counter');
   await retry.press('Tab');
+  assert.equal(await page.locator('#source-tooltip a').getAttribute('href'), '#panel-instances');
+  assert.equal(await page.locator('#source-tooltip a').evaluate(link => link === document.activeElement), true);
   await page.keyboard.press('Enter');
   assert.equal(await page.locator('#tab-instances').getAttribute('aria-selected'), 'true');
-  await page.locator('[data-source-view="graph"]').click();
   await page.evaluate(() => selectTopologyItem(null));
   await page.locator('.graph-node-name').filter({ hasText: /^partner$/ }).click();
   assert.equal(await page.evaluate(() => selectedTopologyItemView(currentSnapshot.topology).path), 'deliver.partner');
@@ -1170,4 +1178,131 @@ test('source-first countdown qualification exposes the changing Loop counter', {
   await page.locator('#timeline-position').filter({ hasText: /^LIVE · Session 1 · transition 0$/ }).waitFor();
   assert.equal(await page.locator('#source-code [aria-current="step"]').count(), 0);
   await capture(page, 'source-countdown-reset');
+});
+
+test('source, inspector and graph share two persistent accessible splitters', { timeout: 60000 }, async t => {
+  const page = await openTour(t, { width: 1440, height: 900 }, 'examples/echo.rkg');
+  const geometry = () => page.evaluate(() => {
+    const box = selector => {
+      const { x, y, width, height } = document.querySelector(selector).getBoundingClientRect();
+      return { x, y, width, height };
+    };
+    return { source: box('#source-section'), details: box('#details-pane'),
+      inspector: box('#inspector'), graph: box('#graph-section') };
+  });
+  const initial = await geometry();
+  assert.ok(Math.abs(initial.source.width - initial.details.width) < 2, 'columns start at equal widths');
+  assert.ok(Math.abs(initial.inspector.height - initial.graph.height) < 2, 'right panes start at equal heights');
+  assert.ok(initial.details.x > initial.source.x && initial.graph.y > initial.inspector.y);
+  const status = await page.locator('#command-status').boundingBox();
+  assert.ok(status.y + status.height <= initial.source.y, 'status never covers source or inspector controls');
+  const scenarioStatus = await page.locator('#scenario-status').boundingBox();
+  const sourceStatus = await page.locator('#source-status').boundingBox();
+  assert.ok(scenarioStatus.y + scenarioStatus.height <= sourceStatus.y,
+    'scenario progress and source position occupy separate rows');
+  assert.equal(await page.locator('[data-inspector-tab]').count(), 7);
+  assert.equal(await page.locator('[data-source-view="graph"]').count(), 0, 'graph does not replace the source');
+  const boundary = await page.locator('#timeline').inputValue();
+  const drag = async (selector, dx, dy) => {
+    const rect = await page.locator(selector).boundingBox();
+    const x = rect.x + rect.width / 2, y = rect.y + rect.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + dx, y + dy, { steps: 4 });
+    await page.mouse.up();
+  };
+  await capture(page, 'split-echo-equal-1440-dark');
+  await drag('#workspace-splitter', 80, 0);
+  await drag('#details-splitter', 0, 50);
+  const dragged = await geometry();
+  assert.ok(Math.abs(dragged.source.width - initial.source.width - 80) < 2);
+  assert.ok(Math.abs(dragged.inspector.height - initial.inspector.height - 50) < 2,
+    JSON.stringify({ initial, dragged }));
+  for (const [selector, key] of [['#workspace-splitter', 'ArrowLeft'], ['#details-splitter', 'ArrowUp']]) {
+    const splitter = page.locator(selector);
+    await splitter.focus();
+    const size = Number(await splitter.getAttribute('aria-valuenow'));
+    await splitter.press(key);
+    assert.equal(Number(await splitter.getAttribute('aria-valuenow')), size - 24);
+    await splitter.press('Home');
+    assert.equal(Number(await splitter.getAttribute('aria-valuenow')), Number(await splitter.getAttribute('aria-valuemin')));
+    await splitter.press('End');
+    assert.equal(Number(await splitter.getAttribute('aria-valuenow')), Number(await splitter.getAttribute('aria-valuemax')));
+  }
+  await drag('#workspace-splitter', -180, 0);
+  await drag('#details-splitter', 0, -180);
+  const adjusted = await geometry();
+  assert.equal(await page.locator('#timeline').inputValue(), boundary, 'layout keys do not navigate or execute');
+  await page.reload();
+  await page.locator('#step:enabled').waitFor();
+  const restored = await geometry();
+  assert.ok(Math.abs(restored.source.width - adjusted.source.width) < 2);
+  assert.ok(Math.abs(restored.inspector.height - adjusted.inspector.height) < 2);
+  await page.setViewportSize({ width: 1024, height: 760 });
+  await page.emulateMedia({ colorScheme: 'light', reducedMotion: 'reduce' });
+  assert.equal(await page.locator('#source-pane').isVisible(), true);
+  assert.equal(await page.locator('#graph').isVisible(), true);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  await capture(page, 'split-echo-adjusted-1024-light');
+  await page.setViewportSize({ width: 700, height: 760 });
+  assert.equal(await page.locator('#workspace-splitter').isVisible(), false);
+  assert.equal(await page.locator('#details-splitter').isVisible(), true);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const returned = await geometry();
+  assert.ok(Math.abs(returned.source.width - adjusted.source.width) < 2, 'narrow layout does not overwrite the desktop proportions');
+  assert.ok(Math.abs(returned.inspector.height - adjusted.inspector.height) < 2);
+});
+
+test('debugger function keys use existing controls and preserve native input shortcuts', { timeout: 60000 }, async t => {
+  const page = await openTour(t, { width: 1440, height: 900 }, 'examples/echo.rkg');
+  const commands = [];
+  page.on('request', request => { if (request.url().includes('/api/command/')) commands.push(new URL(request.url()).pathname); });
+  await page.locator('#source-code').focus();
+  const tokens = page.locator('#source-code [data-source-token]');
+  await tokens.first().focus();
+  await tokens.nth(1).hover();
+  await page.keyboard.press('Tab');
+  assert.equal(await page.locator('#source-tooltip a').evaluate(link => link === document.activeElement), true);
+  assert.match(await page.locator('#source-tooltip strong').innerText(), /^echo · /,
+    'Tab inspects the focused identifier even when the pointer hovers another');
+  await page.keyboard.press('Shift+Tab');
+  assert.equal(await tokens.first().evaluate(token => token === document.activeElement), true);
+  await page.keyboard.press('Tab');
+  await page.keyboard.press('Tab');
+  assert.equal(await tokens.nth(1).evaluate(token => token === document.activeElement), true, 'tooltip links do not trap the Tab order');
+  await page.keyboard.press('Escape');
+  assert.match(await page.locator('#step').getAttribute('title'), /F10 or n/);
+  assert.match(await page.locator('[data-command=resume]').getAttribute('aria-keyshortcuts'), /F8/);
+  await page.keyboard.press('F10');
+  await page.locator('#timeline-position').filter({ hasText: /^LIVE · Main · transition 1$/ }).waitFor();
+  assert.deepEqual(commands, ['/api/command/step']);
+  await finish(page);
+  await seek(page, 0);
+  const before = commands.length;
+  await page.locator('#source-code').focus();
+  await page.keyboard.press('F10');
+  await page.locator('#timeline-position').filter({ hasText: /^HISTORY · Main · transition 1$/ }).waitFor();
+  await page.keyboard.press('F8');
+  await page.locator('#timeline-position').filter({ hasText: /^REPLAY/ }).waitFor();
+  await page.keyboard.press('F8');
+  await page.locator('#execution-state').filter({ hasText: /^replay paused$/ }).waitFor();
+  assert.equal(commands.length, before, 'function keys navigate retained history without executing commands');
+  const boundary = await page.locator('#timeline').inputValue();
+  await page.locator('#open-search').click();
+  await page.locator('#search').fill('relay');
+  await page.keyboard.press('F10');
+  await page.keyboard.press('F8');
+  assert.equal(await page.locator('#timeline').inputValue(), boundary);
+  assert.equal(await page.locator('#search').inputValue(), 'relay');
+  const untouched = await page.evaluate(() => {
+    const events = [{ key: 'F5' }, { key: 'F11' }, { key: 'F10', shiftKey: true },
+      { key: 'F8', ctrlKey: true }, { key: 'F10', metaKey: true }, { key: 'F8', altKey: true },
+      { key: 'F10', isComposing: true }, { key: 'F10', repeat: true }, { key: 'F8', repeat: true }];
+    return events.every(options => document.querySelector('#source-code').dispatchEvent(
+      new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...options })));
+  });
+  assert.equal(untouched, true, 'browser, context-menu and composition keys are not canceled');
+  assert.equal(commands.length, before);
 });

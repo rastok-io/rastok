@@ -74,10 +74,10 @@ A unit without a Lab refuses.
 - `--deployment` supplies boot values and attestations needed by the graph,
   even when the external responses are mocked.
 
-`--ui` requires `hosted-ui` and prints a token-bearing loopback URL to open.
-It starts paused with source, transition marker and inspector.
-Hover or keyboard focus opens read-only summaries with redaction;
-**Graph** is secondary. `--ui-port` requires `--ui` and selects a nonzero TCP
+`--ui` requires `hosted-ui` and prints a token-bearing loopback URL.
+It starts paused: source left, inspector above Graph right, with draggable
+dividers. Hover or keyboard focus opens read-only summaries with redaction.
+`--ui-port` requires `--ui` and selects a nonzero TCP
 port; otherwise the OS chooses one.
 
 ## Execute the App: run

@@ -32,8 +32,9 @@ The debugger starts paused in the source view. Follow one input with
 **Next transition** and watch the source marker. Hover a port identifier, or
 focus it with Tab, to inspect its recorded value and open the full object in
 the inspector. The instance and Session tables show the recorded ownership.
-Use the **Graph** tab to follow connections; selecting a node also selects its
-source definition and inspector context. For the reproducible CLI check:
+The **Graph** pane below the inspector follows connections while the source
+stays visible on the left. Selecting a node selects its source definition and
+inspector context. Both dividers are adjustable. For the reproducible CLI check:
 
 ```sh
 rastok simulate examples/agent-gateway.rkg --compare crates/rastok/tests/golden/gallery/agent-gateway

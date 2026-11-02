@@ -120,11 +120,10 @@ day.
 
 ## Inspect source
 
-`--ui` opens the source debugger. **Next transition** marks the recorded node,
-port or selected arm. Hover or focus an identifier for a read-only summary;
-Escape closes it. The tooltip links to the inspector and preserves redaction.
-**Graph** is secondary; selecting a node prepares its source definition and
-inspector context.
+`--ui` opens source on the left, inspector above Graph on the right.
+Drag either divider to resize. **Next transition** (`F10` or `n`) marks the
+recorded node, port or arm. Hover or focus an identifier for a read-only summary
+with an inspector link; Escape closes it. Redaction stays in effect.
 
 ## Know the evidence boundary
 
