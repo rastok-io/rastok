@@ -44,7 +44,8 @@ const sourceValues = new Map();
 let sourceTooltipAnchor = null;
 let sourceTooltipTimer = null;
 let dismissingSourceTooltip = false;
-const graphViewport = { scale: 1, x: 0, y: 0 };
+const graphViewport = { scale: 1, x: 0, y: 0, fitScale: 1, fitX: 0, fitY: 0 };
+let graphViewportResizeObserver = null;
 
 const COMMAND_HINTS = Object.freeze({
   resume: "Replay: replay recorded transitions at the selected speed (F8 or Space)",
@@ -200,7 +201,7 @@ function selectSourceView(view, focus = false) {
 }
 
 function renderSource(snapshot) {
-  if (!selectedTopologyItem) {
+  if (!selectedTopologyItem && !scenarioDefinitionActive) {
     selectedSourceDefinition = null;
     sourceSelectionPending = false;
   }
@@ -283,9 +284,10 @@ function renderSource(snapshot) {
       const span = document.createElement("span");
       span.className = `syntax-${token.kind}`;
       span.textContent = chars.slice(token.column - 1, token.end_column - 1).join("");
-      if (token.value) {
+      if (token.value && token.value.kind !== "identifier") {
         const key = `${token.source_index}:${token.line}:${token.column}`;
         span.dataset.sourceToken = key;
+        span.dataset.valueAvailable = String(token.value.available);
         span.tabIndex = 0;
         span.setAttribute("aria-label", `${token.name}: ${token.value.kind}`);
         span.addEventListener("mouseenter", () => showSourceTooltip(span));
@@ -298,6 +300,20 @@ function renderSource(snapshot) {
       offset = token.end_column - 1;
     }
     line.append(document.createTextNode(chars.slice(offset).join("")));
+    const definition = scenarioDefinitionActive ? snapshot.scenario?.current?.definition : null;
+    if (definition?.source_index === source.index) {
+      const action = definition.action_lines?.indexOf(index + 2 - Number(definition.first_line)) ?? -1;
+      const frame = action < 0 ? null : timelineFrames(snapshot.timeline.session).find(frame => Number(frame.action) === action + 1);
+      if (frame) {
+        line.dataset.action = String(action + 1);
+        line.tabIndex = 0;
+        line.setAttribute("role", "button");
+        line.title = `Action ${action + 1} · transition ${frame.boundary}`;
+        const open = () => { pausePresentation(); showBoundary(snapshot.timeline.session, frame.boundary).catch(showViewError); };
+        line.addEventListener("click", event => { if (!event.target.closest("[data-source-token]")) open(); });
+        line.addEventListener("keydown", event => { if (event.target === line && event.key === "Enter") { event.preventDefault(); open(); } });
+      }
+    }
     pane.append(line);
   });
   pane.scrollLeft = previousScroll[0];
@@ -353,22 +369,21 @@ function showSourceTooltip(anchor) {
   const tooltip = document.querySelector("#source-tooltip");
   const title = document.createElement("strong");
   title.textContent = `${token.name} · ${token.value.kind}`;
-  const value = document.createElement("pre");
-  value.textContent = token.value.rendering;
+  const value = document.createElement("div");
+  value.className = "source-value";
+  let structured;
+  try { structured = JSON.parse(token.value.rendering); } catch (_) { /* Bounded or mixed summaries stay text. */ }
+  if (structured && ["Loop counter", "Retry counter"].includes(token.value.kind)) {
+    const counters = token.value.kind === "Loop counter"
+      ? `application ${structured.application} · remaining ${structured.remaining}`
+      : `attempt ${structured.attempt}/${structured.limit}`;
+    value.textContent = `${counters} · phase ${structured.phase}${structured.due_at_ns == null ? "" : ` · due ${formatLogicalTime(structured.due_at_ns)}`}`;
+  } else if (structured && typeof structured === "object") appendDataTree(value, structured);
+  else value.textContent = token.value.rendering;
   const link = document.createElement("a");
   const target = token.value.inspector;
   link.href = `#panel-${target.tab}`;
   link.textContent = `Inspect in ${target.tab.charAt(0).toUpperCase() + target.tab.slice(1)}`;
-  link.addEventListener("keydown", event => {
-    if (event.key !== "Tab" || event.ctrlKey || event.metaKey || event.altKey) return;
-    event.preventDefault();
-    const tokens = [...document.querySelectorAll("#source-code [data-source-token]")];
-    const splitter = document.querySelector("#workspace-splitter");
-    const next = event.shiftKey ? anchor : tokens[tokens.indexOf(anchor) + 1]
-      || (splitter.offsetWidth ? splitter : document.querySelector('[data-inspector-tab][aria-selected="true"]'));
-    hideSourceTooltip();
-    next.focus();
-  });
   link.addEventListener("click", event => {
     event.preventDefault();
     const item = [...(currentSnapshot?.topology?.nodes || []), ...(currentSnapshot?.topology?.owners || [])]
@@ -383,7 +398,7 @@ function showSourceTooltip(anchor) {
     if (token.value.kind === "pending deadline") document.querySelector("#future").open = true;
     hideSourceTooltip();
   });
-  // The next Tab from the identifier reaches this link without traversing the file.
+  // Tab enters this tooltip without traversing the rest of the source file.
   anchor.addEventListener("keydown", sourceTooltipKeydown);
   tooltip.replaceChildren(title, value, link);
   tooltip.hidden = false;
@@ -398,9 +413,23 @@ function sourceTooltipKeydown(event) {
     // Keyboard navigation follows its focused identifier even if scrolling
     // has moved another identifier under the pointer.
     showSourceTooltip(event.currentTarget);
-    document.querySelector("#source-tooltip a")?.focus();
+    document.querySelector("#source-tooltip summary, #source-tooltip button, #source-tooltip a")?.focus();
   }
 }
+
+document.querySelector("#source-tooltip").addEventListener("keydown", event => {
+  if (event.key !== "Tab" || event.ctrlKey || event.metaKey || event.altKey || !sourceTooltipAnchor) return;
+  const controls = [...event.currentTarget.querySelectorAll("summary, button, a[href]")]
+    .filter(element => element.getClientRects().length);
+  if (event.target !== (event.shiftKey ? controls[0] : controls.at(-1))) return;
+  event.preventDefault();
+  const anchor = sourceTooltipAnchor;
+  const sourceStops = [...document.querySelectorAll('#source-code [tabindex="0"]')];
+  const next = event.shiftKey ? anchor : sourceStops[sourceStops.indexOf(anchor) + 1]
+    || document.querySelector("#workspace-splitter");
+  hideSourceTooltip();
+  next.focus();
+});
 
 document.querySelector("#source-tooltip").addEventListener("mouseleave", scheduleSourceTooltipClose);
 document.querySelector("#source-tooltip").addEventListener("focusout", scheduleSourceTooltipClose);
@@ -551,6 +580,7 @@ function renderTimeline() {
     return option;
   }));
   sessionSelector.disabled = sessions.length < 2;
+  sessionSelector.closest("label").hidden = sessions.length < 2;
   const slider = document.querySelector("#timeline");
   slider.min = String(frames[0]?.boundary ?? 0);
   slider.max = String(frames.at(-1)?.boundary ?? boundary);
@@ -600,6 +630,27 @@ function renderRelatedPanels(snapshot) {
   renderSearchResults();
   renderAssertion(snapshot);
   renderComparison();
+  for (const section of document.querySelectorAll(".instance-section")) {
+    const content = section.querySelector("div[id]");
+    const count = content.classList.contains("empty") ? 0
+      : content.querySelectorAll(":scope > .data-card, :scope > table > tbody > tr").length;
+    if (!section.dataset.count || section.dataset.count === "0" || count === 0) section.open = count > 0;
+    section.dataset.count = String(count);
+    section.querySelector(":scope > summary").textContent = `${section.dataset.label} (${count})`;
+  }
+  const counts = {
+    instances: document.querySelector('#state').closest('details').dataset.count,
+    history: (snapshot.history?.records || []).filter(row => rowMatchesSelection(row, selection, ["owner", "connector"])).length,
+    mailbox: (snapshot.topology?.edges || []).find(edge => edge.route === selectedMailboxRoute)?.mailbox?.length,
+  };
+  for (const [name, count] of Object.entries(counts)) {
+    const label = name.charAt(0).toUpperCase() + name.slice(1);
+    text(`tab-${name}`, count === undefined ? label : `${label} (${count})`);
+  }
+  const expectation = snapshot.scenario?.current?.expectation;
+  const assertion = document.querySelector('#tab-assertion');
+  assertion.textContent = expectation ? `Assertion · ${expectation.failed ? "failed" : "passed"}` : "Assertion";
+  assertion.classList.toggle("assertion-failed", Boolean(expectation?.failed));
 }
 
 function identifier(value, label = "", action = null) {
@@ -753,6 +804,12 @@ function inspectScenarioDefinition() {
   scenarioDefinitionActive = true;
   selectedTopologyItem = null;
   selectedMailboxRoute = null;
+  const definition = currentSnapshot?.scenario?.current?.definition;
+  selectedSourceDefinition = typeof definition?.code === "string"
+    ? { ...definition, last_line: Number(definition.first_line) + definition.code.split("\n").length - 1 } : null;
+  sourceSelectionPending = Boolean(selectedSourceDefinition);
+  if (selectedSourceDefinition) activeSourceView = String(selectedSourceDefinition.source_index);
+  renderSource(currentSnapshot);
   renderTopology(currentSnapshot?.topology, false);
   if (currentSnapshot) renderRelatedPanels(currentSnapshot);
   activateInspectorTab("definition");
@@ -784,6 +841,8 @@ function scenarioDefinitionPanel(scenario) {
   close.setAttribute("aria-label", "Close scenario definition");
   close.addEventListener("click", () => {
     scenarioDefinitionActive = false;
+    selectedSourceDefinition = null;
+    renderSource(currentSnapshot);
     renderRelatedPanels(currentSnapshot);
     activateInspectorTab("envelope");
   });
@@ -794,33 +853,9 @@ function scenarioDefinitionPanel(scenario) {
   panel.append(heading, progress);
   const definition = scenario.definition;
   if (typeof definition?.code === "string") {
-    const pre = document.createElement("pre");
-    pre.className = "node-definition-code scenario-definition-code";
-    const actionIndex = Number(scenario.next_action_index || 0);
-    const displayedAction = actionIndex > 0 ? actionIndex - 1 : 0;
-    const currentLine = definition.action_lines?.[displayedAction];
-    definition.code.split("\n").forEach((text, index) => {
-      const line = document.createElement("span");
-      line.className = `source-line${index + 1 === currentLine ? " current" : ""}`;
-      line.dataset.line = String(Number(definition.first_line) + index);
-      line.textContent = text;
-      if (index + 1 === currentLine) line.setAttribute("aria-current", "step");
-      const action = definition.action_lines?.indexOf(index + 1) ?? -1;
-      if (action >= 0) {
-        const frame = timelineFrames(currentSnapshot?.timeline?.session || 0).find(frame => Number(frame.action) === action + 1);
-        line.dataset.action = String(action + 1);
-        line.title = frame ? `Action ${action + 1} · transition ${frame.boundary}` : `Action ${action + 1} · not yet executed`;
-        if (frame) {
-          line.tabIndex = 0;
-          line.setAttribute("role", "button");
-          const open = () => { pausePresentation(); showBoundary(currentSnapshot.timeline.session, frame.boundary).catch(showViewError); };
-          line.addEventListener("click", open);
-          line.addEventListener("keydown", event => { if (event.key === "Enter") { event.preventDefault(); open(); } });
-        }
-      }
-      pre.append(line);
-    });
-    panel.append(pre);
+    const note = document.createElement("p");
+    note.textContent = "Recorded actions are selectable in the source pane.";
+    panel.append(note);
   } else {
     const note = document.createElement("p");
     note.className = "scenario-source-limit";
@@ -864,10 +899,14 @@ function updateControls() {
     button.title = reason ? `${base} — unavailable: ${reason}.` : base;
     button.setAttribute("aria-label", reason ? `${base}. Unavailable: ${reason}.` : base);
   }
-  const selectScenario = document.querySelector("#select-scenario");
-  selectScenario.disabled = !controls || !atLive || !legal.has("select-scenario") || !document.querySelector("#scenario-select").value;
+  const playing = bufferedPlayback || liveSnapshot?.execution?.state === "running" || liveSnapshot?.execution?.state === "pause-requested";
+  document.querySelector('[data-command="resume"]').hidden = playing;
+  document.querySelector('[data-command="pause"]').hidden = !playing;
+  document.querySelector('[data-command="retry-step"]').hidden = !liveSnapshot?.fault?.retryable;
+  const selectScenario = document.querySelector("#scenario-select");
+  selectScenario.disabled = pendingCommandRevision !== null || !controls || !atLive || !legal.has("select-scenario") || !document.querySelector("#scenario-select").value;
   selectScenario.title = selectScenario.disabled
-    ? "Select scenario — unavailable until this controller returns to LIVE and selection is legal."
+    ? "Select scenario: unavailable until this controller returns to LIVE and selection is legal."
     : "Select the checked scenario";
   const back = document.querySelector("#back-boundary");
   back.disabled = frames.findIndex((frame) => Number(frame.boundary) === boundary) <= 0;
@@ -891,10 +930,7 @@ function renderScenario(scenario, enabled) {
   if (!enabled || !scenario) return;
   const current = scenario.current || {};
   const next = current.next_action ? `next: ${current.next_action}` : "no remaining action";
-  text(
-    "scenario-progress",
-    `${current.simulation || "?"}.${current.scenario || "?"} · A${current.next_action_index || 0}/${current.action_count || 0}`,
-  );
+
   const failures = (current.failures || []).length + (current.golden_failures || []).length;
   text(
     "scenario-status",
@@ -920,14 +956,14 @@ function renderScenario(scenario, enabled) {
     element.selected = option.value === selected;
     return element;
   }));
-  document.querySelector("#scenario-definition").textContent = current.scenario || "Scenario";
+  document.querySelector("#scenario-select").title = `${current.simulation}.${current.scenario}`;
 }
 
 function keepGraphTextAtInterfaceSize(svg, intrinsicWidth) {
   const sync = () => {
-    const renderedWidth = svg.getBoundingClientRect().width;
+    const renderedWidth = svg.clientWidth;
     if (!(renderedWidth > 0) || !(intrinsicWidth > 0)) return;
-    const scale = Math.max(renderedWidth / intrinsicWidth / graphViewport.scale, 0.1);
+    const scale = Math.max(renderedWidth / intrinsicWidth, 0.1);
     svg.style.setProperty("--graph-title-font-size", `${12 / scale}px`);
     svg.style.setProperty("--graph-mono-font-size", `${10 / scale}px`);
     svg.style.setProperty("--graph-small-font-size", `${9 / scale}px`);
@@ -944,14 +980,25 @@ function keepGraphTextAtInterfaceSize(svg, intrinsicWidth) {
 }
 
 function clampGraphZoom(value) {
-  return Math.min(2.5, Math.max(0.5, value));
+  return Math.min(Math.max(2.5, 1 / graphViewport.fitScale), Math.max(0.5, value));
 }
 
 function applyGraphViewport(layer, label) {
-  layer.style.transform = `matrix(${graphViewport.scale}, 0, 0, ${graphViewport.scale}, ${graphViewport.x}, ${graphViewport.y})`;
+  const svg = layer.querySelector("svg");
+  const canvas = layer.parentElement;
+  if (!canvas || !svg.clientWidth || !svg.clientHeight) return;
+  // Fit the complete viewBox inside the current pane. User zoom and pan stay
+  // relative to that fit, so resizing a splitter preserves a fitted overview.
+  const fitScale = Math.min((canvas.clientWidth - 24) / svg.clientWidth, (canvas.clientHeight - 24) / svg.clientHeight);
+  if (!(fitScale > 0)) return;
+  graphViewport.fitScale = fitScale;
+  graphViewport.fitX = (canvas.clientWidth - svg.clientWidth * graphViewport.fitScale) / 2;
+  graphViewport.fitY = (canvas.clientHeight - svg.clientHeight * graphViewport.fitScale) / 2;
+  const scale = graphViewport.fitScale * graphViewport.scale;
+  layer.style.transform = `matrix(${scale}, 0, 0, ${scale}, ${graphViewport.fitX + graphViewport.x}, ${graphViewport.fitY + graphViewport.y})`;
   if (label) {
     label.textContent = `${Math.round(graphViewport.scale * 100)}%`;
-    label.title = "Zoom relative to Fit graph (100%); buttons zoom around the canvas centre, wheel around the pointer";
+    label.title = "Zoom relative to Fit graph (100%); buttons zoom around the canvas center, wheel around the pointer";
     label.setAttribute("aria-label", `${label.textContent} of fitted graph`);
   }
   requestAnimationFrame(() => graphTextSync?.());
@@ -960,8 +1007,8 @@ function applyGraphViewport(layer, label) {
 function zoomGraphAt(layer, label, canvas, nextScale, clientX, clientY) {
   const scale = clampGraphZoom(nextScale);
   const bounds = canvas.getBoundingClientRect();
-  const anchorX = clientX - bounds.left;
-  const anchorY = clientY - bounds.top;
+  const anchorX = clientX - bounds.left - graphViewport.fitX;
+  const anchorY = clientY - bounds.top - graphViewport.fitY;
   const worldX = (anchorX - graphViewport.x) / graphViewport.scale;
   const worldY = (anchorY - graphViewport.y) / graphViewport.scale;
   graphViewport.x = anchorX - worldX * scale;
@@ -1011,9 +1058,19 @@ function installGraphViewport(canvas, layer) {
       graphViewport.y = 0;
       applyGraphViewport(layer, label);
     }),
+    button("readable", "Readable size", () => {
+      graphViewport.scale = 1 / graphViewport.fitScale;
+      graphViewport.x = 0;
+      graphViewport.y = 0;
+      applyGraphViewport(layer, label);
+    }),
     label,
   );
 
+  graphViewportResizeObserver?.disconnect();
+  graphViewportResizeObserver = new ResizeObserver(() => applyGraphViewport(layer, label));
+  graphViewportResizeObserver.observe(canvas);
+  graphViewportResizeObserver.observe(layer.querySelector("svg"));
   let drag = null;
   canvas.addEventListener("pointerdown", (event) => {
     if (event.button !== 0 || event.target.closest("button, .graph-node, .graph-instance-badge, .edge-counter, .graph-scope-title-hit, text")) return;
@@ -1095,7 +1152,9 @@ function renderTopology(topology, animateBoundary = false) {
     : "transition 0 · initial";
   const activityText = document.createElement("strong");
   activityText.textContent = activity?.detail || "Before admission · no transition has advanced.";
-  activityPanel.append(activityLabel, activityText);
+  const graphTitle = document.createElement("h2");
+  graphTitle.textContent = "Graph";
+  activityPanel.append(graphTitle, activityLabel, activityText);
   if (activity?.kind === "lifecycle") {
     const note = document.createElement("span");
     note.className = "graph-activity-note";
@@ -1531,14 +1590,11 @@ function renderTopology(topology, animateBoundary = false) {
     nodeLayer.append(group);
   }
   svg.append(nodeLayer);
-  const historyWatermark = document.createElement("span");
-  historyWatermark.className = "history-watermark";
-  historyWatermark.textContent = "HISTORY";
   const panLayer = document.createElement("div");
   panLayer.className = "graph-pan-layer";
   panLayer.append(svg);
   const viewportControls = installGraphViewport(canvas, panLayer);
-  canvas.append(panLayer, historyWatermark, viewportControls);
+  canvas.append(panLayer, viewportControls);
   canvas.addEventListener("click", (event) => {
     if (event.target === canvas || event.target === panLayer || event.target === svg) {
       selectTopologyItem(null);
@@ -1804,12 +1860,9 @@ function definitionPanel(item) {
     ? `line ${item.definition.first_line}`
     : `lines ${item.definition.first_line}–${item.definition.last_line}`;
   location.textContent = `Source ${Number(item.definition.source_index) + 1} · ${lineLabel}`;
-  const pre = document.createElement("pre");
-  pre.className = "node-definition-code";
   const record = decisionRecord(item.path);
   const decision = record?.decision;
   let sourceArms = item.definition.decisions?.find(handler => handler.trigger === decision?.trigger)?.arms || [];
-  const highlights = new Set();
   const explanations = document.createElement("div");
   explanations.className = "decision-explanation";
   if (decision?.unavailable) explanations.textContent = decision.unavailable;
@@ -1827,27 +1880,26 @@ function definitionPanel(item) {
       explanations.append(line);
     }
     if (selected) {
-      for (let line = selected.lines[0]; line <= selected.lines[1]; line++) {
-        if (!selected.children.some(child => line >= child.lines[0] && line <= child.lines[1])) highlights.add(line);
-      }
       sourceArms = selected.children;
     }
   }
-  item.definition.code.split("\n").forEach((text, index) => {
-    const line = document.createElement("span");
-    const number = Number(item.definition.first_line) + index;
-    line.className = `source-line${highlights.has(number) ? " fired" : ""}`;
-    line.dataset.line = String(number);
-    line.textContent = text;
-    pre.append(line);
-  });
   panel.append(heading, badges);
   if (record && decision) {
     const label = document.createElement("p");
     label.textContent = `Transaction · record ${record.record_index} · transition ${boundaryForRecord(record.record_index)}`;
     panel.append(label, explanations);
   }
-  panel.append(location, pre);
+  const showSource = document.createElement("button");
+  showSource.type = "button";
+  showSource.textContent = "Show source";
+  showSource.addEventListener("click", () => {
+    selectedSourceDefinition = item.definition;
+    activeSourceView = String(item.definition.source_index);
+    sourceSelectionPending = true;
+    renderSource(currentSnapshot);
+    document.querySelector("#source-code").focus({ preventScroll: true });
+  });
+  panel.append(location, showSource);
   const commands = (currentSnapshot?.topology?.commands || []).filter((command) =>
     command.source_owner === item.path || command.owner === item.path);
   if (commands.length) {
@@ -2152,7 +2204,17 @@ function historyTable(label, rows, columns, open) {
       line.setAttribute("role", "button");
       line.title = `View the system at causal record R${row.record_index}`;
       const openRecord = () => { selectedRecordIndex = row.record_index; return showRecordBoundary(row.record_index)
-        .then(() => { const item = currentSnapshot?.topology?.nodes.find(item => item.path === row.owner); if (item) selectedTopologyItem = item.id; renderRelatedPanels(currentSnapshot); })
+        .then(() => {
+          const item = [...(currentSnapshot?.topology?.nodes || []), ...(currentSnapshot?.topology?.owners || [])].find(item => item.path === (row.owner ?? row.connector));
+          selectedTopologyItem = item?.id || null;
+          selectedSourceDefinition = item?.definition || null;
+          scenarioDefinitionActive = false;
+          sourceSelectionPending = Boolean(selectedSourceDefinition);
+          if (selectedSourceDefinition) activeSourceView = String(selectedSourceDefinition.source_index);
+          renderSource(currentSnapshot);
+          renderTopology(currentSnapshot.topology, false);
+          renderRelatedPanels(currentSnapshot);
+        })
         .catch((error) => setCommandStatus(`Historical view unavailable: ${error.message}`));
       };
       line.addEventListener("click", openRecord);
@@ -2530,12 +2592,15 @@ function empty(target, message) {
 }
 
 function text(id, value) {
-  document.querySelector(`#${id}`).textContent = value;
+  const element = document.querySelector(`#${id}`);
+  element.textContent = value;
+  if (id === "source-status") element.title = value;
 }
 
 function setCommandStatus(message) {
   const status = document.querySelector("#command-status");
   status.textContent = message;
+  status.title = message;
   status.hidden = !message;
 }
 
@@ -2564,30 +2629,35 @@ function formatLogicalTime(value) {
 }
 
 function installWorkspaceSplitter(container, splitter, vertical, property, storageKey, minimumSize, description) {
-  const stored = Number(sessionStorage.getItem(storageKey));
-  let share = Number.isFinite(stored) && stored > 0 && stored < 1 ? stored : .5;
+  const isVertical = () => vertical && !matchMedia("(max-width: 820px)").matches;
+  const key = () => storageKey + (vertical && !isVertical() ? "-stacked" : "");
+  const share = () => {
+    const stored = Number(sessionStorage.getItem(key()));
+    return Number.isFinite(stored) && stored > 0 && stored < 1 ? stored : vertical && !isVertical() ? .4 : .5;
+  };
   const limits = () => {
-    const available = vertical
+    const available = isVertical()
       ? container.clientWidth - splitter.offsetWidth
       : container.clientHeight - splitter.offsetHeight;
-    const minimum = Math.min(minimumSize, available / 2);
+    const minimum = Math.min(matchMedia("(max-width: 820px)").matches ? 100 : minimumSize, available / 2);
     return { available, minimum, maximum: available - minimum };
   };
   const apply = () => {
     const { available, minimum, maximum } = limits();
     if (available <= 0) return;
-    const size = Math.min(maximum, Math.max(minimum, available * share));
+    const size = Math.min(maximum, Math.max(minimum, available * share()));
     container.style.setProperty(property, String(size / available));
+    splitter.setAttribute("aria-orientation", isVertical() ? "vertical" : "horizontal");
     splitter.setAttribute("aria-valuemin", String(minimum));
     splitter.setAttribute("aria-valuemax", String(maximum));
     splitter.setAttribute("aria-valuenow", String(Math.round(size)));
-    splitter.setAttribute("aria-valuetext", `${Math.round(size / available * 100)}% ${description}`);
+    splitter.setAttribute("aria-valuetext", `${Math.round(size / available * 100)}% ${vertical && !isVertical() ? "source height" : description}`);
   };
   const resize = (candidate) => {
     const { available, minimum, maximum } = limits();
     if (available <= 0) return;
-    share = Math.min(maximum, Math.max(minimum, candidate)) / available;
-    sessionStorage.setItem(storageKey, String(share));
+    const next = Math.min(maximum, Math.max(minimum, candidate)) / available;
+    sessionStorage.setItem(key(), String(next));
     apply();
   };
   let dragging = false;
@@ -2602,7 +2672,7 @@ function installWorkspaceSplitter(container, splitter, vertical, property, stora
   splitter.addEventListener("pointermove", (event) => {
     if (!dragging) return;
     const bounds = container.getBoundingClientRect();
-    resize(vertical
+    resize(isVertical()
       ? event.clientX - bounds.left - container.clientLeft - splitter.offsetWidth / 2
       : event.clientY - bounds.top - container.clientTop - splitter.offsetHeight / 2);
   });
@@ -2615,8 +2685,8 @@ function installWorkspaceSplitter(container, splitter, vertical, property, stora
   splitter.addEventListener("pointerup", stop);
   splitter.addEventListener("pointercancel", stop);
   splitter.addEventListener("keydown", (event) => {
-    const backward = vertical ? "ArrowLeft" : "ArrowUp";
-    const forward = vertical ? "ArrowRight" : "ArrowDown";
+    const backward = isVertical() ? "ArrowLeft" : "ArrowUp";
+    const forward = isVertical() ? "ArrowRight" : "ArrowDown";
     if (![backward, forward, "Home", "End"].includes(event.key)) return;
     event.preventDefault();
     const { minimum, maximum } = limits();
@@ -2769,11 +2839,8 @@ document.querySelector("#show-older").addEventListener("click", () => {
   historyLimit += 100;
   if (currentSnapshot) renderRelatedPanels(currentSnapshot);
 });
-document.querySelector("#scenario-definition").addEventListener("click", inspectScenarioDefinition);
-document.querySelector("#scenario-select").addEventListener("change", () => {
-  updateControls();
-});
-document.querySelector("#select-scenario").addEventListener("click", async () => {
+document.querySelector("#scenario-status").addEventListener("click", inspectScenarioDefinition);
+document.querySelector("#scenario-select").addEventListener("change", async () => {
   const [simulation, scenario] = document.querySelector("#scenario-select").value.split("\u0000");
   try {
     clearPlaybackTimer();
@@ -2781,6 +2848,9 @@ document.querySelector("#select-scenario").addEventListener("click", async () =>
     bufferedPlayback = false;
     replayPaused = false;
     selectedTopologyItem = null;
+    selectedSourceDefinition = null;
+    sourceSelectionPending = false;
+    scenarioDefinitionActive = false;
     selectedEnvelopeId = null;
     selectedRecordIndex = null;
     selectedLoopInstance = null;
@@ -2789,6 +2859,7 @@ document.querySelector("#select-scenario").addEventListener("click", async () =>
     pendingCommandRevision = liveSnapshot?.revision ?? currentSnapshot?.revision ?? 0;
     updateControls();
     await post(`/api/command/select-scenario?simulation=${encodeURIComponent(simulation)}&scenario=${encodeURIComponent(scenario)}`);
+    await refresh();
   } catch (error) {
     pendingCommandRevision = null;
     updateControls();

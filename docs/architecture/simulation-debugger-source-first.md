@@ -27,7 +27,23 @@ future details and fault panel retain their behavior.
 Source tab selection, scroll, pan, zoom and both splitter proportions remain
 physical UI state. Pointer dragging and axis-aligned arrows resize the panes;
 Home/End reach their size limits. Stored proportions survive reload and viewport
-changes. Narrow screens stack source above the right panes.
+changes. Narrow screens stack source above the right panes within the viewport,
+with both dividers resizing heights and a separate stored source proportion.
+
+Fit graph centers the complete drawing in its canvas. Text scales with that
+overview; Readable size restores interface-sized text and panning. This replaces
+the former automatic readability floor. The Graph title shares its activity row.
+Command status shares the source header with the current position. Replay and
+Pause share one visible control, and Retry transaction appears only with a
+retryable fault. Scenario changes take effect from the selector; its progress
+button selects the scenario source. The history-session selector appears when
+more than one session exists.
+
+Definition retains decision evidence, node information and manager commands;
+source text appears once, in the primary pane. Recorded scenario actions are
+selectable there. A history record selects the same source definition and graph
+node. Instance sections show counts and start folded when empty; a user's fold
+persists while a section remains populated. The inspector retains its tabs.
 
 ## Source and position model
 
@@ -84,12 +100,20 @@ policy-filtered JSON. No hover decodes opaque payloads or exposes prepared
 request/settings. Classified scenario source remains hidden. Port summaries
 show DATA and application META, with transport identifiers available through
 the inspector link. Unsupported identifiers and ambiguous instance selection
-have unavailable values; the projection does not evaluate arbitrary expressions.
+have unavailable values in the read model; the projection does not evaluate
+arbitrary expressions. Only resolved inspection symbols enter the source's Tab
+order or open tooltips. Known runtime symbols with absent values remain
+inspectable. Available values have a dotted underline. Counter summaries use
+labeled text; complete objects in the existing bounded summary use the DATA
+tree. The UI does not request an additional value payload. The shared comment
+recognizer colors lexer trivia without mistaking string contents for comments;
+annotations and primitive types have their own syntax color.
 
 Hover and keyboard focus open the same tooltip. Escape dismisses it;
 its link selects the inspector tab containing the full recorded object.
-Tab reaches the link, then continues through the source and into the other
-panes. Shift+Tab returns from the link to its identifier.
+Tab traverses a structured summary and its inspector link, then continues through
+source and into the other panes. Shift+Tab returns through the tooltip to its
+identifier.
 The source and tooltip contain no editable fields, inputs or forms.
 
 ## Limits and adapter follow-up

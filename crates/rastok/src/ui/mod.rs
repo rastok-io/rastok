@@ -1054,7 +1054,7 @@ mod tests {
         assert!(APP_JS.contains("Math.ceil(layout.width * 1.5)"));
         assert!(APP_JS.contains("keepGraphTextAtInterfaceSize(svg, layout.width)"));
         assert!(APP_CSS.contains("--graph-title-font-size"));
-        assert!(APP_JS.contains("history-watermark"));
+        assert!(APP_CSS.contains("body.historical-view .graph-canvas"));
         assert!(APP_JS.contains("animateMotion"));
         assert!(APP_JS.contains("activity?.routes"));
         assert!(APP_JS.contains("connector-boundary-packet"));

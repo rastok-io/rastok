@@ -75,8 +75,8 @@ A unit without a Lab refuses.
   even when the external responses are mocked.
 
 `--ui` requires `hosted-ui` and prints a token-bearing loopback URL.
-It starts paused: source left, inspector above Graph right, with draggable
-dividers. Hover or keyboard focus opens read-only summaries with redaction.
+It starts paused: source left, inspector above Graph right. Drag the dividers.
+Hover or focus runtime identifiers for redacted summaries.
 `--ui-port` requires `--ui` and selects a nonzero TCP
 port; otherwise the OS chooses one.
 

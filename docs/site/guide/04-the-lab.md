@@ -120,10 +120,12 @@ day.
 
 ## Inspect source
 
-`--ui` opens source on the left, inspector above Graph on the right.
-Drag either divider to resize. **Next transition** (`F10` or `n`) marks the
-recorded node, port or arm. Hover or focus an identifier for a read-only summary
-with an inspector link; Escape closes it. Redaction stays in effect.
+Source left, inspector above Graph right. Drag the dividers.
+**Next transition** (`F10` or `n`) follows recorded transitions. Hover or focus
+runtime identifiers for redacted, read-only summaries and inspector links;
+Escape closes them. **Fit graph** shows everything; **Readable size** restores
+interface-sized text. Choose scenarios directly; click progress to select
+their source.
 
 ## Know the evidence boundary
 

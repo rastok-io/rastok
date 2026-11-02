@@ -77,13 +77,17 @@ Every selection starts paused at B0, before admission. Controls are:
 - **Replay / Pause**: present the same recorded transitions at one or four events
   per second; Pause stops buffered playback even after the engine completes.
 - **Finish**: run to completion without pedagogical pacing.
-- **Retry**: available only when a refusal still owns retryable reserved work.
+- **Retry transaction**: shown in the fault panel only when a refusal still owns
+  retryable reserved work.
 - **Reset**: fresh Execution, mock world, journal and clock for the selected scenario.
   Reloading the browser only reconnects to the recorded session; it is not Reset.
 
-At B0 the status reads `Paused before admission · Next transition advances
-one step`; the first navigation gesture dismisses it. There is no tour or modal.
-Tooltips retain their action description and append a reason when disabled.
+At B0 the source header reads `Paused before admission · Next transition advances
+one step`; the first navigation gesture dismisses it. Command status shares that
+header with the current source position, without reserving an empty row.
+There is no tour or modal. Tooltips retain their action description and append a
+reason when disabled. Replay and Pause share one visible playback control; Back
+and Next transition are adjacent. **Status: shipped.**
 
 The server may run ahead while the browser reads recorded frames. Replay first
 finishes the engine when necessary: `engine finishing, then replay`. The header
@@ -93,8 +97,9 @@ advances through Lab actions; viewing a paused frame cannot age a timeout.
 After completion or fault, history remains until Close or process termination.
 
 A = authored action; B = recorded coherent transition, beginning at zero;
-R = journal record index. These are different things. The interface spells out
-`action · transition · record` and `LIVE · Main · transition 9`; B remains an
+R = journal record index. These are different things. The timeline position's
+tooltip explains action, transition and record; its label spells out
+`LIVE · Main · transition 9`. B remains an
 internal ordinal, not a public label. A transition may contain several
 indivisible records. History shows `record 14 · transition 16` and the exact
 record type, `INGRESS`, `TRANSACTION` or `EGRESS`. Transaction never means
@@ -131,6 +136,12 @@ select its B0 immediately. Old sessions remain inspectable. A session here
 means one debugger scenario execution, not a Connector Session or a branch.
 No branch command, authoring API or replay-to-mutate operation exists.
 
+Changing the checked-scenario selector immediately selects its fresh session.
+The adjacent progress button selects the scenario source and its recorded
+context. The history-session selector appears only when there is a choice of
+sessions. Historical inspection keeps the header label, canvas tint and return
+control; it adds no watermark over the graph. **Status: shipped.**
+
 Every frame is retained under `(session, boundary)` before the replaceable
 live notification is published. SSE is bounded and never blocks execution;
 a missed notification creates no timeline hole. Reconnect obtains the current
@@ -162,8 +173,9 @@ The vertical divider resizes source and details; the horizontal divider resizes
 inspector and Graph. Both support pointer dragging, the arrows along their axis,
 and Home/End for their size limits. Proportions persist within the browser tab
 and survive viewport changes. Each pane keeps its own scrolling. Narrow screens
-stack source above the inspector and Graph, with their horizontal divider still
-available. **Status: shipped.**
+stack source above the inspector and Graph within the viewport. Both dividers
+then resize heights. The stacked source proportion is stored separately from
+the desktop width. **Status: shipped.**
 
 Containment and actual ports come from the validated Node table, including
 the App root and nested Graphs. Node bodies distinguish Graphs, Operators and
@@ -192,11 +204,14 @@ Connectors. The UI never infers execution from geometry.
 - `⧉ n` counts currently opened instances, derived from lifecycle facts.
   Selecting it opens the filtered Instances tab; keys do not clutter the graph.
 - Selecting a node/scope filters related panels without forcing Definition.
-  Definition shows the exact authored source from the compiler debug table;
-  scenario selection shows its DSL and highlights the action responsible for
-  the selected transition (the first action before admission). Clicking
-  the background clears selection. Replacing a graph frame preserves keyboard
-  focus on the same surviving node, instance badge or mailbox.
+  Definition shows the node's identity, source location, decision evidence and
+  manager commands, with a link back to source. Source text appears in the
+  source pane. Scenario progress selects its retained DSL; recorded actions
+  there navigate to their transitions. Before admission there is no current
+  transition marker. History selection synchronizes source and node context.
+  Clicking the background clears selection. Replacing a graph frame preserves
+  keyboard focus on the same surviving node, instance badge or mailbox.
+  **Status: shipped.**
 - Loop runs appear in Instances: exact run, owner, application, remaining fuel,
   phase, pending command, due instant and current state-envelope reference.
   That reference is a dependency, not a second unclassified DATA projection.
@@ -238,20 +253,30 @@ status is explicit in [C4](../architecture/retry-c4-inspection.md).
 The page has a compact transport row, a timeline row, source tabs, a complementary
 Graph canvas and Envelope / Mailbox / Definition / Instances / History /
 Assertion / Compare inspector tabs.
-Tabs wrap without overlapping their panel. Instances includes
-exchanges and injection history. The canvas pans/zooms;
+Tabs wrap without overlapping their panel. Instances, History and a selected
+Mailbox show entry counts; Assertion names an evaluated result. Instances
+includes exchanges and injection history in collapsible sections, each with a
+count. Empty sections start closed; sections with entries start open. A manual
+fold stays physical UI state while its section remains populated.
+**Status: shipped.**
+
+The canvas pans/zooms;
 two splitters resize the panes. Initial fit uses the available space.
 Zoom percentages are relative to Fit graph (100%), not an absolute SVG scale.
-Toolbar zoom anchors at the canvas centre; wheel zoom anchors at the pointer.
+Toolbar zoom anchors at the canvas center; wheel zoom anchors at the pointer.
 The label exposes those conventions in its tooltip. Injection history names
 the instances in the admission's sealed routes, never a guessed DATA field.
 Observed-envelope rows initially fold META and DATA; opening a cell retains
 the same structured inspector and redaction, without a full-height tree per row.
 Key columns reserve fourteen monospace characters so ordinary META names such
 as `graph_version` do not split across lines at the default inspector width.
-Graph text stays at interface text size. Automatic fit has a readability floor;
-larger drawings remain pannable instead of shrinking their boxes below the space
-reserved for text. Separate vertical scope bands reuse horizontal rank columns.
+Fit graph centers the complete drawing in the available canvas, including after
+a splitter or viewport resize. Text scales with the fitted drawing.
+Readable size restores interface-sized text; a large drawing can then be panned.
+Both views retain the space reserved for labels inside node geometry. The Graph
+title and current activity share one header. **Status: shipped.**
+
+Separate vertical scope bands reuse horizontal rank columns.
 Node sizes reserve title, the complete Contract/Extension subtitle, and
 instance-badge space before admission; opening an instance does not move the
 graph. The layout and SVG renderer use the same subtitle, so `HttpClient · + Retry`
@@ -329,7 +354,7 @@ recipe or permission to reveal a redacted value.
 
 ## 6. Explanatory projection
 
-Positioned identifiers in source offer read-only value summaries for ports,
+Positioned runtime identifiers in source offer read-only value summaries for ports,
 instance state, Loop and Retry counters, scenario inputs, DATA and META paths,
 and pending deadlines. Summaries identify their kind, short rendering,
 redaction status and inspector target. Missing or ambiguous values say so.
@@ -338,6 +363,16 @@ without executing expressions or decoding opaque DATA. Classified source
 remains withheld under section 5. Hover and keyboard focus open the same
 tooltip; Escape closes it, and its link selects the matching inspector
 tab. This projection adds no input, editable field, form, POST route or command.
+**Status: shipped.**
+
+Only resolved inspection symbols are focusable or open value tooltips. Static
+type names and other unresolved identifiers retain syntax coloring without an
+unavailable-value stop in the Tab order. Runtime symbols with absent values
+remain inspectable and explain their absence. Available values have a dotted
+underline. Loop and Retry counters use labeled summaries; structured summaries
+use the existing DATA tree when the bounded rendering contains a complete
+object. Tab reaches structured entries and the inspector link in order.
+Comments, annotations and primitive types have distinct syntax colors.
 **Status: shipped.**
 
 Positions use one-based lines and Unicode scalar columns when the retained
@@ -360,7 +395,8 @@ append a record or modify the live machine.
   Capacity is the actual shared instance-mailbox capacity, not an invented
   independent budget per pipe. Missing resolved type information says unavailable.
 - **Decisions.** Selecting an Operator transaction in history and opening
-  Definition highlights its chosen authored arm. The read model resolves consumed
+  Definition explains its decision while source highlights the chosen authored
+  arm. The read model resolves consumed
   ids from journal routes/cursors, folds private state up to but **not including**
   this transaction, and reconstructs recorded META, logical time, immutable
   bindings, named join inputs and Loop state. The core's pure Dispatch evaluator
@@ -448,7 +484,7 @@ Every item has a browser or projection regression; browser tests are in
 | Complete Contract/Extension subtitles fit their node before and after admission | `Connector subtitles and Extension labels fit…`; `the flagship keeps readable graph text…` checks real SVG labels and pipes |
 | Individually inspectable advance transactions, original App output, folded history cells | `an authored advance retains each transaction…`; Rust `advancing_time_keeps_each_ready_transaction_individually_inspectable` compares the complete batch/step result |
 | Admission keys from recorded routes, including a misleading `tenant` field | `injection history names the recorded routing key…` |
-| Toolbar zoom keeps the canvas centre fixed, Fit is 100%, splitter remains usable | `the complete tour stays inspectable by mouse and keyboard` |
+| Toolbar zoom keeps the canvas center fixed, Fit is 100%, splitter remains usable | `the complete tour stays inspectable by mouse and keyboard` |
 
 The browser harness checks both uncaught exceptions and console errors on every
 page. SVG sizing uses the CSSOM rather than a blocked inline style attribute;

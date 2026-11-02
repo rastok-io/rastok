@@ -332,8 +332,31 @@ pub(super) fn tokens(
         let mut lexer = Lexer::new(SourceId::new(index), code);
         let mut bag = Bag::new();
         let mut tokens = Vec::new();
+        let mut trivia_start = 0;
         loop {
             let token = lexer.next(&mut bag);
+            // The lexer skips trivia. Inspect only those gaps, using the shared
+            // comment recognizer so string contents never become comments.
+            let mut offset = trivia_start;
+            while offset < token.span.range().start {
+                if let Some(comment) = rastok_core::trivia::comment_at(code, offset) {
+                    for segment in code[offset..comment.end].split_inclusive('\n') {
+                        let text = segment.trim_end_matches(['\r', '\n']);
+                        let line = code[..offset].bytes().filter(|byte| *byte == b'\n').count() + 1;
+                        let line_start = code[..offset].rfind('\n').map_or(0, |at| at + 1);
+                        let column = code[line_start..offset].chars().count() + 1;
+                        result.push(json!({"source_index": index, "line": line,
+                            "column": column, "end_column": column + text.chars().count(),
+                            "kind": "comment", "name": text, "node_path": null, "value": null}));
+                        offset += segment.len();
+                    }
+                } else if let Some(character) = code[offset..].chars().next() {
+                    offset += character.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            trivia_start = token.span.range().end;
             if token.kind == TokenKind::Eof {
                 break;
             }
@@ -345,7 +368,15 @@ pub(super) fn tokens(
             let start = token.span.range().start;
             let mut end = token.span.range().end;
             let mut name = token.text.to_owned();
-            if token.kind == TokenKind::Ident {
+            let annotation = token.text == "@"
+                && tokens.get(cursor + 1).is_some_and(|next| {
+                    next.kind == TokenKind::Ident && next.span.range().start == end
+                });
+            if annotation {
+                cursor += 1;
+                name.push_str(tokens[cursor].text);
+                end = tokens[cursor].span.range().end;
+            } else if token.kind == TokenKind::Ident {
                 while tokens
                     .get(cursor + 1)
                     .is_some_and(|token| token.kind == TokenKind::Dot)
@@ -389,7 +420,8 @@ pub(super) fn tokens(
                     | "false"
                     | "App"
             );
-            let kind = match token.kind {
+            let mut kind = match token.kind {
+                _ if annotation => "annotation",
                 TokenKind::Ident if keyword => "keyword",
                 TokenKind::Ident => "identifier",
                 TokenKind::Str => "string",
@@ -419,6 +451,34 @@ pub(super) fn tokens(
                     resolve(snapshot, plan, &owner, &name)
                 }
             });
+            if hover
+                .as_ref()
+                .is_some_and(|value| value["kind"] == "identifier")
+                && matches!(
+                    name.as_str(),
+                    "text"
+                        | "long"
+                        | "double"
+                        | "number"
+                        | "media_type"
+                        | "null"
+                        | "date"
+                        | "timestamp_ntz"
+                        | "time"
+                        | "int"
+                        | "uint"
+                        | "bool"
+                        | "float"
+                        | "decimal"
+                        | "bytes"
+                        | "duration"
+                        | "timestamp"
+                        | "uuid"
+                        | "variant"
+                )
+            {
+                kind = "type";
+            }
             // Multiline literals stay ordinary source text; no false one-line span.
             if !code[start..end].contains('\n') {
                 result.push(json!({"source_index": index, "line": line,
@@ -429,12 +489,53 @@ pub(super) fn tokens(
             cursor += 1;
         }
     }
+    result.sort_by_key(|token| {
+        (
+            token["source_index"].as_u64(),
+            token["line"].as_u64(),
+            token["column"].as_u64(),
+        )
+    });
     json!(result)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn syntax_projection_distinguishes_comments_annotations_and_string_contents() {
+        let program = "graph echo : App { input in: text; output out: text; operator relay { on in { out = data } } in -> relay -> out }";
+        let compilation = crate::compiler::compile(
+            &[program],
+            &crate::connector::contract::ContractCatalog::try_m0().unwrap(),
+        )
+        .unwrap();
+        let code = "// écho\ntext @secret \"https://example.test/path\" /* block\nend */\n";
+        let frame = json!({"sources": [{"index": 0, "text": code}]});
+        let result = tokens(&frame, &compilation.plan, &[]);
+        let tokens = result.as_array().unwrap();
+        let comments: Vec<_> = tokens
+            .iter()
+            .filter(|token| token["kind"] == "comment")
+            .collect();
+        assert_eq!(comments.len(), 3);
+        assert_eq!(comments[0]["name"], "// écho");
+        assert_eq!(comments[0]["end_column"], 8);
+        assert!(comments.iter().all(|token| token["value"].is_null()));
+        assert!(
+            tokens
+                .iter()
+                .any(|token| token["kind"] == "annotation" && token["name"] == "@secret")
+        );
+        assert!(
+            tokens
+                .iter()
+                .any(|token| token["kind"] == "type" && token["name"] == "text")
+        );
+        assert!(tokens.iter().any(|token| token["kind"] == "string"
+            && token["name"].as_str().unwrap().contains("https://")));
+    }
 
     #[test]
     fn port_summaries_reserve_transport_identifiers_for_the_inspector() {

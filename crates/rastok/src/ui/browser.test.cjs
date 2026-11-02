@@ -134,7 +134,6 @@ test('the Responses adapter preserves typed evidence and hides the bearer in LIV
     if (index) {
       await page.locator('#return-live').click();
       await page.locator('#scenario-select').selectOption(`responses\u0000${scenario}`);
-      await page.locator('#select-scenario').click();
       await page.locator('#timeline-position').filter({ hasText: new RegExp(`^LIVE · Session ${index} · transition 0$`) }).waitFor();
     }
     const head = Number(await finish(page));
@@ -232,6 +231,7 @@ test('the flagship keeps readable graph text clear of badges, ports and pipes', 
     if (transition === 8) await seek(page, 8);
     if (transition === 'narrow') await page.setViewportSize({ width: 700, height: 760 });
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await page.getByRole('button', { name: 'Readable size', exact: true }).click();
     await capture(page, `webhook-geometry-${transition}`);
     const collisions = await page.evaluate(() => {
       const labels = [...document.querySelectorAll('.graph-svg text')].map(element => ({
@@ -272,6 +272,7 @@ test('the flagship keeps readable graph text clear of badges, ports and pipes', 
       return collisions;
     });
     assert.deepEqual(collisions, [], String(transition));
+    await page.getByRole('button', { name: 'Fit graph', exact: true }).click();
     if (transition !== 'narrow') {
       const canvas = await page.locator('.graph-canvas').boundingBox();
       const scope = await page.locator('.graph-scope.root .graph-scope-body').boundingBox();
@@ -279,9 +280,8 @@ test('the flagship keeps readable graph text clear of badges, ports and pipes', 
       assert.ok(scope.y >= canvas.y && scope.y + scope.height <= canvas.y + canvas.height, 'the complete flagship fits vertically');
     }
     if (transition === 8) {
-      const badge = await page.locator('.history-watermark').boundingBox();
-      const controls = await page.locator('.graph-viewport-controls').boundingBox();
-      assert.ok(badge.x + badge.width < controls.x, 'HISTORY clears the zoom controls');
+      assert.equal(await page.locator('body.historical-view').count(), 1);
+      assert.equal(await page.locator('#return-live').isVisible(), true);
     }
   }
 });
@@ -328,7 +328,6 @@ test('the webhook gallery remains classified in LIVE, HISTORY and REPLAY without
     if (index) {
       await page.locator('#return-live').click();
       await page.locator('#scenario-select').selectOption(`webhook\u0000${scenario}`);
-      await page.locator('#select-scenario').click();
       await page.locator('#timeline-position').filter({ hasText: new RegExp(`^LIVE · Session ${index} · transition 0$`) }).waitFor();
     }
     const head = Number(await finish(page));
@@ -525,14 +524,16 @@ test('Operator decisions highlight the exact authored arm and ordered predicate 
     if (await node.locator('..').getAttribute('aria-pressed') !== 'true') await node.click();
     await page.locator('#tab-definition').click();
     assert.match(await page.locator('.decision-explanation').innerText(), new RegExp(`Selected case: ${expected}`));
-    assert.ok((await page.locator('#definition .source-line.fired').allTextContents()).some(line => line.includes(`${expected} =>`)));
+    assert.ok((await page.locator('#source-code .source-line.fired').allTextContents()).some(line => line.includes(`${expected} =>`)));
     await capture(page, `decision-${expected}`);
   }
   const sample = await openTour(t, undefined, 'crates/rastok/tests/fixtures/ui-explanation.rkg');
   await finish(sample);
-  await sample.evaluate(() => { selectedTopologyItem = currentSnapshot.topology.nodes.find(node => node.path === 'classify').id; renderRelatedPanels(currentSnapshot); activateInspectorTab('definition'); });
+  const decision = await sample.evaluate(() => boundaryForRecord(currentSnapshot.history.records.findLast(record => record.owner === 'classify' && record.decision).record_index));
+  await seek(sample, decision);
+  await sample.evaluate(() => { selectTopologyItem(currentSnapshot.topology.nodes.find(node => node.path === 'classify').id); activateInspectorTab('definition'); });
   assert.match(await sample.locator('.decision-explanation').innerText(), /data < 0 = false.*seen == 0 = true/s);
-  const fired = (await sample.locator('#definition .source-line.fired').allTextContents()).join('\n');
+  const fired = (await sample.locator('#source-code .source-line.fired').allTextContents()).join('\n');
   assert.match(fired, /true =>/);
   assert.doesNotMatch(fired, /false =>/, 'an unselected nested arm must not inherit its parent highlight');
   assert.equal(await sample.locator('.graph-edge.case-selected[data-selected-case="Kept"]').count(), 1);
@@ -575,11 +576,11 @@ test('scenario actions select their recorded transition and all navigation is ke
   await page.locator('#timeline-position').filter({ hasText: new RegExp(`^LIVE · Main · transition ${actionHead + 1}$`) }).waitFor();
   await capture(page, 'fresh-shortcut-n');
   await finish(page);
-  await page.locator('#scenario-definition').press('Enter');
-  const action = page.locator('.scenario-definition-code [data-action="2"]');
+  await page.locator('#scenario-status').press('Enter');
+  const action = page.locator('#source-code [data-action="2"]');
   await action.press('Enter');
-  await page.locator('.scenario-definition-code [data-action="2"][aria-current=step]').waitFor();
-  assert.equal(await page.locator('.scenario-definition-code [aria-current=step]').getAttribute('data-action'), '2');
+  await page.locator('#source-code [data-action="2"][aria-current=step]').waitFor();
+  assert.equal(await page.locator('#source-code [aria-current=step]').getAttribute('data-action'), '2');
   assert.match(await page.locator('#timeline-position').innerText(), /^HISTORY/);
   await page.keyboard.press('Escape');
   await page.keyboard.press(' ');
@@ -674,11 +675,11 @@ test('the explanatory path is reachable with Tab and keyboard alone', { timeout:
   await tabTo(page.locator('#envelope .identifier > button').filter({ hasText: /^origin / }));
   await page.keyboard.press('Enter');
   assert.doesNotMatch(await page.locator('body').innerText(), /[0-9a-f]{32}/i);
-  await tabTo(page.locator('#scenario-definition'));
+  await tabTo(page.locator('#scenario-status'));
   await page.keyboard.press('Enter');
-  await tabTo(page.locator('.scenario-definition-code [data-action="2"]'));
+  await tabTo(page.locator('#source-code [data-action="2"]'));
   await page.keyboard.press('Enter');
-  await page.locator('.scenario-definition-code [data-action="2"][aria-current=step]').waitFor();
+  await page.locator('#source-code [data-action="2"][aria-current=step]').waitFor();
   await page.keyboard.press('Escape');
   await page.keyboard.press(' ');
   await page.locator('#timeline-position').filter({ hasText: /^REPLAY/ }).waitFor();
@@ -694,7 +695,6 @@ test('failed expect shows the observed field difference and expect nothing shows
   assert.match(await page.locator('.assertion-difference').innerText(), /data.value.*differs.*7.*8/s);
   await capture(page, 'assertion-difference');
   await page.locator('#scenario-select').selectOption('inspect\u0000unwanted');
-  await page.locator('#select-scenario').click();
   await page.locator('#timeline-position').filter({ hasText: /Session 1 · transition 0$/ }).waitFor();
   await finish(page);
   assert.match(await page.locator('#assertion').innerText(), /expect nothing app.out.*1 observed · 1 matching/s);
@@ -931,15 +931,15 @@ test("narrow history keeps Return live and session navigation reachable", { time
   await page.locator("#back-boundary").click();
   await page.locator("#timeline-position").filter({ hasText: /^HISTORY/ }).waitFor();
   assert.equal(await page.locator("#return-live").isVisible(), true);
-  assert.equal(await page.locator("#timeline-session").isVisible(), true);
+  assert.equal(await page.locator("#timeline-session").isVisible(), false, "a single session needs no selector");
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
 });
 
 test("scenario Definition shows authored DSL and reset selects a fresh B0", { timeout: 60000 }, async t => {
   const page = await openTour(t);
-  await page.locator("#scenario-definition").click();
-  assert.match(await page.locator("#definition").innerText(), /app.in = \{ tenant = "alice"/);
-  assert.match(await page.locator('#definition .source-line[aria-current="step"]').innerText(), /app.in/);
+  await page.locator("#scenario-status").click();
+  assert.match(await page.locator("#source-code .selected-definition").allTextContents().then(lines => lines.join('\n')), /app.in = \{ tenant = "alice"/);
+  assert.equal(await page.locator('#source-code .current-position').count(), 0, 'before admission has no current transition');
   const head = await finish(page);
   await page.locator('[data-command="reset-scenario"]').click();
   await page.locator("#timeline-position").filter({ hasText: /^LIVE · Session 1 · transition 0$/ }).waitFor();
@@ -990,12 +990,13 @@ test("the complete tour stays inspectable by mouse and keyboard", { timeout: 600
     const point = new DOMPoint(canvas.x + canvas.width / 2, canvas.y + canvas.height / 2).matrixTransform(svg.getScreenCTM().inverse());
     return { x: point.x, y: point.y };
   });
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   const centre = await graphPointAtCentre();
   await page.getByRole("button", { name: "Zoom in", exact: true }).click();
   assert.equal(await page.locator(".graph-zoom-value").innerText(), "120%");
-  assert.match(await page.locator('.graph-zoom-value').getAttribute('title'), /relative to Fit graph.*canvas centre/);
+  assert.match(await page.locator('.graph-zoom-value').getAttribute('title'), /relative to Fit graph.*canvas center/);
   const zoomed = await graphPointAtCentre();
-  assert.ok(Math.abs(centre.x - zoomed.x) < 0.1 && Math.abs(centre.y - zoomed.y) < 0.1, 'toolbar zoom keeps the canvas centre fixed in graph coordinates');
+  assert.ok(Math.abs(centre.x - zoomed.x) < 0.1 && Math.abs(centre.y - zoomed.y) < 0.1, `toolbar zoom keeps the canvas center fixed in graph coordinates: ${JSON.stringify({ centre, zoomed })}`);
   await page.getByRole("button", { name: "Fit graph", exact: true }).click();
   assert.equal(await page.locator('.graph-zoom-value').innerText(), '100%');
   const splitter = page.locator("#workspace-splitter");
@@ -1074,7 +1075,6 @@ test('source-first webhook qualification covers timeout, redaction, Retry, Reset
     });
   await page.locator('[data-source-view="0"]').click();
   await page.locator('#scenario-select').selectOption('webhook\u0000timeout_then_success');
-  await page.locator('#select-scenario').click();
   await page.locator('#timeline-position').filter({ hasText: /^LIVE · Session 1 · transition 0$/ }).waitFor();
   const step = async () => {
     const revision = await page.evaluate(() => currentSnapshot.revision);
@@ -1112,7 +1112,7 @@ test('source-first webhook qualification covers timeout, redaction, Retry, Reset
   await capture(page, 'source-webhook-secret-binding-redacted');
   const retry = page.locator('#source-code [data-source-token]').filter({ hasText: /^Retry.attempts$/ });
   await retry.focus();
-  assert.match(await page.locator('#source-tooltip').innerText(), /Retry counter.*"attempt":"1".*"limit":"2"/s);
+  assert.match(await page.locator('#source-tooltip').innerText(), /Retry counter.*attempt 1\/2/s);
   await capture(page, 'source-webhook-retry-counter');
   await retry.press('Tab');
   assert.equal(await page.locator('#source-tooltip a').getAttribute('href'), '#panel-instances');
@@ -1164,7 +1164,7 @@ test('source-first countdown qualification exposes the changing Loop counter', {
   }
   const loop = page.locator('#source-code [data-source-token]').filter({ hasText: /^Loop.measure$/ });
   await loop.focus();
-  assert.match(await page.locator('#source-tooltip').innerText(), /Loop counter.*"application":"2"/s);
+  assert.match(await page.locator('#source-tooltip').innerText(), /Loop counter.*application 2/s);
   for (const width of [1440, 1024]) {
     await page.setViewportSize({ width, height: 760 });
     for (const colorScheme of ['dark', 'light']) {
@@ -1195,11 +1195,12 @@ test('source, inspector and graph share two persistent accessible splitters', { 
   assert.ok(Math.abs(initial.inspector.height - initial.graph.height) < 2, 'right panes start at equal heights');
   assert.ok(initial.details.x > initial.source.x && initial.graph.y > initial.inspector.y);
   const status = await page.locator('#command-status').boundingBox();
-  assert.ok(status.y + status.height <= initial.source.y, 'status never covers source or inspector controls');
+  const heading = await page.locator('.source-section .graph-heading').boundingBox();
+  assert.ok(status.y >= heading.y && status.y + status.height <= heading.y + heading.height, 'status fits in the source header');
   const scenarioStatus = await page.locator('#scenario-status').boundingBox();
-  const sourceStatus = await page.locator('#source-status').boundingBox();
-  assert.ok(scenarioStatus.y + scenarioStatus.height <= sourceStatus.y,
-    'scenario progress and source position occupy separate rows');
+  const sourceCode = await page.locator('#source-code').boundingBox();
+  assert.ok(scenarioStatus.y >= heading.y + heading.height && scenarioStatus.y + scenarioStatus.height <= sourceCode.y,
+    'scenario progress fits between the source header and code');
   assert.equal(await page.locator('[data-inspector-tab]').count(), 7);
   assert.equal(await page.locator('[data-source-view="graph"]').count(), 0, 'graph does not replace the source');
   const boundary = await page.locator('#timeline').inputValue();
@@ -1245,7 +1246,8 @@ test('source, inspector and graph share two persistent accessible splitters', { 
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await capture(page, 'split-echo-adjusted-1024-light');
   await page.setViewportSize({ width: 700, height: 760 });
-  assert.equal(await page.locator('#workspace-splitter').isVisible(), false);
+  assert.equal(await page.locator('#workspace-splitter').isVisible(), true);
+  await page.waitForFunction(() => document.querySelector('#workspace-splitter').getAttribute('aria-orientation') === 'horizontal');
   assert.equal(await page.locator('#details-splitter').isVisible(), true);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -1261,11 +1263,12 @@ test('debugger function keys use existing controls and preserve native input sho
   page.on('request', request => { if (request.url().includes('/api/command/')) commands.push(new URL(request.url()).pathname); });
   await page.locator('#source-code').focus();
   const tokens = page.locator('#source-code [data-source-token]');
+  const firstTokenName = await tokens.first().textContent();
   await tokens.first().focus();
   await tokens.nth(1).hover();
   await page.keyboard.press('Tab');
   assert.equal(await page.locator('#source-tooltip a').evaluate(link => link === document.activeElement), true);
-  assert.match(await page.locator('#source-tooltip strong').innerText(), /^echo · /,
+  assert.ok((await page.locator('#source-tooltip strong').innerText()).startsWith(`${firstTokenName} · `),
     'Tab inspects the focused identifier even when the pointer hovers another');
   await page.keyboard.press('Shift+Tab');
   assert.equal(await tokens.first().evaluate(token => token === document.activeElement), true);
@@ -1305,4 +1308,141 @@ test('debugger function keys use existing controls and preserve native input sho
   });
   assert.equal(untouched, true, 'browser, context-menu and composition keys are not canceled');
   assert.equal(commands.length, before);
+});
+
+test('audit: source focus excludes static identifiers and summaries use readable fields', { timeout: 60000 }, async t => {
+  const page = await openTour(t, { width: 1440, height: 760 }, 'examples/countdown.rkg');
+  assert.equal(await page.locator('#source-code [data-source-token][aria-label$=": identifier"]').count(), 0);
+  assert.ok(await page.locator('#source-code .syntax-comment').count() > 0);
+  assert.equal(await page.locator('#source-code .syntax-type').filter({ hasText: /^int$/ }).count() > 0, true);
+  for (let count = 0; count < 40; count += 1) {
+    if (await page.evaluate(() => currentSnapshot.loop_runs.some(run => run.active && run.application === '2'))) break;
+    const revision = await page.evaluate(() => currentSnapshot.revision);
+    await page.locator('#step').click();
+    await page.waitForFunction(previous => currentSnapshot.revision > previous && pendingCommandRevision === null, revision);
+  }
+  const counter = page.locator('#source-code [data-source-token]').filter({ hasText: /^Loop.measure$/ });
+  assert.equal(await counter.getAttribute('data-value-available'), 'true');
+  await counter.focus();
+  assert.match(await page.locator('#source-tooltip').innerText(), /application 2.*remaining 3/s);
+  assert.doesNotMatch(await page.locator('#source-tooltip').innerText(), /\{"application"/);
+  await capture(page, 'audit-loop-summary');
+});
+
+test('audit: graph fit shows the complete drawing in the equal split and after resize', { timeout: 60000 }, async t => {
+  const page = await openTour(t, { width: 1440, height: 760 });
+  const fits = () => page.evaluate(() => {
+    const canvas = document.querySelector('.graph-canvas').getBoundingClientRect();
+    const graph = document.querySelector('.graph-svg').getBoundingClientRect();
+    return graph.left >= canvas.left && graph.right <= canvas.right + 1
+      && graph.top >= canvas.top && graph.bottom <= canvas.bottom + 1;
+  });
+  await page.getByRole('button', { name: 'Fit graph', exact: true }).click();
+  assert.equal(await fits(), true, 'Fit shows the complete drawing, including its output ports');
+  const top = await page.locator('.workspace').boundingBox();
+  await page.keyboard.press('Escape');
+  const after = await page.locator('.workspace').boundingBox();
+  assert.equal(after.y, top.y, 'dismissing command status does not shift the workspace');
+  assert.ok(after.y < 80, 'there is no permanent command-status row');
+  await capture(page, 'audit-equal-fit-1440');
+  await page.getByRole('button', { name: 'Readable size', exact: true }).click();
+  await page.getByRole('button', { name: 'Fit graph', exact: true }).click();
+  assert.equal(await fits(), true);
+  await page.setViewportSize({ width: 1024, height: 760 });
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  assert.equal(await fits(), true);
+  await capture(page, 'audit-equal-fit-1024');
+  await page.setViewportSize({ width: 700, height: 760 });
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const graph = await page.locator('#graph-section').boundingBox();
+  assert.ok(graph.y < 760 && graph.height > 100, 'the narrow viewport exposes the graph');
+  assert.equal(await page.locator('#workspace-splitter').getAttribute('aria-orientation'), 'horizontal');
+  await capture(page, 'audit-narrow-three-panes');
+});
+
+test('audit: history selection keeps source and node context together', { timeout: 60000 }, async t => {
+  const page = await openTour(t);
+  await finish(page);
+  await page.evaluate(() => selectTopologyItem(currentSnapshot.topology.nodes.find(node => node.path === 'model').id));
+  await page.locator('#tab-history').click();
+  const record = await page.evaluate(() => currentSnapshot.history.records.find(record => record.owner === 'decide' && record.decision).record_index);
+  // Clear the node filter to expose the complete retained journal.
+  await page.evaluate(() => { selectedTopologyItem = null; renderRelatedPanels(currentSnapshot); });
+  await page.locator(`.timeline-record[data-record="${record}"]`).press('Enter');
+  await page.waitForFunction(() => selectedTopologyItemView(currentSnapshot.topology)?.path === 'decide');
+  assert.equal(await page.evaluate(() => selectedSourceDefinition?.first_line),
+    await page.evaluate(() => selectedTopologyItemView(currentSnapshot.topology).definition.first_line));
+  assert.equal(await page.locator('.graph-node.selected').count(), 1);
+  await page.locator('#tab-definition').click();
+  assert.equal(await page.locator('#definition .node-definition-code').count(), 0, 'source text is shown once');
+  assert.ok(await page.locator('#definition .decision-explanation').isVisible());
+  await capture(page, 'audit-history-source-selection');
+});
+
+test('audit: compact controls keep commands explicit and instance sections useful', { timeout: 60000 }, async t => {
+  const page = await openTour(t, { width: 1440, height: 760 }, 'examples/countdown.rkg');
+  const commands = [];
+  page.on('request', request => { if (request.url().includes('/api/command/')) commands.push(new URL(request.url()).pathname); });
+  assert.equal(await page.locator('.transport .playback-toggle:visible').count(), 1);
+  assert.equal(await page.locator('.transport [data-command="retry-step"]').count(), 0);
+  assert.equal(await page.locator('#fault-panel [data-command="retry-step"]').count(), 1);
+  assert.equal(await page.locator('.timeline-session').isVisible(), false);
+  await page.locator('#tab-instances').click();
+  const emptySections = page.locator('.instance-section[data-count="0"]');
+  assert.ok(await emptySections.count());
+  assert.equal(await emptySections.evaluateAll(sections => sections.every(section => !section.open)), true);
+  await page.locator('#scenario-status').click();
+  assert.ok(await page.locator('#source-code .selected-definition').count());
+  const scenario = await page.locator('#scenario-select option').nth(1).getAttribute('value');
+  await page.locator('#scenario-select').selectOption(scenario);
+  await page.locator('#timeline-position').filter({ hasText: /^LIVE · Session 1 · transition 0$/ }).waitFor();
+  assert.deepEqual(commands, ['/api/command/select-scenario']);
+  assert.equal(await page.locator('#source-code .selected-definition').count(), 0, 'scenario change clears the previous source selection');
+  assert.equal(await page.locator('.timeline-session').isVisible(), true);
+  await page.locator('#tab-instances').click();
+  const populated = page.locator('.instance-section').filter({ has: page.locator('#state') });
+  for (let transition = 1; transition <= 8; transition += 1) {
+    await page.locator('#step').click();
+    await page.waitForFunction(target => Number(currentSnapshot.timeline.boundary) === target && pendingCommandRevision === null, transition);
+    if (Number(await populated.getAttribute('data-count')) > 0) break;
+  }
+  assert.equal(await populated.evaluate(section => section.open), true);
+  await populated.locator('summary').first().click();
+  const next = Number(await page.locator('#timeline').inputValue()) + 1;
+  await page.locator('#step').click();
+  await page.waitForFunction(target => Number(currentSnapshot.timeline.boundary) === target && pendingCommandRevision === null, next);
+  assert.ok(Number(await populated.getAttribute('data-count')) > 0);
+  assert.equal(await populated.evaluate(section => section.open), false, 'manual folding survives a populated refresh');
+  await finish(page);
+  await seek(page, 0);
+  await page.locator('[data-command="resume"]').click();
+  assert.equal(await page.locator('.transport .playback-toggle:visible').count(), 1);
+  assert.equal(await page.locator('[data-command="pause"]').isVisible(), true);
+  await page.locator('[data-command="pause"]').click();
+  assert.equal(await page.locator('[data-command="resume"]').isVisible(), true);
+  await capture(page, 'audit-compact-controls');
+});
+
+test('audit: structured source summaries keep their tree and inspector link keyboard reachable', { timeout: 60000 }, async t => {
+  const page = await openTour(t, undefined, 'examples/countdown.rkg');
+  // Isolate tooltip navigation with a complete, already filtered read-model summary.
+  await page.evaluate(() => {
+    const anchor = document.querySelector('#source-code [data-source-token]');
+    const token = sourceValues.get(anchor.dataset.sourceToken);
+    token.value = { ...token.value, kind: 'DATA path', rendering: '{"receipt":{"public":"accepted"}}', available: true };
+    anchor.focus();
+  });
+  await page.keyboard.press('Tab');
+  const branch = page.locator('#source-tooltip summary');
+  assert.equal(await branch.evaluate(element => element === document.activeElement), true);
+  await page.keyboard.press('Enter');
+  assert.equal(await branch.locator('..').evaluate(element => element.open), false);
+  await page.keyboard.press('Enter');
+  assert.equal(await page.locator('#source-tooltip').getByText('accepted', { exact: true }).isVisible(), true);
+  await page.keyboard.press('Tab');
+  assert.equal(await page.locator('#source-tooltip a').evaluate(element => element === document.activeElement), true);
+  await page.keyboard.press('Shift+Tab');
+  assert.equal(await branch.evaluate(element => element === document.activeElement), true);
+  await page.keyboard.press('Shift+Tab');
+  assert.equal(await page.locator('#source-code [data-source-token]').first().evaluate(element => element === document.activeElement), true);
 });

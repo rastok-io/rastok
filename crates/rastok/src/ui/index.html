@@ -22,6 +22,7 @@
     <symbol id="icon-live" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9h-3a6 6 0 1 1-1.8-4.3L13 11h8V3l-2.7 2.7A8.9 8.9 0 0 0 12 3z"/></symbol>
     <symbol id="icon-zoom-in" viewBox="0 0 24 24"><path d="M10 4a6 6 0 1 0 3.7 10.7L19 20l1-1-5.3-5.3A6 6 0 0 0 10 4zm-1 3h2v2h2v2h-2v2H9v-2H7V9h2z"/></symbol>
     <symbol id="icon-zoom-out" viewBox="0 0 24 24"><path d="M10 4a6 6 0 1 0 3.7 10.7L19 20l1-1-5.3-5.3A6 6 0 0 0 10 4zM7 9h6v2H7z"/></symbol>
+    <symbol id="icon-readable" viewBox="0 0 24 24"><path d="M3 5h18v3h-7v13h-4V8H3z"/></symbol>
     <symbol id="icon-fit" viewBox="0 0 24 24"><path d="M4 9V4h5v2H6v3zm11-5h5v5h-2V6h-3zM6 15v3h3v2H4v-5zm12 0h2v5h-5v-2h3z"/></symbol>
   </svg>
 
@@ -34,34 +35,32 @@
       </div>
       <nav class="transport" aria-label="Execution controls">
         <button id="back-boundary" class="transport-button" title="View the previous recorded transition"><svg><use href="#icon-back"/></svg><span>Back</span></button>
-        <button data-command="resume" class="transport-button" aria-keyshortcuts="F8 Space" title="Replay: replay recorded transitions at the selected speed"><svg><use href="#icon-play"/></svg><span>Replay</span><kbd>F8</kbd></button>
-        <button data-command="pause" class="transport-button" aria-keyshortcuts="F8 Space" title="Pause: stop replay or execution at the next safe transition"><svg><use href="#icon-pause"/></svg><span>Pause</span></button>
         <button id="step" data-command="step" class="transport-button primary" aria-keyshortcuts="F10 n ArrowRight" title="Next transition: advance one recorded transition"><svg><use href="#icon-step"/></svg><span>Next transition</span><kbd>F10</kbd></button>
-        <button data-command="retry-step" class="transport-button" title="Retry: retry the reserved transaction"><svg><use href="#icon-retry"/></svg><span>Retry</span></button>
+        <span class="transport-divider simulation-only" hidden></span>
+        <button data-command="next-scenario-action" class="transport-button simulation-only" hidden title="Next action: run one authored action to its effect"><svg><use href="#icon-action"/></svg><span>Next action</span></button>
+        <button data-command="run-until-assertion" class="transport-button simulation-only" hidden title="Run to expect: continue to the next expect action"><svg><use href="#icon-assert"/></svg><span>Run to expect</span></button>
         <button data-command="run-to-completion" class="transport-button" title="Finish: run to completion"><svg><use href="#icon-complete"/></svg><span>Finish</span></button>
+        <span class="transport-divider"></span>
+        <button data-command="resume" class="transport-button playback-toggle" aria-keyshortcuts="F8 Space" title="Replay: replay recorded transitions at the selected speed"><svg><use href="#icon-play"/></svg><span>Replay</span><kbd>F8</kbd></button>
+        <button data-command="pause" class="transport-button playback-toggle" aria-keyshortcuts="F8 Space" title="Pause: stop replay or execution at the next safe transition"><svg><use href="#icon-pause"/></svg><span>Pause</span><kbd>F8</kbd></button>
         <label class="speed-control" title="Replay speed"><span>Speed</span>
           <select id="playback-speed" aria-label="Replay speed">
             <option value="1">1 event/s</option>
             <option value="4">4 events/s</option>
           </select>
         </label>
-        <span class="transport-divider simulation-only" hidden></span>
-        <button data-command="next-scenario-action" class="transport-button simulation-only" hidden title="Next action: run one authored action to its effect"><svg><use href="#icon-action"/></svg><span>Next action</span></button>
-        <button data-command="run-until-assertion" class="transport-button simulation-only" hidden title="Run to expect: continue to the next expect action"><svg><use href="#icon-assert"/></svg><span>Run to expect</span></button>
         <button data-command="reset-scenario" class="transport-button simulation-only" hidden title="Start a clean scenario session"><svg><use href="#icon-reset"/></svg><span>Reset</span></button>
       </nav>
       <div class="bar-status">
         <span><b id="logical-time">—</b> logical</span>
         <span><b id="awaiting-calls">0</b> calls</span>
-        <span id="scenario-progress" class="simulation-only" hidden>—</span>
         <span id="role" class="role-badge">connecting</span>
         <button id="take-control" class="icon-button quiet take-control-button" title="Take control" aria-label="Take control"><svg><use href="#icon-control"/></svg><span>Take control</span></button>
         <button data-command="close" class="icon-button danger" title="Close UI" aria-label="Close UI"><svg><use href="#icon-close"/></svg></button>
       </div>
     </div>
     <div class="timeline-bar" aria-label="Recorded execution timeline">
-      <span id="timeline-position" class="timeline-position">LIVE · Main · transition 0</span>
-      <abbr class="timeline-vocabulary" title="Action: authored scenario step · Transition: recorded coherent state · Record: journal entry">action · transition · record</abbr>
+      <span id="timeline-position" class="timeline-position" title="Action: authored scenario step · Transition: recorded coherent state · Record: journal entry">LIVE · Main · transition 0</span>
       <label class="timeline-session simulation-only" hidden>Session
         <select id="timeline-session" aria-label="Simulation history session"></select>
       </label>
@@ -73,25 +72,22 @@
   </header>
 
   <main>
-    <div id="command-status" class="command-status" aria-live="polite">Paused before admission · Next transition advances one step</div>
     <section id="fault-panel" class="fault-panel" hidden aria-live="assertive">
       <h2 id="fault-title">Execution fault</h2>
       <p id="fault-message" class="fault-message"></p>
       <p id="fault-help"></p>
       <p id="fault-commit" class="commit-note"></p>
+      <button data-command="retry-step" class="transport-button fault-retry" title="Retry: retry the reserved transaction"><svg><use href="#icon-retry"/></svg><span>Retry transaction</span></button>
     </section>
     <div class="workspace">
       <section id="source-section" class="source-section" aria-label="Source">
-        <div class="graph-heading"><div id="source-tabs" role="tablist" aria-label="Source files"></div><button id="open-search" title="Search node, port or id (/)" aria-label="Search node, port or id">Search /</button></div>
+        <div class="graph-heading"><div id="source-tabs" role="tablist" aria-label="Source files"></div><div class="source-context"><span id="source-status" aria-live="polite"></span><span id="command-status" class="command-status" aria-live="polite" title="Paused before admission · Next transition advances one step">Paused before admission · Next transition advances one step</span></div><button id="open-search" title="Search node, port or id (/)" aria-label="Search node, port or id">Search /</button></div>
         <div id="search-panel" hidden><input id="search" type="search" placeholder="Node, port or id" aria-label="Search node, port or id"><div id="search-results"></div></div>
         <div id="scenario-panel" class="graph-scenario simulation-only" hidden>
-          <button id="scenario-definition" class="scenario-definition" type="button" title="Inspect the selected scenario">Scenario</button>
           <select id="scenario-select" aria-label="Checked scenario"></select>
-          <button id="select-scenario" class="secondary">Select</button>
-          <span id="scenario-status" class="section-summary"></span>
+          <button id="scenario-status" class="scenario-status" type="button" title="Show the selected scenario in source"></button>
         </div>
         <section id="source-pane" role="tabpanel" aria-label="Source">
-          <div id="source-status" class="source-status" aria-live="polite"></div>
           <pre id="source-code" tabindex="0" aria-label="Read-only source"></pre>
         </section>
       </section>
@@ -111,11 +107,11 @@
           <div id="panel-mailbox" class="inspector-panel mailbox-panel" role="tabpanel" aria-labelledby="tab-mailbox" hidden><div id="mailbox" class="empty">Select a mailbox in the graph.</div></div>
           <div id="panel-definition" class="inspector-panel" role="tabpanel" aria-labelledby="tab-definition" hidden><div id="definition" class="empty">Select a Graph or Node.</div></div>
           <div id="panel-instances" class="inspector-panel runtime-panel" role="tabpanel" aria-labelledby="tab-instances" hidden>
-            <section><h2>Injections</h2><div id="injections" class="empty">No admitted injection.</div></section>
-            <section><h2>Instances and private state</h2><div id="state" class="empty">No active instance.</div></section>
-            <section><h2>Loop runs</h2><div id="loop-runs" class="empty">No admitted Loop run.</div></section>
-            <section><h2>Retry operations</h2><div id="retry-operations" class="empty">No recorded Retry operation.</div></section>
-            <section><h2>Calls and Sessions</h2><div id="exchanges" class="empty">No open exchange.</div></section>
+            <details class="instance-section" data-label="Injections"><summary>Injections</summary><div id="injections" class="empty">No admitted injection.</div></details>
+            <details class="instance-section" data-label="Instances and private state"><summary>Instances and private state</summary><div id="state" class="empty">No active instance.</div></details>
+            <details class="instance-section" data-label="Loop runs"><summary>Loop runs</summary><div id="loop-runs" class="empty">No admitted Loop run.</div></details>
+            <details class="instance-section" data-label="Retry operations"><summary>Retry operations</summary><div id="retry-operations" class="empty">No recorded Retry operation.</div></details>
+            <details class="instance-section" data-label="Calls and Sessions"><summary>Calls and Sessions</summary><div id="exchanges" class="empty">No open exchange.</div></details>
           </div>
           <div id="panel-history" class="inspector-panel history-panel" role="tabpanel" aria-labelledby="tab-history" hidden>
             <div class="history-heading"><p id="history-summary" class="section-summary">No committed records.</p><button id="show-older" class="secondary" hidden>Older</button></div>
@@ -129,8 +125,7 @@
           </div>
         </aside>
         <div id="details-splitter" class="pane-splitter" role="separator" aria-label="Resize inspector and graph" aria-controls="inspector graph-section" aria-orientation="horizontal" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50" tabindex="0"></div>
-        <section id="graph-section" class="graph-section" aria-labelledby="graph-title">
-          <h2 id="graph-title">Graph</h2>
+        <section id="graph-section" class="graph-section" aria-label="Graph">
           <div id="graph" class="empty">Waiting for a validated topology.</div>
         </section>
       </section>
