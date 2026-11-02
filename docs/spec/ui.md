@@ -137,7 +137,25 @@ a missed notification creates no timeline hole. Reconnect obtains the current
 index and can read every recorded frame. This complete in-memory history is
 disposable debugger state, not another causal ledger or a durable backup.
 
-## 4. Graph and inspector
+## 4. Source, graph and inspector
+
+The source pane will be the primary view, with one tab per source unit, line
+numbers and syntax coloring. Graph will be a secondary tab beside the sources;
+the inspector will remain on the right. Source indexes, inclusive line ranges,
+optional columns, node paths, ports and selected arms will be disposable read
+model fields. Simulation source units will retain full text except where the
+existing policy withholds Lab source. Replay will expose retained excerpts and
+explicitly identify missing source. Per-node definitions will remain compatible.
+**Status: specified, not shipped.**
+
+The current-transition marker will follow the selected recorded prefix, landing
+on the transition's node, port or selected arm. An unavailable source location
+will have an explicit reason. Graph selection will scroll to the node definition
+and select its inspector context; the source marker will highlight the node in
+Graph. Source scrolling will stay inside its pane and respect reduced motion.
+View selection and splitters will remain physical UI state. The existing
+controller, transport commands, iteration dial and recording format will remain
+unchanged. **Status: specified, not shipped.**
 
 Containment and actual ports come from the validated Node table, including
 the App root and nested Graphs. Node bodies distinguish Graphs, Operators and
@@ -209,7 +227,7 @@ Evidence: `retry_inspection_agrees_in_steps_batch_and_every_recorded_prefix`
 and the browser regression `Retry keeps held attempts inspectable…`; execution
 status is explicit in [C4](../architecture/retry-c4-inspection.md).
 
-The page has a compact transport row, a timeline row, a graph canvas and
+The existing page has a compact transport row, a timeline row, a graph canvas and
 Envelope / Mailbox / Definition / Instances / History / Assertion / Compare tabs.
 Tabs wrap without overlapping their panel. Instances includes
 exchanges and injection history. The canvas pans/zooms;
@@ -301,6 +319,17 @@ rule. Classified key labels stay hidden. This is display folding, not a new id
 recipe or permission to reveal a redacted value.
 
 ## 6. Explanatory projection
+
+Positioned identifiers in source will offer read-only value summaries for ports,
+instance state, Loop and Retry counters, scenario inputs, DATA and META paths,
+and pending deadlines. Summaries will identify their kind, short rendering,
+redaction status and inspector target. Missing or ambiguous values will say so.
+They will use the selected prefix and existing policy-filtered projections,
+without executing expressions or decoding opaque DATA. Classified source will
+remain withheld under section 5. Hover and keyboard focus will open the same
+tooltip; Escape will close it, and its link will select the matching inspector
+tab. No input, editable field, form, POST route or command will be added by this
+projection. **Status: specified, not shipped.**
 
 All evidence below is disposable and scoped to the selected snapshot and journal
 prefix. Inspection does not execute a handler, call a Driver, decode opaque DATA,
