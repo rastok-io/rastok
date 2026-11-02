@@ -370,3 +370,6 @@ Rastok is licensed under the Apache License 2.0. The Rastok name
 and official artifacts are covered separately by the trademark policy
 ([TRADEMARKS.md](TRADEMARKS.md)); [OPEN_SOURCE_COMMITMENT.md](OPEN_SOURCE_COMMITMENT.md)
 records the project's licensing commitments.
+The simulation debugger embeds the JetBrains Mono typeface under the SIL Open
+Font License 1.1; the license text is in
+[crates/rastok/src/ui/fonts/OFL.txt](crates/rastok/src/ui/fonts/OFL.txt).

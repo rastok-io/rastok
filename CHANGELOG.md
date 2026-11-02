@@ -28,6 +28,13 @@ External opening gates remain open; these capabilities are not a release claim.
   disposition and exact-prefix recovery. Only the final attempt is published.
 - Deterministic Lab scenarios, record-level golden trace comparison and a read-only
   simulation debugger with mailbox, instance, Retry and causal inspection.
+- Source-first simulation debugger: the program source is the primary view,
+  a gutter marker follows the selected transition, identifier summaries open
+  read-only on pointer hover and keyboard focus, source and graph selection
+  stay in step, and the graph is a complementary tab. The Definition inspector
+  tab is removed; node source is reached from the graph or the gutter.
+  JetBrains Mono is embedded under the SIL Open Font License for the source
+  pane. Recordings, goldens and plan identity are unchanged.
 - Explicit simulation reference modes: `--compare <dir>` reads existing
   golden traces without changing them; `--save <dir>` creates or replaces them.
   The modes are mutually exclusive, and neither supplies the Lab responses.

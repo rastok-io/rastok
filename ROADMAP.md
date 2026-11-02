@@ -454,6 +454,13 @@ in `docs/site/`; the separate site consumes it and the examples at one tag.
   and instance/session comparisons, without changing execution or plan identity.
   The external browser/keyboard pass remains in the
   [release qualification](docs/architecture/release-qualification.md) inventory.
+- On 2 November 2026 the debugger became source first. The
+  [source-first projection](docs/architecture/simulation-debugger-source-first.md)
+  makes the program text the primary view, follows the selected transition
+  with a gutter marker, exposes read-only identifier summaries on hover and
+  keyboard focus, and keeps the graph as a complementary tab. Execution,
+  controller routes, recordings and plan identity are unchanged. A Debug
+  Adapter Protocol adapter over the same read model is specified, not shipped.
 - A rich terminal debugger remains a later projection over the same controller
   and redacted read model; its CLI spelling is deliberately not frozen in M1.9.
 - A guided example gallery seeded by the benchmark's reference
