@@ -965,7 +965,7 @@ fn simulate_with_ui(
             return ExitCode::FAILURE;
         }
     };
-    println!("ui: {}", server.url());
+    server.print_url();
 
     let mut step_requested = false;
     let mut until_assertion = false;

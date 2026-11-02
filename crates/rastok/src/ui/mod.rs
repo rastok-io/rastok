@@ -299,6 +299,19 @@ impl UiServer {
         format!("http://{}/?token={}", self.address, self.capability)
     }
 
+    /// Prints the debugger URL, linked only when stdout is a terminal.
+    /// Piped output remains plain text for scripts that read the capability.
+    pub fn print_url(&self) {
+        use std::io::IsTerminal as _;
+
+        let url = self.url();
+        if std::io::stdout().is_terminal() {
+            println!("ui: \x1b]8;;{url}\x1b\\{url}\x1b]8;;\x1b\\");
+        } else {
+            println!("ui: {url}");
+        }
+    }
+
     /// Receives one already-authorized command without waiting.
     #[must_use]
     pub fn try_command(&self) -> Option<UiCommand> {

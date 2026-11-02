@@ -234,6 +234,58 @@ fn cli_information_help_and_the_guide_share_the_command_syntax() {
 
 #[cfg(feature = "hosted-ui")]
 #[test]
+fn debugger_url_is_plain_text_when_stdout_is_piped() {
+    use std::io::BufRead as _;
+
+    let _network_guard = LIVE_NETWORK_CLI_TEST
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut child = rastok()
+        .arg("simulate")
+        .arg(example())
+        .arg("--ui")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the UI binary starts");
+    let mut stdout = std::io::BufReader::new(child.stdout.take().unwrap());
+    let mut line = String::new();
+    stdout.read_line(&mut line).unwrap();
+    // Do not print capability-bearing output even when this assertion fails.
+    assert!(
+        !line.contains('\x1b'),
+        "piped output has no terminal escapes"
+    );
+    let url = line.trim().strip_prefix("ui: http://").unwrap();
+    let (address, token) = url.split_once("/?token=").unwrap();
+    let address: std::net::SocketAddr = address.parse().unwrap();
+    assert!(!token.is_empty());
+    let origin = format!("http://{address}");
+    let headers = [
+        ("Origin", origin.as_str()),
+        ("X-Rastok-Controller", "plain-url-cli-test"),
+    ];
+    assert!(
+        ui_http(
+            address,
+            &format!("POST /api/control/claim?token={token}"),
+            &headers
+        )
+        .starts_with("HTTP/1.1 200")
+    );
+    assert!(
+        ui_http(
+            address,
+            &format!("POST /api/command/close?token={token}"),
+            &headers
+        )
+        .starts_with("HTTP/1.1 200")
+    );
+    assert!(child.wait().unwrap().success());
+}
+
+#[cfg(feature = "hosted-ui")]
+#[test]
 fn simulate_ui_starts_paused_and_retains_the_completed_run_until_close() {
     use std::io::{BufRead as _, Read as _};
 

@@ -76,7 +76,7 @@ pub fn serve_ui(recording: &Recording, port: Option<u16>) -> Result<(), Error> {
         server.publish(view);
     }
     server.flush();
-    println!("ui: {}", server.url());
+    server.print_url();
     loop {
         if matches!(server.try_command(), Some(UiCommand::Close)) {
             return Ok(());
