@@ -87,13 +87,11 @@ lab hello {
 }
 ```
 
-The output below omits the scenario description.
-
 ```sh
 $ rastok check hello.rkg
-ok: 2 node(s), semantic hash 6c3cb3ab…
+ok: 2 node(s), semantic hash 6c3cb3abbbfc726fe79f850d6b5d6489e02e89ee545c706378466a7d9f6c6879
 $ rastok simulate hello.rkg
-PASS smoke.roundtrip
+PASS smoke.roundtrip: a typed message becomes a greeting
 1 scenario(s), 0 failed
 ```
 
@@ -118,7 +116,7 @@ rastok simulate hello.rkg --ui
 
 Open the loopback URL printed by the last command, including its access token.
 The simulation starts paused. Choose **Next transition**, or **Finish** to
-reach `Hello, world`. The CLI reports `PASS smoke.roundtrip` when the scenario
+reach `Hello, world`. The CLI reports `PASS smoke.roundtrip: a typed message becomes a greeting` when the scenario
 finishes. Close the viewer from its toolbar when done.
 <!-- quickstart:end -->
 

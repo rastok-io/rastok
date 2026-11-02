@@ -19,7 +19,7 @@ rastok simulate hello.rkg --ui
 
 Open the loopback URL printed by the last command, including its access token.
 The simulation starts paused. Choose **Next transition**, or **Finish** to
-reach `Hello, world`. The CLI reports `PASS smoke.roundtrip` when the scenario
+reach `Hello, world`. The CLI reports `PASS smoke.roundtrip: a typed message becomes a greeting` when the scenario
 finishes. Close the viewer from its toolbar when done.
 <!-- quickstart:end -->
 

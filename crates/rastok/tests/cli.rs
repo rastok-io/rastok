@@ -1434,6 +1434,129 @@ lab deployed {
 }
 
 #[test]
+fn simulate_explains_the_authored_assertion_and_its_exact_window() {
+    let root = std::env::temp_dir().join(format!("rastok-assertion-report-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let created = rastok()
+        .current_dir(&root)
+        .args(["new", "hello"])
+        .output()
+        .unwrap();
+    assert!(created.status.success());
+    let path = root.join("hello.rkg");
+    let source = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(
+        &path,
+        source.replace("app.in = \"world\"", "app.in = \"monde\""),
+    )
+    .unwrap();
+    let output = rastok().arg("simulate").arg(&path).output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("FAIL smoke.roundtrip: a typed message becomes a greeting"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("expect app.out count == 1 where data == \"Hello, world\"  (hello.rkg:18)"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("observed app.out: \"Hello, monde\""),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "where data == \"Hello, world\" is false for 1 of 1 deliveries; count 0, expected 1"
+        ),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("Boundary(Port"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn simulate_assertion_reports_cover_quantifiers_and_empty_windows() {
+    let root = std::env::temp_dir().join(format!(
+        "rastok-assertion-quantifiers-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("quantifiers.rkg");
+    for (expectation, verdict) in [
+        ("expect app.out count == 2", "count 1, expected 2"),
+        ("expect app.out count != 1", "count 1, expected != 1"),
+        ("expect app.out count < 1", "count 1, expected < 1"),
+        ("expect app.out count <= 0", "count 1, expected <= 0"),
+        ("expect app.out count > 1", "count 1, expected > 1"),
+        ("expect app.out count >= 2", "count 1, expected >= 2"),
+        ("expect nothing app.out", "count 1, expected 0"),
+        (
+            "expect app.out where data == \"other\"",
+            "count 0, expected at least 1",
+        ),
+    ] {
+        let source = format!(
+            "graph demo : App {{ input in: text; output out: text; in -> out }}\nlab demo {{ simulation s on app {{ scenario check {{\napp.in = \"first\"\nexpect app.out\napp.in = \"current\"\n{expectation}\n}} }} }}\n"
+        );
+        std::fs::write(&path, source).unwrap();
+        let output = rastok().arg("simulate").arg(&path).output().unwrap();
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains(&format!("{expectation}  (quantifiers.rkg:6)")),
+            "{stdout}"
+        );
+        assert!(stdout.contains("observed app.out: \"current\""), "{stdout}");
+        assert!(
+            !stdout.contains("\"first\""),
+            "the previous window is excluded: {stdout}"
+        );
+        assert!(stdout.contains(verdict), "{stdout}");
+    }
+    std::fs::write(&path, "graph demo : App { input in: text; output out: text; in -> out }\nlab demo { simulation s on app { scenario check { expect app.out } } }").unwrap();
+    let output = rastok().arg("simulate").arg(&path).output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("nothing observed"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn simulate_assertion_reports_never_print_classified_data_or_predicates() {
+    let path = std::env::temp_dir().join(format!(
+        "rastok-classified-assertion-{}.rkg",
+        std::process::id()
+    ));
+    std::fs::write(
+        &path,
+        r#"
+type Protected = struct { value: int @sensitive(level = restricted) }
+graph hidden : App { input in: Protected; output out: Protected; in -> out }
+lab hidden { simulation s on app { scenario check {
+  app.in = { value = 1234567 }
+  expect app.out count == 1 where data.value == 7654321
+} } }
+"#,
+    )
+    .unwrap();
+    let output = rastok().arg("simulate").arg(&path).output().unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let visible = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        visible.contains("Assertion evidence is redacted"),
+        "{visible}"
+    );
+    assert!(!visible.contains("1234567"));
+    assert!(!visible.contains("7654321"));
+    assert!(!visible.contains("where data.value"));
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn simulate_fails_loudly_on_a_broken_expectation() {
     let source = std::fs::read_to_string(example()).expect("the example reads");
     let path = std::env::temp_dir().join("rastok-cli-evidence-broken.rkg");

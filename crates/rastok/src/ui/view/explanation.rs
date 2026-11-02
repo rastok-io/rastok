@@ -219,28 +219,7 @@ pub(super) fn instance_label(instance: &instance::Generation, classified: bool) 
     }
 }
 
-pub(super) fn classified(plan: &ValidatedExecutionPlan) -> bool {
-    let sensitive = |annotations: &AnnotationTable| {
-        annotations
-            .entries()
-            .iter()
-            .any(|(path, _)| is_redacted_path(annotations, path))
-    };
-    plan.resolved_ports()
-        .boundary()
-        .iter()
-        .any(|port| sensitive(port.annotations()))
-        || plan.nodes.iter().enumerate().any(|(index, node)| {
-            plan.resolved_ports()
-                .node(NodeIndex::new(index as u32))
-                .is_some_and(|ports| ports.iter().any(|port| sensitive(port.annotations())))
-                || node.vars().iter().any(|var| sensitive(&var.annotations))
-        })
-        || plan.nodes.iter().any(|owner| {
-            owner.vals.iter().any(|value| sensitive(&value.annotations))
-                || owner.ports.iter().any(|port| sensitive(&port.annotations))
-        })
-}
+pub(super) use crate::render::value::classified;
 
 pub(super) struct HistoryExplanation {
     pub records: Vec<JsonValue>,

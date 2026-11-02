@@ -863,21 +863,9 @@ fn simulate(
             let golden_failures =
                 compare_or_save_golden(report, &run.records, golden, &compilation.plan);
             let passed = report.passed() && golden_failures.is_empty();
-            let verdict = if passed { "PASS" } else { "FAIL" };
-            match &report.label {
-                Some(label) => {
-                    println!(
-                        "{verdict} {}.{} — {label}",
-                        report.simulation, report.scenario
-                    );
-                }
-                None => println!("{verdict} {}.{}", report.simulation, report.scenario),
-            }
+            print_scenario_verdict(&compilation, report, &golden_failures);
             if !passed {
                 failed += 1;
-                for failure in report.failures.iter().chain(&golden_failures) {
-                    println!("     {failure}");
-                }
             }
         }
     }
@@ -1335,7 +1323,7 @@ fn simulate_with_ui(
             );
             let passed = report.passed() && golden_failures.is_empty();
             any_failed |= !passed;
-            print_scenario_verdict(&report, &golden_failures);
+            print_scenario_verdict(compilation, &report, &golden_failures);
             reported = true;
             dirty = true;
         }
@@ -1510,20 +1498,28 @@ fn compare_or_save_golden(
 }
 
 /// Prints one PASS or FAIL line for a scenario, then its failures.
-#[cfg(feature = "hosted-ui")]
-fn print_scenario_verdict(report: &lab::ScenarioReport, golden_failures: &[String]) {
+fn print_scenario_verdict(
+    compilation: &Compilation,
+    report: &lab::ScenarioReport,
+    golden_failures: &[String],
+) {
     let passed = report.passed() && golden_failures.is_empty();
     let verdict = if passed { "PASS" } else { "FAIL" };
     match &report.label {
         Some(label) => println!(
-            "{verdict} {}.{} — {label}",
+            "{verdict} {}.{}: {label}",
             report.simulation, report.scenario
         ),
         None => println!("{verdict} {}.{}", report.simulation, report.scenario),
     }
     if !passed {
-        for failure in report.failures.iter().chain(golden_failures) {
-            println!("     {failure}");
+        for failure in rastok::render::scenario_failures(compilation, report)
+            .iter()
+            .chain(golden_failures)
+        {
+            for line in failure.lines() {
+                println!("     {line}");
+            }
         }
     }
 }

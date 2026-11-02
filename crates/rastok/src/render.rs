@@ -18,6 +18,10 @@
 use crate::diagnostics::{Diagnostic, SourceId};
 use std::fmt::Write as _;
 
+mod scenario;
+pub(crate) mod value;
+pub use scenario::scenario_failures;
+
 /// The compiled sources a rendering resolves spans against, in
 /// [`SourceId`] order — the same order they were handed to the
 /// compiler.

@@ -60,6 +60,22 @@ pub struct ScenarioReport {
     /// Every failed expectation, uncovered call, and fault — in
     /// occurrence order. Empty means green.
     pub failures: Vec<String>,
+    /// Presentation evidence captured at each failed assertion, before its
+    /// observation window advances. Protected values are never stored here.
+    pub assertions: Vec<AssertionFailure>,
+}
+
+/// The exact failed assertion window, already projected through data policy.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AssertionFailure {
+    /// Index in the report's ordered failure list.
+    pub failure_index: usize,
+    /// Index of the authored action in its scenario.
+    pub action_index: usize,
+    /// The debugger's value projection; `None` means classified evidence.
+    pub observed: Option<Vec<serde_json::Value>>,
+    /// Matching deliveries, or unknown if evaluation faulted or was redacted.
+    pub matched: Option<usize>,
 }
 
 impl ScenarioReport {
@@ -161,6 +177,7 @@ pub struct Simulator<'plan, 'scenario> {
     source_input: Rc<RefCell<HttpServerLabInput>>,
     faults: MockFaults,
     failures: Vec<String>,
+    assertions: Vec<AssertionFailure>,
     window_start: usize,
     output_window_start: usize,
     record_window_start: usize,
@@ -268,6 +285,7 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
             source_input,
             faults,
             failures: Vec::new(),
+            assertions: Vec::new(),
             window_start: 0,
             output_window_start: 0,
             record_window_start: 0,
@@ -451,6 +469,7 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
             scenario: self.scenario.name.clone(),
             label: self.scenario.label.clone(),
             failures: self.failures.clone(),
+            assertions: self.assertions.clone(),
         }
     }
 
@@ -556,6 +575,27 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
                     &self.worker.journal().records()[self.record_window_start..],
                 );
                 if let Some(message) = check_expectation(self.plan, expectation, &envelopes) {
+                    let classified = crate::render::value::classified(self.plan);
+                    self.assertions.push(AssertionFailure {
+                        failure_index: self.failures.len(),
+                        action_index: self.next_action,
+                        observed: (!classified).then(|| {
+                            envelopes
+                                .iter()
+                                .map(|envelope| {
+                                    crate::render::value::data_json(
+                                        envelope.data(),
+                                        &crate::schema_annotation::AnnotationTable::empty(),
+                                    )
+                                })
+                                .collect()
+                        }),
+                        matched: if classified {
+                            None
+                        } else {
+                            expectation_matches(self.plan, expectation, &envelopes).ok()
+                        },
+                    });
                     self.failures.push(message);
                 }
                 self.quiescent = true;
@@ -682,6 +722,7 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
                 scenario: self.scenario.name.clone(),
                 label: self.scenario.label.clone(),
                 failures: self.failures,
+                assertions: self.assertions,
             },
             records: self.worker.shutdown().records().to_vec(),
         }
@@ -811,6 +852,7 @@ fn run_scenario(
                 scenario: scenario.name.clone(),
                 label: scenario.label.clone(),
                 failures: vec![format!("the Lab Driver composition refused: {error}")],
+                assertions: Vec::new(),
             },
             records: Vec::new(),
         },
@@ -906,11 +948,11 @@ fn expectation_envelopes<'a>(
     }
 }
 
-fn check_expectation(
+fn expectation_matches(
     plan: &ValidatedExecutionPlan,
     expectation: &Expectation,
     deliveries: &[&Envelope],
-) -> Option<String> {
+) -> Result<usize, String> {
     let ty = match &expectation.target {
         ExpectTarget::Boundary(port) => plan
             .resolved_ports()
@@ -946,7 +988,7 @@ fn check_expectation(
                         env.insert(String::from("data"), expr::EvalValue::from(data));
                     }
                     Err(fault) => {
-                        return Some(format!(
+                        return Err(format!(
                             "expect {name}: a delivery's data is unreadable: {fault}"
                         ));
                     }
@@ -962,15 +1004,27 @@ fn check_expectation(
                     Ok(expr::EvalValue::Bool(true)) => matches += 1,
                     Ok(expr::EvalValue::Bool(false)) => {}
                     Ok(_) => {
-                        return Some(format!("expect {name}: the predicate is not a bool"));
+                        return Err(format!("expect {name}: the predicate is not a bool"));
                     }
                     Err(error) => {
-                        return Some(format!("expect {name}: the predicate faulted: {error}"));
+                        return Err(format!("expect {name}: the predicate faulted: {error}"));
                     }
                 }
             }
         }
     }
+    Ok(matches)
+}
+
+fn check_expectation(
+    plan: &ValidatedExecutionPlan,
+    expectation: &Expectation,
+    deliveries: &[&Envelope],
+) -> Option<String> {
+    let matches = match expectation_matches(plan, expectation, deliveries) {
+        Ok(matches) => matches,
+        Err(message) => return Some(message),
+    };
     let held = match &expectation.quantifier {
         Quantifier::Exists => matches >= 1,
         // The void quantifier counts deliveries, predicate-filtered
@@ -993,6 +1047,10 @@ fn check_expectation(
     if held {
         None
     } else {
+        let name = expectation
+            .label
+            .clone()
+            .unwrap_or_else(|| format!("{:?}", expectation.target));
         Some(format!(
             "expect {name}: {matches} match(es) in a window of {} deliveries",
             deliveries.len()

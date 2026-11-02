@@ -91,6 +91,18 @@ pub struct ScenarioDefinition {
     pub code: String,
     /// One-based lines relative to `code`, in executable action order.
     pub action_lines: Vec<usize>,
+    /// Exact assertion and predicate spans, keyed by authored action index.
+    /// These source positions never enter executable identity.
+    pub expectations: std::collections::BTreeMap<usize, ExpectationSource>,
+}
+
+/// Source slices for an assertion report; absent positions are never guessed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpectationSource {
+    /// The whole authored `expect` statement.
+    pub span: crate::diagnostics::Span,
+    /// The predicate after `where`, if present.
+    pub predicate: Option<crate::diagnostics::Span>,
 }
 
 /// One exact source declaration retained beside a successful compilation.
@@ -395,6 +407,33 @@ fn scenario_definitions(unit: &Unit, sources: &[&str]) -> Vec<ScenarioDefinition
                         first_line,
                         code: code.to_owned(),
                         action_lines,
+                        expectations: scenario
+                            .body
+                            .iter()
+                            .filter(|item| {
+                                !matches!(
+                                    item,
+                                    syntax::ScenarioItem::Mock(_)
+                                        | syntax::ScenarioItem::Origin { .. }
+                                )
+                            })
+                            .enumerate()
+                            .filter_map(|(index, item)| {
+                                let syntax::ScenarioItem::Expect(step) = item else {
+                                    return None;
+                                };
+                                Some((
+                                    index,
+                                    ExpectationSource {
+                                        span: step.span,
+                                        predicate: step
+                                            .predicate
+                                            .as_ref()
+                                            .map(|predicate| predicate.span),
+                                    },
+                                ))
+                            })
+                            .collect(),
                     });
                 }
             }
