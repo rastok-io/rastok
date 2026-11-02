@@ -25,7 +25,7 @@ rastok simulate examples/countdown.rkg --compare examples/traces/countdown
 
 Add `--ui` to inspect each admitted application and its manager transition.
 
-## Read the graph
+## Read the program
 
 The App wires `in -> count -> out`. Inside `count`, a positive integer produces
 `Loop.next = data - 1`; otherwise the Operator emits `liftoff`. `Loop.next`

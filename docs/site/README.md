@@ -78,9 +78,9 @@ English, short, one implicit H1 from `title`. The gallery is a learning path,
 not a feature catalogue: each chapter opens with a practical question, builds
 on the previous one, and leaves the reader with a concrete next experiment.
 Every example is independently runnable; reading earlier chapters is optional.
-Use the same H2 sections for every gallery page: `Run`, `Read the graph`,
+Use the same H2 sections for every gallery page: `Run`, `Read the program`,
 `Expected result`, `Break it`, `Read the golden difference`, `Carry forward`,
-`Limits`. `Read the graph` names the few relevant
+`Limits`. `Read the program` names the few relevant
 parts of the referenced source; it does not duplicate that source.
 `Carry forward` explains the transferable idea and links the adjacent published
 chapters. Announce unfinished chapters without a broken link or placeholder.

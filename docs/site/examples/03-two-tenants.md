@@ -29,7 +29,7 @@ rastok simulate examples/keyed-retry.rkg --compare examples/traces/two-tenants
 
 Add `--ui` to follow the same checked scenario in the debugger.
 
-## Read the graph
+## Read the program
 
 Start with `instance = { key = data.tenant }`: it selects independent state
 for Alice and Bob. `Retry.attempts = 2` bounds Calls for one retained request,

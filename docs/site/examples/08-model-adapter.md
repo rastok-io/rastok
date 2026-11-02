@@ -32,7 +32,7 @@ RASTOK_SHOWCASE_MODEL_TOKEN=lab-only-not-a-credential RASTOK_SHOWCASE_MODEL_TOKE
 Add `--ui` for the paused debugger. The Lab never contacts the profile's
 configured model URL. These fixture values are not credentials.
 
-## Read the graph
+## Read the program
 
 Start with `ResponseUsage` and `ModelResponse`. The former marks the three
 original quantities with `@measure(id = ..., unit = "token")`. The latter

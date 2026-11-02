@@ -30,8 +30,8 @@ lab echo {
     }
 
     scenario roundtrip "a line echoes back" {
-      app.in = "salut"
-      expect "the echo" app.out count == 1 where data == "salut"
+      app.in = "hello"
+      expect "the echo" app.out count == 1 where data == "hello"
       expect nothing shell.err
     }
 
@@ -45,7 +45,7 @@ lab echo {
       mock shell {
         on in { out = nothing }
       }
-      app.in = "salut"
+      app.in = "hello"
       advance duration("5s")
       expect "the typed timeout" shell.exit where data is TimeoutExpired
     }

@@ -1666,6 +1666,7 @@ fn simulate_saves_then_compares_reference_traces() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("FAIL smoke.roundtrip"), "{stdout}");
     assert!(stdout.contains("golden divergence"), "{stdout}");
+    assert!(!stdout.contains('—'), "{stdout}");
     assert!(
         stdout.contains("expected \"other\"; got \"hello\""),
         "{stdout}"

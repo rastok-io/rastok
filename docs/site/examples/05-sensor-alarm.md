@@ -25,7 +25,7 @@ to your scenario.
 rastok simulate examples/sensor-alarm.rkg --compare examples/traces/sensor-alarm
 ```
 
-## Read the graph
+## Read the program
 
 First follow the readings into the keyed stateful Operator: its two thresholds
 prevent an alarm from oscillating around one limit. Then find the `watchdog`

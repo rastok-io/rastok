@@ -110,7 +110,7 @@ fn public_pages_have_the_site_contract_and_existing_artifacts() {
         reference(&page.golden, "trace");
         for section in [
             "Run",
-            "Read the graph",
+            "Read the program",
             "Expected result",
             "Break it",
             "Read the golden difference",

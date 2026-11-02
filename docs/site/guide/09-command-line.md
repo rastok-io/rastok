@@ -5,8 +5,7 @@ order: 9
 ---
 
 After this chapter you can choose a CLI command and interpret its output
-and exit status. Run repository examples from the checkout root; paths
-are relative to your working directory.
+and exit status. Run examples from the checkout root.
 
 ## Help and version
 
@@ -15,15 +14,13 @@ rastok --help | -h | help
 rastok --version
 ```
 
-Use `rastok --help`, `rastok -h` or `rastok help`: each prints the same
-usage on stdout and exits successfully.
-`--version` prints `rastok` followed by the compiled package version. These
-are standalone requests, without a source file or additional arguments.
-Help is global; command-specific help is not implemented.
+The help aliases print usage on stdout and exit successfully.
+`--version` prints `rastok` and the package version. Neither accepts additional
+arguments. Help is global, not command-specific.
 
-In the syntax below, square brackets mean optional, `|` separates alternatives,
-and `...` means one or more source files. Do not type those markers literally.
-Multiple `.rkg` paths form one compilation unit, not independent applications.
+Below, square brackets mean optional, `|` separates alternatives, and `...`
+means one or more files. These markers are not literal arguments.
+Multiple source paths form one compilation unit.
 
 ## Create a program: new
 
@@ -31,10 +28,9 @@ Multiple `.rkg` paths form one compilation unit, not independent applications.
 rastok new <name>
 ```
 
-`rastok new hello` creates `hello.rkg`, with an App, a typed Operator and a
-Lab scenario. Supply a bare name, without a path or `.rkg` extension.
-Existing files are never overwritten. The printed simulation and debugger
-commands are suggestions, not executed actions.
+`rastok new hello` creates `hello.rkg`: an App, a typed Operator and a Lab
+scenario. Use a bare name, without a path or extension. Existing files are
+never overwritten. Printed follow-up commands are not executed.
 
 ## Check a program: check
 
@@ -74,11 +70,9 @@ A unit without a Lab refuses.
 - `--deployment` supplies boot values and attestations needed by the graph,
   even when the external responses are mocked.
 
-`--ui` requires `hosted-ui` and prints a token-bearing loopback URL.
-It starts paused: source left, inspector above Graph right. Drag the dividers.
-Hover or focus runtime identifiers for redacted summaries.
-`--ui-port` requires `--ui` and selects a nonzero TCP
-port; otherwise the OS chooses one.
+`--ui` requires `hosted-ui`, prints a token-bearing loopback URL and starts
+paused. `--ui-port` requires `--ui` and selects a nonzero TCP port;
+otherwise the OS chooses one.
 
 ## Execute the App: run
 
@@ -118,11 +112,9 @@ rastok replay <file.rkrec> [--ui [--ui-port <port>]]
 `rastok replay echo.rkrec` prints App outputs on stdout and a record-count/seal
 summary on stderr, without Driver I/O. It uses the same output format as `run`:
 values alone for a single App output, `port: value` for several outputs.
-`--ui` uses simulation's port rules and
-opens read-only source history, with a marker and value summaries. Recordings
-retain node excerpts; missing source lines are explicit. Replay needs no
-original source or external systems, does not load changed source from disk,
-and cannot execute the program or create a Lab scenario.
+`--ui` uses simulation's port rules and opens read-only recorded history.
+Missing source lines are explicit. Replay needs no original source, ignores
+source files on disk, and cannot execute the program or create a Lab scenario.
 
 ## Inspect capabilities: connectors
 
@@ -142,12 +134,11 @@ different questions.
 rastok --resolve-open-api <project-dir> [--check]
 ```
 
-This discovers static HTTP endpoints in project sources, matches OpenAPI
-3.0/3.1 documents and writes deterministic `openapi.generated.rkg` types.
-Authored sources are untouched. `--check` writes nothing and fails when the
-generated file is missing or stale. Unsupported or ambiguous schemas refuse;
-generation is not proof that a live API honors its schema. The leading
-double dash is part of this command's current spelling.
+This matches static HTTP endpoints to OpenAPI 3.0/3.1 documents and writes
+`openapi.generated.rkg` types, leaving authored sources untouched. `--check`
+writes nothing and refuses missing or stale output. Unsupported or ambiguous
+schemas refuse. Generation cannot prove a live API honors its schema.
+The leading double dash is required.
 
 ## Exit status and streams
 
@@ -158,6 +149,12 @@ double dash is part of this command's current spelling.
 Usage errors go to stderr, including a bare `rastok` invocation. Scenario
 failure details remain in the simulation report on stdout; do not detect
 success solely by whether stderr is empty.
+
+## File formats
+
+`.rkg` holds the program and its Lab. `.trace` holds one scenario's reviewed
+causal reference, read by `simulate --compare`. `.rkrec` records a real run
+for inspection by `replay`, without repeating its external effects.
 
 ## Summary
 

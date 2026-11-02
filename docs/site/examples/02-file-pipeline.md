@@ -23,7 +23,7 @@ refusals visible before the flow runs?
 rastok simulate examples/file-pipeline.rkg --compare examples/traces/file-pipeline
 ```
 
-## Read the graph
+## Read the program
 
 Find the two `File` Connectors: one reads, one replaces. Their modes describe
 different operations under the same Contract. Between them, the Operator

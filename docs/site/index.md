@@ -117,7 +117,7 @@ scenario silence_expires "a mute shell times out" {
   mock shell {
     on in { out = nothing }
   }
-  app.in = "salut"
+  app.in = "hello"
   advance duration("5s")
   expect "the typed timeout" shell.exit where data is TimeoutExpired
 }

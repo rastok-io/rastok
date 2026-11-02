@@ -165,7 +165,7 @@ impl fmt::Display for Divergence {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "record {}: {} — {} ≠ {}",
+            "record {}: {}; {} ≠ {}",
             self.record, self.path, self.left, self.right
         )
     }
@@ -291,7 +291,7 @@ pub fn explain_diff(
         .map(|record| record_context(&record.tree))
         .unwrap_or_else(|| String::from("end of retained trace"));
     Some(format!(
-        "record {}: {} — expected {}; got {}; cause: {}",
+        "record {}: {}; expected {}; got {}; cause: {}",
         difference.record,
         difference.path,
         if redact {

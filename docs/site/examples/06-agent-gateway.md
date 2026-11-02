@@ -42,7 +42,7 @@ sections show counts and keep empty sections folded. For the reproducible CLI ch
 rastok simulate examples/agent-gateway.rkg --compare examples/traces/agent-gateway
 ```
 
-## Read the graph
+## Read the program
 
 Start at `clients.out`: each WebSocket message enters `conversation`, where
 `instance = { key = meta.ext.session_id }` scopes its children. The first
