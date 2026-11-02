@@ -169,6 +169,25 @@ its pane and respects reduced motion. Source tab selection and splitters remain
 physical UI state. The controller, transport commands, iteration dial and
 recording format are unchanged. **Status: shipped.**
 
+Source typography enables coding ligatures when the installed font supports
+them; the underlying text and columns stay unchanged. Gutter controls fold
+multiline brace regions from retained tokens, excluding comments, strings and
+unavailable recording lines. Folded ranges preserve original line numbers.
+Nested folds persist within the browser tab. Navigation to a transition or
+definition opens the containing regions. Manually folding over the current
+transition leaves its marker on the folded header, with the actual line in its
+description and the source status. Enter and Space activate focused gutter
+controls. **Status: shipped.**
+
+A green gutter triangle identifies each source-visible scenario declaration.
+It selects an inactive scenario through the existing controller, waits for its
+fresh session, then advances one transition. On the active scenario it advances
+one transition. An intervening historical navigation or loss of control cancels
+the pending step. These actions require LIVE, controller ownership and legal
+commands; they are unavailable in historical inspection and recordings.
+Classified scenario source remains withheld, with the existing selector
+available under the same control rules. **Status: shipped.**
+
 The vertical divider resizes source and details; the horizontal divider resizes
 inspector and Graph. Both support pointer dragging, the arrows along their axis,
 and Home/End for their size limits. Proportions persist within the browser tab

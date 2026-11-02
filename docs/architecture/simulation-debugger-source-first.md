@@ -45,6 +45,17 @@ selectable there. A history record selects the same source definition and graph
 node. Instance sections show counts and start folded when empty; a user's fold
 persists while a section remains populated. The inspector retains its tabs.
 
+Source typography enables ligatures with the installed Fira Code first in the
+font stack and the existing monospace fallbacks. No font is downloaded. The
+source string and Unicode columns are unchanged. Multiline brace regions come
+from retained lexer tokens, excluding string and comment contents. A region
+crossing unavailable recording lines has no folding control. A closing line
+shared with another statement stays visible. Nested folds persist per source
+within the tab, separately from the execution prefix. Transition and definition
+navigation reveal their containing regions. A manually folded current position
+has a marker on the folded header; its description and source status retain the
+actual line. Enter and Space activate gutter controls without starting Replay.
+
 ## Source and position model
 
 A simulation snapshot exposes each source unit once, with source index,
@@ -53,6 +64,12 @@ beside the checked plan; source names come from the loading boundary.
 Per-node `definition` fields remain compatible. Classified programs
 withhold Lab source, including shared mocks, before serialization; line numbers
 remain stable. Original files are never reconstructed from values.
+
+The existing scenario-definition projection also supplies declaration locations
+for source-visible scenarios: source index, inclusive line range, simulation
+name and scenario name. The compiler's retained declarations supply these
+fields without adding plan fields. The existing classified-source guard
+withholds both scenario text and this location list.
 
 A current position has an explicit available or unavailable status,
 source index, inclusive first/last line, column when retained, node path, optional
@@ -80,6 +97,15 @@ port, without pretending to know its arm. Historical snapshots use their own
 retained prefix. The transport keeps Pause, Next transition, Finish, Reset
 and the iteration dial unchanged. Scrolling is confined to the source pane;
 reduced motion disables animated scrolling.
+
+A green scenario gutter triangle composes existing commands. For an inactive
+scenario it sends select-scenario, observes the matching fresh session at its
+initial boundary, and sends one step. For the active scenario it sends one step.
+The pending intent disables execution controls and repeated gutter activation.
+Historical navigation, a disconnected controller, a refused selection or a
+different observed session cancels the pending step. Historical inspection,
+read-only recording playback and observer mode cannot use the gutter to execute
+work. The ordinary selector remains available when scenario source is withheld.
 
 F8 toggles Replay/Pause; F10 advances one recorded transition. These are aliases
 for the existing controls, with Space and `n` retained when function keys are

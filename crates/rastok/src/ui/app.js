@@ -25,6 +25,7 @@ let selectedMailboxRoute = null;
 let mailboxVisibleLimit = 100;
 let lastAnimatedActivity = null;
 let pendingCommandRevision = null;
+let pendingScenarioStep = null;
 let commandOrigin = null;
 let firstContact = true;
 let selectedEnvelopeId = null;
@@ -40,6 +41,7 @@ let lastSourcePoint = null;
 let selectedSourceDefinition = null;
 let sourceSelectionPending = false;
 const sourceScroll = new Map();
+const sourceFolds = new Map();
 const sourceValues = new Map();
 let sourceTooltipAnchor = null;
 let sourceTooltipTimer = null;
@@ -82,6 +84,7 @@ async function claim(take = false) {
 }
 
 function releaseControl() {
+  pendingScenarioStep = null;
   if (!controls) return;
   controls = false;
   fetch("/api/control/release", {
@@ -115,6 +118,27 @@ async function refreshSnapshot() {
   timelineIndex = await timelineResponse.json();
   if (pendingCommandRevision !== null && liveSnapshot.revision > pendingCommandRevision) {
     pendingCommandRevision = null;
+  }
+  if (pendingScenarioStep) {
+    const intent = pendingScenarioStep;
+    const session = Number(liveSnapshot.timeline.session);
+    if (!controls || manualHistoricalView || liveSnapshot.mode !== "simulate"
+        || (session === intent.session && liveSnapshot.revision > intent.revision && liveSnapshot.fault)) pendingScenarioStep = null;
+    else if (session !== intent.session) {
+      pendingScenarioStep = null;
+      const scenario = liveSnapshot.scenario?.current;
+      // A selection acknowledgment alone does not identify the selected head.
+      // Step only its fresh session, never another controller's later work.
+      if (pendingCommandRevision === null && session === intent.session + 1
+          && Number(liveSnapshot.timeline.boundary) === 0
+          && scenario?.simulation === intent.simulation && scenario?.scenario === intent.scenario
+          && liveSnapshot.execution.legal_commands.includes("step")) {
+        currentSnapshot = liveSnapshot;
+        renderSnapshot(currentSnapshot);
+        document.querySelector("#step:not(:disabled)")?.click();
+        return;
+      }
+    }
   }
   if (commandOrigin && pendingCommandRevision === null
       && (commandOrigin.command !== "next-scenario-action"
@@ -200,6 +224,33 @@ function selectSourceView(view, focus = false) {
   if (focus) document.querySelector(`[data-source-view="${CSS.escape(view)}"]`)?.focus();
 }
 
+function sourceFoldRegions(source, tokens) {
+  const stack = [];
+  const regions = [];
+  const unavailable = new Set(source.unavailable_lines || []);
+  for (const token of tokens) {
+    if (token.kind !== "punctuation") continue;
+    if (token.name === "{") stack.push(token);
+    if (token.name !== "}" || !stack.length) continue;
+    const start = stack.pop();
+    if (token.line <= start.line) continue;
+    // Keep a closing line visible if it also contains the next statement.
+    const shared = tokens.some(next => next.line === token.line && next.column >= token.end_column && next.kind !== "comment");
+    const last = token.line - Number(shared);
+    if (last <= start.line || [...unavailable].some(line => line >= start.line && line <= token.line)) continue;
+    regions.push({ key: `${start.line}:${start.column}:${token.line}:${token.column}`, first: start.line, last });
+  }
+  // One control per line: when blocks share a header, its outer region wins.
+  return regions.sort((a, b) => a.first - b.first || b.last - a.last)
+    .filter((region, index, sorted) => !index || region.first !== sorted[index - 1].first);
+}
+
+function sourceGutterKeydown(event) {
+  if (!["Enter", " "].includes(event.key) || event.ctrlKey || event.metaKey || event.altKey) return;
+  event.preventDefault();
+  if (!event.repeat) event.currentTarget.click();
+}
+
 function renderSource(snapshot) {
   if (!selectedTopologyItem && !scenarioDefinitionActive) {
     selectedSourceDefinition = null;
@@ -253,7 +304,7 @@ function renderSource(snapshot) {
   }
   const previousScroll = pane.dataset.sourceIndex === activeSourceView ? [pane.scrollLeft, pane.scrollTop] : sourceScroll.get(activeSourceView) || [0, 0];
   pane.dataset.sourceIndex = activeSourceView;
-  const focusKey = pane.contains(document.activeElement) ? document.activeElement.dataset.sourceToken : null;
+  const focusKey = pane.contains(document.activeElement) ? document.activeElement.dataset.sourceFocus : null;
   hideSourceTooltip();
   pane.replaceChildren();
   sourceValues.clear();
@@ -263,20 +314,95 @@ function renderSource(snapshot) {
     if (!byLine.has(token.line)) byLine.set(token.line, []);
     byLine.get(token.line).push(token);
   }
+  const regions = sourceFoldRegions(source, tokens);
+  const foldStorageKey = `rastok-source-folds:${source.index}:${source.display_name}`;
+  if (!sourceFolds.has(foldStorageKey)) {
+    let stored;
+    try { stored = JSON.parse(sessionStorage.getItem(foldStorageKey)); } catch (_) { /* Ignore obsolete physical state. */ }
+    sourceFolds.set(foldStorageKey, new Set(Array.isArray(stored) ? stored : []));
+  }
+  const folded = sourceFolds.get(foldStorageKey);
+  const reveal = [];
+  if (advanced && position?.status === "available" && position.source_index === source.index) reveal.push(position.first_line);
+  if (sourceSelectionPending && selectedSourceDefinition?.source_index === source.index) reveal.push(selectedSourceDefinition.first_line);
+  for (const key of folded) {
+    const region = regions.find(region => region.key === key);
+    if (!region || reveal.some(line => line >= region.first && line <= region.last)) folded.delete(key);
+  }
+  sessionStorage.setItem(foldStorageKey, JSON.stringify([...folded]));
+  const collapsed = regions.filter(region => folded.has(region.key));
+  const scenarios = (snapshot.scenario?.current?.definition?.scenario_locations || [])
+    .filter(location => location.source_index === source.index);
+  const scenarioLines = new Map();
+  for (const location of scenarios) {
+    if (!scenarioLines.has(location.first_line)) scenarioLines.set(location.first_line, []);
+    scenarioLines.get(location.first_line).push(location);
+  }
+  pane.style.setProperty("--source-scenario-slots", Math.max(1, ...[...scenarioLines.values()].map(items => items.length)));
+  const atSource = position?.status === "available" && position.source_index === source.index;
+  const markerLine = atSource ? collapsed.find(region => position.first_line > region.first && position.first_line <= region.last)?.first
+    || position.first_line : null;
   source.text.split("\n").slice(0, source.line_count).forEach((text, index) => {
     const line = document.createElement("span");
-    const atSource = position?.status === "available" && position.source_index === source.index;
     const current = atSource && index + 1 >= position.first_line && index + 1 <= position.last_line;
     const fired = atSource && (position.fired_lines || []).includes(index + 1);
     const selected = selectedSourceDefinition?.source_index === source.index
       && index + 1 >= selectedSourceDefinition.first_line && index + 1 <= selectedSourceDefinition.last_line;
     line.className = `source-line${current ? " current-range" : ""}${fired ? " fired" : ""}${selected ? " selected-definition" : ""}`;
-    if (atSource && index + 1 === position.first_line) {
+    if (index + 1 === markerLine) {
       line.classList.add("current-position");
       line.setAttribute("aria-current", "step");
       line.dataset.nodePath = position.node_path ?? "";
+      if (markerLine !== position.first_line) line.title = `Current transition at line ${position.first_line} inside this folded block`;
     }
     line.dataset.line = String(index + 1);
+    line.hidden = collapsed.some(region => index + 1 > region.first && index + 1 <= region.last);
+    const gutter = document.createElement("span");
+    gutter.className = "source-gutter";
+    const marker = document.createElement("span");
+    marker.className = "source-marker";
+    marker.textContent = index + 1 === markerLine ? "▶" : "";
+    marker.setAttribute("aria-hidden", "true");
+    const number = document.createElement("span");
+    number.className = "source-number";
+    number.textContent = String(index + 1);
+    number.setAttribute("aria-hidden", "true");
+    const region = regions.find(region => region.first === index + 1);
+    const fold = document.createElement(region ? "button" : "span");
+    fold.className = "source-fold";
+    if (region) {
+      fold.type = "button";
+      fold.dataset.sourceFocus = `fold:${source.index}:${region.key}`;
+      fold.textContent = folded.has(region.key) ? "▸" : "▾";
+      fold.setAttribute("aria-expanded", String(!folded.has(region.key)));
+      fold.title = `${folded.has(region.key) ? "Expand" : "Collapse"} block at line ${region.first}`;
+      fold.setAttribute("aria-label", fold.title);
+      fold.addEventListener("keydown", sourceGutterKeydown);
+      fold.addEventListener("click", event => {
+        event.stopPropagation();
+        if (folded.has(region.key)) folded.delete(region.key); else folded.add(region.key);
+        sessionStorage.setItem(foldStorageKey, JSON.stringify([...folded]));
+        renderSource(currentSnapshot);
+        updateControls();
+        pane.querySelector(`[data-source-focus="${CSS.escape(fold.dataset.sourceFocus)}"]`)?.focus({ preventScroll: true });
+      });
+    }
+    const actions = document.createElement("span");
+    actions.className = "source-scenario-actions";
+    for (const location of scenarioLines.get(index + 1) || []) {
+      const action = document.createElement("button");
+      action.type = "button";
+      action.className = "source-scenario";
+      action.textContent = "▶";
+      action.dataset.simulation = location.simulation;
+      action.dataset.scenario = location.scenario;
+      action.dataset.sourceFocus = `scenario:${JSON.stringify([location.simulation, location.scenario])}`;
+      action.addEventListener("keydown", sourceGutterKeydown);
+      action.addEventListener("click", event => { event.stopPropagation(); stepScenario(location); });
+      actions.append(action);
+    }
+    gutter.append(marker, number, fold, actions);
+    line.append(gutter);
     const chars = Array.from(text);
     let offset = 0;
     for (const token of byLine.get(index + 1) || []) {
@@ -287,6 +413,7 @@ function renderSource(snapshot) {
       if (token.value && token.value.kind !== "identifier") {
         const key = `${token.source_index}:${token.line}:${token.column}`;
         span.dataset.sourceToken = key;
+        span.dataset.sourceFocus = key;
         span.dataset.valueAvailable = String(token.value.available);
         span.tabIndex = 0;
         span.setAttribute("aria-label", `${token.name}: ${token.value.kind}`);
@@ -300,6 +427,13 @@ function renderSource(snapshot) {
       offset = token.end_column - 1;
     }
     line.append(document.createTextNode(chars.slice(offset).join("")));
+    if (region && folded.has(region.key)) {
+      const placeholder = document.createElement("span");
+      placeholder.className = "source-fold-summary";
+      placeholder.textContent = ` … ${region.last - region.first} lines`;
+      placeholder.setAttribute("aria-hidden", "true");
+      line.append(placeholder);
+    }
     const definition = scenarioDefinitionActive ? snapshot.scenario?.current?.definition : null;
     if (definition?.source_index === source.index) {
       const action = definition.action_lines?.indexOf(index + 2 - Number(definition.first_line)) ?? -1;
@@ -310,7 +444,7 @@ function renderSource(snapshot) {
         line.setAttribute("role", "button");
         line.title = `Action ${action + 1} · transition ${frame.boundary}`;
         const open = () => { pausePresentation(); showBoundary(snapshot.timeline.session, frame.boundary).catch(showViewError); };
-        line.addEventListener("click", event => { if (!event.target.closest("[data-source-token]")) open(); });
+        line.addEventListener("click", event => { if (!event.target.closest("button, [data-source-token]")) open(); });
         line.addEventListener("keydown", event => { if (event.target === line && event.key === "Enter") { event.preventDefault(); open(); } });
       }
     }
@@ -327,7 +461,8 @@ function renderSource(snapshot) {
     scrollSourceLine(selectedSourceDefinition.first_line);
     sourceSelectionPending = false;
   }
-  if (focusKey) pane.querySelector(`[data-source-token="${CSS.escape(focusKey)}"]`)?.focus({ preventScroll: true });
+  updateScenarioGutter();
+  if (focusKey) pane.querySelector(`[data-source-focus="${CSS.escape(focusKey)}"]`)?.focus({ preventScroll: true });
 }
 
 function scrollSourceLine(number) {
@@ -424,7 +559,8 @@ document.querySelector("#source-tooltip").addEventListener("keydown", event => {
   if (event.target !== (event.shiftKey ? controls[0] : controls.at(-1))) return;
   event.preventDefault();
   const anchor = sourceTooltipAnchor;
-  const sourceStops = [...document.querySelectorAll('#source-code [tabindex="0"]')];
+  const sourceStops = [...document.querySelectorAll('#source-code [tabindex="0"], #source-code button')]
+    .filter(element => !element.disabled && element.getClientRects().length);
   const next = event.shiftKey ? anchor : sourceStops[sourceStops.indexOf(anchor) + 1]
     || document.querySelector("#workspace-splitter");
   hideSourceTooltip();
@@ -482,6 +618,7 @@ function timelineFrames(session) {
 }
 
 async function showBoundary(session, boundary, manual = true) {
+  if (manual) pendingScenarioStep = null;
   const request = ++viewRequest;
   if (manual) setCommandStatus("");
   manualHistoricalView = manual;
@@ -879,13 +1016,13 @@ function updateControls() {
     const recordingNavigation = liveSnapshot?.mode === "replay" && canReplayForward && (command === "step" || command === "run-to-completion");
     const localReplayControl = replayPlay || replayPause || recordingNavigation;
     const physicalControl = button.dataset.command === "pause" || button.dataset.command === "close";
-    button.disabled = pendingCommandRevision !== null
+    button.disabled = pendingCommandRevision !== null || pendingScenarioStep !== null
       || (!localReplayControl && !controls)
       || (!localReplayControl && ((!atLive && !physicalControl) || !legal.has(button.dataset.command)));
     const base = COMMAND_HINTS[command] || command;
     let reason = "";
     if (button.disabled) {
-      if (pendingCommandRevision !== null) reason = "the previous command is still being recorded";
+      if (pendingCommandRevision !== null || pendingScenarioStep !== null) reason = "the previous command is still being recorded";
       else if (liveSnapshot?.mode === "replay" && command !== "close") reason = "recordings are read-only; only recorded timeline navigation is available";
       else if (!controls) reason = "this browser is an observer; take control first";
       else if (!atLive && !physicalControl) {
@@ -904,7 +1041,7 @@ function updateControls() {
   document.querySelector('[data-command="pause"]').hidden = !playing;
   document.querySelector('[data-command="retry-step"]').hidden = !liveSnapshot?.fault?.retryable;
   const selectScenario = document.querySelector("#scenario-select");
-  selectScenario.disabled = pendingCommandRevision !== null || !controls || !atLive || !legal.has("select-scenario") || !document.querySelector("#scenario-select").value;
+  selectScenario.disabled = pendingCommandRevision !== null || pendingScenarioStep !== null || !controls || !atLive || !legal.has("select-scenario") || !document.querySelector("#scenario-select").value;
   selectScenario.title = selectScenario.disabled
     ? "Select scenario: unavailable until this controller returns to LIVE and selection is legal."
     : "Select the checked scenario";
@@ -914,6 +1051,40 @@ function updateControls() {
     ? "Back — no earlier recorded transition exists on this session."
     : "Back: view the previous recorded transition";
   document.querySelector("#take-control").hidden = controls;
+  updateScenarioGutter();
+}
+
+function updateScenarioGutter() {
+  const current = liveSnapshot?.scenario?.current;
+  const legal = liveSnapshot?.execution?.legal_commands || [];
+  for (const button of document.querySelectorAll(".source-scenario")) {
+    const active = current?.simulation === button.dataset.simulation && current?.scenario === button.dataset.scenario;
+    const label = `${button.dataset.simulation}.${button.dataset.scenario}`;
+    const action = active ? `Next transition in ${label}` : `Select ${label} and advance one transition`;
+    let reason = "";
+    if (liveSnapshot?.mode !== "simulate") reason = "recordings are read-only";
+    else if (!controls) reason = "this browser is an observer; take control first";
+    else if (pendingCommandRevision !== null || pendingScenarioStep !== null) reason = "a command is still pending";
+    else if (!sameTimelinePoint(currentSnapshot, liveSnapshot)) reason = "available in LIVE only; select Return live";
+    else if (!legal.includes(active ? "step" : "select-scenario")) reason = "not legal at the current execution state";
+    button.disabled = Boolean(reason);
+    button.dataset.active = String(active);
+    button.title = reason ? `${action}. Unavailable: ${reason}.` : action;
+    button.setAttribute("aria-label", button.title);
+  }
+}
+
+function stepScenario(location) {
+  updateScenarioGutter();
+  const button = [...document.querySelectorAll(".source-scenario")]
+    .find(button => button.dataset.simulation === location.simulation && button.dataset.scenario === location.scenario);
+  if (!button || button.disabled) return;
+  if (button.dataset.active === "true") document.querySelector("#step:not(:disabled)")?.click();
+  else {
+    pendingScenarioStep = { simulation: location.simulation, scenario: location.scenario,
+      session: Number(liveSnapshot.timeline.session), revision: liveSnapshot.revision };
+    selectScenario(location.simulation, location.scenario);
+  }
 }
 
 function renderFault(fault) {
@@ -2711,7 +2882,7 @@ installWorkspaceSplitter(document.querySelector("#details-pane"), document.query
 
 for (const button of document.querySelectorAll("button[data-command]")) {
   button.addEventListener("click", async () => {
-    if (pendingCommandRevision !== null) return;
+    if (pendingCommandRevision !== null || pendingScenarioStep !== null) return;
     const command = button.dataset.command;
     const session = Number(currentSnapshot?.timeline?.session || 0);
     const boundary = Number(currentSnapshot?.timeline?.boundary || 0);
@@ -2840,9 +3011,9 @@ document.querySelector("#show-older").addEventListener("click", () => {
   if (currentSnapshot) renderRelatedPanels(currentSnapshot);
 });
 document.querySelector("#scenario-status").addEventListener("click", inspectScenarioDefinition);
-document.querySelector("#scenario-select").addEventListener("change", async () => {
-  const [simulation, scenario] = document.querySelector("#scenario-select").value.split("\u0000");
+async function selectScenario(simulation, scenario) {
   try {
+    viewRequest += 1;
     clearPlaybackTimer();
     manualHistoricalView = false;
     bufferedPlayback = false;
@@ -2861,10 +3032,17 @@ document.querySelector("#scenario-select").addEventListener("change", async () =
     await post(`/api/command/select-scenario?simulation=${encodeURIComponent(simulation)}&scenario=${encodeURIComponent(scenario)}`);
     await refresh();
   } catch (error) {
+    pendingScenarioStep = null;
     pendingCommandRevision = null;
     updateControls();
     setCommandStatus(`Scenario selection refused: ${error.message}`);
   }
+}
+
+document.querySelector("#scenario-select").addEventListener("change", () => {
+  pendingScenarioStep = null;
+  const [simulation, scenario] = document.querySelector("#scenario-select").value.split("\u0000");
+  selectScenario(simulation, scenario);
 });
 
 const events = new EventSource("/api/events");
@@ -2873,6 +3051,7 @@ events.addEventListener("open", () => {
   if (!controls) claim().then(refresh).catch((error) => setCommandStatus(error.message));
 });
 events.onerror = () => {
+  pendingScenarioStep = null;
   text("role", "reconnecting");
   controls = false;
   updateControls();

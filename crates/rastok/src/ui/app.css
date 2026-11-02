@@ -351,9 +351,17 @@ tr.timeline-record:focus { outline: 1px solid var(--boundary); outline-offset: -
 .source-context { flex: 1 1 0; min-width: 0; padding: 0 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 10px var(--mono); color: var(--muted); }
 .source-context:has(#command-status:not([hidden])) #source-status { display: none; }
 #open-search { flex: 0 0 auto; }
-#source-code { flex: 1 1 auto; overflow: auto; min-height: 0; margin: 0; padding: 12px 0; tab-size: 2; font: 13px/1.65 var(--mono); background: var(--surface-soft); }
+#source-code { flex: 1 1 auto; overflow: auto; min-height: 0; margin: 0; padding: 12px 0; tab-size: 2; font: 13px/1.65 "Fira Code", var(--mono); font-variant-ligatures: common-ligatures contextual; font-feature-settings: "liga" 1, "calt" 1; background: var(--surface-soft); }
 #source-code .source-line { min-width: max-content; padding-right: 20px; }
-#source-code .source-line::before { position: sticky; left: 0; width: 7ch; padding-right: 1ch; margin-right: 12px; text-align: right; background: var(--surface-soft); border-right: 1px solid var(--hairline); user-select: none; }
+#source-code .source-line::before { content: none; }
+.source-gutter { position: sticky; z-index: 1; left: 0; display: inline-grid; grid-template-columns: 14px 4ch 18px calc(18px * var(--source-scenario-slots, 1)); align-items: center; height: 1.65em; padding-right: 4px; margin-right: 12px; background: var(--surface-soft); border-right: 1px solid var(--hairline); color: var(--muted); user-select: none; vertical-align: top; font-variant-ligatures: none; }
+.source-number { text-align: right; padding-right: 3px; }
+.source-marker { color: var(--boundary); font-size: 10px; text-align: center; }
+.source-gutter button { display: inline-grid; place-items: center; min-height: 0; width: 18px; height: 1.65em; padding: 0; border: 0; background: transparent; color: var(--muted); font: inherit; }
+.source-gutter button:hover, .source-gutter button:focus-visible { background: var(--boundary-soft); outline-offset: -1px; }
+.source-gutter .source-scenario { color: var(--boundary); font-size: 11px; }
+.source-scenario[data-active="true"] { background: var(--boundary-soft); }
+.source-fold-summary { padding: 0 4px; color: var(--muted); background: var(--surface-raised); user-select: none; }
 .syntax-keyword { color: var(--selection); font-weight: 600; }
 .syntax-string { color: var(--operator); }
 .syntax-number { color: var(--scope); }
@@ -364,7 +372,7 @@ tr.timeline-record:focus { outline: 1px solid var(--boundary); outline-offset: -
 
 #source-code .current-range { background: var(--boundary-soft); }
 #source-code .source-line.fired { border-left: 0; box-shadow: inset 2px 0 var(--boundary); }
-#source-code .current-position::before { content: "▶ " attr(data-line); color: var(--boundary); font-weight: 700; }
+#source-code .current-position .source-number { color: var(--boundary); font-weight: 700; }
 @media (prefers-reduced-motion: reduce) { #source-code { scroll-behavior: auto; } }
 
 [data-source-token][data-value-available="true"] { text-decoration: underline dotted var(--boundary); text-underline-offset: 3px; }

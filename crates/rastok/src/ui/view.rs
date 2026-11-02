@@ -880,6 +880,13 @@ pub fn scenario_definition_json(
                 "first_line": definition.first_line,
                 "code": definition.code,
                 "action_lines": definition.action_lines,
+                "scenario_locations": compilation.scenario_definitions.iter().map(|location| json!({
+                    "source_index": location.source.index(),
+                    "first_line": location.first_line,
+                    "last_line": location.first_line + location.code.lines().count().saturating_sub(1),
+                    "simulation": location.simulation,
+                    "scenario": location.scenario,
+                })).collect::<Vec<_>>(),
             })
         })
 }
@@ -1868,6 +1875,33 @@ mod tests {
     }
 
     #[test]
+    fn scenario_gutter_locations_keep_source_units_and_qualified_names() {
+        let graph = "graph echo : App { input in: text; output out: text; in -> out }";
+        let labs = [
+            "lab echo {\n simulation first on app {\n  scenario same {\n   app.in = \"first\"\n  }\n }\n}",
+            "lab echo {\n simulation second on app {\n  scenario same { app.in = \"second\" }\n }\n}",
+        ];
+        let compilation = crate::compiler::compile(
+            &[graph, labs[0], labs[1]],
+            &crate::connector::contract::ContractCatalog::try_m0().unwrap(),
+        )
+        .unwrap();
+        let value = super::scenario_definition_json(&compilation, "first", "same");
+        let locations = value["scenario_locations"].as_array().unwrap();
+        assert_eq!(locations.len(), 2);
+        assert_eq!(
+            locations[0],
+            json!({"source_index": 1, "first_line": 3, "last_line": 5, "simulation": "first", "scenario": "same"})
+        );
+        assert_eq!(
+            locations[1],
+            json!({"source_index": 2, "first_line": 3, "last_line": 3, "simulation": "second", "scenario": "same"})
+        );
+        assert_eq!(value["first_line"], 3);
+        assert!(value["code"].as_str().unwrap().starts_with("scenario same"));
+    }
+
+    #[test]
     fn scenario_source_never_bypasses_classified_data_redaction() {
         for annotation in ["@sensitive(level = restricted)", "@personal"] {
             let source = format!(
@@ -1888,6 +1922,7 @@ lab demo {{ simulation test on app {{ scenario classified {{
             let value = super::scenario_definition_json(&compilation, "test", "classified");
             assert_eq!(value["redacted"], true);
             assert!(value.get("code").is_none());
+            assert!(value.get("scenario_locations").is_none());
             assert!(!value.to_string().contains("private-scenario-literal"));
         }
     }

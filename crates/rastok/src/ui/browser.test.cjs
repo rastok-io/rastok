@@ -20,6 +20,198 @@ before(async () => {
 });
 after(async () => { await browser?.close(); });
 
+test('source regions fold with the keyboard and reveal the actual transition', { timeout: 60000 }, async t => {
+  const page = await openTour(t, { width: 1440, height: 760 }, 'examples/echo.rkg');
+  const fold = line => page.locator(`.source-line[data-line="${line}"] .source-fold`);
+  assert.equal(await fold(5).count(), 1, 'the graph has a folding control');
+  const commands = [];
+  page.on('request', request => { if (request.url().includes('/api/command/')) commands.push(new URL(request.url()).pathname); });
+  const typography = await page.locator('#source-code').evaluate(element => {
+    const style = getComputedStyle(element);
+    return { ligatures: style.fontVariantLigatures, features: style.fontFeatureSettings };
+  });
+  assert.match(typography.ligatures, /contextual/);
+  assert.match(typography.features, /"calt"(?: 1)?(?:,|$)/);
+  await fold(13).press('Space');
+  assert.equal(await fold(13).getAttribute('aria-expanded'), 'false');
+  assert.equal(await page.locator('.source-line[data-line="14"]').isVisible(), false);
+  await fold(5).press('Enter');
+  assert.equal(await page.locator('.source-line[data-line="13"]').isVisible(), false);
+  await capture(page, 'fold-echo-graph-dark');
+  await fold(5).press('Space');
+  assert.equal(await fold(13).getAttribute('aria-expanded'), 'false', 'nested folding survives expanding a parent');
+  await page.reload();
+  await page.locator('#step:enabled').waitFor();
+  assert.equal(await fold(13).getAttribute('aria-expanded'), 'false', 'folding survives a reload in this tab');
+  assert.deepEqual(commands, [], 'folding never sends an execution command');
+  await fold(5).click();
+  await page.locator('#step').click();
+  await page.waitForFunction(() => Number(currentSnapshot.timeline.boundary) === 1 && pendingCommandRevision === null);
+  assert.equal(await page.locator('#source-code [aria-current="step"]').isVisible(), true);
+  assert.equal(await fold(5).getAttribute('aria-expanded'), 'false', 'an unrelated fold stays closed');
+  await fold(24).click();
+  assert.equal(await page.locator('#source-code [aria-current="step"]').getAttribute('data-line'), '24', 'a folded region indicates a current transition inside it');
+  await page.locator('#step').click();
+  await page.waitForFunction(() => Number(currentSnapshot.timeline.boundary) === 2 && pendingCommandRevision === null);
+  assert.equal(await fold(5).getAttribute('aria-expanded'), 'true');
+  for (let remaining = 8; remaining > 0 && await page.evaluate(() => currentSnapshot.current_position.node_path !== 'relay'); remaining -= 1) {
+    const revision = await page.evaluate(() => currentSnapshot.revision);
+    await page.locator('#step').click();
+    await page.waitForFunction(previous => currentSnapshot.revision > previous && pendingCommandRevision === null, revision);
+  }
+  assert.equal(await page.evaluate(() => currentSnapshot.current_position.node_path), 'relay');
+  assert.equal(await fold(13).getAttribute('aria-expanded'), 'true', 'the transition reveals the nested operator');
+  await fold(5).click();
+  await page.locator('.graph-node-name').filter({ hasText: /^relay$/ }).click();
+  assert.equal(await fold(5).getAttribute('aria-expanded'), 'true', 'graph selection reveals its source definition');
+  await page.emulateMedia({ colorScheme: 'light', reducedMotion: 'reduce' });
+  await page.setViewportSize({ width: 1024, height: 760 });
+  await capture(page, 'fold-echo-marker-light');
+});
+
+test('scenario gutter selects a fresh session and advances exactly one transition', { timeout: 60000 }, async t => {
+  const page = await openTour(t, { width: 1440, height: 760 }, 'examples/echo.rkg');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const action = page.locator('.source-scenario[data-simulation="smoke"][data-scenario="filtered"]');
+  assert.equal(await action.count(), 1, 'scenario declarations have gutter actions');
+  const commands = [];
+  page.on('request', request => { if (request.url().includes('/api/command/')) commands.push(new URL(request.url()).pathname); });
+  await action.press('Enter');
+  await page.locator('#timeline-position').filter({ hasText: /^LIVE · Session 1 · transition 1$/ }).waitFor();
+  assert.equal(await page.locator('#scenario-select').inputValue(), 'smoke\u0000filtered');
+  assert.deepEqual(commands, ['/api/command/select-scenario', '/api/command/step']);
+  await capture(page, 'fold-echo-scenario-selected');
+  await action.press('Space');
+  await page.locator('#timeline-position').filter({ hasText: /^LIVE · Session 1 · transition 2$/ }).waitFor();
+  assert.deepEqual(commands, ['/api/command/select-scenario', '/api/command/step', '/api/command/step']);
+  await capture(page, 'fold-echo-scenario-step');
+  await seek(page, 1);
+  assert.equal(await action.isDisabled(), true, 'historical inspection cannot execute a scenario');
+  assert.deepEqual(commands, ['/api/command/select-scenario', '/api/command/step', '/api/command/step']);
+});
+
+test('fold regions ignore comment and string braces and preserve shared closing lines', { timeout: 60000 }, async t => {
+  const directory = await fs.mkdtemp(path.join(root, 'target/source-fold-browser-'));
+  t.after(() => fs.rm(directory, { recursive: true }));
+  const source = path.join(directory, 'fold.rkg');
+  await fs.writeFile(source, `// { unmatched comment brace
+graph fold : App {
+  input in: text; output out: text
+  operator relay {
+    on in { out = data }
+  } in -> relay -> out
+}
+lab fold { simulation smoke on app {
+  scenario first "a { label" {
+    app.in = "}"
+    expect app.out count == 1 // }
+  } scenario second { app.in = "{" }
+} }
+`);
+  const page = await openTour(t, undefined, source);
+  assert.deepEqual(await page.locator('button.source-fold').evaluateAll(buttons => buttons.map(button => Number(button.closest('[data-line]').dataset.line))), [2, 4, 8, 9]);
+  await page.getByRole('button', { name: 'Collapse block at line 4', exact: true }).click();
+  assert.equal(await page.locator('[data-line="5"]').isVisible(), false);
+  assert.equal(await page.locator('[data-line="6"]').isVisible(), true, 'the pipe following the closing brace stays visible');
+  await page.getByRole('button', { name: 'Collapse block at line 9', exact: true }).click();
+  assert.equal(await page.locator('[data-line="12"]').isVisible(), true, 'the next scenario on the closing line stays visible');
+  assert.equal(await page.locator('.source-scenario[data-scenario="second"]').isVisible(), true);
+  await capture(page, 'fold-shared-lines');
+});
+
+test('scenario gutter waits for the selected snapshot and ignores repeated activation', { timeout: 60000 }, async t => {
+  const page = await openTour(t, undefined, 'examples/echo.rkg');
+  const commands = [];
+  page.on('request', request => { if (request.url().includes('/api/command/')) commands.push(new URL(request.url()).pathname); });
+  let release;
+  let requested;
+  const started = new Promise(resolve => { requested = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  await page.route('**/api/snapshot', async route => {
+    const response = await route.fetch();
+    const snapshot = await response.json();
+    if (snapshot.timeline.session === 1 && Number(snapshot.timeline.boundary) === 0) {
+      requested();
+      await gate;
+    }
+    await route.fulfill({ response });
+  });
+  const action = page.locator('.source-scenario[data-scenario="filtered"]');
+  await action.click();
+  await started;
+  assert.equal(await action.isDisabled(), true);
+  assert.equal(await page.locator('#step').isDisabled(), true);
+  await action.dispatchEvent('click');
+  assert.deepEqual(commands, ['/api/command/select-scenario'], 'an acknowledgment does not authorize a step on the old snapshot');
+  release();
+  await page.locator('#timeline-position').filter({ hasText: /^LIVE · Session 1 · transition 1$/ }).waitFor();
+  assert.deepEqual(commands, ['/api/command/select-scenario', '/api/command/step']);
+});
+
+test('historical navigation cancels a pending scenario gutter step', { timeout: 60000 }, async t => {
+  const page = await openTour(t, undefined, 'examples/echo.rkg');
+  await page.locator('#step').click();
+  await page.locator('#timeline-position').filter({ hasText: /transition 1$/ }).waitFor();
+  const commands = [];
+  page.on('request', request => { if (request.url().includes('/api/command/')) commands.push(new URL(request.url()).pathname); });
+  let release;
+  let requested;
+  const started = new Promise(resolve => { requested = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  await page.route('**/api/snapshot', async route => {
+    const response = await route.fetch();
+    const snapshot = await response.json();
+    if (snapshot.timeline.session === 1) { requested(); await gate; }
+    await route.fulfill({ response });
+  });
+  await page.locator('.source-scenario[data-scenario="filtered"]').click();
+  await started;
+  await page.locator('#back-boundary').click();
+  await page.locator('#timeline-position').filter({ hasText: /Main · transition 0$/ }).waitFor();
+  release();
+  await page.waitForFunction(() => Number(liveSnapshot.timeline.session) === 1);
+  assert.deepEqual(commands, ['/api/command/select-scenario']);
+  assert.equal(await page.locator('#timeline').inputValue(), '0');
+  await page.locator('#return-live').click();
+  assert.match(await page.locator('#timeline-position').innerText(), /^LIVE · Session 1 · transition 0$/);
+});
+
+test('a refused scenario selection clears its pending gutter step', { timeout: 30000 }, async t => {
+  const page = await openTour(t, undefined, 'examples/echo.rkg');
+  const commands = [];
+  page.on('request', request => { if (request.url().includes('/api/command/')) commands.push(new URL(request.url()).pathname); });
+  // Exercise the real controller's refusal after accepting a queued command.
+  await page.route('**/api/command/select-scenario?*', route => {
+    const url = new URL(route.request().url());
+    url.searchParams.set('scenario', 'missing');
+    return route.continue({ url: url.toString() });
+  });
+  await page.locator('.source-scenario[data-scenario="filtered"]').click();
+  await page.locator('#fault-panel').waitFor();
+  await page.waitForFunction(() => pendingScenarioStep === null, null, { timeout: 3000 });
+  assert.equal(await page.locator('#scenario-select').isEnabled(), true, 'selection can be corrected without reloading');
+  assert.equal(await page.locator('#timeline').inputValue(), '0');
+  assert.deepEqual(commands, ['/api/command/select-scenario']);
+});
+
+test('an observer can fold source but cannot execute its scenario gutter actions', { timeout: 30000 }, async t => {
+  const page = await openTour(t, undefined, 'examples/echo.rkg');
+  const observer = await page.context().newPage();
+  const commands = [];
+  const errors = [];
+  observer.on('pageerror', error => errors.push(error.message));
+  observer.on('request', request => { if (request.url().includes('/api/command/')) commands.push(new URL(request.url()).pathname); });
+  await observer.goto(page.url());
+  await observer.locator('#role').filter({ hasText: /^observer$/ }).waitFor();
+  await observer.locator('.source-scenario').first().waitFor();
+  assert.equal(await observer.locator('.source-scenario').evaluateAll(buttons => buttons.every(button => button.disabled)), true);
+  await observer.locator('.source-scenario').first().dispatchEvent('click');
+  await observer.getByRole('button', { name: 'Collapse block at line 5', exact: true }).click();
+  assert.equal(await observer.locator('.source-line[data-line="13"]').isVisible(), false);
+  assert.deepEqual(commands, []);
+  assert.deepEqual(errors, []);
+});
+
 // The two-simultaneous-retries fixture pins intermediate transition regressions;
 // the public asymmetric gallery example is also exercised in the example matrix.
 async function openTour(t, viewport = { width: 1352, height: 760 }, source = "crates/rastok/tests/fixtures/ui-two-retries.rkg", commandArgs, environment = {}) {
@@ -316,6 +508,7 @@ test('the webhook gallery remains classified in LIVE, HISTORY and REPLAY without
     assert.ok(!snapshot.includes(credential), 'the physical secret never reaches the browser');
     assert.equal(await page.evaluate(() => Object.hasOwn(currentSnapshot, 'cost_report')), false);
     assert.equal(await page.locator('#cost').count(), 0);
+    assert.equal(await page.locator('.source-scenario').count(), 0, 'withheld scenario source has no gutter actions');
   };
   await assertClassified();
   await capture(page, 'webhook-B0');
@@ -362,6 +555,7 @@ test('a real recording is navigable without any execution command or Driver', { 
   const commands = [];
   page.on('request', request => { if (request.url().includes('/api/command/')) commands.push(request.url()); });
   assert.equal(await page.evaluate(() => currentSnapshot.mode), 'replay');
+  assert.equal(await page.locator('.source-scenario').count(), 0, 'recordings do not expose execution gutter actions');
   assert.match(await page.locator('#command-status').innerText(), /Recorded run.*read-only/);
   await page.locator('[data-source-view="0"]').click();
   assert.match(await page.locator('#source-status').innerText(), /recorded excerpts/);
