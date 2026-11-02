@@ -6,13 +6,15 @@ graph: examples/keyed-retry.rkg
 golden: examples/traces/two-tenants/ui_tour.two_tenants.trace
 command: rastok simulate examples/keyed-retry.rkg --compare examples/traces/two-tenants
 expected: Two scenarios pass; Bob completes in one attempt, Alice in two, and idle expiry opens a fresh generation.
-break_it: 'Change Retry.attempts = 2 to Retry.attempts = 1, then rerun without --save.'
+break_it: 'Change Retry.attempts = 2 to Retry.attempts = 1, then rerun against its reference traces.'
 limits:
   - An instance key isolates state; it does not deduplicate requests.
   - The Lab substitutes Process responses; no model or real agent is called.
   - Idle lifetime and Retry attempts are different bounds; restart durability is not provided.
 order: 3
 ---
+
+This program handles requests from two tenants independently, repeating Alice's timed-out request while Bob's completes.
 
 A file pipeline is easy to follow one request at a time. What happens when
 Alice's partner stalls while Bob's request is ready? This chapter adds
@@ -21,13 +23,31 @@ instance ownership and finite retry to the same graph-and-Lab model.
 The versioned goldens cover native Retry: the failed attempt remains visible
 in the journal, while only the final outcome reaches the graph.
 
+The [file formats](../guide/09-command-line.md#file-formats) are `.rkg` for
+the program and Lab, `.trace` for a reviewed scenario reference and `.rkrec`
+for a real execution recording.
+
 ## Run
+
+From the repository root, with `rastok` installed:
 
 ```sh
 rastok simulate examples/keyed-retry.rkg --compare examples/traces/two-tenants
 ```
 
+```text
+PASS ui_tour.two_tenants: Bob completes once; only Alice retries
+PASS ui_tour.lifetime: a quiet keyed instance closes and opens a fresh generation
+2 scenario(s), 0 failed
+```
+
 Add `--ui` to follow the same checked scenario in the debugger.
+
+```sh
+rastok simulate examples/keyed-retry.rkg --compare examples/traces/two-tenants --ui
+```
+
+This requires `hosted-ui`. Open the private loopback URL printed by the CLI.
 
 For the controls and source view, see [the debugger tour](../debugger.md).
 
@@ -37,10 +57,14 @@ Start with `instance = { key = data.tenant }`: it selects independent state
 for Alice and Bob. `Retry.attempts = 2` bounds Calls for one retained request,
 including the first; `lifetime` bounds how long an idle instance lives. They
 solve different problems.
-Then read `model : Process + Retry`: `Retry.on = [TimeoutExpired]` selects
+Then read `model : Process + Retry`, using the [Process contract](../reference/connectors/process.md): `Retry.on = [TimeoutExpired]` selects
 the terminal that permits another attempt. Retry retains the original request
 across attempts. `answer` decodes the final Process frame after the Retry
 manager has selected it. The nested `audit` Graph composes another branch.
+
+The [Lab reference](../reference/lab.md) explains mock responses, expectations
+and observation windows. `advance` supplies virtual time; a mock's terminal
+response ends its simulated exchange, not the whole scenario.
 
 ## Expected result
 
@@ -89,6 +113,30 @@ Change `Retry.attempts = 2` to `Retry.attempts = 1`. Alice can no longer be
 readmitted: her original `TimeoutExpired` reaches `failed`, and the assertion
 expecting Alice's answer fails. Bob still finishes once. There is no new
 `RetryExpired` error type.
+
+```sh
+rastok simulate examples/keyed-retry.rkg --compare examples/traces/two-tenants
+```
+
+```text
+FAIL ui_tour.two_tenants: Bob completes once; only Alice retries
+     expect app.done count == 1 where data.tenant == "alice"  (keyed-retry.rkg:102)
+     nothing observed
+     where data.tenant == "alice" is false for 0 of 0 deliveries; count 0, expected 1
+     expect answer.in count == 1 where data is Answer && data.tenant == "alice"  (keyed-retry.rkg:103)
+     nothing observed
+     where data is Answer && data.tenant == "alice" is false for 0 of 0 deliveries; count 0, expected 1
+     golden divergence: record 6: retry_protocol(43) . parent_id(2)[0][4]; expected e0091a67cd4992a8…(32 bytes); got 8783e6cca4a7d30f…(32 bytes); cause: TRANSACTION "model" · trigger "l:retry" · cause_id f3df1105112054d3…(16 bytes)
+FAIL ui_tour.lifetime: a quiet keyed instance closes and opens a fresh generation
+     golden divergence: record 6: retry_protocol(43) . parent_id(2)[0][4]; expected e0091a67cd4992a8…(32 bytes); got 8783e6cca4a7d30f…(32 bytes); cause: TRANSACTION "model" · trigger "l:retry" · cause_id f3df1105112054d3…(16 bytes)
+2 scenario(s), 2 failed
+```
+
+Restore the checked-in source (this discards your edits to this example):
+
+```sh
+git checkout -- examples/keyed-retry.rkg
+```
 
 ## Read the golden difference
 

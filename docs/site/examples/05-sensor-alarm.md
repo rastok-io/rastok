@@ -6,7 +6,7 @@ graph: examples/sensor-alarm.rkg
 golden: examples/traces/sensor-alarm/sensors.virtual_day.trace
 command: rastok simulate examples/sensor-alarm.rkg --compare examples/traces/sensor-alarm
 expected: Three scenarios pass; pump-a trips and clears, pump-b stays isolated, and one unanswered probe expires.
-break_it: 'Change data.value > 120 to data.value > 130, then rerun without --save.'
+break_it: 'Change data.value > 120 to data.value > 130, then rerun against its reference traces.'
 limits:
   - The Lab authors probes and heartbeats; there is no live sensor or periodic Driver here.
   - JoinExpired means an unmatched rendezvous; an unsolicited unmatched heartbeat can expire too.
@@ -14,15 +14,30 @@ limits:
 order: 5
 ---
 
+This program tracks each sensor's readings, emits alarm changes and reports a missing heartbeat.
+
 The partner example tested a response and a timeout. Now ask a harder
 question: how do you test silence? Keep state per sensor, distinguish a
 threshold crossing from noise, and make the waiting period an explicit input
 to your scenario.
 
+The [file formats](../guide/09-command-line.md#file-formats) are `.rkg` for
+the program and Lab, `.trace` for a reviewed scenario reference and `.rkrec`
+for a real execution recording.
+
 ## Run
+
+From the repository root, with `rastok` installed:
 
 ```sh
 rastok simulate examples/sensor-alarm.rkg --compare examples/traces/sensor-alarm
+```
+
+```text
+PASS sensors.hysteresis: separate thresholds and separate sensor states
+PASS sensors.silent_sensor: only the unanswered probe expires
+PASS sensors.virtual_day: twenty-four hours without waiting twenty-four hours
+3 scenario(s), 0 failed
 ```
 
 ## Read the program
@@ -33,6 +48,9 @@ join. A probe and heartbeat rendezvous within a bounded interval; a missing
 partner produces `JoinExpired`, whose route is as explicit as a normal output.
 Read `advance` in the Lab last: time comes from the scenario, not from sleeps
 hidden in the application.
+
+There is no Connector in this program. The [Lab reference](../reference/lab.md)
+explains expectations and observation windows; `advance` supplies virtual time.
 
 ## Expected result
 
@@ -74,6 +92,30 @@ ruby -e '3.times { t = Process.clock_gettime(Process::CLOCK_MONOTONIC); ok = sys
 Raise the trip threshold from 120 to 130. The sample at 121 no longer trips,
 and the original assertion and golden fail. Alternatively, remove the route
 from `watchdog.expired`: the checker refuses `E-UNWIRED-OUTPUT` before execution.
+
+```sh
+rastok simulate examples/sensor-alarm.rkg --compare examples/traces/sensor-alarm
+```
+
+```text
+FAIL sensors.hysteresis: separate thresholds and separate sensor states
+     expect app.alarm count == 1 where data.sensor == "pump-a" && data.state == "tripped"  (sensor-alarm.rkg:55)
+     nothing observed
+     where data.sensor == "pump-a" && data.state == "tripped" is false for 0 of 0 deliveries; count 0, expected 1
+     expect app.alarm count == 1 where data.state == "normal"  (sensor-alarm.rkg:61)
+     nothing observed
+     where data.state == "normal" is false for 0 of 0 deliveries; count 0, expected 1
+     golden divergence: record 3: emissions(23).len; expected 1; got 0; cause: TRANSACTION "hysteresis" · trigger "p:in" · cause_id absent
+PASS sensors.silent_sensor: only the unanswered probe expires
+PASS sensors.virtual_day: twenty-four hours without waiting twenty-four hours
+3 scenario(s), 1 failed
+```
+
+Restore the checked-in source (this discards your edits to this example):
+
+```sh
+git checkout -- examples/sensor-alarm.rkg
+```
 
 ## Read the golden difference
 

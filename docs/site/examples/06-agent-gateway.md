@@ -6,7 +6,7 @@ graph: examples/agent-gateway.rkg
 golden: examples/traces/agent-gateway/app_server.two_conversations.trace
 command: rastok simulate examples/agent-gateway.rkg --compare examples/traces/agent-gateway --ui
 expected: Two scenarios pass; Alice and Bob use separate children, streamed replies keep their socket address, and Bob continues after Alice closes.
-break_it: 'Change the scripted delta "Hello from the simulated agent." to "A different answer." and rerun with the gallery golden directory without --save.'
+break_it: 'Change the scripted delta "Hello from the simulated agent." to "A different answer." and rerun the complete comparison below.'
 limits:
   - The Lab uses explicit peer inputs, not a simulated WebSocket handshake; real socket composition is a separate local integration test.
   - Replies are scripted app-server examples, not a paid model invocation or complete protocol qualification.
@@ -16,13 +16,22 @@ limits:
 order: 6
 ---
 
+This program connects each conversation to its own resident process and routes its replies to the right client.
+
 The sensor chapter kept state while time passed. A conversation adds state
 outside the graph: the memory of a child process. Alice and Bob should each
 keep their own child across several turns. Ending Alice's child must not
 interrupt Bob, and sending a message must not be mistaken for receiving an
 answer.
 
+The [file formats](../guide/09-command-line.md#file-formats) are `.rkg` for
+the program and Lab, `.trace` for a reviewed scenario reference and `.rkrec`
+for a real execution recording.
+
 ## Run
+
+From the repository root, with `rastok` built with `hosted-ui` for the
+browser command (the non-browser command below does not need that feature):
 
 ```sh
 rastok simulate examples/agent-gateway.rkg --compare examples/traces/agent-gateway --ui
@@ -42,13 +51,19 @@ sections show counts and keep empty sections folded. For the reproducible CLI ch
 rastok simulate examples/agent-gateway.rkg --compare examples/traces/agent-gateway
 ```
 
+```text
+PASS app_server.two_conversations: same request ids, separate children and correctly addressed notifications
+PASS app_server.unknown_method: a protocol error is data, not a Process terminal
+2 scenario(s), 0 failed
+```
+
 For the controls and source view, see [the debugger tour](../debugger.md).
 
 ## Read the program
 
-Start at `clients.out`: each WebSocket message enters `conversation`, where
+Start at `clients.out` on the [WebSocketServer](../reference/connectors/websocket-server.md): each message enters `conversation`, where
 `instance = { key = meta.ext.session_id }` scopes its children. The first
-message opens `Process(mode = service)`; later messages write to the same
+message opens [Process](../reference/connectors/process.md) with `mode = service`; later messages write to the same
 child. Each `route_reply` instance remembers its socket address and restores
 it on that child's responses.
 
@@ -62,6 +77,10 @@ scenario's incoming messages.
 Follow `finish.out -> model.instance.stop` last. An authored `close` input
 requests that exact child generation's Closing, not every Process or the
 whole conversation Graph. Socket closure has its own `session_exit` output.
+
+The [Lab reference](../reference/lab.md) explains mock responses, expectations
+and observation windows. `advance` supplies virtual time; a mock's terminal
+response ends its simulated exchange, not the whole scenario.
 
 ## Expected result
 
@@ -118,13 +137,22 @@ CDN or generated bundle. Start with its scripted protocol:
 rastok simulate examples/agent-chat.rkg
 ```
 
+```text
+PASS browser_protocol.alice_and_bob: two names, two resident children; quitting Alice leaves Bob and the listeners alive
+PASS browser_protocol.duplicate_name: another socket cannot take Alice's process or quit it
+PASS browser_protocol.invalid_message: bad input and unsupported methods do not start a child
+3 scenario(s), 0 failed
+```
+
 Three scenarios cover interleaved conversations, a duplicate nickname and
 invalid messages. The same app-server handshake is now wrapped in
 `{ nickname, kind, rpc }`. `conversation` is keyed by the nickname and remembers
 its socket; a second socket cannot take that name or close its child. The Lab
 still enters through `peer`, without binding either network listener.
 
-For the real local application, install and configure Codex first. This
+For the real local application, use a macOS or Linux shell and install and
+configure Codex on PATH first. Live account-dependent output is not quoted
+here: the documented checks run only the Lab. This
 command **does launch real processes** when a client connects, and sending a
 message may use your configured model/account:
 
@@ -139,7 +167,7 @@ before enabling the next message. Model text is rendered literally, not as HTML.
 An unsupported server-initiated request is explicitly declined.
 
 The two flows share an App, not a transaction. `page` serves the embedded
-`asset(...)` through HttpServer; `clients` carries chat over WebSocket at
+`asset(...)` through [HttpServer](../reference/connectors/http-server.md); `clients` carries chat over WebSocket at
 `127.0.0.1:8778/chat`. Neither listener is inside the keyed conversation.
 The current cooperative Worker can keep serving the page and other children
 while external I/O waits; this does not claim parallel DSL execution.
@@ -177,9 +205,26 @@ not retry an inference that could be charged twice.
 ## Break it
 
 Change only `Hello from the simulated agent.` to `A different answer.` in
-the mock. Leave the golden unchanged and run the comparison command again.
+the mock. Leave the golden unchanged and run the comparison below.
 The graph still compiles, and the shape/count assertions still pass. The
 changed answer nevertheless differs in the recorded evidence.
+
+```sh
+rastok simulate examples/agent-gateway.rkg --compare examples/traces/agent-gateway
+```
+
+```text
+FAIL app_server.two_conversations: same request ids, separate children and correctly addressed notifications
+     golden divergence: record 51: envelope(8) . data(5)[1] (ccbor value)[1][1][1][1][0][1][1]; expected "Hello from the simulated agent."; got "A different answer."; cause: INGRESS "conversation.model" · port "out" · sequence 5
+PASS app_server.unknown_method: a protocol error is data, not a Process terminal
+2 scenario(s), 1 failed
+```
+
+Restore the checked-in source (this discards your edits to this example):
+
+```sh
+git checkout -- examples/agent-gateway.rkg
+```
 
 ## Read the golden difference
 

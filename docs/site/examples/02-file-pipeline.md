@@ -6,32 +6,52 @@ graph: examples/file-pipeline.rkg
 golden: examples/traces/file-pipeline/files.copy.trace
 command: rastok simulate examples/file-pipeline.rkg --compare examples/traces/file-pipeline
 expected: Four scenarios pass; eleven ASCII bytes or three UTF-8 bytes reach the writer, while empty inputs and directory refusals never do.
-break_it: 'Change size(data) > 0 to size(data) > 20, then rerun the command without --save.'
+break_it: 'Change size(data) > 0 to size(data) > 20, then rerun the command against its reference traces.'
 limits:
   - Replacement is atomic for one file, not a transaction over multiple files.
   - The deployment root is explicit; directory operations and watch are not supported.
 order: 2
 ---
 
+This program reads a file, counts its bytes and copies nonempty content to another file.
+
 Echo separated computation from the world. Now the world contains files you
 could overwrite. How do you make the permitted operation, its limits and its
 refusals visible before the flow runs?
 
+The [file formats](../guide/09-command-line.md#file-formats) are `.rkg` for
+the program and Lab, `.trace` for a reviewed scenario reference and `.rkrec`
+for a real execution recording.
+
 ## Run
+
+From the repository root, with `rastok` installed:
 
 ```sh
 rastok simulate examples/file-pipeline.rkg --compare examples/traces/file-pipeline
+```
+
+```text
+PASS files.copy: two lines, eleven bytes, one atomic replacement
+PASS files.empty: empty input never overwrites the target
+PASS files.utf8: one UTF-8 line is three bytes, not two characters
+PASS files.directory: a directory is refused by name
+4 scenario(s), 0 failed
 ```
 
 For the controls and source view, see [the debugger tour](../debugger.md).
 
 ## Read the program
 
-Find the two `File` Connectors: one reads, one replaces. Their modes describe
+Find the two [File](../reference/connectors/file.md) Connectors: one reads, one replaces. Their modes describe
 different operations under the same Contract. Between them, the Operator
 decides whether the bytes should continue. Follow the `exit` routes too:
 a refused read has a destination, rather than disappearing into a log.
 The Lab replaces both file operations, using the same resolved port types.
+
+The [Lab reference](../reference/lab.md) explains mock responses, expectations
+and observation windows. `advance` supplies virtual time; a mock's terminal
+response ends its simulated exchange, not the whole scenario.
 
 ## Expected result
 
@@ -63,7 +83,9 @@ not overwrite the target. A directory produces `NotAFile`, routed to `failed`.
 The `utf8` scenario counts `é\n` as three bytes, not two characters: the
 reader's `bytes` port determines how the value is read.
 
-To exercise real disk I/O, use a new temporary directory:
+To exercise real disk I/O, use a macOS or Linux shell with `mktemp`, `printf`
+and `cmp` on PATH. This creates a new temporary directory; both file operations
+are confined to that directory, and the recording uses an unused path:
 
 ```sh
 demo_root=$(mktemp -d)
@@ -74,14 +96,61 @@ printf 'changed after recording\n' > "$demo_root/input.txt"
 rastok replay "$demo_root/copy.rkrec"
 ```
 
+The run printed:
+
+```text
+bytes_read: Materialized(Int(11))
+recorded: 12 causal records · seal bfa1df6bc5ab7eaeb42419aa0203af9b5350ee0e4252f96ed4fcb2c4159f7977
+```
+
+`cmp` exited successfully without output. After changing the input file,
+replay printed:
+
+```text
+replay: 12 causal records · seal bfa1df6bc5ab7eaeb42419aa0203af9b5350ee0e4252f96ed4fcb2c4159f7977 · completed recording · no Driver I/O
+bytes_read: Materialized(Int(11))
+```
+
 Replay prints the same recorded output and seal without reading or replacing
 either file. It does not restore the disk to its earlier contents. Use
-`replay "$demo_root/copy.rkrec" --ui` to inspect the recorded history.
+`rastok replay "$demo_root/copy.rkrec" --ui` to inspect the recorded history.
 
 ## Break it
 
 Change `size(data) > 0` to `size(data) > 20`. The eleven-byte example is now
-rejected and the writer receives nothing. Rerun without `--save`.
+rejected and the writer receives nothing. Run the comparison below.
+
+```sh
+rastok simulate examples/file-pipeline.rkg --compare examples/traces/file-pipeline
+```
+
+```text
+FAIL files.copy: two lines, eleven bytes, one atomic replacement
+     expect app.bytes_read count == 1 where data == 11  (file-pipeline.rkg:63)
+     nothing observed
+     where data == 11 is false for 0 of 0 deliveries; count 0, expected 1
+     expect write_file.in count == 1 where size(data) == 11  (file-pipeline.rkg:64)
+     nothing observed
+     where size(data) == 11 is false for 0 of 0 deliveries; count 0, expected 1
+     golden divergence: record 7: emissions(23)[0][0]; expected "bytes_read"; got "empty"; cause: TRANSACTION "inspect" · trigger "p:in" · cause_id absent
+PASS files.empty: empty input never overwrites the target
+FAIL files.utf8: one UTF-8 line is three bytes, not two characters
+     expect app.bytes_read count == 1 where data == 3  (file-pipeline.rkg:76)
+     nothing observed
+     where data == 3 is false for 0 of 0 deliveries; count 0, expected 1
+     expect write_file.in count == 1 where size(data) == 3  (file-pipeline.rkg:77)
+     nothing observed
+     where size(data) == 3 is false for 0 of 0 deliveries; count 0, expected 1
+     golden divergence: record 7: emissions(23)[0][0]; expected "bytes_read"; got "empty"; cause: TRANSACTION "inspect" · trigger "p:in" · cause_id absent
+PASS files.directory: a directory is refused by name
+4 scenario(s), 2 failed
+```
+
+Restore the checked-in source (this discards your edits to this example):
+
+```sh
+git checkout -- examples/file-pipeline.rkg
+```
 
 ## Read the golden difference
 

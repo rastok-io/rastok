@@ -15,10 +15,16 @@ limits:
 order: 8
 ---
 
+This program sends a model request and keeps the response's reported usage with its job and session.
+
 A bounded loop tells you how much work may repeat. At a model boundary,
 another question matters: what usage did the partner actually report?
 Keep that evidence on the original typed response, without turning an absent
 field into a zero or counting a downstream copy again.
+
+The [file formats](../guide/09-command-line.md#file-formats) are `.rkg` for
+the program and Lab, `.trace` for a reviewed scenario reference and `.rkrec`
+for a real execution recording.
 
 ## Run
 
@@ -29,7 +35,23 @@ From the repository root, use the synthetic fixture bindings and the checked
 RASTOK_SHOWCASE_MODEL_TOKEN=lab-only-not-a-credential RASTOK_SHOWCASE_MODEL_TOKEN_VERSION=fixture-v1 rastok simulate examples/agent-http.rkg --deployment examples/agent-http.deployment.json --compare examples/traces/agent-http
 ```
 
-Add `--ui` for the paused debugger. The Lab never contacts the profile's
+```text
+PASS responses.two_sessions: three jobs keep their session and original measured response
+PASS responses.missing_usage: absent or null wire usage supplies no sample
+PASS responses.observed_zero: reported zero is evidence, not missing usage
+PASS responses.schema_failure: a mistyped response has no partially retained DATA
+PASS responses.transport_failure: a timeout neither invents usage nor repeats inference
+PASS responses.http_errors: decoding precedes the 5xx terminal classification
+6 scenario(s), 0 failed
+```
+
+Add `--ui` for the paused debugger.
+
+```sh
+RASTOK_SHOWCASE_MODEL_TOKEN=lab-only-not-a-credential RASTOK_SHOWCASE_MODEL_TOKEN_VERSION=fixture-v1 rastok simulate examples/agent-http.rkg --deployment examples/agent-http.deployment.json --compare examples/traces/agent-http --ui
+```
+
+This requires `hosted-ui`. Open the private loopback URL printed by the CLI. The Lab never contacts the profile's
 configured model URL. These fixture values are not credentials.
 
 For the controls and source view, see [the debugger tour](../debugger.md).
@@ -41,7 +63,7 @@ original quantities with `@measure(id = ..., unit = "token")`. The latter
 is an explicit selected view of an external JSON object: response identity,
 output, status, usage and error.
 
-The `model` Connector refines its existing port with `output out: ModelResponse`.
+The `model` [HttpClient](../reference/connectors/http-client.md) refines its existing port with `output out: ModelResponse`.
 Under `codec = json` and `json_profile = projected`, deserialization keeps
 declared members, omits additional members and turns an absent nullable
 member into null. A member with the wrong type still produces `DecodeFailed`.
@@ -56,6 +78,10 @@ The bearer is a logical `secret("showcase/model/token")` reference. Its value
 is bound at boot and supplied only at the real HttpClient Driver boundary.
 `behavior = probabilistic` describes the partner's outputs. It does not mean
 that repeating a request is safe: there is no Retry on this inference.
+
+The [Lab reference](../reference/lab.md) explains mock responses, expectations
+and observation windows. `advance` supplies virtual time; a mock's terminal
+response ends its simulated exchange, not the whole scenario.
 
 ## Expected result
 
@@ -77,9 +103,30 @@ fixture; the graph invents neither a monetary amount nor a missing quantity.
 ## Break it
 
 In the `simulated_message` constant, change `Hello from the simulated model.`
-to `A different model answer.`. Keep the expected trace unchanged and rerun
-the comparison command. The counts still match, but `responses.two_sessions`
+to `A different model answer.`. Keep the expected trace unchanged and run
+the comparison below. The counts still match, but `responses.two_sessions`
 fails its golden comparison. The other five scenarios still pass.
+
+```sh
+RASTOK_SHOWCASE_MODEL_TOKEN=lab-only-not-a-credential RASTOK_SHOWCASE_MODEL_TOKEN_VERSION=fixture-v1 rastok simulate examples/agent-http.rkg --deployment examples/agent-http.deployment.json --compare examples/traces/agent-http
+```
+
+```text
+FAIL responses.two_sessions: three jobs keep their session and original measured response
+     golden divergence: record 6: closure(32)[1][0][1][1]; expected 820f868265657272…(399 bytes); got 820f868265657272…(393 bytes); cause: EGRESS "model" · emitting_id 7c6e92c8de6b86d2…(16 bytes) · call_key absent
+PASS responses.missing_usage: absent or null wire usage supplies no sample
+PASS responses.observed_zero: reported zero is evidence, not missing usage
+PASS responses.schema_failure: a mistyped response has no partially retained DATA
+PASS responses.transport_failure: a timeout neither invents usage nor repeats inference
+PASS responses.http_errors: decoding precedes the 5xx terminal classification
+6 scenario(s), 1 failed
+```
+
+Restore the checked-in source (this discards your edits to this example):
+
+```sh
+git checkout -- examples/agent-http.rkg
+```
 
 ## Read the golden difference
 

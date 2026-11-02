@@ -13,17 +13,37 @@ limits:
 order: 7
 ---
 
+This program counts down from an integer and emits one final message.
+
 A conversation keeps a resource alive until closure. A countdown asks the
 opposite question: can the program prove that repeated work will finish?
 The answer is written beside the Operator, without a backwards graph edge.
 
+The [file formats](../guide/09-command-line.md#file-formats) are `.rkg` for
+the program and Lab, `.trace` for a reviewed scenario reference and `.rkrec`
+for a real execution recording.
+
 ## Run
+
+From the repository root, with `rastok` installed:
 
 ```sh
 rastok simulate examples/countdown.rkg --compare examples/traces/countdown
 ```
 
+```text
+PASS proof.positive: three recurrences, then one result
+PASS proof.already_finished: a nonpositive input needs no recurrence
+2 scenario(s), 0 failed
+```
+
 Add `--ui` to inspect each admitted application and its manager transition.
+
+```sh
+rastok simulate examples/countdown.rkg --compare examples/traces/countdown --ui
+```
+
+This requires `hosted-ui`. Open the private loopback URL printed by the CLI.
 
 For the controls and source view, see [the debugger tour](../debugger.md).
 
@@ -45,6 +65,9 @@ With an explicit fuel bound, possible exhaustion instead produces
 `LoopExpired { last_state: EntryType }` on the host's declared terminal,
 normally `err` for an Operator or `exit` for a Call. It must have a destination.
 Loop never adds a synthetic expiry port. See `docs/spec/loop.md` §§8 and 10.
+
+There is no Connector in this program. The [Lab reference](../reference/lab.md)
+explains expectations and observation windows; `advance` supplies virtual time.
 
 ## Expected result
 
@@ -71,8 +94,38 @@ The checker reports exactly:
 error[E-LOOP]: this Loop cannot be proved finite: the Loop measure is outside the supported direct integer-path fragment
 ```
 
-Restore the measure. For a runtime comparison, change only the Operator's
-`out = "liftoff"` to `out = "changed"` and rerun the original comparison.
+Restore the measure before trying the next edit (this discards edits to the example):
+
+```sh
+git checkout -- examples/countdown.rkg
+```
+
+For a runtime comparison, change only the Operator's
+`out = "liftoff"` to `out = "changed"` and run the complete comparison below.
+
+```sh
+rastok simulate examples/countdown.rkg --compare examples/traces/countdown
+```
+
+```text
+FAIL proof.positive: three recurrences, then one result
+     expect app.out count == 1 where data == "liftoff"  (countdown.rkg:25)
+     observed app.out: "changed"
+     where data == "liftoff" is false for 1 of 1 deliveries; count 0, expected 1
+     golden divergence: record 14: emissions(23)[0][2] . data(5)[1] (ccbor value)[1]; expected "liftoff"; got "changed"; cause: TRANSACTION "count" · trigger "p:in" · cause_id absent
+FAIL proof.already_finished: a nonpositive input needs no recurrence
+     expect app.out count == 1 where data == "liftoff"  (countdown.rkg:29)
+     observed app.out: "changed"
+     where data == "liftoff" is false for 1 of 1 deliveries; count 0, expected 1
+     golden divergence: record 5: emissions(23)[0][2] . data(5)[1] (ccbor value)[1]; expected "liftoff"; got "changed"; cause: TRANSACTION "count" · trigger "p:in" · cause_id absent
+2 scenario(s), 2 failed
+```
+
+Restore the checked-in source (this discards your edits to this example):
+
+```sh
+git checkout -- examples/countdown.rkg
+```
 
 ## Read the golden difference
 
