@@ -70,6 +70,162 @@ pub(super) fn units(
     }).collect::<Vec<_>>())
 }
 
+pub(super) fn position(
+    snapshot: &JsonValue,
+    definitions: &[SourceDefinition],
+    sources: &[SourceUnit],
+    activity: Option<&ActivityView>,
+    journal: &MemJournal,
+) -> JsonValue {
+    let unavailable = |reason| {
+        json!({"status": "unavailable", "reason": reason,
+        "source_index": null, "first_line": null, "last_line": null, "column": null,
+        "node_path": null, "port": null, "selected_arm": null, "fired_lines": []})
+    };
+    let Some(activity) = activity else {
+        return unavailable("No transition selected before admission.");
+    };
+    if activity.kind == "scenario-action" {
+        let current = &snapshot["scenario"]["current"];
+        let definition = &current["definition"];
+        let action = current["next_action_index"]
+            .as_u64()
+            .unwrap_or(0)
+            .saturating_sub(1) as usize;
+        if let (Some(first), Some(relative)) = (
+            definition["first_line"].as_u64(),
+            definition["action_lines"][action].as_u64(),
+        ) {
+            return json!({"status": "available", "reason": null, "source_index": definition["source_index"],
+                "first_line": first + relative - 1, "last_line": first + relative - 1,
+                "column": null, "node_path": null, "port": null, "selected_arm": null, "fired_lines": []});
+        }
+    }
+    let record = activity.records.and_then(|(from, through)| {
+        journal
+            .records()
+            .get(from..=through)?
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, record)| matches!(record, Record::Transaction(_)))
+            .or_else(|| {
+                journal
+                    .records()
+                    .get(from..=through)?
+                    .iter()
+                    .enumerate()
+                    .next_back()
+            })
+            .map(|(offset, record)| (from + offset, record))
+    });
+    let (owner, port) = match record.map(|(_, record)| record) {
+        Some(Record::Transaction(tx)) => (
+            Some(tx.owner_path.to_string()),
+            match &tx.trigger {
+                crate::node::Trigger::Port(port) => Some(port.name().to_owned()),
+                _ => None,
+            },
+        ),
+        Some(Record::Ingress(root)) => (
+            Some(
+                root.connector_path
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_default(),
+            ),
+            Some(root.port.name().to_owned()),
+        ),
+        _ => (activity.node.clone(), None),
+    };
+    let Some(definition) = definitions
+        .iter()
+        .find(|definition| Some(definition.owner.to_string()) == owner)
+    else {
+        return unavailable(
+            "This system, mock or synthetic transition has no retained authored source.",
+        );
+    };
+    let mut first = definition.first_line;
+    let mut last = definition.last_line;
+    let mut column = None;
+    let source = sources
+        .iter()
+        .find(|source| source.index == definition.source.index());
+    if let Some(port) = &port {
+        // Use the existing lexer; comments and literals cannot masquerade as ports.
+        let mut lexer = crate::compiler::lexer::Lexer::new(definition.source, &definition.code);
+        let mut bag = crate::diagnostics::Bag::new();
+        let mut declaration = false;
+        loop {
+            let token = lexer.next(&mut bag);
+            if token.kind == crate::compiler::lexer::TokenKind::Eof {
+                break;
+            }
+            if declaration && token.text == port {
+                first += definition.code[..token.span.range().start]
+                    .bytes()
+                    .filter(|byte| *byte == b'\n')
+                    .count();
+                last = first;
+                break;
+            }
+            declaration = matches!(token.text, "input" | "output");
+        }
+    }
+    let decision = record.map(|(index, _)| &snapshot["history"]["records"][index]["decision"]);
+    let mut selected_arm = JsonValue::Null;
+    let mut fired = BTreeSet::new();
+    if let Some(decision) = decision {
+        let mut arms = definition
+            .decisions
+            .iter()
+            .find(|(trigger, _)| Some(trigger.as_str()) == decision["trigger"].as_str())
+            .map(|(_, arms)| arms.as_slice())
+            .unwrap_or(&[]);
+        for step in decision["steps"].as_array().into_iter().flatten() {
+            let selected = if step["kind"] == "closed" {
+                arms.iter()
+                    .enumerate()
+                    .find(|(_, arm)| {
+                        arm.cases
+                            .iter()
+                            .any(|case| Some(case.as_str()) == step["case"].as_str())
+                    })
+                    .or_else(|| arms.iter().enumerate().find(|(_, arm)| arm.fallback))
+            } else if let Some(index) = step["selected"].as_u64() {
+                arms.iter()
+                    .enumerate()
+                    .filter(|(_, arm)| !arm.fallback)
+                    .nth(index as usize)
+            } else {
+                arms.iter().enumerate().find(|(_, arm)| arm.fallback)
+            };
+            let Some((index, arm)) = selected else {
+                break;
+            };
+            (first, last) = arm.lines;
+            selected_arm = json!({"index": index, "first_line": first, "last_line": last});
+            for line in first..=last {
+                if !arm
+                    .children
+                    .iter()
+                    .any(|child| (child.lines.0..=child.lines.1).contains(&line))
+                {
+                    fired.insert(line);
+                }
+            }
+            arms = &arm.children;
+        }
+    }
+    if let Some(line) = source.and_then(|source| source.text.lines().nth(first.saturating_sub(1))) {
+        column = Some(line.chars().take_while(|ch| ch.is_whitespace()).count() + 1);
+    }
+    json!({"status": "available", "reason": null, "source_index": definition.source.index(),
+        "first_line": first, "last_line": last, "column": column,
+        "node_path": owner, "port": port, "selected_arm": selected_arm, "fired_lines": fired})
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -82,6 +238,143 @@ mod tests {
         .unwrap()
     }
 
+    use crate::deployment::{
+        BootBindings, DeploymentProfile, EnvironmentName, PolicyName, PrivacyDeclaration,
+        PrivacyDeclarationName, PrivacyRetention, RecipientPolicy, SecretBinding, SecretMaterial,
+        SecretName, SecretProvider, SecretProviderError, SecretProviderId, SecretVersion,
+        TransferPolicy,
+    };
+    struct FixtureSecrets;
+    impl SecretProvider for FixtureSecrets {
+        fn resolve(&self, _: &SecretBinding) -> Result<SecretMaterial, SecretProviderError> {
+            SecretMaterial::new(vec![42; 16])
+        }
+    }
+    fn showcase_boot(with_privacy: bool) -> BootBindings {
+        let policy = |name| PolicyName::new(name).unwrap();
+        let privacy = with_privacy.then(|| {
+            PrivacyDeclaration::new(
+                PrivacyDeclarationName::new("privacy.example/showcase-webhook@1").unwrap(),
+                policy("showcase/fictional-webhook"),
+                vec![policy("purpose/local-synthetic-demonstration")],
+                vec![policy("basis/synthetic-fixture-not-production-authority")],
+                None,
+                None,
+                RecipientPolicy::Classes(vec![policy("recipient/simulated-partner")]),
+                TransferPolicy::None,
+                PrivacyRetention::RunScoped,
+            )
+            .unwrap()
+        });
+        let reference = SecretName::new("showcase/partner/token").unwrap();
+        BootBindings::resolve(
+            DeploymentProfile::new(
+                BTreeMap::from([(
+                    EnvironmentName::new("PARTNER_URL").unwrap(),
+                    Value::Text("https://partner.example.test/events/upsert".into()),
+                )]),
+                BTreeMap::from([(
+                    reference.clone(),
+                    SecretBinding::new(
+                        reference,
+                        SecretProviderId::new("test.local/test@1").unwrap(),
+                        "fixture-token",
+                        SecretVersion::new("fixture-v1").unwrap(),
+                    )
+                    .unwrap(),
+                )]),
+                privacy,
+            )
+            .unwrap(),
+            &FixtureSecrets,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn gallery_positions_follow_each_retained_prefix() {
+        let boot = showcase_boot(true);
+        for source in [
+            include_str!("../../../../../examples/echo.rkg"),
+            include_str!("../../../../../examples/countdown.rkg"),
+            include_str!("../../../../../examples/webhook-to-partner.rkg"),
+        ] {
+            let compilation = compile(&[source]);
+            let simulation = &compilation.labs[0].simulations[0];
+            let scenario = simulation
+                .scenarios
+                .iter()
+                .find(|scenario| scenario.name == "timeout_then_success")
+                .unwrap_or(&simulation.scenarios[0]);
+            let mut session = crate::lab::Simulator::try_new_program(
+                &compilation.plan,
+                compilation.hash,
+                crate::plan::GraphVersion(1),
+                &simulation.name,
+                &simulation.mocks,
+                scenario,
+                Some(&boot),
+            )
+            .unwrap();
+            let mut positions = Vec::new();
+            let mut activity = None;
+            for boundary in 0..500 {
+                let view = super::super::snapshot(SnapshotInput {
+                    revision: boundary,
+                    mode: "simulate",
+                    state: ExecutionState::Paused,
+                    plan: &compilation.plan,
+                    definitions: &compilation.source_definitions,
+                    sources: &compilation.sources,
+                    execution: session.execution(),
+                    journal: session.journal(),
+                    activity: activity.as_ref(),
+                    fault: None,
+                    scenario: None,
+                    session: 0,
+                    boundary,
+                })
+                .unwrap();
+                let frame: JsonValue = serde_json::from_slice(&view.json).unwrap();
+                let position = frame["current_position"].clone();
+                assert!(position.get("status").is_some());
+                if position["status"] == "available" {
+                    assert_eq!(position["source_index"], 0);
+                    let first = position["first_line"].as_u64().unwrap();
+                    let last = position["last_line"].as_u64().unwrap();
+                    assert!(first > 0 && first <= last && last <= source.lines().count() as u64);
+                }
+                positions.push(position);
+                if session.is_complete() {
+                    break;
+                }
+                let before = session.journal().records().len();
+                if session.is_quiescent() {
+                    session.next_action().unwrap();
+                } else {
+                    session.step_transaction().unwrap();
+                }
+                activity =
+                    ActivityView::journal_change(session.journal(), before, Some(boundary + 1));
+            }
+            assert!(session.is_complete());
+            assert_eq!(positions[0]["status"], "unavailable");
+            assert!(
+                positions
+                    .iter()
+                    .any(|position| position["port"].is_string())
+            );
+            if source.contains("graph countdown") {
+                assert!(
+                    positions
+                        .iter()
+                        .any(|position| !position["selected_arm"].is_null())
+                );
+            }
+            // Earlier serialized positions remain independent of the completed head.
+            assert_eq!(positions[0]["first_line"], JsonValue::Null);
+        }
+    }
     #[test]
     fn source_units_preserve_full_text_and_indexes_once() {
         let graph = "// header\ngraph echo : App { input in: text; output out: text; in -> out }\n";

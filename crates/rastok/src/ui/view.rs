@@ -284,7 +284,7 @@ pub fn snapshot(input: SnapshotInput<'_>) -> Result<UiSnapshot, serde_json::Erro
     let retry_operations = retry::operations(execution, journal.records());
     let mut future = explanation::future(&inspection, journal.records());
     retry::append_future(&mut future, &retry_operations);
-    let value = json!({
+    let mut value = json!({
         "sources": source::units(plan, sources, definitions),
         "revision": revision,
         "mode": mode,
@@ -321,6 +321,7 @@ pub fn snapshot(input: SnapshotInput<'_>) -> Result<UiSnapshot, serde_json::Erro
             "commit": fault.commit,
         })),
     });
+    value["current_position"] = source::position(&value, definitions, sources, activity, journal);
     UiSnapshot::new(revision, &value)
 }
 
