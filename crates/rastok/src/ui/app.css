@@ -367,3 +367,10 @@ tr.timeline-record:focus { outline: 1px solid var(--boundary); outline-offset: -
 #source-code .source-line.fired { border-left: 0; box-shadow: inset 2px 0 var(--boundary); }
 #source-code .current-position::before { content: "▶ " attr(data-line); color: var(--boundary); font-weight: 700; }
 @media (prefers-reduced-motion: reduce) { #source-code { scroll-behavior: auto; } }
+
+[data-source-token] { cursor: help; border-radius: 2px; }
+[data-source-token]:hover, [data-source-token]:focus-visible { background: var(--boundary-soft); outline: 1px solid var(--boundary); outline-offset: 1px; }
+#source-tooltip { position: fixed; z-index: 100; width: 360px; max-width: calc(100vw - 16px); max-height: 60vh; overflow: auto; padding: 12px; border: 1px solid var(--hairline-strong); background: var(--surface-raised); color: var(--text); box-shadow: 0 5px 20px #0004; }
+#source-tooltip pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0; font: 12px/1.5 var(--mono); }
+#source-tooltip a { color: var(--boundary); }
+#source-tooltip a:focus-visible { outline: 1px solid var(--boundary); }

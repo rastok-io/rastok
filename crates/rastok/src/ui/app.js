@@ -39,6 +39,9 @@ let activeSourceView = sessionStorage.getItem("rastok-source-view") || null;
 let lastSourcePoint = null;
 const sourceScroll = new Map();
 const sourceValues = new Map();
+let sourceTooltipAnchor = null;
+let sourceTooltipTimer = null;
+let dismissingSourceTooltip = false;
 const graphViewport = { scale: 1, x: 0, y: 0 };
 
 const COMMAND_HINTS = Object.freeze({
@@ -240,6 +243,8 @@ function renderSource(snapshot) {
   const pane = document.querySelector("#source-code");
   const previousScroll = pane.dataset.sourceIndex === activeSourceView ? [pane.scrollLeft, pane.scrollTop] : sourceScroll.get(activeSourceView) || [0, 0];
   pane.dataset.sourceIndex = activeSourceView;
+  const focusKey = pane.contains(document.activeElement) ? document.activeElement.dataset.sourceToken : null;
+  hideSourceTooltip();
   pane.replaceChildren();
   sourceValues.clear();
   const tokens = (snapshot.source_tokens || []).filter(token => token.source_index === source.index);
@@ -270,6 +275,12 @@ function renderSource(snapshot) {
       if (token.value) {
         const key = `${token.source_index}:${token.line}:${token.column}`;
         span.dataset.sourceToken = key;
+        span.tabIndex = 0;
+        span.setAttribute("aria-label", `${token.name}: ${token.value.kind}`);
+        span.addEventListener("mouseenter", () => showSourceTooltip(span));
+        span.addEventListener("focus", () => { if (!dismissingSourceTooltip) showSourceTooltip(span); });
+        span.addEventListener("mouseleave", scheduleSourceTooltipClose);
+        span.addEventListener("blur", scheduleSourceTooltipClose);
         sourceValues.set(key, token);
       }
       line.append(span);
@@ -285,6 +296,7 @@ function renderSource(snapshot) {
     ? `Transition ${snapshot.timeline.boundary} · ${position.node_path || "App"}${position.port ? `.${position.port}` : ""} · line ${position.first_line}`
     : position?.reason || "Read-only source") + policy);
   if (advanced) scrollSourceLine(position?.source_index === source.index ? position.first_line : null);
+  if (focusKey) pane.querySelector(`[data-source-token="${CSS.escape(focusKey)}"]`)?.focus({ preventScroll: true });
 }
 
 function scrollSourceLine(number) {
@@ -299,6 +311,80 @@ function scrollSourceLine(number) {
       behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
   }
 }
+
+function hideSourceTooltip() {
+  clearTimeout(sourceTooltipTimer);
+  document.querySelector("#source-tooltip").hidden = true;
+  sourceTooltipAnchor?.removeAttribute("aria-describedby");
+  sourceTooltipAnchor = null;
+}
+
+function scheduleSourceTooltipClose() {
+  clearTimeout(sourceTooltipTimer);
+  sourceTooltipTimer = setTimeout(() => {
+    const tooltip = document.querySelector("#source-tooltip");
+    if (!tooltip.matches(":hover") && !tooltip.contains(document.activeElement)
+        && sourceTooltipAnchor !== document.activeElement && !sourceTooltipAnchor?.matches(":hover")) hideSourceTooltip();
+  }, 150);
+}
+
+function showSourceTooltip(anchor) {
+  const token = sourceValues.get(anchor.dataset.sourceToken);
+  if (!token) return;
+  hideSourceTooltip();
+  sourceTooltipAnchor = anchor;
+  anchor.setAttribute("aria-describedby", "source-tooltip");
+  const tooltip = document.querySelector("#source-tooltip");
+  const title = document.createElement("strong");
+  title.textContent = `${token.name} · ${token.value.kind}`;
+  const value = document.createElement("pre");
+  value.textContent = token.value.rendering;
+  const link = document.createElement("a");
+  const target = token.value.inspector;
+  link.href = `#panel-${target.tab}`;
+  link.textContent = `Inspect in ${target.tab.charAt(0).toUpperCase() + target.tab.slice(1)}`;
+  link.addEventListener("click", event => {
+    event.preventDefault();
+    const item = [...(currentSnapshot?.topology?.nodes || []), ...(currentSnapshot?.topology?.owners || [])]
+      .find(item => item.path === target.node_path);
+    if (item) selectedTopologyItem = item.id;
+    if (target.tab === "mailbox") {
+      const edge = currentSnapshot?.topology?.edges.find(edge => edge.mailbox.some(entry => entry.envelope_id === target.envelope_id));
+      if (edge) inspectMailbox(edge.route);
+    } else if (target.envelope_id) selectEnvelope(target.envelope_id);
+    renderRelatedPanels(currentSnapshot);
+    activateInspectorTab(target.tab, true);
+    if (token.value.kind === "pending deadline") document.querySelector("#future").open = true;
+    hideSourceTooltip();
+  });
+  // The next Tab from the identifier reaches this link without traversing the file.
+  anchor.addEventListener("keydown", sourceTooltipKeydown);
+  tooltip.replaceChildren(title, value, link);
+  tooltip.hidden = false;
+  const rect = anchor.getBoundingClientRect();
+  tooltip.style.setProperty("left", `${Math.max(8, Math.min(rect.left, innerWidth - tooltip.offsetWidth - 8))}px`);
+  tooltip.style.setProperty("top", `${Math.max(8, Math.min(rect.bottom + 6, innerHeight - tooltip.offsetHeight - 8))}px`);
+}
+
+function sourceTooltipKeydown(event) {
+  if (event.key === "Tab" && !event.shiftKey && !document.querySelector("#source-tooltip").hidden) {
+    event.preventDefault();
+    document.querySelector("#source-tooltip a")?.focus();
+  }
+}
+
+document.querySelector("#source-tooltip").addEventListener("mouseleave", scheduleSourceTooltipClose);
+document.querySelector("#source-tooltip").addEventListener("focusout", scheduleSourceTooltipClose);
+document.addEventListener("keydown", event => {
+  if (event.key !== "Escape" || document.querySelector("#source-tooltip").hidden) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  const anchor = sourceTooltipAnchor;
+  hideSourceTooltip();
+  dismissingSourceTooltip = true;
+  anchor?.focus({ preventScroll: true });
+  dismissingSourceTooltip = false;
+}, true);
 
 function renderLiveExecutionState() {
   renderExecutionState(currentSnapshot);
