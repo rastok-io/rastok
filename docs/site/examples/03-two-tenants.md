@@ -3,8 +3,8 @@ title: 'Two tenants: whose state is this?'
 description: Watch Bob finish once while Alice alone times out, waits for backoff and retries in an isolated keyed instance.
 teaches: Keyed instances, idle lifetime, nested Graph, native Retry, pinned requests and recorded attempts
 graph: examples/keyed-retry.rkg
-golden: crates/rastok/tests/golden/gallery/two-tenants/ui_tour.two_tenants.trace
-command: rastok simulate examples/keyed-retry.rkg
+golden: examples/traces/two-tenants/ui_tour.two_tenants.trace
+command: rastok simulate examples/keyed-retry.rkg --compare examples/traces/two-tenants
 expected: Two scenarios pass; Bob completes in one attempt, Alice in two, and idle expiry opens a fresh generation.
 break_it: 'Change Retry.attempts = 2 to Retry.attempts = 1, then rerun without --save.'
 limits:
@@ -24,7 +24,7 @@ in the journal, while only the final outcome reaches the graph.
 ## Run
 
 ```sh
-rastok simulate examples/keyed-retry.rkg
+rastok simulate examples/keyed-retry.rkg --compare examples/traces/two-tenants
 ```
 
 Add `--ui` to follow the same checked scenario in the debugger.
@@ -90,7 +90,7 @@ expecting Alice's answer fails. Bob still finishes once. There is no new
 
 ## Read the golden difference
 
-Add `--compare crates/rastok/tests/golden/gallery/two-tenants` to compare every
+Add `--compare examples/traces/two-tenants` to compare every
 record. The unedited example matches. After your edit, the CLI names the first
 difference and recorded context, which can precede the final missing answer.
 Restore the attempt bound afterward.

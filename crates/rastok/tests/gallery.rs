@@ -27,7 +27,7 @@ fn opening_examples_match_versioned_scenario_goldens() {
             "simulate",
             &format!("examples/{graph}.rkg"),
             "--compare",
-            &format!("crates/rastok/tests/golden/gallery/{directory}"),
+            &format!("examples/traces/{directory}"),
         ]);
         if graph == "webhook-to-partner" {
             command
@@ -120,7 +120,7 @@ fn each_gallery_break_it_edit_exposes_a_record_difference_without_saving() {
             .arg("simulate")
             .arg(&path)
             .arg("--compare")
-            .arg(format!("crates/rastok/tests/golden/gallery/{directory}"));
+            .arg(format!("examples/traces/{directory}"));
         if graph == "webhook-to-partner" {
             command
                 .args([

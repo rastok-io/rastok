@@ -3,8 +3,8 @@ title: 'Echo: one graph, two worlds'
 description: Run one graph with a real cat process or scripted Lab responses, then inspect a recording without starting the process again.
 teaches: Operator, Connector, Graph, Lab, causal golden, diagnostic replay
 graph: examples/echo.rkg
-golden: crates/rastok/tests/golden/gallery/echo/smoke.roundtrip.trace
-command: rastok simulate examples/echo.rkg --compare crates/rastok/tests/golden/gallery/echo
+golden: examples/traces/echo/smoke.roundtrip.trace
+command: rastok simulate examples/echo.rkg --compare examples/traces/echo
 expected: Three scenarios pass, including a filtered empty line and a timed-out silent process.
 break_it: 'Change the mock line out = . to out = "changed", then rerun the command without --save.'
 limits:
@@ -23,7 +23,7 @@ what the outside world does, then keeps both success and silence as scenarios.
 From the checkout, with `rastok` installed:
 
 ```sh
-rastok simulate examples/echo.rkg --compare crates/rastok/tests/golden/gallery/echo
+rastok simulate examples/echo.rkg --compare examples/traces/echo
 ```
 
 ## Read the graph

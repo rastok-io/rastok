@@ -130,7 +130,7 @@ their source.
 ## Know the evidence boundary
 
 Run `rastok simulate examples/echo.rkg` to check its three scenarios.
-Add `--compare crates/rastok/tests/golden/gallery/echo` to compare their
+Add `--compare examples/traces/echo` to compare their
 causal traces as well. Expectations express selected requirements; the
 golden comparison can reveal other changed facts. `--save` writes new
 references and is a separate, reviewed action.

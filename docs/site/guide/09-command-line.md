@@ -57,7 +57,7 @@ rastok simulate <file.rkg>... [--deployment <profile.json>] [--compare <dir> | -
 ```
 
 ```sh
-rastok simulate examples/echo.rkg --compare crates/rastok/tests/golden/gallery/echo
+rastok simulate examples/echo.rkg --compare examples/traces/echo
 ```
 
 Simulation uses Lab mocks and virtual time, not physical Drivers. Without

@@ -3,8 +3,8 @@ title: 'HTTP model adapter: typed responses and token metering'
 description: Select a typed view of an OpenAI Responses result, retain original token measurements by job and session, and distinguish absent usage from an observed zero.
 teaches: Typed JSON responses, projected fields, original @measure samples, boot-bound secrets and inference without Retry
 graph: examples/agent-http.rkg
-golden: crates/rastok/tests/golden/gallery/agent-http/responses.two_sessions.trace
-command: RASTOK_SHOWCASE_MODEL_TOKEN=lab-only-not-a-credential RASTOK_SHOWCASE_MODEL_TOKEN_VERSION=fixture-v1 rastok simulate examples/agent-http.rkg --deployment examples/agent-http.deployment.json --compare crates/rastok/tests/golden/gallery/agent-http
+golden: examples/traces/agent-http/responses.two_sessions.trace
+command: RASTOK_SHOWCASE_MODEL_TOKEN=lab-only-not-a-credential RASTOK_SHOWCASE_MODEL_TOKEN_VERSION=fixture-v1 rastok simulate examples/agent-http.rkg --deployment examples/agent-http.deployment.json --compare examples/traces/agent-http
 expected: Six scenarios pass; three jobs retain their session and usage, missing usage stays unknown, and observed zero stays zero.
 break_it: 'Change Hello from the simulated model. to A different model answer. in the mock and rerun the comparison; responses.two_sessions diverges at record 6.'
 limits:
@@ -26,7 +26,7 @@ From the repository root, use the synthetic fixture bindings and the checked
 [deployment profile](../../../examples/agent-http.deployment.json):
 
 ```sh
-RASTOK_SHOWCASE_MODEL_TOKEN=lab-only-not-a-credential RASTOK_SHOWCASE_MODEL_TOKEN_VERSION=fixture-v1 rastok simulate examples/agent-http.rkg --deployment examples/agent-http.deployment.json --compare crates/rastok/tests/golden/gallery/agent-http
+RASTOK_SHOWCASE_MODEL_TOKEN=lab-only-not-a-credential RASTOK_SHOWCASE_MODEL_TOKEN_VERSION=fixture-v1 rastok simulate examples/agent-http.rkg --deployment examples/agent-http.deployment.json --compare examples/traces/agent-http
 ```
 
 Add `--ui` for the paused debugger. The Lab never contacts the profile's

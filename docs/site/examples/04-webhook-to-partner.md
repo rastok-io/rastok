@@ -3,8 +3,8 @@ title: 'Webhook to partner: put it together'
 description: Admit a webhook, validate and deduplicate it, then exercise bounded partner retries with privacy, secret and cost evidence.
 teaches: HttpServer ACK, typed validation, explicit deduplication state, HttpClient, finite retry, personal-data policy, secret binding, exact reported cost
 graph: examples/webhook-to-partner.rkg
-golden: crates/rastok/tests/golden/gallery/webhook-to-partner/webhook.nominal.trace
-command: env RASTOK_SHOWCASE_PARTNER_TOKEN=lab-only-not-a-credential RASTOK_SHOWCASE_PARTNER_TOKEN_VERSION=fixture-v1 rastok simulate examples/webhook-to-partner.rkg --deployment examples/webhook-to-partner.deployment.json
+golden: examples/traces/webhook-to-partner/webhook.nominal.trace
+command: env RASTOK_SHOWCASE_PARTNER_TOKEN=lab-only-not-a-credential RASTOK_SHOWCASE_PARTNER_TOKEN_VERSION=fixture-v1 rastok simulate examples/webhook-to-partner.rkg --deployment examples/webhook-to-partner.deployment.json --compare examples/traces/webhook-to-partner
 expected: Six scenarios pass; ACK precedes business completion, retries are bounded, duplicates are suppressed during retention, and 500 is handled as a response.
 break_it: 'Change Retry.attempts = 2 to Retry.attempts = 1, then rerun the same command without --save.'
 limits:
@@ -33,7 +33,8 @@ From the repository root:
 env RASTOK_SHOWCASE_PARTNER_TOKEN=lab-only-not-a-credential \
     RASTOK_SHOWCASE_PARTNER_TOKEN_VERSION=fixture-v1 \
     rastok simulate examples/webhook-to-partner.rkg \
-      --deployment examples/webhook-to-partner.deployment.json
+      --deployment examples/webhook-to-partner.deployment.json \
+      --compare examples/traces/webhook-to-partner
 ```
 
 Add `--ui` to inspect the same graph. No HTTP listener, real partner or paid
@@ -125,7 +126,7 @@ above, without `--save`, then restore the source.
 ## Read the golden difference
 
 Add
-`--compare crates/rastok/tests/golden/gallery/webhook-to-partner`.
+`--compare examples/traces/webhook-to-partner`.
 The CLI names the first differing record and field, expected versus actual,
 and recorded causal context. This classified graph deliberately redacts
 values in divergence messages. Recorded operation facts can differ before

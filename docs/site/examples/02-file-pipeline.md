@@ -3,8 +3,8 @@ title: 'File pipeline: effects with a contract'
 description: Read a bounded file, reject an empty input, count its bytes and atomically replace a second file, then replay without disk access.
 teaches: File Contract, explicit deployment root, bounded read, atomic replacement, named refusal, recorded replay
 graph: examples/file-pipeline.rkg
-golden: crates/rastok/tests/golden/gallery/file-pipeline/files.copy.trace
-command: rastok simulate examples/file-pipeline.rkg --compare crates/rastok/tests/golden/gallery/file-pipeline
+golden: examples/traces/file-pipeline/files.copy.trace
+command: rastok simulate examples/file-pipeline.rkg --compare examples/traces/file-pipeline
 expected: Four scenarios pass; eleven ASCII bytes or three UTF-8 bytes reach the writer, while empty inputs and directory refusals never do.
 break_it: 'Change size(data) > 0 to size(data) > 20, then rerun the command without --save.'
 limits:
@@ -20,7 +20,7 @@ refusals visible before the flow runs?
 ## Run
 
 ```sh
-rastok simulate examples/file-pipeline.rkg --compare crates/rastok/tests/golden/gallery/file-pipeline
+rastok simulate examples/file-pipeline.rkg --compare examples/traces/file-pipeline
 ```
 
 ## Read the graph

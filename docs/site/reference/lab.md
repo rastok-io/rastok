@@ -108,8 +108,8 @@ Expectations do not inspect private Operator state or a mailbox.
 
 ```sh
 rastok simulate examples/echo.rkg
-rastok simulate examples/echo.rkg --compare crates/rastok/tests/golden/gallery/echo
-rastok simulate examples/echo.rkg --save crates/rastok/tests/golden/gallery/echo
+rastok simulate examples/echo.rkg --compare examples/traces/echo
+rastok simulate examples/echo.rkg --save examples/traces/echo
 ```
 
 | Option | Result |

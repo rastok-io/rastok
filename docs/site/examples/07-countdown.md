@@ -3,8 +3,8 @@ title: 'Countdown: a bounded loop'
 description: Prove that a countdown terminates, follow its manager commands, and see the checker reject a measure that cannot prove progress.
 teaches: Loop.next, Loop.state, decreasing measures, finite recurrence and the host terminal
 graph: examples/countdown.rkg
-golden: crates/rastok/tests/golden/gallery/countdown/proof.positive.trace
-command: rastok simulate examples/countdown.rkg --compare crates/rastok/tests/golden/gallery/countdown
+golden: examples/traces/countdown/proof.positive.trace
+command: rastok simulate examples/countdown.rkg --compare examples/traces/countdown
 expected: Two scenarios pass; input 3 reaches liftoff after three recurrences and input 0 finishes immediately.
 break_it: 'Replace Loop.measure = Loop.state.data with Loop.measure = 3 and run rastok check examples/countdown.rkg; E-LOOP refuses the unsupported measure.'
 limits:
@@ -20,7 +20,7 @@ The answer is written beside the Operator, without a backwards graph edge.
 ## Run
 
 ```sh
-rastok simulate examples/countdown.rkg --compare crates/rastok/tests/golden/gallery/countdown
+rastok simulate examples/countdown.rkg --compare examples/traces/countdown
 ```
 
 Add `--ui` to inspect each admitted application and its manager transition.
