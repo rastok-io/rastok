@@ -418,6 +418,73 @@ mod tests {
     }
 
     #[test]
+    fn replay_projects_source_positions_without_changing_recording_bytes() {
+        let mut compilation = compile(&[include_str!("../../../../../examples/echo.rkg")]);
+        let run = crate::lab::run(
+            &compilation.plan,
+            crate::plan::GraphVersion(1),
+            &compilation.labs[0],
+        )
+        .remove(0);
+        let journal = MemJournal::from_records(
+            crate::plan::GraphVersion(1),
+            crate::time::Timestamp::UNIX_EPOCH,
+            None,
+            &run.records,
+        )
+        .unwrap();
+        let observed = crate::time::LogicalTime::from_nanoseconds(10_000_000_000);
+        let bytes = crate::recording::Recording::capture(&compilation, &journal, observed)
+            .unwrap()
+            .encode()
+            .unwrap();
+        compilation.sources[0].text = "Physical source text does not enter recordings".into();
+        compilation.sources[0].name = "different.rkg".into();
+        assert_eq!(
+            bytes,
+            crate::recording::Recording::capture(&compilation, &journal, observed)
+                .unwrap()
+                .encode()
+                .unwrap()
+        );
+        let recording = crate::recording::Recording::decode(&bytes).unwrap();
+        for through in 0..=recording.records().len() {
+            let (journal, execution) = recording.inspect(through).unwrap();
+            let activity = through.checked_sub(1).and_then(|before| {
+                ActivityView::journal_change(&journal, before, Some(through as u64))
+            });
+            let view = super::super::snapshot(SnapshotInput {
+                revision: through as u64,
+                mode: "replay",
+                state: ExecutionState::Completed,
+                plan: recording.plan(),
+                definitions: recording.definitions(),
+                sources: &[],
+                execution: &execution,
+                journal: &journal,
+                activity: activity.as_ref(),
+                fault: None,
+                scenario: None,
+                session: 0,
+                boundary: through as u64,
+            })
+            .unwrap();
+            let frame: JsonValue = serde_json::from_slice(&view.json).unwrap();
+            assert_eq!(frame["sources"][0]["complete"], false);
+            assert_eq!(frame["current_position"]["column"], JsonValue::Null);
+            assert_eq!(frame["execution"]["legal_commands"], json!(["close"]));
+            assert!(
+                frame["source_tokens"]
+                    .as_array()
+                    .is_some_and(|tokens| !tokens.is_empty())
+            );
+            if through == 0 {
+                assert_eq!(frame["current_position"]["status"], "unavailable");
+            }
+        }
+    }
+
+    #[test]
     fn recording_sources_are_explicitly_incomplete() {
         let compilation = compile(&[include_str!("../../../../../examples/echo.rkg")]);
         let units = units(&compilation.plan, &[], &compilation.source_definitions);

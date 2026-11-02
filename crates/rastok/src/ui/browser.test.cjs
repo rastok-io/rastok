@@ -362,6 +362,9 @@ test('a real recording is navigable without any execution command or Driver', { 
   page.on('request', request => { if (request.url().includes('/api/command/')) commands.push(request.url()); });
   assert.equal(await page.evaluate(() => currentSnapshot.mode), 'replay');
   assert.match(await page.locator('#command-status').innerText(), /Recorded run.*read-only/);
+  await page.locator('[data-source-view="0"]').click();
+  assert.match(await page.locator('#source-status').innerText(), /recorded excerpts/);
+  assert.equal(await page.evaluate(() => currentSnapshot.sources[0].complete), false);
   assert.equal(await page.locator('#timeline').inputValue(), '0');
   for (const command of ['reset-scenario', 'next-scenario-action', 'run-until-expect', 'retry-step']) {
     const button = page.locator(`[data-command="${command}"]`);
