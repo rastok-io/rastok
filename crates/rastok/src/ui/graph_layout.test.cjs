@@ -77,6 +77,62 @@ test("barycentric sweeps untangle crossed adjacent layers deterministically", ()
   assert.equal(stableProjection(first), stableProjection(second));
 });
 
+test("request-response cycles keep forward columns and every validated pipe", () => {
+  const ports = [{ name: "in", direction: "input" }, { name: "out", direction: "output" }];
+  const topology = {
+    owners: [owner("owner:0", null), owner("owner:1", "owner:0", ports)],
+    nodes: [
+      operator("html", "owner:0", ports),
+      { ...operator("page", "owner:0", ports), kind: "connector", profile: "Call · Inbound" },
+      operator("admit", "owner:1", ports),
+      operator("model", "owner:1", ports),
+      operator("address_reply", "owner:1", ports),
+    ],
+    edges: [
+      edge(0, "page", "out", "html", "in"),
+      edge(1, "html", "out", "page", "in"),
+      edge(2, "admit", "out", "model", "in"),
+      edge(3, "model", "out", "address_reply", "in"),
+      edge(4, "address_reply", "out", "admit", "in"),
+    ],
+  };
+  const before = JSON.stringify(topology);
+  const result = render(topology);
+  for (const [left, right] of [["page", "html"], ["admit", "model"], ["model", "address_reply"]]) {
+    const a = result.layout.positions.get(left), b = result.layout.positions.get(right);
+    assert.ok(a.x + a.width < b.x, `${left} precedes ${right} in the displayed flow`);
+  }
+  assert.equal(result.routes.size, topology.edges.length, "cycle removal is confined to ranking");
+  for (const index of [1, 4]) {
+    const route = result.routes.get(index);
+    assert.match(layoutEngine.curvedCorridorPath(route.presentationPoints), / Q /);
+    assert.ok(route.presentationPoints[1].x > route.start.x, "return leaves the output toward the right");
+    assert.ok(route.presentationPoints.at(-2).x < route.end.x, "return approaches the input from the left");
+    for (let point = 1; point < route.presentationPoints.length; point += 1) {
+      const a = route.presentationPoints[point - 1], b = route.presentationPoints[point];
+      assert.ok(a.x === b.x || a.y === b.y, "return tracks are orthogonal");
+    }
+  }
+  assert.equal(JSON.stringify(topology), before);
+  assert.equal(stableProjection(result), stableProjection(render(topology)));
+});
+
+test("clear forward spans use one cubic and fan-in shares its final approach", () => {
+  const ports = [{ name: "in", direction: "input" }, { name: "out", direction: "output" }];
+  const topology = { owners: [owner("owner:0", null)],
+    nodes: [operator("top", "owner:0", ports), operator("bottom", "owner:0", ports), operator("receive", "owner:0", ports)],
+    edges: [edge(0, "top", "out", "receive", "in"), edge(1, "bottom", "out", "receive", "in")] };
+  const single = render({ ...topology, edges: [topology.edges[0]] });
+  const singlePath = layoutEngine.curvedCorridorPath(single.routes.get(0).presentationPoints);
+  assert.equal((singlePath.match(/ C /g) || []).length, 1);
+  const { routes } = render(topology);
+  const first = layoutEngine.curvedCorridorSegments(routes.get(0).presentationPoints);
+  const second = layoutEngine.curvedCorridorSegments(routes.get(1).presentationPoints);
+  assert.deepEqual(first.at(-1), second.at(-1), "the receiving pin has one shared visual approach");
+  assert.notDeepEqual(first[0].from, second[0].from, "both original producers remain distinct");
+  assert.equal(routes.size, 2);
+});
+
 test("vertically stacked scopes reuse horizontal ranks and reserve instance-title space", () => {
   const ports = [{ name: "in", direction: "input" }, { name: "out", direction: "output" }];
   const topology = {
@@ -262,7 +318,7 @@ test("ambiguous flattened composition seams never invent a Graph port", () => {
   assert.deepEqual(routes.get(0).portals, []);
 });
 
-test("the smooth cubic presentation remains inside its routed bounds", () => {
+test("orthogonal detours keep straight tracks and bounded rounded corners", () => {
   const points = [
     { x: 10, y: 20 },
     { x: 80, y: 20 },
@@ -272,8 +328,8 @@ test("the smooth cubic presentation remains inside its routed bounds", () => {
   const path = layoutEngine.curvedCorridorPath(points);
   assert.match(path, /^M 10 20 /);
   assert.match(path, / 140 90$/);
-  assert.doesNotMatch(path, /\s[QL]\s/, "the presentation uses cubic Beziers throughout");
-  assert.equal((path.match(/ C /g) || []).length, 3, "one smooth cubic joins each routed waypoint");
+  assert.match(path, / L /, "detours retain straight tracks");
+  assert.match(path, / Q /, "corners are rounded without a spline through the whole route");
   const segments = layoutEngine.curvedCorridorSegments(points);
   assert.equal(segments[0].from.y, segments[0].c1.y, "the output tangent is horizontal");
   assert.equal(segments.at(-1).c2.y, segments.at(-1).to.y, "the input tangent is horizontal");

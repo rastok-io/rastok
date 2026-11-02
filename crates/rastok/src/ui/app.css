@@ -215,12 +215,20 @@ main { display: flex; flex: 1 1 auto; min-height: 0; flex-direction: column; gap
 .graph-edge.queued .graph-edge-path { stroke-dasharray: 3 3; }
 .graph-edge.active .graph-edge-path { stroke: var(--active-flow, var(--boundary)); stroke-width: 2; }
 .graph-edge.selected .graph-edge-path { stroke: var(--selection); stroke-width: 2; }
+.graph-edge.connection-muted { opacity: .2; }
+.graph-edge.connection-related .graph-edge-path { stroke: var(--boundary); stroke-width: 2; }
 #graph-arrow path { fill: var(--muted); }
 #graph-arrow-active path { fill: var(--active-flow, var(--boundary)); }
 .graph-edge-packet, .connector-boundary-packet { fill: var(--active-flow, var(--boundary)); stroke: var(--surface); stroke-width: 1; pointer-events: none; }
 .edge-counter { cursor: pointer; }
 .edge-counter rect { fill: rgba(0, 0, 0, .72); stroke: var(--hairline-strong); stroke-width: 1; }
 .edge-counter text { fill: #f2f5f3; font: 700 var(--graph-mono-font-size) var(--mono); }
+.edge-counter.empty-mailbox rect { fill: transparent; stroke: transparent; }
+.edge-counter.empty-mailbox text { fill: var(--muted); font-weight: 400; }
+.graph-edge:is(.selected, .node-selected, .connection-related) .empty-mailbox rect,
+.empty-mailbox:is(:hover, :focus-visible) rect { fill: var(--surface-raised); stroke: var(--hairline-strong); }
+.graph-edge:is(.selected, .node-selected, .connection-related) .empty-mailbox text,
+.empty-mailbox:is(:hover, :focus-visible) text { fill: var(--text); }
 .edge-counter:hover rect, .edge-counter:focus-visible rect { stroke: var(--boundary); }
 .graph-edge.active .edge-counter rect { stroke: var(--active-flow, var(--boundary)); }
 .graph-instance-badge { cursor: pointer; }

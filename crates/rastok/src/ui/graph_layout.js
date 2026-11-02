@@ -1,5 +1,5 @@
 /*
- * Deterministic compound-DAG layout for the embedded Rastok UI.
+ * Deterministic compound-graph layout for the embedded Rastok UI.
  *
  * This is an original, dependency-free implementation. It combines standard
  * barycentric layer sweeps with movable side-constrained ports and interval
@@ -27,7 +27,7 @@
   const ROOT_OUTPUT_GUTTER = 112;
   const EDGE_COUNTER_WIDTH = 36;
   const PORT_LABEL_CLEARANCE = 16;
-  const PRESENTATION_CURVE_TENSION = 0.92;
+  const CORNER_RADIUS = 12;
   const MINIMUM_READABLE_SCALE = 0.85;
 
   function materializeGraph(topology) {
@@ -94,10 +94,26 @@
     const queue = nodes
       .filter((node) => incoming.get(node.id) === 0)
       .map((node) => node.id);
+    const remaining = new Set(nodes.map(node => node.id));
+    const rootId = owners.find(owner => owner.parent === null)?.id;
+    const entryPriority = node => node.owner === rootId && node.kind === "connector"
+      && /Inbound/.test(node.profile || "") ? 0 : 1;
     let cursor = 0;
-    while (cursor < queue.length) {
+    while (remaining.size) {
+      if (cursor === queue.length) {
+        // A cycle has no ready node. Prefer an inbound root Connector, then
+        // the node reached furthest from the already placed flow. Its later
+        // incoming edges become visual returns, never removed semantic pipes.
+        const entry = nodes.filter(node => remaining.has(node.id)).sort((left, right) =>
+          entryPriority(left) - entryPriority(right)
+          || rank.get(right.id) - rank.get(left.id)
+          || byId.get(left.id).index - byId.get(right.id).index)[0];
+        queue.push(entry.id);
+      }
       const source = queue[cursor++];
+      if (!remaining.delete(source)) continue;
       for (const target of outgoing.get(source) || []) {
+        if (!remaining.has(target)) continue;
         rank.set(target, Math.max(rank.get(target) || 0, (rank.get(source) || 0) + 1));
         incoming.set(target, (incoming.get(target) || 0) - 1);
         if (incoming.get(target) === 0) queue.push(target);
@@ -479,7 +495,7 @@
             addSample(
               ownerSamples,
               scopePortKey(ownerId, direction, port.name),
-              boxCenterY(targetPosition),
+              layout.portAnchors.get(portKey(target.id, "input", edge.target.port))?.y ?? boxCenterY(targetPosition),
             );
           }
         }
@@ -491,7 +507,7 @@
             addSample(
               ownerSamples,
               scopePortKey(ownerId, direction, port.name),
-              boxCenterY(sourcePosition),
+              layout.portAnchors.get(portKey(source.id, "output", edge.source.port))?.y ?? boxCenterY(sourcePosition),
             );
           }
         }
@@ -756,27 +772,25 @@
       ));
       appendPoints(points, targetTail);
       const compact = compactOrthogonalPoints(points);
-      const presentationPoints = [candidate.start];
-      if (sourceFan.count > 1) {
-        presentationPoints.push({
-          x: candidate.start.x + textWidth(candidate.edge.source.port) + PORT_STUB * 3,
-          y: candidate.start.y + sourceFan.offset,
-        });
-      }
-      presentationPoints.push(...candidate.portals.map((portal) => ({ x: portal.x, y: portal.y, horizontal: true })));
-      if (targetFan.count > 1) {
-        presentationPoints.push({
-          x: candidate.end.x - textWidth(candidate.edge.target.port) - PORT_STUB * 3,
-          y: candidate.end.y + targetFan.offset,
-        });
-      }
+      const presentationPoints = [candidate.start,
+        ...candidate.portals.map(portal => ({ x: portal.x, y: portal.y }))];
+      // Multiple pipes keep their identities and join the same short approach
+      // to the receiving pin. They do not create a shared semantic mailbox.
+      if (targetFan.count > 1) presentationPoints.push({ x: candidate.end.x - FAN_STUB * 2, y: candidate.end.y });
       presentationPoints.push(candidate.end);
-      const obstacles = [...labelObstacles, ...bodies, ...headers];
+      const ownPorts = new Set([
+        portKey(candidate.source.id, "output", candidate.edge.source.port),
+        portKey(candidate.target.id, "input", candidate.edge.target.port),
+        ...candidate.portals.map(portal => scopePortKey(portal.owner, portal.direction, portal.port)),
+      ]);
+      for (const endpoint of [candidate.source, candidate.target]) {
+        if (endpoint.kind === "boundary") ownPorts.add(scopePortKey(endpoint.owner, endpoint.direction, endpoint.ports[0].name));
+      }
+      const obstacles = [...labelObstacles.filter(box => !ownPorts.has(box.portKey)), ...bodies, ...headers];
       const clearPoints = [];
       for (let index = 1; index < presentationPoints.length; index += 1) {
-        const from = { ...presentationPoints[index - 1], horizontal: true };
-        const to = { ...presentationPoints[index], horizontal: true };
-        appendPoints(clearPoints, routePresentationSpan(from, to, obstacles, layout.scopes.get(layout.rootOwner)));
+        appendPoints(clearPoints, routePresentationSpan(presentationPoints[index - 1], presentationPoints[index],
+          obstacles, layout.scopes.get(layout.rootOwner)));
       }
       const route = {
         start: candidate.start,
@@ -974,12 +988,12 @@
       if (!scope) continue;
       for (const port of owner.ports || []) {
         const anchor = scopePortAnchor(owner, scope, port, layout);
-        portLabelObstacles.push(textLabelBox(
+        portLabelObstacles.push({ ...textLabelBox(
           anchor.x + (port.direction === "input" ? 9 : -9),
           anchor.y - 5,
           port.display_label || port.name,
           port.direction === "input" ? "start" : "end",
-        ));
+        ), portKey: scopePortKey(ownerId, port.direction, port.name) });
       }
     }
     for (const node of graph.nodes) {
@@ -993,22 +1007,20 @@
       }
       for (const port of node.ports || []) {
         const anchor = portAnchor(node, position, port.name, port.direction, layout);
-        portLabelObstacles.push(textLabelBox(
+        portLabelObstacles.push({ ...textLabelBox(
           anchor.x + (port.direction === "input" ? -8 : 8),
           anchor.y - 5,
           port.display_label || port.name,
           port.direction === "input" ? "end" : "start",
-        ));
+        ), portKey: portKey(node.id, port.direction, port.name) });
       }
     }
     return portLabelObstacles;
   }
 
   function routePresentationSpan(from, to, obstacles, bounds) {
-    // Keep the direct Bezier when it is clear. A detour is selected against
-    // the curve itself, not an invisible orthogonal path that it might cut.
     const score = points => {
-      const samples = sampleCurvedCorridor(points, PRESENTATION_CURVE_TENSION, 32);
+      const samples = sampleCurvedCorridor(points, CORNER_RADIUS, 32);
       let collisions = 0;
       let length = 0;
       for (let index = 1; index < samples.length; index += 1) {
@@ -1023,35 +1035,32 @@
       }
       return { points, collisions, cost: collisions * 1_000_000 + length + points.length * 8 };
     };
-    let best = score([from, to]);
-    if (!best.collisions && to.x >= from.x) return best.points;
+    const gap = to.x - from.x;
+    const direct = score([from, { ...to, curve: true }]);
+    if (gap > 0 && !direct.collisions) return direct.points;
     const lanes = [...new Set([
       (from.y + to.y) / 2,
-      ...obstacles.flatMap(box => [box.y - 12, box.y + box.height + 12]),
-    ])].sort((a, b) => a - b);
+      ...obstacles.flatMap(box => [box.y - CORNER_RADIUS, box.y + box.height + CORNER_RADIUS]),
+    ])].filter(y => y >= bounds.y + SCOPE_HEADER && y <= bounds.y + bounds.height)
+      .sort((a, b) => a - b);
+    let best = null;
     for (const lane of lanes) {
-      const gap = to.x - from.x;
-      const candidates = gap > 0
-        ? [[from, { x: (from.x + to.x) / 2, y: lane }, to]] : [];
       for (const stub of [24, 48, 72]) {
-        if (gap > 0 && gap < stub * 3) continue;
-        const departure = Math.min(stub, Math.max(0, (bounds.x + bounds.width - from.x - 8) / 1.5));
-        const arrival = Math.min(stub, Math.max(0, (to.x - bounds.x - 8) / 1.5));
-        candidates.push([
+        const departure = gap > 0 ? Math.min(stub, gap / 3) : stub;
+        const arrival = departure;
+        const points = compactOrthogonalPoints([
           from,
-          { x: from.x + departure, y: from.y, horizontal: true },
-          { x: from.x + departure * 1.5, y: lane },
-          { x: to.x - arrival * 1.5, y: lane },
-          { x: to.x - arrival, y: to.y, horizontal: true },
+          { x: from.x + departure, y: from.y },
+          { x: from.x + departure, y: lane },
+          { x: to.x - arrival, y: lane },
+          { x: to.x - arrival, y: to.y },
           to,
         ]);
-      }
-      for (const points of candidates) {
         const candidate = score(points);
-        if (candidate.cost < best.cost) best = candidate;
+        if (!best || candidate.cost < best.cost) best = candidate;
       }
     }
-    return best.points;
+    return best?.points || [from, to];
   }
 
   function placeEdgeLabels(routes, graph, layout) {
@@ -1068,7 +1077,7 @@
     const portLabelObstacles = graphLabelObstacles(graph, layout);
     const routeSamples = new Map([...routes.entries()].map(([index, route]) => [
       index,
-      sampleCurvedCorridor(route.presentationPoints, PRESENTATION_CURVE_TENSION, 12),
+      sampleCurvedCorridor(route.presentationPoints, CORNER_RADIUS, 12),
     ]));
     const placed = [];
     const ordered = [...routes.entries()].sort(([left], [right]) => left - right);
@@ -1267,7 +1276,7 @@
         const [before, corner, after] = compact.slice(-3);
         const collinear = (before.x === corner.x && corner.x === after.x)
           || (before.y === corner.y && corner.y === after.y);
-        if (!collinear) break;
+        if (!collinear || corner.curve || after.curve) break;
         compact.splice(compact.length - 2, 1);
       }
     }
@@ -1417,54 +1426,51 @@
     return `${path} L ${end.x} ${end.y}`;
   }
 
-  // The collision-free orthogonal route remains the lane authority. A
-  // Catmull-Rom-derived cubic spline passes through its separated waypoints,
-  // while explicit endpoint controls keep both port tangents horizontal.
-  function curvedCorridorPath(points, tension = PRESENTATION_CURVE_TENSION) {
-    const segments = curvedCorridorSegments(points, tension);
+  // A clear forward span is one cubic with horizontal port tangents. Detours
+  // retain straight orthogonal tracks; only their corners are rounded.
+  function curvedCorridorPath(points, radius = CORNER_RADIUS) {
+    if (!points.some(point => point.curve) && points.length > 2) return roundedOrthogonalPath(points, radius);
+    const segments = curvedCorridorSegments(points, radius);
     if (!segments.length) return "";
     const start = segments[0].from;
     return segments.reduce(
-      (path, segment) => `${path} C ${segment.c1.x} ${segment.c1.y} ${segment.c2.x} ${segment.c2.y} ${segment.to.x} ${segment.to.y}`,
+      (path, segment) => segment.line ? `${path} L ${segment.to.x} ${segment.to.y}`
+        : `${path} C ${segment.c1.x} ${segment.c1.y} ${segment.c2.x} ${segment.c2.y} ${segment.to.x} ${segment.to.y}`,
       `M ${start.x} ${start.y}`,
     );
   }
 
-  function curvedCorridorSegments(points, tension = PRESENTATION_CURVE_TENSION) {
+  function curvedCorridorSegments(points, radius = CORNER_RADIUS) {
     const compact = compactOrthogonalPoints(points);
     if (compact.length < 2) return [];
-    const strength = clamp(Number(tension), 0, 1) / 6;
-    const minimumX = Math.min(...compact.map((point) => point.x));
-    const maximumX = Math.max(...compact.map((point) => point.x));
-    const minimumY = Math.min(...compact.map((point) => point.y));
-    const maximumY = Math.max(...compact.map((point) => point.y));
     const segments = [];
-    for (let index = 0; index < compact.length - 1; index += 1) {
-      const previous = compact[Math.max(0, index - 1)];
-      const from = compact[index];
-      const to = compact[index + 1];
-      const next = compact[Math.min(compact.length - 1, index + 2)];
-      const c1 = {
-        x: from.x + (to.x - previous.x) * strength,
-        y: from.y + (to.y - previous.y) * strength,
-      };
-      const c2 = {
-        x: to.x - (next.x - from.x) * strength,
-        y: to.y - (next.y - from.y) * strength,
-      };
-      if (index === 0 || from.horizontal) {
-        c1.x = from.x + (to.x - from.x) * 0.42;
-        c1.y = from.y;
-      }
-      if (index === compact.length - 2 || to.horizontal) {
-        c2.x = to.x - (to.x - from.x) * 0.42;
-        c2.y = to.y;
-      }
-      c1.x = clamp(c1.x, minimumX, maximumX);
-      c1.y = clamp(c1.y, minimumY, maximumY);
-      c2.x = clamp(c2.x, minimumX, maximumX);
-      c2.y = clamp(c2.y, minimumY, maximumY);
-      segments.push({ from, c1, c2, to });
+    let current = compact[0];
+    const lineTo = to => {
+      if (current.x === to.x && current.y === to.y) return;
+      segments.push({ from: current, c1: current, c2: to, to, line: true });
+      current = to;
+    };
+    for (let index = 1; index < compact.length; index += 1) {
+      const previous = compact[index - 1], corner = compact[index], next = compact[index + 1];
+      if (corner.curve || compact.length === 2) {
+        const reach = (corner.x - current.x) * 0.42;
+        segments.push({ from: current, c1: { x: current.x + reach, y: current.y },
+          c2: { x: corner.x - reach, y: corner.y }, to: corner });
+        current = corner;
+      } else if (next && !next.curve) {
+        const turn = Math.min(radius, Math.hypot(corner.x - previous.x, corner.y - previous.y) / 2,
+          Math.hypot(next.x - corner.x, next.y - corner.y) / 2);
+        const before = { x: corner.x - Math.sign(corner.x - previous.x) * turn,
+          y: corner.y - Math.sign(corner.y - previous.y) * turn };
+        const after = { x: corner.x + Math.sign(next.x - corner.x) * turn,
+          y: corner.y + Math.sign(next.y - corner.y) * turn };
+        lineTo(before);
+        // Quadratic corner represented as an equivalent cubic for sampling.
+        segments.push({ from: before,
+          c1: { x: before.x + (corner.x - before.x) * 2 / 3, y: before.y + (corner.y - before.y) * 2 / 3 },
+          c2: { x: after.x + (corner.x - after.x) * 2 / 3, y: after.y + (corner.y - after.y) * 2 / 3 }, to: after });
+        current = after;
+      } else lineTo(corner);
     }
     return segments;
   }
@@ -1483,8 +1489,8 @@
     };
   }
 
-  function sampleCurvedCorridor(points, tension = PRESENTATION_CURVE_TENSION, samplesPerSegment = 8) {
-    const segments = curvedCorridorSegments(points, tension);
+  function sampleCurvedCorridor(points, radius = CORNER_RADIUS, samplesPerSegment = 8) {
+    const segments = curvedCorridorSegments(points, radius);
     if (!segments.length) return [];
     const samples = [segments[0].from];
     for (const segment of segments) {

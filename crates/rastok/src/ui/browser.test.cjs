@@ -1099,6 +1099,48 @@ test("visible buffered Play honors both selected speeds", { timeout: 60000 }, as
   assert.ok(fast >= 180 && fast < slow * 0.6, `4 events/s interval ${fast} ms, 1 event/s ${slow} ms`);
 });
 
+test("cyclic chat layout separates forward work, quiet mailboxes and focused connections", { timeout: 60000 }, async t => {
+  const page = await openTour(t, { width: 1440, height: 760 }, 'examples/agent-chat.rkg');
+  await capture(page, 'graph-chat-overview');
+  const positions = await page.evaluate(() => {
+    const graph = graphLayout.materializeGraph(currentSnapshot.topology);
+    const layout = graphLayout.layoutGraph(graph.nodes, graph.edges, currentSnapshot.topology.owners);
+    return Object.fromEntries(graph.nodes.filter(node => node.path).map(node => [node.path, layout.positions.get(node.id)]));
+  });
+  for (const [from, to] of [['page', 'html'], ['clients', 'validate'],
+    ['conversation.admit', 'conversation.model'], ['conversation.model', 'conversation.address_reply']]) {
+    assert.ok(positions[from].x + positions[from].width < positions[to].x, `${from} precedes ${to}`);
+  }
+  const commands = [];
+  page.on('request', request => { if (request.method() === 'POST') commands.push(new URL(request.url()).pathname); });
+  const empty = page.locator('.edge-counter.empty-mailbox').first();
+  assert.equal(await empty.locator('rect').evaluate(rect => getComputedStyle(rect).fill), 'rgba(0, 0, 0, 0)');
+  const node = page.locator('.graph-node').filter({ has: page.locator('.graph-node-name').filter({ hasText: /^validate$/ }) });
+  await node.hover();
+  assert.ok(await page.locator('.graph-edge.connection-related').count());
+  assert.ok(await page.locator('.graph-edge.connection-muted').count());
+  assert.equal(await page.locator('.graph-edge.connection-muted').first().evaluate(edge => getComputedStyle(edge).opacity), '0.2');
+  await capture(page, 'graph-chat-hover');
+  await page.locator('#source-tabs').hover();
+  assert.equal(await page.locator('.graph-edge.connection-muted').count(), 0);
+  await node.focus();
+  assert.ok(await page.locator('.graph-edge.connection-muted').count(), 'keyboard focus exposes the same neighborhood');
+  await empty.focus();
+  assert.equal(await page.locator('.graph-edge.connection-related').count(), 1);
+  await empty.press('Enter');
+  assert.equal(await page.locator('#tab-mailbox').getAttribute('aria-selected'), 'true');
+  assert.match(await page.locator('#mailbox').innerText(), /0 messages waiting/);
+  assert.deepEqual(commands, []);
+  await page.locator('#step').click();
+  await page.waitForFunction(() => Number(currentSnapshot.timeline.boundary) === 1 && pendingCommandRevision === null);
+  const occupied = page.locator('.edge-counter:not(.empty-mailbox)').first();
+  assert.ok(await occupied.isVisible());
+  assert.notEqual(await occupied.locator('rect').evaluate(rect => getComputedStyle(rect).fill), 'rgba(0, 0, 0, 0)');
+  await page.setViewportSize({ width: 1024, height: 760 });
+  await page.emulateMedia({ colorScheme: 'light', reducedMotion: 'reduce' });
+  await capture(page, 'graph-chat-1024-light');
+});
+
 test("graph selection reveals the source block without a Definition tab or execution", { timeout: 60000 }, async t => {
   const page = await openTour(t, undefined, 'examples/agent-chat.rkg');
   const commands = [];

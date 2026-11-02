@@ -1235,6 +1235,29 @@ function installGraphViewport(canvas, layer) {
   return controls;
 }
 
+function installGraphConnectionFocus(svg, graph) {
+  let hovered = null;
+  const targetFor = element => element?.closest?.(".graph-node, .graph-edge");
+  const edges = [...svg.querySelectorAll(".graph-edge")].map(element => ({
+    element, edge: graph.edges.find(edge => edge.route === element.dataset.route),
+  }));
+  const update = () => {
+    const target = hovered || (svg.contains(document.activeElement) ? targetFor(document.activeElement) : null);
+    for (const { element, edge } of edges) {
+      const related = target && (target.dataset.route === edge.route
+        || target.dataset.nodeId === edge.source.id || target.dataset.nodeId === edge.target.id);
+      element.classList.toggle("connection-related", Boolean(related));
+      element.classList.toggle("connection-muted", Boolean(target && !related));
+      element.classList.toggle("node-selected", [edge.source.id, edge.target.id].includes(selectedTopologyItem));
+    }
+  };
+  svg.addEventListener("pointerover", event => { hovered = targetFor(event.target); update(); });
+  svg.addEventListener("pointerleave", () => { hovered = null; update(); });
+  svg.addEventListener("focusin", update);
+  svg.addEventListener("focusout", () => queueMicrotask(update));
+  update();
+}
+
 function renderTopology(topology, animateBoundary = false) {
   const tooltip = document.querySelector("#graph-tooltip");
   if (tooltip) tooltip.hidden = true;
@@ -1518,7 +1541,7 @@ function renderTopology(topology, animateBoundary = false) {
     if (mailbox) {
       const counterWidth = route.label.box.width;
       const badge = svgElement("g", {
-        class: "edge-counter",
+        class: `edge-counter${queuedNow ? "" : " empty-mailbox"}`,
         transform: `translate(${route.label.x - counterWidth / 2} ${route.label.y - 9})`,
         role: "button",
         tabindex: "0",
@@ -1572,6 +1595,7 @@ function renderTopology(topology, animateBoundary = false) {
     const group = svgElement("g", {
       class: `graph-node graph-node-${node.kind}${active ? " active" : ""}${active && animateBoundary ? " moving" : ""}${selectable ? " selectable" : ""}${selected ? " selected" : ""}`,
       transform: `translate(${position.x} ${position.y})`,
+      "data-node-id": node.id,
     });
     group.classList.toggle("causal-related", relatedOwners.has(node.path));
     if (selectable) {
@@ -1718,6 +1742,7 @@ function renderTopology(topology, animateBoundary = false) {
     nodeLayer.append(group);
   }
   svg.append(nodeLayer);
+  installGraphConnectionFocus(svg, graph);
   const panLayer = document.createElement("div");
   panLayer.className = "graph-pan-layer";
   panLayer.append(svg);

@@ -39,6 +39,23 @@ retryable fault. Scenario changes take effect from the selector; its progress
 button selects the scenario source. The history-session selector appears when
 more than one session exists.
 
+Graph ranking breaks cycles only for column placement. When no node is ready,
+it prefers an inbound root Connector, then the node reached furthest from the
+already placed flow, with retained node order as the final tie-break. Incoming
+connections from later nodes remain visible return pipes. This has no execution
+meaning and removes no validated edge. Clear forward spans use a single cubic
+curve with horizontal endpoints. Obstructed and return spans retain orthogonal
+tracks with rounded corners. Their sampled geometry is checked against node
+bodies, scope headers and unrelated port labels; a pipe excludes its own labels.
+Multiple arrivals share a short final approach without merging their semantic
+routes. Boundary pins use neighboring retained port anchors. Ambiguous flattened
+composition metadata remains explicit rather than inventing a boundary port.
+
+Empty mailbox badges retain their hit area and accessible count, with muted text
+and a transparent background. Occupancy, selection, hover and keyboard focus
+restore contrast. Hover or focus on an Operator, Connector or pipe emphasizes
+its connections and dims unrelated pipes without changing the selected prefix.
+
 Selecting a graph node reveals and highlights its source block without switching
 inspector tabs. Instances retains decision evidence, node information and manager
 commands in a collapsible section for the selected node. There is no Definition

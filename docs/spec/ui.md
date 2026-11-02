@@ -201,6 +201,22 @@ Containment and actual ports come from the validated Node table, including
 the App root and nested Graphs. Node bodies distinguish Graphs, Operators and
 Connectors. The UI never infers execution from geometry.
 
+Cyclic graphs use deterministic display columns anchored by inbound root
+Connectors and the already placed flow. Return pipes retain their original
+endpoints and directions. A clear forward span uses one curve with horizontal
+ends; returns and obstructed spans use straight tracks with rounded corners.
+Routing checks node bodies and unrelated port labels, excluding the pipe's
+own endpoint labels. Arrivals at the same input share a short final approach;
+their route identities, mailbox selection and causal links remain separate.
+Boundary positions follow retained neighboring port anchors. An ambiguous
+composition seam does not acquire an invented Graph port. **Status: shipped.**
+
+Empty mailbox counters use a transparent background and muted text. Occupied
+mailboxes and counters selected or emphasized through their connected node
+retain contrast. Hover or keyboard focus on an Operator, Connector or pipe
+emphasizes its connections and dims unrelated pipes. The same FIFO remains
+reachable by pointer and keyboard at zero occupancy. **Status: shipped.**
+
 - Graphs enclose children; Operator and Connector bodies are visually distinct.
   Titles show names, Contract and Extensions, without synthetic Node types.
 - Hollow square pins are inputs; filled square pins are outputs. Graph pins
