@@ -21,6 +21,7 @@ static EMPTY_ANNOTATIONS: AnnotationTable = AnnotationTable::empty();
 mod expectation;
 mod explanation;
 mod retry;
+mod source;
 pub use expectation::expectation_json;
 
 /// Physical controller state, outside every semantic identity recipe.
@@ -237,6 +238,8 @@ pub struct SnapshotInput<'a> {
     /// Source-faithful physical definitions retained by the compiler. They
     /// enrich inspection only and never become execution authority.
     pub definitions: &'a [SourceDefinition],
+    /// Original simulation source units; recordings retain only definitions.
+    pub sources: &'a [crate::compiler::SourceUnit],
     /// Read-only mutable-machine inspection source.
     pub execution: &'a Execution<'a>,
     /// Complete in-memory causal authority.
@@ -266,6 +269,7 @@ pub fn snapshot(input: SnapshotInput<'_>) -> Result<UiSnapshot, serde_json::Erro
         state,
         plan,
         definitions,
+        sources,
         execution,
         journal,
         fault,
@@ -281,6 +285,7 @@ pub fn snapshot(input: SnapshotInput<'_>) -> Result<UiSnapshot, serde_json::Erro
     let mut future = explanation::future(&inspection, journal.records());
     retry::append_future(&mut future, &retry_operations);
     let value = json!({
+        "sources": source::units(plan, sources, definitions),
         "revision": revision,
         "mode": mode,
         "timeline": {
@@ -1667,6 +1672,7 @@ mod tests {
                     state: ExecutionState::Paused,
                     plan: &compilation.plan,
                     definitions: &compilation.source_definitions,
+                    sources: &compilation.sources,
                     execution,
                     journal,
                     fault: None,
@@ -1842,6 +1848,7 @@ mod tests {
             state: ExecutionState::Paused,
             plan: &compilation.plan,
             definitions: &compilation.source_definitions,
+            sources: &compilation.sources,
             execution: &execution,
             journal: &journal,
             fault: None,

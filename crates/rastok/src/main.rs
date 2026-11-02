@@ -384,7 +384,13 @@ fn load(paths: &[String]) -> Result<(Compilation, Sources), ExitCode> {
         .and_then(|path| std::path::Path::new(path).parent())
         .map(std::path::Path::to_path_buf);
     match rastok::compiler::compile_with_assets(&refs, &registry, asset_root.as_deref()) {
-        Ok(compilation) => {
+        Ok(mut compilation) => {
+            for (unit, path) in compilation.sources.iter_mut().zip(paths) {
+                unit.name = std::path::Path::new(path).file_name().map_or_else(
+                    || format!("source-{}.rkg", unit.index),
+                    |name| name.to_string_lossy().into_owned(),
+                );
+            }
             let warnings = render_all(&compilation.warnings, &sources);
             if !warnings.is_empty() {
                 eprint!("{warnings}");
@@ -937,6 +943,7 @@ fn simulate_with_ui(
         state,
         plan: &compilation.plan,
         definitions: &compilation.source_definitions,
+        sources: &compilation.sources,
         execution: session.execution(),
         journal: session.journal(),
         fault: None,
@@ -1351,6 +1358,7 @@ fn simulate_with_ui(
                 state,
                 plan: &compilation.plan,
                 definitions: &compilation.source_definitions,
+                sources: &compilation.sources,
                 execution: session.execution(),
                 journal: session.journal(),
                 fault: fault.as_ref(),

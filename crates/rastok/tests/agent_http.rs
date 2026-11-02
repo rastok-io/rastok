@@ -244,6 +244,7 @@ fn responses_debugger_projects_each_transition_without_materializing_the_bearer(
                 state: ExecutionState::Paused,
                 plan: &compilation.plan,
                 definitions: &compilation.source_definitions,
+                sources: &compilation.sources,
                 execution: session.execution(),
                 journal: session.journal(),
                 fault: None,

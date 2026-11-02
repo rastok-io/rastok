@@ -58,6 +58,22 @@ pub struct Compilation {
     /// Authored scenario text for inspection only, outside plan identity.
     /// Renderers must apply data policy before exposing source literals.
     pub scenario_definitions: Vec<ScenarioDefinition>,
+    /// Original source units for physical inspection, never encoded in the plan
+    /// or diagnostic recording. Renderers must suppress classified Lab text.
+    pub sources: Vec<SourceUnit>,
+}
+
+/// Source text retained outside executable identity and recording formats.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceUnit {
+    /// Index assigned by the source loader.
+    pub index: u32,
+    /// Display label; the CLI supplies the authored file name.
+    pub name: String,
+    /// Exact original text, including comments and trailing newline.
+    pub text: String,
+    /// Inclusive Lab line ranges, including shared mock declarations.
+    pub lab_lines: Vec<(usize, usize)>,
 }
 
 /// One authored scenario and its action positions, independent of execution.
@@ -308,6 +324,24 @@ pub fn compile_with_assets(
         labs: hir.labs,
         source_definitions,
         scenario_definitions: scenario_definitions(&unit, sources),
+        sources: unit
+            .files
+            .iter()
+            .zip(sources)
+            .map(|((id, tree), text)| SourceUnit {
+                index: id.index(),
+                name: format!("source-{}.rkg", id.index()),
+                text: (*text).to_owned(),
+                lab_lines: tree
+                    .decls
+                    .iter()
+                    .filter_map(|decl| match decl {
+                        syntax::TopDecl::Lab(lab) => Some(source_lines(text, lab.span)),
+                        _ => None,
+                    })
+                    .collect(),
+            })
+            .collect(),
     })
 }
 

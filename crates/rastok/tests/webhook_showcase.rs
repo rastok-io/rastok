@@ -336,6 +336,7 @@ fn every_webhook_transition_redacts_personal_data_and_the_secret_before_presenta
                 state: rastok::ui::ExecutionState::Paused,
                 plan: &compilation.plan,
                 definitions: &compilation.source_definitions,
+                sources: &compilation.sources,
                 execution: session.execution(),
                 journal: session.journal(),
                 fault: None,
