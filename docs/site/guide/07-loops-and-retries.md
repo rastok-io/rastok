@@ -61,7 +61,7 @@ the previous one. See `docs/spec/loop.md` §§7–10.
 
 ## Repeat an operation with Retry
 
-The webhook uses `examples/webhook-to-partner.rkg`, lines 101–105:
+The webhook uses `examples/webhook-to-partner.rkg`, lines 89–93:
 
 ```rkg
 idempotent = true

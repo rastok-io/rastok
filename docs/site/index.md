@@ -118,6 +118,9 @@ the compiler checks. The executable standard Contract families are
 `WebSocketServer`; `rastok connectors` lists their modes, installed
 implementations, Lab bindings and untested cases.
 
+The [standard library reference](reference/stdlib.md) lists the types,
+Contracts, annotations and value frontends available to a program.
+
 The Lab lives in the same file. This is the scenario that tests the fault
 case, a process that never answers:
 

@@ -34,7 +34,7 @@ overwritten.
 ## Supply deployment facts explicitly
 
 The webhook example needs more than a command name. Its partner Connector,
-from `examples/webhook-to-partner.rkg`, lines 90–106, separates a URL
+from `examples/webhook-to-partner.rkg`, lines 78–94, separates a URL
 binding and a secret reference from the application logic:
 
 ```rkg

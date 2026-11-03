@@ -711,6 +711,13 @@ routing therefore does not pay parse cost. The exact authority is
 [docs/spec/types.md](docs/spec/types.md), with host syntax in
 [docs/spec/grammar.md](docs/spec/grammar.md).
 
+Standard Connector types, including `FileExit` and `ProcessExit`, are available
+by name without imports or copied declarations. They use the same logical
+definitions as the Connector ports; aliases do not create a second identity.
+A module/import system remains a later design discussion, with no syntax or
+delivery date decided. The current names are listed in
+[stdlib.md §1.2](docs/spec/stdlib.md#12-standard-types-in-source).
+
 ### 2.2 The shared Node shape
 
 Every declaration creates one **Node**, but Node has only two structural

@@ -5,6 +5,27 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-11-03-3: Make standard Contract types available without imports
+
+Yoann requests that examples and applications use the types compiled into
+Rastok instead of copying their definitions. `FileExit`, `ProcessExit`,
+`HttpClientExit`, `HttpServerExit` and `WebSocketExit` resolve directly to the
+existing standard Contract types in every compilation unit. Driver build
+features do not select language types. A local type declaration cannot
+replace a standard name; it receives the existing `E-NAME-RESERVED` refusal.
+
+These are structural types, not new nominal identities. Aliases, annotations,
+contextual constructors and `is`/`as` use the same resolved definitions.
+Implicit names do not add candidates to untyped constructor lookup among
+authored unions; a typed destination or an explicit local alias supplies that
+context. Existing production hashes, reference bytes, package format 24 and
+recording format 5 remain unchanged.
+
+Yoann explicitly asks to retain a later design discussion about modules and
+imports. Scope, namespace collisions across modules, visibility and import
+syntax remain undecided; this change introduces no `import`, `use` or
+`using` directive and commits to no delivery date.
+
 ## D-2026-11-03-2: Use one filename family for Rastok artifacts
 
 Yoann adopts `.rkg` for program source, `.rkp` for compiled plan packages,

@@ -74,6 +74,15 @@ aggregate. `type Name = @struct { ... }` declares a flat, annotation-capable
 struct; annotation use and interpretation are described in
 [Privacy, secrets and measurements](../guide/08-privacy-secrets-and-measurements.md).
 
+## Standard types without imports
+
+The [standard library](stdlib.md#types) lists the named types available
+without imports, including `FileExit` and `ProcessExit`. They use the same
+definitions as the Connector ports, independently of the physical Drivers
+included in the binary. Write `output failed: FileExit` without copying its
+declaration; the library reference explains name collisions and the module
+and import design still to be discussed.
+
 ## Literals and constructors
 
 | Spelling | Result | Notes |
@@ -176,6 +185,7 @@ untouched. `--check` reports a missing or stale generated file without writing.
 | Optional fields, open/mixed object or required map keys | `LossyProjection` |
 | Unknown format, discriminator, `readOnly` or `writeOnly` | `UnsupportedSource` |
 | Dynamic endpoint, no matching document or ambiguous document | Resolver refusal; no guessed endpoint |
+| Component name that is a standard type name | `UnrepresentableName`; no conflicting declaration is written |
 
 The HttpClient `json_profile = projected` setting is a separate boundary policy:
 it can skip extra fields and fill omitted nullable fields with null. It

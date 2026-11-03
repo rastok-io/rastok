@@ -53,6 +53,11 @@ For the controls and source view, see [the debugger tour](../debugger.md).
 
 ## Read the program
 
+The file starts with `type Request = struct { ... }`. This names a payload
+shape with two text fields, `tenant` and `prompt`; it does not create a
+request. `input in: Request` then uses that type on a port. The
+[type reference](../reference/types.md) explains structs and other type forms.
+
 Start with `instance = { key = data.tenant }`: it selects independent state
 for Alice and Bob. `Retry.attempts = 2` bounds Calls for one retained request,
 including the first; `lifetime` bounds how long an idle instance lives. They
@@ -120,10 +125,10 @@ rastok simulate examples/keyed-retry.rkg --compare examples/traces/two-tenants
 
 ```text
 FAIL ui_tour.two_tenants
-     expect app.done where data.tenant == "alice"  (keyed-retry.rkg:101)
+     expect app.done where data.tenant == "alice"  (keyed-retry.rkg:91)
      nothing observed
      where data.tenant == "alice" is false for 0 of 0 deliveries; count 0, expected 1
-     expect answer.in where data is Answer && data.tenant == "alice"  (keyed-retry.rkg:102)
+     expect answer.in where data is Answer && data.tenant == "alice"  (keyed-retry.rkg:92)
      nothing observed
      where data is Answer && data.tenant == "alice" is false for 0 of 0 deliveries; count 0, expected 1
      golden divergence: record 6: retry_protocol(43) . parent_id(2)[0][4]; expected e0091a67cd4992a8…(32 bytes); got 8783e6cca4a7d30f…(32 bytes); cause: TRANSACTION "model" · trigger "l:retry" · cause_id f3df1105112054d3…(16 bytes)

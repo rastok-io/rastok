@@ -11,7 +11,7 @@ does this arrival belong to, and which live instance may consume it?
 
 ## Select an instance
 
-In `examples/keyed-retry.rkg`, lines 29–31, the App declares three independent
+In `examples/keyed-retry.rkg`, lines 19–21, the App declares three independent
 policies:
 
 ```rkg

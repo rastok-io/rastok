@@ -51,7 +51,7 @@ Independent plan validation can also surface these semantic refusals.
 | `E-DUP-TYPE` | Two type declarations share a name. | Keep one definition for that name. | “the type `T` is already declared” |
 | `E-LAB-DUP` | More than one logical Lab name is declared. | Keep one Lab name; use simulation groups for different mock worlds. | “a unit has one logical Lab; use simulations for different mock worlds” |
 | `E-NAME-CLASH` | A child and a Graph port share a name. | Rename one declaration. | “`work` already names a Graph port; ports and children share one namespace” |
-| `E-NAME-RESERVED` | A declaration uses a language-reserved name. | Choose a name that is not reserved. | “`nothing` is a reserved word” |
+| `E-NAME-RESERVED` | A declaration uses a reserved name, including a standard type or annotation. | Choose another name; use standard types without redeclaring them. | “`nothing` is a reserved word” |
 | `E-RESOLVE-UNKNOWN` | A referenced name has no declaration in scope. | Declare the name or correct its spelling. | “`ghost` names neither a Graph port nor a child Node in this Graph” |
 | `E-SIM-TARGET` | A simulation targets something other than the unit's App. | Omit the target or name the complete App boundary. | “a simulation closes the unit's App; sub-graph targets are a deferred capability” |
 

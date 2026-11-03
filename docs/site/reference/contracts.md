@@ -10,6 +10,10 @@ facts. A binary built with default features (no networking) lists File and Proce
 Drivers; networking requires the hosted networking features. Run the command
 on the binary you deploy to inspect that assembly.
 
+The [standard exit types](stdlib.md#types) are available
+by name without imports. The physical Driver selection does not change those
+type definitions.
+
 A setting's latest phase is its evaluation ceiling: plan, boot, instance or
 invocation. A setting may depend on values available by that phase, but
 not on values that become available later. The compiler selects the earliest phase where its expression

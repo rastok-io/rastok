@@ -3,29 +3,20 @@
 // replies; these are not Codex's wire protocol or proof of model memory.
 type Turn = struct { tenant: text, prompt: text }
 type Reply = struct { tenant: text, answer: text }
-type ChildExit = union {
-  Exited { exit_code: int, signal: int? }
-  SpawnFailed { message: text }
-  DecodeFailed { line: text?, message: text }
-  OutputOverflow { limit: uint, reason: enum { budget, capacity } }
-  CaptureFailed {}
-  TimeoutExpired {}
-  OutcomeUnknown {}
-}
 
 graph dialogues : App {
   input in: Turn
   input close: Turn
   output out: Reply
   output invalid: text
-  output exit: ChildExit
+  output exit: ProcessExit
 
   graph conversation {
     input in: Turn
     input close: Turn
     output out: Reply
     output invalid: text
-    output exit: ChildExit
+    output exit: ProcessExit
     instance = { key = data.tenant }
 
     operator request {

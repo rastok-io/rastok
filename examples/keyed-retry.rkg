@@ -11,20 +11,10 @@ type Answer = struct {
   prompt: text
 }
 
-type ModelExit = union {
-  CaptureFailed {}
-  DecodeFailed { line: text?, message: text }
-  Exited { exit_code: int, signal: int? }
-  OutcomeUnknown {}
-  OutputOverflow { limit: uint, reason: enum { budget, capacity } }
-  SpawnFailed { message: text }
-  TimeoutExpired {}
-}
-
 graph agent_retry : App {
   input in: Request
   output done: Answer
-  output failed: ModelExit
+  output failed: ProcessExit
 
   instance = { key = data.tenant }
   lifetime = { kind = idle; after = duration("10s") }

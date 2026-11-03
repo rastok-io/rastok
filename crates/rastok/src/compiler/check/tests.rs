@@ -960,14 +960,14 @@ fn a_meta_sys_write_carries_its_normative_code() {
 #[test]
 fn a_tagged_constructor_and_its_optional_field_are_wrapped_at_check() {
     let source = r#"
-type ProcessExit = union {
+type ChildStatus = union {
   Exited { exit_code: int, signal: int? },
   SpawnFailed { message: text }
 }
 graph g : App {
   operator o {
 input in: int
-output exit: ProcessExit
+output exit: ChildStatus
 on in {
   exit = Exited { exit_code = 0, signal = null }
 }

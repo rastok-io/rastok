@@ -647,6 +647,9 @@ fn source_type_name(name: &str) -> bool {
     source_word(name)
         && !matches!(name, "true" | "false" | "null" | "nothing")
         && !crate::compiler::parser::is_builtin_type_name(name)
+        && !crate::stdlib::STANDARD_TYPES
+            .iter()
+            .any(|(standard, _)| *standard == name)
 }
 
 fn validate_member_names(ty: &DataType, document: &Path) -> Result<(), ResolveError> {
@@ -966,6 +969,44 @@ components:
             Err(ResolveError::Stale { .. })
         ));
         fs::remove_dir_all(&root).expect("remove project root");
+    }
+
+    #[test]
+    fn a_standard_type_name_refuses_before_writing_generated_source() {
+        let root = project();
+        fs::create_dir_all(&root).expect("create project root");
+        fs::write(
+            root.join("app.rkg"),
+            r#"graph g : App {
+              connector remote : HttpClient {
+                url = "https://example.test/resource"
+                timeout = duration("1s")
+                codec = json
+                idempotent = true
+                behavior = deterministic
+              }
+            }"#,
+        )
+        .expect("write source");
+        for (name, _) in crate::stdlib::STANDARD_TYPES {
+            fs::write(
+                root.join("openapi.json"),
+                serde_json::json!({
+                    "openapi": "3.1.0",
+                    "paths": { "/resource": { "get": { "responses": {} } } },
+                    "components": { "schemas": { (*name): { "type": "string" } } }
+                })
+                .to_string(),
+            )
+            .expect("write schema");
+            assert!(matches!(resolve_project(&root, ResolveMode::Write),
+                Err(ResolveError::UnrepresentableName { name: refused, .. }) if refused == *name));
+            assert!(
+                !root.join(GENERATED_FILE).exists(),
+                "no invalid declaration is written"
+            );
+        }
+        fs::remove_dir_all(root).expect("remove test project");
     }
 
     #[test]

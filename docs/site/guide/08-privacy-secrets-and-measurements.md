@@ -56,7 +56,7 @@ it safely in the journal.
 
 The current sites are specific: `HttpClient.url` accepts an exact `env()`
 reference and `HttpClient.auth_bearer` an exact `secret()` reference. Read
-`examples/agent-http.rkg`, lines 56–66:
+`examples/agent-http.rkg`, lines 44–54:
 
 ```rkg
 connector model : HttpClient {

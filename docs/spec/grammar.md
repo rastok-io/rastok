@@ -1487,6 +1487,10 @@ claimed `DECL_KW` unmaskable):
   the text type there); a user `type` declaration may not SPELL a
   builtin type — the builtin resolves first and the declaration
   would be silently dead (`E-NAME-RESERVED`, review round 3).
+  The standard names listed in [stdlib.md §1.2](stdlib.md#12-standard-types-in-source)
+  are also available without import and cannot be redeclared. They use the
+  ordinary `IDENT` type-reference production, not new keywords. A module/import
+  system remains a later design discussion, not a grammar feature of this version.
 - **Attribute names**: any expressible identifier; dots are owner
   qualification only.
 - **Bare-word VALUE positions**: any expressible word the contract's

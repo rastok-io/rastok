@@ -4,21 +4,12 @@ val alice_session = "11111111111111111111111111111111"
 val bob_session = "22222222222222222222222222222222"
 type JsonObject = map<text,variant>
 type ClientFrame = struct { nickname: text, kind: text, rpc: JsonObject }
-type ChildExit = union {
-  Exited { exit_code: int, signal: int? }
-  SpawnFailed { message: text }
-  DecodeFailed { line: text?, message: text }
-  OutputOverflow { limit: uint, reason: enum { budget, capacity } }
-  CaptureFailed {}
-  TimeoutExpired {}
-  OutcomeUnknown {}
-}
 
 graph agent_chat : App {
   // The Lab supplies decoded messages here. Real browsers use clients.out.
   input peer: variant
   output reply: variant
-  output process_exit: ChildExit
+  output process_exit: ProcessExit
   output session_exit: variant
 
   connector page : HttpServer {
@@ -77,7 +68,7 @@ graph agent_chat : App {
   graph conversation {
     input in: ClientFrame
     output out: variant
-    output exit: ChildExit
+    output exit: ProcessExit
     // Both listeners stay outside this scope: only conversations get children.
     instance = { key = data.nickname }
     lifetime = { kind = idle; after = duration("5m") }

@@ -158,18 +158,18 @@ env RASTOK_SHOWCASE_PARTNER_TOKEN=lab-only-not-a-credential RASTOK_SHOWCASE_PART
 FAIL webhook.nominal
      golden divergence: record 12: retry_protocol(43) . parent_id(2)[0][4]; expected [REDACTED]; got [REDACTED]; cause: [REDACTED]
 FAIL webhook.timeout_then_success
-     expect [REDACTED]  (webhook-to-partner.rkg:173)
+     expect [REDACTED]  (webhook-to-partner.rkg:161)
      observed: [REDACTED]
      Assertion evidence is redacted because this program carries classified data.
-     expect [REDACTED]  (webhook-to-partner.rkg:175)
+     expect [REDACTED]  (webhook-to-partner.rkg:163)
      observed: [REDACTED]
      Assertion evidence is redacted because this program carries classified data.
-     expect [REDACTED]  (webhook-to-partner.rkg:176)
+     expect [REDACTED]  (webhook-to-partner.rkg:164)
      observed: [REDACTED]
      Assertion evidence is redacted because this program carries classified data.
      golden divergence: record 12: retry_protocol(43) . parent_id(2)[0][4]; expected [REDACTED]; got [REDACTED]; cause: [REDACTED]
 FAIL webhook.partner_dead
-     expect [REDACTED]  (webhook-to-partner.rkg:185)
+     expect [REDACTED]  (webhook-to-partner.rkg:173)
      observed: [REDACTED]
      Assertion evidence is redacted because this program carries classified data.
      golden divergence: record 12: retry_protocol(43) . parent_id(2)[0][4]; expected [REDACTED]; got [REDACTED]; cause: [REDACTED]
@@ -177,10 +177,10 @@ FAIL webhook.duplicate
      golden divergence: record 12: retry_protocol(43) . parent_id(2)[0][4]; expected [REDACTED]; got [REDACTED]; cause: [REDACTED]
 PASS webhook.invalid_payload
 FAIL webhook.http_500
-     expect [REDACTED]  (webhook-to-partner.rkg:221)
+     expect [REDACTED]  (webhook-to-partner.rkg:209)
      observed: [REDACTED]
      Assertion evidence is redacted because this program carries classified data.
-     expect [REDACTED]  (webhook-to-partner.rkg:224)
+     expect [REDACTED]  (webhook-to-partner.rkg:212)
      observed: [REDACTED]
      Assertion evidence is redacted because this program carries classified data.
      golden divergence: record 12: retry_protocol(43) . parent_id(2)[0][4]; expected [REDACTED]; got [REDACTED]; cause: [REDACTED]

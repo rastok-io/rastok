@@ -193,6 +193,14 @@ expansion is the type identity, so renaming an alias does not change a
 plan. Tagged-union case names are not aliases and do affect identity.
 Recursive aliases remain illegal in v1.
 
+The standard library makes `FileExit`, `ProcessExit`, `HttpClientExit`,
+`HttpServerExit` and `WebSocketExit` available in every compilation unit,
+without an import or a local declaration. They resolve to the same logical
+types as the corresponding Connector ports, including in aliases, nested
+types and `is`/`as`. Their names cannot be redeclared (`E-NAME-RESERVED`).
+Only their resolved structures enter a plan, not this implicit type scope.
+See [stdlib.md §1.2](stdlib.md#12-standard-types-in-source).
+
 **Flat data declarations implemented; annotation binding still staged:** [D-2026-09-15-5](decisions.md#d-2026-09-15-5--define-flat-annotation-capable-structs-with-one-type-system)
 adds the flat annotation-capable declaration `type Name = @struct { ... }`.
 Its data values reuse ordinary struct/scalar types; its annotation definition
@@ -480,8 +488,10 @@ port emission.
 
 `Case { ... }` occupies one complete host value position. The parser records
 the shape without consulting a type registry; the checker resolves the case
-from the typed destination or, without one, from exactly one named union in
-the compilation unit. Reusing a case name across unions is legal, but an
+from the typed destination or, without one, from exactly one explicitly
+declared named union in the compilation unit. Implicit standard types do not
+add cases to that untyped search: use a typed destination or declare a local
+alias to provide the context. Reusing a case name across unions is legal, but an
 untyped construction is then ambiguous and must acquire an explicit typed
 destination. Payload fields are closed, unique and canonicalized by name.
 This constructor does not revive old configuration initializers: an obsolete

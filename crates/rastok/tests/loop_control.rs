@@ -168,16 +168,6 @@ type Attempt = struct {
   tenant: text
   attempt: int
 }
-type ProcessExit = union {
-  CaptureFailed {}
-  DecodeFailed { line: text?, message: text }
-  Exited { exit_code: int, signal: int? }
-  OutcomeUnknown {}
-  OutputOverflow { limit: uint, reason: enum { budget, capacity } }
-  SpawnFailed { message: text }
-  TimeoutExpired {}
-}
-
 graph keyed_retry : App + Loop {
   input in: Attempt
   output err: union { LoopExpired { last_state: Attempt } }

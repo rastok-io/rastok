@@ -8,19 +8,7 @@ type Webhook = struct {
 type Delivered = struct { event_id: text, status: int }
 type Failure = union {
   Rejected { reason: text }
-  PartnerFailed { event_id: text, terminal: PartnerExit }
-}
-type PartnerExit = union {
-  Completed { status: int }
-  ServerError { status: int }
-  DnsFailed {}
-  ConnectFailed {}
-  TlsFailed {}
-  ProtocolFailed {}
-  TimeoutExpired {}
-  BodyTooLarge { limit: uint }
-  DecodeFailed {}
-  OutcomeUnknown {}
+  PartnerFailed { event_id: text, terminal: HttpClientExit }
 }
 type Receipt = struct {
   charge: decimal(38,18) @measure(id = amount, unit = "USD")
@@ -106,7 +94,7 @@ graph webhook_to_partner : App {
     }
 
     operator decide {
-      input in: PartnerExit
+      input in: HttpClientExit
       output done: Delivered
       output failed: Failure
       on in match {

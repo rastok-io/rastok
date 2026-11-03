@@ -474,6 +474,10 @@ in the checker and core, without changing the runtime, plan format or goldens.
 
 ## Later: incident lab and safe dogfood
 
+- Discuss language modules and explicit imports: boundaries, namespaces,
+  visibility and name collisions. Standard Contract types are currently
+  available without import (D-2026-11-03-3); this does not settle a module
+  syntax or a delivery date.
 - Qualify derived Retry journal indexes before M2 durable storage: current
   prefix scans can make long histories quadratic in total work. Preserve the
   retained arm order and exact recovery facts; the

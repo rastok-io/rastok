@@ -31,7 +31,7 @@ point for the alpha's limits.
 
 ## One Contract, different operations
 
-The reader in `examples/file-pipeline.rkg`, lines 22–27, declares one
+The reader in `examples/file-pipeline.rkg`, lines 10–15, declares one
 bounded operation per input:
 
 ```rkg
@@ -49,7 +49,7 @@ to read an arbitrary host path. That root is a resolution base, not a
 portable security sandbox. The read publishes the complete bytes or no
 `out` value; exceeding `max_read` produces `ReadLimitExceeded`.
 
-The writer, lines 38–42, selects another mode of the same Contract:
+The writer, lines 26–30, selects another mode of the same Contract:
 
 ```rkg
 connector write_file : File {
@@ -78,7 +78,7 @@ on `exit`. Process uses `err` for stderr. HTTP Contracts have no implicit
 `err`. The names are conventions whose actual meaning comes from the
 resolved Contract, not three universal success and fault channels.
 
-The file Graph makes both final dispositions explicit, at lines 49–50:
+The file Graph makes both final dispositions explicit, at lines 37–38:
 
 ```rkg
 read_file.exit -> match { Completed -> nothing; _ -> failed }
@@ -92,7 +92,7 @@ stop the whole Node instance; an instance may serve further invocations.
 
 ## Admission is not business success
 
-The webhook listener, from `examples/webhook-to-partner.rkg`, lines 35–40,
+The webhook listener, from `examples/webhook-to-partner.rkg`, lines 23–28,
 uses the default `ack` mode:
 
 ```rkg

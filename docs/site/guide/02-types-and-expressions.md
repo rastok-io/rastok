@@ -13,8 +13,13 @@ contents satisfy your application.
 
 A port carries an envelope. Its `data` is the payload the Operator works
 on; `meta` carries separate provenance and application metadata. The
-payload has one resolved logical type. Leaving off an annotation asks the
-compiler to infer that type before execution.
+payload has one resolved logical type. When a port declaration omits its
+type, the compiler must infer it before execution.
+
+A type describes which values are allowed. `type Name = ...` gives that
+description a name; it does not create a value. A port declaration such as
+`output out: Webhook` uses the named type to constrain its payload. See the
+[type reference](../reference/types.md) for the available forms.
 
 The webhook example names the shape it needs. This declaration is from
 `examples/webhook-to-partner.rkg`, lines 3–7:
@@ -39,13 +44,18 @@ names, such as File's `Completed` and `NotFound`, select observable outcomes.
 Use the existing declarations as the starting point, not an assumption
 that every pair of JSON-looking objects is interchangeable.
 
+Types such as `FileExit` and `ProcessExit` come from the standard library;
+use them without copying their declarations or importing them. The
+[standard library reference](../reference/stdlib.md#types) lists
+these names. Modules and explicit imports remain a later design discussion.
+
 ## Test before projecting
 
 With `codec = json`, the webhook listener supplies a `variant`: a decoded
 value whose application shape is not yet known. An Operator cannot simply
 read arbitrary members of it. It first tests and narrows the value.
 
-The validation Operator, from the same file, lines 42–53, separates shape
+The validation Operator, from the same file, lines 30–41, separates shape
 validation from the business rule:
 
 ```rkg
@@ -77,7 +87,7 @@ through the Connector.
 ## Keep bytes and text distinct
 
 File reads produce `bytes`. Its inspection Operator, from
-`examples/file-pipeline.rkg`, lines 28–37, accepts only nonempty bytes:
+`examples/file-pipeline.rkg`, lines 16–25, accepts only nonempty bytes:
 
 ```rkg
 operator inspect {

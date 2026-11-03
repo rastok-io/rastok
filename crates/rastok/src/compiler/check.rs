@@ -294,6 +294,21 @@ pub fn check(
         return None;
     }
     let app = apps[0];
+    let standard_types = crate::stdlib::STANDARD_TYPES
+        .iter()
+        .map(|(name, ty)| ty.resolve().map(|ty| (String::from(*name), ty)))
+        .collect::<Result<BTreeMap<_, _>, _>>();
+    let standard_types = match standard_types {
+        Ok(types) => types,
+        Err(error) => {
+            bag.push(Diagnostic::new(
+                crate::compiler::E_INTERNAL_PLAN,
+                Phase::Check,
+                format!("a standard type definition is invalid: {error}"),
+            ));
+            return None;
+        }
+    };
     let mut checker = Checker {
         bag,
         registry,
@@ -305,6 +320,7 @@ pub fn check(
         asset_root: asset_root.map(std::path::Path::to_path_buf),
         assets: Vec::new(),
         type_decls: BTreeMap::new(),
+        standard_types,
         annotation_origins: BTreeMap::new(),
         resolved_types: BTreeMap::new(),
         resolved_named_schemas: BTreeMap::new(),
@@ -486,6 +502,10 @@ struct Checker<'bag, 'registry> {
     /// The unit's named types (D-2026-08-10-8): structural sugar,
     /// pre-validated for cycles and budgets at collection.
     type_decls: BTreeMap<String, crate::compiler::syntax::TypeRef>,
+    /// Canonical Contract types available without an authored declaration.
+    /// Kept apart from source aliases so implicit case names do not make an
+    /// existing untyped constructor ambiguous; typed destinations resolve them.
+    standard_types: BTreeMap<String, DataType>,
     /// Declaring identity survives structural alias-chain collapse.
     annotation_origins: BTreeMap<String, String>,
     /// Named aliases expanded to their logical type for `is`/`as`. Expression
@@ -603,8 +623,9 @@ impl Checker<'_, '_> {
     ) -> Option<(expr::Tree, Option<String>)> {
         let signature = self.unit_signature(signature);
         let signature = self
-            .resolved_types
+            .standard_types
             .iter()
+            .chain(self.resolved_types.iter())
             .fold(signature, |signature, (name, ty)| {
                 signature.with_type(name.clone(), ty.clone())
             });
@@ -4446,10 +4467,8 @@ impl Checker<'_, '_> {
         false
     }
 
-    /// A user type name additionally may not spell a BUILTIN type:
-    /// the builtin resolves first, so the declaration would be dead
-    /// code shadowed in silence (review round 3 — `type text = int`
-    /// compiled to the same program as its absence).
+    /// Builtin and standard names have one definition. Reject a replacement
+    /// at its declaration rather than silently resolving to a different type.
     fn guard_type_name(&mut self, name: &crate::compiler::syntax::Name) -> bool {
         if !self.guard_binding_name(name, "a type name") {
             return false;
@@ -4460,6 +4479,10 @@ impl Checker<'_, '_> {
                 name.text
             )),
             "cost" => Some("`cost` is retired; use `@measure(id = amount, ...)`, not a replacement annotation definition".to_owned()),
+            _ if self.standard_types.contains_key(&name.text) => Some(format!(
+                "`{}` is a standard type; a user definition cannot replace it",
+                name.text
+            )),
             _ => None,
         };
         if let Some(message) = protected {
@@ -4799,6 +4822,9 @@ impl Checker<'_, '_> {
                 }
             }
             BaseType::Named(name) => {
+                if let Some(ty) = self.standard_types.get(&name.text) {
+                    return Some(ty.clone());
+                }
                 let Some(aliased) = self.type_decls.get(&name.text).cloned() else {
                     self.bag.push(
                         Diagnostic::new(
@@ -5002,6 +5028,11 @@ impl Checker<'_, '_> {
         match source {
             BaseType::Scalar(_) | BaseType::Variant | BaseType::Enum(_) => Some(()),
             BaseType::Named(name) => {
+                // Standard exit types contain no data-policy annotations.
+                // An annotation on this use was collected before this walk.
+                if self.standard_types.contains_key(&name.text) {
+                    return Some(());
+                }
                 let aliased = self.type_decls.get(&name.text).cloned()?;
                 if self.type_stack.contains(&name.text) {
                     return None;
@@ -5660,6 +5691,11 @@ impl Checker<'_, '_> {
                 let crate::compiler::syntax::BaseType::Named(next) = &ty.alternatives[0] else {
                     unreachable!("just matched");
                 };
+                if self.standard_types.contains_key(&next.text) {
+                    // Keep the final reference to the canonical type, rather
+                    // than leaving a chain whose terminal has no source AST.
+                    break;
+                }
                 current = next.text.clone();
                 hops += 1;
                 if hops > 512 || current == name {
@@ -5842,6 +5878,12 @@ impl Checker<'_, '_> {
             }
             match base {
                 BaseType::Named(name) => {
+                    if self.standard_types.contains_key(&name.text) {
+                        // No source cycle or duplicate field can occur here.
+                        // resolve_plain_type_ref checks the complete expanded
+                        // DataType's bounds, including this standard subtree.
+                        continue;
+                    }
                     // The alias-follow budget (D-2026-08-10-8 as
                     // delivered): names are semantically transparent
                     // but FOLLOWING them is work — a 50 000-link

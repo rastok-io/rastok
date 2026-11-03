@@ -1,13 +1,24 @@
-//! Standard tagged frontends, annotations and media-type completion names.
+//! Standard type names, tagged frontends, annotations and media-type completions.
 //!
-//! This module supplies the compiler's frontend and annotation declarations
-//! and the media-type names offered by tooling, as specified in [`stdlib.md`].
+//! This module supplies the compiler's type names, frontend and annotation
+//! declarations and tooling's media-type names, as specified in [`stdlib.md`].
 //! Standard Connector definitions live separately in [`crate::connector::stdlib`]
 //! and are shared with the independent package validator.
 //!
 //! [`stdlib.md`]: https://github.com/rastok-io/rastok/blob/main/docs/spec/stdlib.md
 
+use crate::connector::contract::PortDataType;
 use crate::contract::{FrontendContract, FrontendFraming, FrontendReader};
+
+/// Implicit source names for the Contracts' canonical types, not copies of
+/// their cases. Physical Driver features do not change the language's types.
+pub(crate) const STANDARD_TYPES: &[(&str, PortDataType)] = &[
+    ("FileExit", PortDataType::FileExit),
+    ("ProcessExit", PortDataType::ProcessExit),
+    ("HttpClientExit", PortDataType::HttpClientExit),
+    ("HttpServerExit", PortDataType::HttpServerExit),
+    ("WebSocketExit", PortDataType::WebSocketExit),
+];
 
 /// Hosted declarations; runtime interpretation is retained in the resolved plan.
 pub(crate) const ANNOTATION_DEFINITIONS: &str = include_str!("stdlib/annotations.rkg");

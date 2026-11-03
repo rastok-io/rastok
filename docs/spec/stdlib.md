@@ -114,6 +114,30 @@ external namespaces must contain a dot. Current ids are
 and `std/websocket-server@3`. Only these exact Contracts execute in M1.
 Source names such as `Process` remain unchanged.
 
+### 1.2 Standard types in source
+
+These names are available in every compilation unit without an import.
+They resolve directly to the logical types defined by the standard Contracts,
+independently of which physical Drivers the binary includes.
+
+| Type name | Contract terminal |
+|---|---|
+| `FileExit` | File `exit`, in `read` and `replace` modes |
+| `ProcessExit` | Process `exit`, in `job` and `service` modes |
+| `HttpClientExit` | HttpClient `exit` |
+| `HttpServerExit` | HttpServer `exit` |
+| `WebSocketExit` | WebSocketClient and WebSocketServer `exit` |
+
+An author may write `output failed: FileExit`, use a standard type inside a
+struct or collection, or declare an application alias such as
+`type StorageResult = FileExit`. A declaration that replaces a standard name
+refuses with `E-NAME-RESERVED`. The standard annotations `sensitive`, `secret`,
+`personal` and `measure` also remain implicitly available.
+
+The current language has no module or import directive. Module boundaries,
+explicit imports and namespace rules require a later design discussion;
+this implicit availability does not decide their syntax or delivery date.
+
 ## 2. `behavior` — determinism, separate from idempotence
 
 The world's *timing* nondeterminism is already journal-absorbed
@@ -342,7 +366,8 @@ writes. Service has no per-turn timeout: an application can express its own
 bounded rendezvous; instance lifetime and Closing bound resource lifetime.
 
 `ProcessExit` is an ordinary tagged union on the ordinary `exit`
-port:
+port. Its standard definition is shown below for reference; authors use
+the name directly rather than redeclaring it:
 
 ```rastok
 type ProcessExit = union {

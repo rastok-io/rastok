@@ -14,7 +14,7 @@ No front-matter field changes with this handoff.
 
 For the authorized 5 November opening, prefer a minimal Starlight deployment
 serving General (Overview, Getting Started and the debugger tour), nine
-User Guide chapters, eight examples and Reference (five index-level pages
+User Guide chapters, eight examples and Reference (six index-level pages
 and six Connector pages). If that cannot be ready,
 serve a 301 from the documentation domain to the actual gallery page on
 `www.rastok.com`, replacing it with the documentation site in November. The
@@ -113,9 +113,11 @@ pinned checkout, including heading fragments.
 
 ### Reference pages
 
-The `reference/` section follows Examples. Its five index-level pages use only
+The `reference/` section follows Examples. Its six index-level pages use only
 `title`, `description` and `order`: `types.md` (1), `expressions.md` (2),
-`contracts.md` (3), `lab.md` (4) and `diagnostics.md` (5). After the contract
+`contracts.md` (3), `lab.md` (4), `diagnostics.md` (5) and `stdlib.md` (6).
+The standard library page lists the implicitly available types and links to
+the existing Contract, annotation and value-frontend references. After the contract
 index, a nested Connectors group contains six pages under
 `reference/connectors/`: `file.md` (1), `process.md` (2), `http-client.md` (3),
 `http-server.md` (4), `websocket-client.md` (5) and `websocket-server.md` (6).

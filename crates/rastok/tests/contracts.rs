@@ -54,6 +54,179 @@ fn refusal_with(source: &str, code: &str, needle: &str) {
 }
 
 #[test]
+fn standard_exit_types_are_available_without_declarations_or_imports() {
+    for (name, rule) in [
+        ("FileExit", PortDataType::FileExit),
+        ("ProcessExit", PortDataType::ProcessExit),
+        ("HttpClientExit", PortDataType::HttpClientExit),
+        ("HttpServerExit", PortDataType::HttpServerExit),
+        ("WebSocketExit", PortDataType::WebSocketExit),
+    ] {
+        let source =
+            format!("graph g : App {{\n input in: {name}\n output out: {name}\n in -> out\n}}");
+        let compilation = compile_one(&source).expect("a standard type needs no declaration");
+        let expected = rule.resolve().expect("the Contract's canonical type");
+        for port in &compilation.plan.nodes[0].ports {
+            assert_eq!(port.ty.as_ref(), Some(&expected), "{name}: {port:?}");
+        }
+    }
+}
+
+#[test]
+fn standard_exit_aliases_preserve_schema_policy_and_package_identity() {
+    let file_union = "union { Completed {}, NotFound {}, NotAFile {}, PermissionDenied {}, InvalidPath {}, ReadLimitExceeded { limit: uint }, AtomicReplaceUnavailable {}, IoFailed {}, TimeoutExpired {}, OutcomeUnknown {} }";
+    let source = r#"
+type Exit = FileExit
+type Result = struct {
+  outcome: Exit? @sensitive(level = confidential)
+  history: array<Exit>
+}
+graph g : App {
+  input in: Result
+  output out: Result
+  in -> out
+}
+"#;
+    let implicit =
+        compile_one(source).expect("standard types compose with aliases and annotations");
+    let expanded = compile_one(&source.replace("FileExit", file_union))
+        .expect("an independently written structural definition");
+    assert_eq!(implicit.hash, expanded.hash);
+    assert_eq!(implicit.plan, expanded.plan);
+    assert_eq!(
+        rastok::plan::encode(&implicit.plan, &implicit.hash),
+        rastok::plan::encode(&expanded.plan, &expanded.hash),
+        "source availability is not a package-format change"
+    );
+}
+
+#[test]
+fn standard_exit_names_cannot_be_redeclared() {
+    for name in [
+        "FileExit",
+        "ProcessExit",
+        "HttpClientExit",
+        "HttpServerExit",
+        "WebSocketExit",
+    ] {
+        let source = format!("type {name} = text\ngraph g : App {{ input in: text\n in -> out }}");
+        let bag = compile_one(&source).expect_err("a standard name has one definition");
+        let diagnostic = bag
+            .diagnostics()
+            .iter()
+            .find(|d| d.code().as_str() == "E-NAME-RESERVED")
+            .expect("the existing naming refusal");
+        assert_eq!(&source[diagnostic.spans()[0].range()], name);
+        assert!(diagnostic.message().contains("standard type"));
+    }
+}
+
+#[test]
+fn standard_exit_types_support_narrowing_and_contextual_constructors() {
+    for (name, constructor) in [
+        ("FileExit", "Completed {}"),
+        ("ProcessExit", "Exited { exit_code = 0, signal = null }"),
+        ("HttpClientExit", "Completed { status = 200 }"),
+        ("HttpServerExit", "Completed { status = 202 }"),
+        ("WebSocketExit", "Closed { code = 1000, reason = \"done\" }"),
+    ] {
+        let source = format!(
+            r#"
+graph g : App {{
+  input in: variant
+  output out: {name}
+  operator narrow {{
+    input in: variant
+    output out: {name}
+    on in match {{
+      data is {name} => out = data as {name}
+      _ => out = {constructor}
+    }}
+  }}
+  in -> narrow -> out
+}}
+lab g {{
+  scenario fallback {{
+    app.in = "not an exit"
+    expect app.out == {constructor}
+  }}
+}}
+"#
+        );
+        let compilation =
+            compile_one(&source).expect("standard type in every contextual type position");
+        let runs = rastok::lab::run_program(
+            &compilation.plan,
+            compilation.hash,
+            rastok::plan::GraphVersion(1),
+            &compilation.labs[0],
+            None,
+        );
+        assert_eq!(runs.len(), 1);
+        assert!(runs[0].report.passed(), "{name}: {runs:?}");
+    }
+    refusal_with(
+        "graph g : App { operator o { output out: FileExit\n on in { out = Completed { status = 200 } } }\n in -> o -> out }",
+        "E-PORT-TYPE",
+        "closed payload",
+    );
+}
+
+#[test]
+fn implicit_standard_cases_leave_authored_constructor_lookup_unchanged() {
+    compile_one(
+        r#"
+type Result = union { Completed {} }
+graph g : App {
+  input in: text
+  operator o {
+    on in { out = Completed {} }
+  }
+  in -> o -> out
+}
+"#,
+    )
+    .expect("the sole authored union still supplies untyped constructor context");
+}
+
+#[test]
+fn standard_exit_expansions_still_spend_the_type_budgets() {
+    for (arrays, accepted) in [(125, true), (126, false)] {
+        let source = format!(
+            "type Deep = {}FileExit{}\ngraph g : App {{ input in: text\n in -> out }}",
+            "array<".repeat(arrays),
+            ">".repeat(arrays)
+        );
+        let result = compile_one(&source);
+        if accepted {
+            result.expect("the standard payload fits at the last admitted level");
+        } else {
+            let bag = result.expect_err("even an unused alias spends the full expansion depth");
+            assert!(
+                bag.diagnostics()
+                    .iter()
+                    .any(|d| d.code().as_str() == "E-TYPE-BUDGET"
+                        && d.fields()
+                            .iter()
+                            .any(|(key, value)| *key == "depth" && value == "129")),
+                "{bag:?}"
+            );
+        }
+    }
+    let fields = (0..256)
+        .map(|i| format!("field_{i}: ProcessExit"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    refusal_with(
+        &format!(
+            "type Wide = struct {{ {fields} }}\ngraph g : App {{ input in: text\n in -> out }}"
+        ),
+        "E-TYPE-BUDGET",
+        "node count",
+    );
+}
+
+#[test]
 fn all_four_network_contracts_cross_the_source_to_validated_plan_boundary() {
     let cases = [
         (

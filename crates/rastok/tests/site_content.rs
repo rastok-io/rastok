@@ -282,7 +282,7 @@ fn reference_pages_have_the_simple_ordered_contract() {
                 .extension()
                 .is_some_and(|ext| ext == "md"))
             .count(),
-        5
+        6
     );
     let mut orders = std::collections::BTreeSet::new();
     for (index, filename) in [
@@ -291,6 +291,7 @@ fn reference_pages_have_the_simple_ordered_contract() {
         "contracts.md",
         "lab.md",
         "diagnostics.md",
+        "stdlib.md",
     ]
     .iter()
     .enumerate()
@@ -302,6 +303,16 @@ fn reference_pages_have_the_simple_ordered_contract() {
         assert_eq!(page.order as usize, index + 1);
         assert!(!body.contains("After this chapter"));
         assert!(body.contains("\n## Specified, not shipped\n"));
+    }
+    let (_, library) = markdown(&directory.join("stdlib.md"));
+    for name in [
+        "FileExit",
+        "ProcessExit",
+        "HttpClientExit",
+        "HttpServerExit",
+        "WebSocketExit",
+    ] {
+        assert!(library.contains(&format!("`{name}`")), "{name}");
     }
 }
 

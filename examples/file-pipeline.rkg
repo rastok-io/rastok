@@ -1,23 +1,11 @@
 // Bounded File read, byte count and empty-file validation, atomic replacement.
 // The deployment root is supplied by --file-root; the Lab never opens a file.
-type FileExit = union {
-  Completed {}
-  NotFound {}
-  NotAFile {}
-  PermissionDenied {}
-  InvalidPath {}
-  ReadLimitExceeded { limit: uint }
-  AtomicReplaceUnavailable {}
-  IoFailed {}
-  TimeoutExpired {}
-  OutcomeUnknown {}
-}
 
 graph file_pipeline : App {
   input in: text
   output bytes_read: int
   output empty: bool
-  output failed: FileExit
+  output failed: FileExit // Standard-library type; no import is needed.
 
   connector read_file : File {
     mode = read

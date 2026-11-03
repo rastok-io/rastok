@@ -49,6 +49,13 @@ decides whether the bytes should continue. Follow the `exit` routes too:
 a refused read has a destination, rather than disappearing into a log.
 The Lab replaces both file operations, using the same resolved port types.
 
+In a port declaration, the name after `:` is its payload's type: the values
+it may accept or emit. `output failed: FileExit` declares an output port
+named `failed`, not a new type. See the [type reference](../reference/types.md)
+for the notation. `FileExit` comes from the [standard library](../reference/stdlib.md#types),
+without an import or copied declaration; its cases are the ones on File's
+`exit` port.
+
 The [Lab reference](../reference/lab.md) explains mock responses, expectations
 and observation windows. `advance` supplies virtual time; a mock's terminal
 response ends its simulated exchange, not the whole scenario.
@@ -126,19 +133,19 @@ rastok simulate examples/file-pipeline.rkg --compare examples/traces/file-pipeli
 
 ```text
 FAIL files.copy
-     expect app.bytes_read == 11  (file-pipeline.rkg:62)
+     expect app.bytes_read == 11  (file-pipeline.rkg:50)
      nothing observed
      expected 1 matching delivery on app.bytes_read, but observed 0
-     expect write_file.in where size(data) == 11  (file-pipeline.rkg:63)
+     expect write_file.in where size(data) == 11  (file-pipeline.rkg:51)
      nothing observed
      where size(data) == 11 is false for 0 of 0 deliveries; count 0, expected 1
      golden divergence: record 7: emissions(23)[0][0]; expected "bytes_read"; got "empty"; cause: TRANSACTION "inspect" · trigger "p:in" · cause_id absent
 PASS files.empty
 FAIL files.utf8
-     expect app.bytes_read == 3  (file-pipeline.rkg:75)
+     expect app.bytes_read == 3  (file-pipeline.rkg:63)
      nothing observed
      expected 1 matching delivery on app.bytes_read, but observed 0
-     expect write_file.in where size(data) == 3  (file-pipeline.rkg:76)
+     expect write_file.in where size(data) == 3  (file-pipeline.rkg:64)
      nothing observed
      where size(data) == 3 is false for 0 of 0 deliveries; count 0, expected 1
      golden divergence: record 7: emissions(23)[0][0]; expected "bytes_read"; got "empty"; cause: TRANSACTION "inspect" · trigger "p:in" · cause_id absent

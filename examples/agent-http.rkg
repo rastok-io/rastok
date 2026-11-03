@@ -21,24 +21,12 @@ type ModelResponse = struct {
   error: JsonObject?
 }
 type UnknownUsage = struct { session: text, job: text, reason: text }
-type HttpExit = union {
-  Completed { status: int }
-  ServerError { status: int }
-  DnsFailed {}
-  ConnectFailed {}
-  TlsFailed {}
-  ProtocolFailed {}
-  TimeoutExpired {}
-  BodyTooLarge { limit: uint }
-  DecodeFailed {}
-  OutcomeUnknown {}
-}
 
 graph agent_http : App {
   input in: Job
   output response: ModelResponse
   output unknown: UnknownUsage
-  output failed: HttpExit
+  output failed: HttpClientExit
   instance = { key = data.session }
 
   operator request {
@@ -75,8 +63,8 @@ graph agent_http : App {
     }
   }
   operator terminal {
-    input in: HttpExit
-    output failed: HttpExit
+    input in: HttpClientExit
+    output failed: HttpClientExit
     output unknown: UnknownUsage
     on in match {
       data is Completed => match {

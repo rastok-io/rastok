@@ -6,22 +6,13 @@ val bob_session = "22222222222222222222222222222222"
 val thread_id = "thread-1"
 
 type JsonObject = map<text,variant>
-type ChildExit = union {
-  Exited { exit_code: int, signal: int? }
-  SpawnFailed { message: text }
-  DecodeFailed { line: text?, message: text }
-  OutputOverflow { limit: uint, reason: enum { budget, capacity } }
-  CaptureFailed {}
-  TimeoutExpired {}
-  OutcomeUnknown {}
-}
 
 graph agent_gateway : App {
   // Public fixture ingress; real clients enter through clients.out instead.
   input peer: variant
   input close: variant
   output reply: variant
-  output process_exit: ChildExit
+  output process_exit: ProcessExit
   output session_exit: variant
 
   connector clients : WebSocketServer {
@@ -38,7 +29,7 @@ graph agent_gateway : App {
     input in: variant
     input close: variant
     output out: variant
-    output exit: ChildExit
+    output exit: ProcessExit
     instance = { key = meta.ext.session_id }
     lifetime = { kind = idle; after = duration("5m") }
     closing = { drain_for = duration("1s"); settle_for = duration("1s") }
