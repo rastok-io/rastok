@@ -77,7 +77,10 @@ discard, not an unwired output that the runtime happens to ignore.
 Every output the compiler considers possible needs a destination. A
 statically proven impossible output is exempt. Removing either discard
 from this Graph produces `E-UNWIRED-OUTPUT`. A discarded emission remains
-visible in the journal and in Lab expectations.
+visible in the journal and in Lab expectations. The journal is not a log
+ordered by the clock: it links each output to the decision and the input
+that caused it; the [Overview](../index.md#what-a-run-leaves-behind)
+contrasts the two.
 
 ## Check before running
 

@@ -142,7 +142,7 @@ the recorded transitions and the visible limits.
 - **A Lab in the same source.** Simulations script the outside world with
   mocks, virtual time and faults. Scenarios are versioned with the graph and
   compared with golden traces.
-- **One causal journal.** Every transaction and boundary outcome is recorded.
+- **One journal that explains each run.** Every transaction and boundary outcome is recorded with the decision and the input that caused it.
   A run is a function of the graph and its journal, so it can be replayed and
   compared record by record.
 - **A paused visual debugger.** `simulate --ui` steps through recorded

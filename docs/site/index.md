@@ -186,8 +186,17 @@ same checked program can later use real Drivers.
 
 ### What a run leaves behind
 
-Execution writes an in-memory journal: typed records in causal order for
-what came in, what was decided and what went out. Three things use it.
+Execution writes an in-memory journal. It is not a log.
+
+| A log | The journal |
+|---|---|
+| Orders events by the machine clock | Links each output to the decision and the input that caused it |
+| Differs at every run: timestamps, latencies, interleavings | For the same scenario, the same records on another machine, byte for byte |
+| Says what happened; the reader guesses why | Keeps the whole chain from cause to effect |
+
+That chain is what *causal* means on this site: typed records, in causal
+order, for what came in, what was decided and what went out. Three things
+use the journal.
 
 ```mermaid
 flowchart LR
