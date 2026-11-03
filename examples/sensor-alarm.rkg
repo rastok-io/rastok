@@ -48,32 +48,30 @@ graph sensor_alarm : App {
   watchdog.expired -> silent
 }
 
-lab sensor_alarm {
-  simulation sensors on app {
-    scenario hysteresis "separate thresholds and separate sensor states" {
-      app.reading = { sensor = "pump-a"; value = 121 }
-      expect app.alarm count == 1 where data.sensor == "pump-a" && data.state == "tripped"
-      app.reading = { sensor = "pump-a"; value = 100 }
-      expect nothing app.alarm
-      app.reading = { sensor = "pump-b"; value = 100 }
-      expect nothing app.alarm
-      app.reading = { sensor = "pump-a"; value = 79 }
-      expect app.alarm count == 1 where data.state == "normal"
-    }
-    scenario silent_sensor "only the unanswered probe expires" {
-      app.probe = { sensor = "pump-a" }
-      app.probe = { sensor = "pump-b" }
-      app.heartbeat = { sensor = "pump-b" }
-      expect app.alive count == 1 where data == "pump-b"
-      advance duration("5m")
-      expect app.silent count == 1 where data is JoinExpired
-      expect nothing app.alive
-    }
-    scenario virtual_day "twenty-four hours without waiting twenty-four hours" {
-      app.probe = { sensor = "pump-a" }
-      advance duration("24h")
-      expect app.silent count == 1 where data is JoinExpired
-      expect nothing app.alarm
-    }
+lab sensors {
+  scenario hysteresis {
+    app.reading = { sensor = "pump-a"; value = 121 }
+    expect app.alarm where data.sensor == "pump-a" && data.state == "tripped"
+    app.reading = { sensor = "pump-a"; value = 100 }
+    expect app.alarm == nothing
+    app.reading = { sensor = "pump-b"; value = 100 }
+    expect app.alarm == nothing
+    app.reading = { sensor = "pump-a"; value = 79 }
+    expect app.alarm where data.state == "normal"
+  }
+  scenario silent_sensor {
+    app.probe = { sensor = "pump-a" }
+    app.probe = { sensor = "pump-b" }
+    app.heartbeat = { sensor = "pump-b" }
+    expect app.alive == "pump-b"
+    advance duration("5m")
+    expect app.silent where data is JoinExpired
+    expect app.alive == nothing
+  }
+  scenario virtual_day {
+    app.probe = { sensor = "pump-a" }
+    advance duration("24h")
+    expect app.silent where data is JoinExpired
+    expect app.alarm == nothing
   }
 }

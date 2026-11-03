@@ -2,7 +2,7 @@
 
 use crate::compiler::{
     Compilation,
-    hir::{Cmp, ExpectTarget, Quantifier, ScenarioStep},
+    hir::{ExpectFilter, ExpectTarget, ScenarioStep},
 };
 use crate::lab::ScenarioReport;
 
@@ -92,26 +92,12 @@ pub fn scenario_failures(compilation: &Compilation, report: &ScenarioReport) -> 
                 lines.push(format!("observed {target}: {content}"));
             }
         }
-        let expected = match expectation.quantifier {
-            Quantifier::Exists => String::from("at least 1"),
-            Quantifier::Nothing => String::from("0"),
-            Quantifier::Count(cmp, count) => {
-                let comparison = match cmp {
-                    Cmp::Eq => "",
-                    Cmp::Ne => "!= ",
-                    Cmp::Lt => "< ",
-                    Cmp::Gt => "> ",
-                    Cmp::Le => "<= ",
-                    Cmp::Ge => ">= ",
-                };
-                format!("{comparison}{count}")
-            }
-        };
+        let expected = expectation.count;
         let Some(matched) = failure.matched else {
             lines.push(format!("{message}; count unknown, expected {expected}"));
             continue;
         };
-        let predicate = if expectation.predicate.is_some() {
+        let predicate = if matches!(expectation.filter, Some(ExpectFilter::Where(_))) {
             let predicate = source.zip(unit).and_then(|(source, unit)| {
                 source
                     .predicate
@@ -129,7 +115,11 @@ pub fn scenario_failures(compilation: &Compilation, report: &ScenarioReport) -> 
         } else {
             String::new()
         };
-        lines.push(format!("{predicate}count {matched}, expected {expected}"));
+        if predicate.is_empty() {
+            lines.push(message.clone());
+        } else {
+            lines.push(format!("{predicate}count {matched}, expected {expected}"));
+        }
     }
     lines
 }
@@ -139,7 +129,7 @@ mod tests {
     #[test]
     fn unavailable_positions_are_named_instead_of_reconstructed() {
         let mut compilation = crate::compiler::compile(
-            &["graph demo : App { input in: text; output out: text; in -> out }\nlab demo { simulation s on app { scenario failed { app.in = \"seen\"\nexpect app.out count == 2 } } }"],
+            &["graph demo : App { input in: text; output out: text; in -> out }\nlab demo { simulation s { scenario failed { app.in = \"seen\"\nexpect 2 app.out } } }"],
             &crate::connector::contract::ContractCatalog::try_m0().unwrap(),
         ).unwrap();
         let run = crate::lab::run_program(
@@ -154,6 +144,9 @@ mod tests {
         let text = super::scenario_failures(&compilation, &run.report).join("\n");
         assert!(text.contains("(source position unavailable)"), "{text}");
         assert!(text.contains("observed app.out: \"seen\""), "{text}");
-        assert!(text.contains("count 1, expected 2"), "{text}");
+        assert!(
+            text.contains("expected 2 matching deliveries on app.out, but observed 1"),
+            "{text}"
+        );
     }
 }

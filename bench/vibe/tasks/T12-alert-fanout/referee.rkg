@@ -1,20 +1,20 @@
 lab fanout {
-  simulation refereeing on app {
+  simulation refereeing {
     mock archive { on in { out = .; exit = Exited { exit_code = 0; signal = null } } }
     mock pager { on in { out = .; exit = Exited { exit_code = 0; signal = null } } }
 
-    scenario critical "both branches fire on critical" {
+    scenario critical {
       app.in = {level = "critical", message = "breaker C2 open"}
-      expect "archived" archive.in count == 1
-      expect "paged" pager.in count == 1
-      expect "both replies" app.out count == 2
+      expect archive.in
+      expect pager.in
+      expect 2 app.out
     }
 
-    scenario warning "a warning fires neither" {
+    scenario warning {
       app.in = {level = "warning", message = "voltage dip"}
-      expect nothing archive.in
-      expect nothing pager.in
-      expect nothing app.out
+      expect archive.in == nothing
+      expect pager.in == nothing
+      expect app.out == nothing
     }
   }
 }

@@ -71,12 +71,15 @@ pub enum TopDecl {
     Error(ErrorNode),
 }
 
-/// `lab IDENT { (simulation | experiment | theorem)* }` — the
-/// logical test corpus of the App sharing its name.
+/// `lab IDENT { lab_item* }`: the unit's non-deployed verification corpus.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LabDecl {
-    /// The lab name, binding to the App of the same name.
+    /// The Lab name, also the simulation name for its direct scenarios.
     pub name: Name,
+    /// Defaults shared by direct scenarios and explicit simulations.
+    pub mocks: Vec<MockDecl>,
+    /// Scenarios using the Lab's default mock world.
+    pub scenarios: Vec<ScenarioDecl>,
     /// The simulations; experiments and theorems are refused at
     /// parse in this build.
     pub simulations: Vec<SimulationDecl>,
@@ -84,13 +87,13 @@ pub struct LabDecl {
     pub span: Span,
 }
 
-/// `simulation IDENT on graph_ref { (mock | scenario)* }`.
+/// `simulation IDENT (":" graph_ref)? { (mock | scenario)* }`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SimulationDecl {
     /// The simulation name.
     pub name: Name,
-    /// The `on` target segments (`app`, or a dotted sub-graph path).
-    pub target: Vec<Name>,
+    /// Optional explicit target; omission selects the unit's App.
+    pub target: Option<Vec<Name>>,
     /// Simulation-level mocks, shared by every scenario.
     pub mocks: Vec<MockDecl>,
     /// The scenarios, in source order.
@@ -111,13 +114,11 @@ pub struct MockDecl {
     pub span: Span,
 }
 
-/// `scenario IDENT STRING? { … }` — one executable case.
+/// `scenario IDENT { … }`: one executable case.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScenarioDecl {
     /// The scenario name.
     pub name: Name,
-    /// The optional human label.
-    pub label: Option<String>,
     /// The steps and scenario-level mocks, in source order.
     pub body: Vec<ScenarioItem>,
     /// The whole declaration.
@@ -156,38 +157,26 @@ pub enum ScenarioItem {
     Mock(MockDecl),
 }
 
-/// `expect STRING? nothing? port_ref (count cmp INT)? (where expr)?`.
+/// `expect INT? port_ref ("==" value | "where" expr)?`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExpectStep {
-    /// The optional report label.
-    pub label: Option<String>,
-    /// The void quantifier: `expect nothing …`.
-    pub nothing: bool,
+    /// Expected matching delivery count; omission means one, except for `nothing`.
+    pub count: Option<IntLit>,
     /// The observed port reference.
     pub target: LValue,
-    /// The exact-count quantifier, when written.
-    pub count: Option<(CmpOp, IntLit)>,
-    /// The predicate over each delivery.
-    pub predicate: Option<ExprSource>,
+    /// Optional value equality or boolean predicate.
+    pub tail: Option<ExpectTail>,
     /// The whole step.
     pub span: Span,
 }
 
-/// A count comparison operator.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CmpOp {
-    /// `==`
-    Eq,
-    /// `!=`
-    Ne,
-    /// `<`
-    Lt,
-    /// `>`
-    Gt,
-    /// `<=`
-    Le,
-    /// `>=`
-    Ge,
+/// Optional assertion filter, using the ordinary value or expression grammar.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExpectTail {
+    /// `== value`, including `== nothing`.
+    Value(Value),
+    /// `where expr`.
+    Where(ExprSource),
 }
 
 /// `graph IDENT ( ":" annotation )? removed_per? "{" body "}"`

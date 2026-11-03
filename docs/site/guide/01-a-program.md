@@ -92,7 +92,7 @@ It does not start `cat`, and it does not write a separate plan file that
 you must pass to the next command. The accepted plan contains resolved
 types, declarations and wiring for the runtime to interpret.
 
-The rest of this source file is `lab echo`. It supplies scenarios for the
+The rest of this source file is `lab smoke`. It supplies scenarios for the
 same App, including the empty input and a silent process. Run those with
 `rastok simulate examples/echo.rkg`. Each scenario records the graph's
 transactions and the scripted boundary outcomes. Adding a scenario does

@@ -258,7 +258,7 @@ fn a_mocked_jsonl_graph_runs_in_the_lab() {
     let source = format!(
         r#"{SIFT_GRAPH}
 lab g {{
-  simulation probing on app {{
+  simulation probing {{
     mock shell {{
       on in {{
         out = {{"status": "ok", "value": 7}}
@@ -266,9 +266,9 @@ lab g {{
       }}
     }}
 
-    scenario s "a structured reply routes by its fields" {{
+    scenario s {{
       app.in = {{ q = 1 }}
-      expect "the sifted value" app.out count == 1 where data == 7
+      expect app.out where data == 7
     }}
   }}
 }}
@@ -315,7 +315,7 @@ fn a_json_object_mock_reply_is_one_jsonl_variant_not_a_batch() {
     let source = format!(
         r#"{SIFT_GRAPH}
 lab g {{
-  simulation probing on app {{
+  simulation probing {{
     mock shell {{
       on in {{
         out = {{ "status": "ok", "value": 7 }}
@@ -323,9 +323,9 @@ lab g {{
       }}
     }}
 
-    scenario s "never runs" {{
+    scenario s {{
       app.in = {{ q = 1 }}
-      expect "unreachable" app.out count == 1
+      expect app.out
     }}
   }}
 }}
@@ -445,7 +445,7 @@ graph g : App {
 }
 
 lab g {
-  simulation probing on app {
+  simulation probing {
     mock shell {
       on in {
         out = 1
@@ -453,9 +453,9 @@ lab g {
       }
     }
 
-    scenario s "the token survives the mock" {
+    scenario s {
       app.in = 1
-      expect "the token on out" app.out count == 1 where data == "tok"
+      expect app.out where data == "tok"
     }
   }
 }

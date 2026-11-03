@@ -20,14 +20,14 @@ app's behavior — before and without touching the real world ?**
 
 | Word | Layer | Meaning |
 |---|---|---|
-| **`lab`** | the App's twin | the never-deployed corpus bound to the homonymous `graph <name> : App`: its simulations, experiments, and future theorems. Fragments with the same name merge across the unit's files; it never alters the production graph or its `graph_version` |
+| **`lab`** | the App's twin | the never-deployed corpus of the unit's App: direct mocks and scenarios, optional simulation groups, and deferred experiments and theorems. Fragments with the same name merge across the unit's files; it never alters the production graph or its `graph_version` |
 | **feature** (Gherkin) | intent | optional business front-end (§8) — never the executable truth |
-| **`simulation`** | possibility space | the executable space of possible worlds around **one closed graph** (`on <graph>` — `on app` today). It groups shared mocks/prelude and named scenarios |
+| **`simulation`** | possibility space | an optional group of mocks and scenarios targeting the unit's App by default, or explicitly with `: App` |
 | **`experiment`** | field evidence | the real App run under an external deployment `profile`, with at least one real Connector boundary, in real time (§10) |
 | **`scenario`** | region / trajectory | a named slice of that space ; when run, one deterministic trajectory : fixture steps + expectations |
 | **fixture** | inside a scenario | **not a first-rank object** — the pre-written outer trace of a Scenario (injections, mock replies, time advances, faults) : the scripted **world-half of the journal** (§2) |
 | **expectations** | inside a scenario | the assertions (§5) |
-| **`theorem`** *(reserved)* | universal property | a declarative statement over ALL admissible trajectories of (graph + simulation), linked by `over <simulation>` (§11) — never "run a few times" |
+| **`theorem`** *(reserved)* | universal property | a reserved universal-property declaration (§11), not a repeated scenario run |
 | **the simulator** | executor | the deterministic runner (virtual clock, mocks, scripted journal) — one, in the runtime |
 | **golden trace** | artifact | the run's journal, canonically serialized, byte-frozen (§6) |
 
@@ -45,15 +45,16 @@ The ontology, side by side — production on the left, its twin on the right :
 | Operator | **itself** — pure logic is never mocked : it runs |
 
 ```rastok
-lab checkout {                           // the App's twin — never deployed
-  simulation payments on app {           // one closed graph, one possibility space
-    mock bank { … }                        // shared by the scenarios below
-    scenario happy_path    { … }
-    scenario declined_card { … }
-    scenario bank_timeout  { … }
-  }
+lab payments {
+  mock bank { … }                  // shared by the scenarios below
+  scenario happy_path    { … }
+  scenario declined_card { … }
+  scenario bank_timeout  { … }
 }
 ```
+
+Add `simulation alternate { ... }` inside the Lab when another group needs
+its own shared mocks. The default two-level form needs no such group.
 
 The mirror is deliberate :
 
@@ -85,7 +86,7 @@ production the world-half is *recorded* ; in simulation there is no world —
 | `orders.out = { … }` | the world sends | **INGRESS** (fixture-owned `inbound_seq`) |
 | `advance duration("30s")` | time passes | the dated decisions (the sweep, execution-model §8) |
 | `mock … { on in … }` | the mock Outbound Driver answers | the **EGRESS closures** |
-| `crash after <record>` / `restart` | the process dies | volatile truncation + recovery |
+| `crash node` / `restart node` (deferred) | the process dies | volatile truncation + recovery |
 | `expect …` | *(nothing — pure observation)* | *(none)* |
 
 **The same-shape contract** — what makes golden traces mean anything :
@@ -145,22 +146,16 @@ explicit `now()` observation is causal key 39). This makes the claim
 compare them to the bridge-generated scenario's.
 
 **Boundaries** :
-- **Scope = the lab of the deployed unit** : simulations live in the
-  **`lab`** whose name
-  matches the unit's single `: App` graph (grammar.md, "Unit formation" +
-  `lab_decl`), and each names the graph it closes : **`on app`** — the only
-  executable target today. A sub-graph target (`on payment`) parses and
-  type-checks but is **deferred (E-SIM-TARGET)** : closing a sub-graph
-  requires a *birth recipe* for envelopes entering its public ports (they
-  are born mid-lineage, with no inbound Connector and no `inbound_seq`) —
-  exactly what mid-graph injection prohibition protects. Until that recipe
-  is specified, wrap the sub-graph in a thin App. Node references in mocks,
-  injections and expectations resolve in the **unit's namespace** —
-  top-level declarations by name, and the App root's own children directly
-  (the root's name is excluded, as in `node_path` —
-  [envelope.md](envelope.md)) : `mock outbound` (a root child),
-  `mock sessions.codex` (a top-level sibling),
-  `expect city_weather.build_request.out`.
+- **Scope is the unit's Lab.** One logical Lab may be split across
+  same-named source fragments. Its name is independent of the App name.
+  Direct scenarios use the Lab name as their effective simulation name.
+  An explicit `simulation name { ... }` groups another mock configuration;
+  `: app`, `: App` and the App graph's declared name all select the unit's
+  App. Other targets refuse with `E-SIM-TARGET`: closing a sub-graph needs
+  a birth recipe for inputs arriving mid-lineage. Until that recipe is
+  specified, wrap the sub-graph in an App. Mock and port references resolve
+  in the unit's namespace: App children directly and composed children by
+  their root-relative path, for example `mock sessions.codex`.
 - **Injection at inbound only** : envelopes are injected at source-Connector
   outputs (`orders.out = …`) — born through the root recipe, clean lineage.
   Mid-graph injection is a **compile error** (it would fabricate an envelope
@@ -280,9 +275,14 @@ is `.` (`out = .`).
   describe how the simulated external peer answers a Connector request; they
   are not handlers owned by the Connector, are not part of the application
   graph, and are not transported as `Dispatch` in the plan package.
-- **Two levels, nearest wins** : a `mock` at `simulation` level is shared by
-  its scenarios ; a scenario-level `mock` for the same Connector **replaces**
-  it (per Connector, whole-mock replacement — no branch merging).
+- **Three mock scopes, nearest wins:** Lab defaults apply to its direct
+  scenarios and explicit simulations. A simulation replaces a Lab mock
+  for the same Connector; a scenario replaces either inherited mock.
+  Each override replaces the whole mock, not individual branches.
+  Duplicate mocks or scenario names at one level refuse with
+  `E-DUP-LAB-IDENTITY`. Simulation names are unique within the Lab, and
+  an explicit simulation cannot take the Lab name when direct scenarios
+  already use it. Same-named Lab fragments merge before these checks.
 - **First match in text order** ; a bare `on in { … }` is the catch-all.
 - A selected mock clause may use recursive closed/open `match` and pure
   `val` prefixes. Only the selected path evaluates; a fault does not try a
@@ -330,19 +330,41 @@ deliveries of that window**, without consuming it :
 ```rastok
 orders.out = { … }               // ACTION → window ①
 expect pay.in where …            // reads window ①
-expect nothing pay.exit          // reads the SAME window ①
+expect pay.exit == nothing          // reads the SAME window ①
 advance duration("30s")                      // ACTION → window ②
 expect ledger.in where …         // reads window ②
 ```
 
-**Three quantifiers, nothing more** :
+**Five assertion forms, with exact counts:**
 
-```rastok
-expect ledger.in where data.status == "settled"            // ∃ — at least one match
-expect nothing codex.in [where <expr>]                     // ∅ — zero deliveries (the void word)
-expect ledger.in count == 1 where data.charge_id == "ch_1" // exact count
-expect "charged exactly once" ledger.in count == 1 …       // optional label, for reports
-```
+| Form | Meaning in the current window |
+|---|---|
+| `expect app.out` | Exactly one delivery |
+| `expect 3 app.out` | Exactly three deliveries |
+| `expect app.out == nothing` | No deliveries, equivalent to `expect 0 app.out` |
+| `expect app.out == value` | Exactly one delivery equal to the value; a positive prefix count replaces one |
+| `expect 3 app.out where predicate` | Exactly three deliveries whose predicate is true; the default count is one |
+
+The count is a nonnegative 64-bit integer. An explicit nonzero count with
+`== nothing`, or zero with another equality value, refuses at Check with
+`E-EXPR`. Zero with `where` requires no matching delivery. A missing filter
+counts every delivery. An evaluation fault fails the expectation, including
+one expecting zero matches; it is not a false predicate.
+
+Equality reuses the ordinary value grammar and the observed port's contextual
+type checker: scalars, closed records, tagged constructors, maps, frontends
+and envelope values. A payload value compares the whole payload. An envelope
+pattern such as `{ meta.ext.session_id = session, data.ok = true }` checks
+the types and values of the written fields, without requiring other fields
+to be absent. Metadata fields named by the pattern must also match.
+`.` refuses because an expectation has no input envelope to inherit.
+
+A `where` expression reads `data` at the observed port's type and `meta`.
+It must have type `bool` or `variant`; runtime evaluation must yield a
+boolean. Counts refer to matches, not necessarily the total window size.
+The equality or `where` clause must start on the same line as the port.
+Scenario names carry their intent; scenarios and expectations have no
+string labels.
 
 - **Every typed source emission is observable once by port.** `app` remains
   the pre-bound identifier for the App Graph, so `app.<port>` means that a
@@ -402,13 +424,12 @@ the warning specified above is not implemented in M1.
 
 ### 5.4 Fault injection
 
-`crash after <selector>` stops the run at a **journal record boundary** — the
-only well-defined interleaving points ; volatile state is lost, the journal
-survives per its durability scope. `restart` runs the standard recovery
-(the fold + the outbound triage, delivery-semantics §7.2). The selector anchors
-on records : `<node>.<record kind>[#n]` — e.g.
-`crash after reserve.outbound_open`,
-`crash after route.tx#3`. Exercised by sim 4.
+The grammar reserves `crash <node>` and `restart <node>` as explicit
+fault-injection actions. Both are named deferrals in the current compiler;
+they do not execute. Their node-scoped stopping and recovery boundaries
+need a separate execution contract before implementation. Existing core
+recovery tests exercise committed journal prefixes independently of this
+future authored syntax.
 
 
 ## 6. Golden traces — freezing behavior at the byte
@@ -574,7 +595,7 @@ incident is a **mechanical projection**, not inference :
 | dated decisions (`l:*` transactions) | → | the `advance` script — **times rebased** (t₀ = first record, deltas preserved) ; the bridge sets the scenario's **`origin` = the slice's first civil instant**, so window/cron arithmetic is preserved (§5.3, execution-model §9.3) |
 | EGRESS `closed(response)` | → | generated mock branches: the external system's real replies, **guarded by the recorded request id** (`on in where meta.sys.id == 0x9f42… { out = … }`) — Lab Driver-script grammar, zero new application machinery |
 | EGRESS `closed(timeout)` | → | `{ out = nothing }` (the chrono re-does its work) |
-| crash + recovery (visible in the journal) | → | `crash after <record>` / `restart` |
+| crash + recovery (visible in the journal) | → | `crash node` / `restart node` (deferred) |
 
 The **slice** is well-defined : the transitive closure of a lineage through
 the 3-piece provenance (parent chain + join contributions + per-hop logical
@@ -598,17 +619,18 @@ Connector boundary, real time — under an **external deployment profile** :
 
 ```rastok
 lab checkout {
-  simulation payments on app { mock bank { … } ; scenario accepted { … } }
+  simulation payments { mock bank { … } ; scenario accepted { … } }
 
-  experiment payment_sandbox on app {
-    profile = "bank-sandbox"          // an external profile REFERENCE —
-                                      // no secret, no endpoint in the DSL
+  experiment payment_sandbox {
     mock notifier { … }               // mocks stay legal for boundaries NOT under test
     scenario accepted { … }           // same scenario / injection / expect grammar
     scenario declined { … }
   }
 }
 ```
+
+The deployment profile is external configuration, not a Lab-body attribute.
+This mode remains specified but unavailable in the current compiler.
 
 Rules :
 
@@ -653,11 +675,10 @@ contracts. Neither layer replaces the other.
 
 ## 11. Theorem — declarative, reserved
 
-`theorem <name> over <simulation> { … }` is a lab declaration, sibling of
-the simulations. `over` names the simulation whose mocks and hypotheses
-close the graph ; the theorem states a **universal property over all
-admissible trajectories** of that (graph + simulation) pair. It is not a
-scenario and is never "run a few times".
+`theorem <name> { ... }` is a reserved Lab declaration. It expresses
+the intent to state a universal property, not to run selected scenarios.
+Its admissible behaviors and connection to mock assumptions remain
+unspecified; the current compiler reports a named deferral.
 
 **The universal quantifier is intent, not yet semantics.** Today's mocks
 are deterministic and scenarios are concrete traces — they do not define

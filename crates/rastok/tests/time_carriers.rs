@@ -57,18 +57,18 @@ fn scenario_origin_is_applied_but_does_not_enter_the_program_identity() {
     let source = format!(
         r#"{CLOCK}
 lab app {{
-  simulation civil on app {{
+  simulation civil {{
     scenario old {{
       origin = timestamp("1600-01-01T00:00:00Z")
       app.in = 1
-      expect app.out count == 1 where data.instant == timestamp("1600-01-01T00:00:00Z")
+      expect app.out where data.instant == timestamp("1600-01-01T00:00:00Z")
       advance duration("1.25s")
       app.in = 2
-      expect app.out count == 1 where data.instant == timestamp("1600-01-01T00:00:01.25Z")
+      expect app.out where data.instant == timestamp("1600-01-01T00:00:01.25Z")
     }}
     scenario epoch {{
       app.in = 1
-      expect app.out count == 1 where data.instant == timestamp("1970-01-01T00:00:00Z")
+      expect app.out where data.instant == timestamp("1970-01-01T00:00:00Z")
     }}
   }}
 }}
@@ -108,7 +108,7 @@ fn scenario_origin_rejects_duplicates_nonconstant_and_wrong_typed_values() {
         ),
     ] {
         let source = format!(
-            "{CLOCK}\nlab app {{ simulation civil on app {{ scenario invalid {{ {declaration}\n app.in = 1 }} }} }}"
+            "{CLOCK}\nlab app {{ simulation civil {{ scenario invalid {{ {declaration}\n app.in = 1 }} }} }}"
         );
         let errors = compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap_err();
         assert!(
@@ -422,7 +422,7 @@ graph app : App {
   echo.exit -> nothing
 }
 lab app {
-  simulation civil on app {
+  simulation civil {
     mock echo {
       on in where now() == timestamp("1600-01-01T00:00:02Z") {
         out = "civil"
@@ -433,7 +433,7 @@ lab app {
       origin = timestamp("1600-01-01T00:00:00Z")
       advance duration("2s")
       app.in = "hello"
-      expect app.out count == 1 where data == "civil"
+      expect app.out where data == "civil"
     }
   }
 }

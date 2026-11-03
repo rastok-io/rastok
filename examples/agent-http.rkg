@@ -99,81 +99,79 @@ graph agent_http : App {
   terminal.unknown -> unknown
 }
 
-lab agent_http {
-  simulation responses on app {
-    // Mocks supply already typed values. Wire-shape refusals are separately
-    // tested against the real HTTP decoder, not inferred from this Lab.
-    mock model {
-      on in match {
-        meta.app.job == "missing" || meta.app.job == "null" => {
-          out = { id = "resp_without_usage"; object = "response"; output = []; status = "completed"; usage = null; error = null }
-          exit = Completed { status = 200 }
+lab responses {
+  // Mocks supply already typed values. Wire-shape refusals are separately
+  // tested against the real HTTP decoder, not inferred from this Lab.
+  mock model {
+    on in match {
+      meta.app.job == "missing" || meta.app.job == "null" => {
+        out = { id = "resp_without_usage"; object = "response"; output = []; status = "completed"; usage = null; error = null }
+        exit = Completed { status = 200 }
+      }
+      meta.app.job == "invalid" || meta.app.job == "error_body" => exit = DecodeFailed {}
+      meta.app.job == "zero" => {
+        out = { id = "resp_zero"; object = "response"; output = []; status = "completed"; usage = { input_tokens = 0u; output_tokens = 0u; total_tokens = 0u; input_tokens_details = null; output_tokens_details = null }; error = null }
+        exit = Completed { status = 200 }
+      }
+      meta.app.job == "timeout" => nothing
+      meta.app.job == "server_error" => {
+        out = { id = "resp_failed"; object = "response"; output = []; status = "failed"; usage = null; error = {"message": "scripted service error"} }
+        exit = ServerError { status = 500 }
+      }
+      _ => {
+        out = {
+          id = "resp_fixture"
+          object = "response"
+          output = [simulated_message]
+          status = "completed"
+          usage = { input_tokens = 12u; output_tokens = 4u; total_tokens = 16u; input_tokens_details = {"cached_tokens": 0}; output_tokens_details = {"reasoning_tokens": 0} }
+          error = null
         }
-        meta.app.job == "invalid" || meta.app.job == "error_body" => exit = DecodeFailed {}
-        meta.app.job == "zero" => {
-          out = { id = "resp_zero"; object = "response"; output = []; status = "completed"; usage = { input_tokens = 0u; output_tokens = 0u; total_tokens = 0u; input_tokens_details = null; output_tokens_details = null }; error = null }
-          exit = Completed { status = 200 }
-        }
-        meta.app.job == "timeout" => nothing
-        meta.app.job == "server_error" => {
-          out = { id = "resp_failed"; object = "response"; output = []; status = "failed"; usage = null; error = {"message": "scripted service error"} }
-          exit = ServerError { status = 500 }
-        }
-        _ => {
-          out = {
-            id = "resp_fixture"
-            object = "response"
-            output = [simulated_message]
-            status = "completed"
-            usage = { input_tokens = 12u; output_tokens = 4u; total_tokens = 16u; input_tokens_details = {"cached_tokens": 0}; output_tokens_details = {"reasoning_tokens": 0} }
-            error = null
-          }
-          exit = Completed { status = 200 }
-        }
+        exit = Completed { status = 200 }
       }
     }
-    scenario two_sessions "three jobs keep their session and original measured response" {
-      app.in = { session = "alice"; job = "a1"; prompt = "Hello" }
-      expect model.out count == 1 where meta.app.session == "alice" && meta.app.job == "a1"
-      app.in = { session = "bob"; job = "b1"; prompt = "Hello" }
-      expect model.out count == 1 where meta.app.session == "bob" && meta.app.job == "b1"
-      app.in = { session = "alice"; job = "a2"; prompt = "Another independent job" }
-      expect model.out count == 1 where meta.app.session == "alice" && meta.app.job == "a2"
-      expect nothing app.unknown
-      expect nothing app.failed
-    }
-    scenario missing_usage "absent or null wire usage supplies no sample" {
-      app.in = { session = "alice"; job = "missing"; prompt = "Hello" }
-      expect app.unknown count == 1 where data.reason == "usage not reported"
-      app.in = { session = "alice"; job = "null"; prompt = "Hello" }
-      expect app.unknown count == 1 where data.reason == "usage not reported"
-      expect nothing app.failed
-    }
-    scenario observed_zero "reported zero is evidence, not missing usage" {
-      app.in = { session = "alice"; job = "zero"; prompt = "Hello" }
-      expect model.out count == 1 where data.usage is ResponseUsage && data.usage.input_tokens == 0u && data.usage.output_tokens == 0u && data.usage.total_tokens == 0u
-      expect nothing app.unknown
-    }
-    scenario schema_failure "a mistyped response has no partially retained DATA" {
-      app.in = { session = "bob"; job = "invalid"; prompt = "Hello" }
-      expect app.failed count == 1 where data is DecodeFailed
-      expect app.unknown count == 1
-      expect nothing model.out
-    }
-    scenario transport_failure "a timeout neither invents usage nor repeats inference" {
-      app.in = { session = "alice"; job = "timeout"; prompt = "Hello" }
-      advance duration("10s")
-      expect app.failed count == 1 where data is TimeoutExpired
-      expect app.unknown count == 1
-      expect nothing model.out
-    }
-    scenario http_errors "decoding precedes the 5xx terminal classification" {
-      app.in = { session = "alice"; job = "server_error"; prompt = "Hello" }
-      expect app.failed count == 1 where data is ServerError && data.status == 500
-      expect model.out count == 1
-      app.in = { session = "alice"; job = "error_body"; prompt = "Hello" }
-      expect app.failed count == 1 where data is DecodeFailed
-      expect nothing model.out
-    }
+  }
+  scenario two_sessions {
+    app.in = { session = "alice"; job = "a1"; prompt = "Hello" }
+    expect model.out where meta.app.session == "alice" && meta.app.job == "a1"
+    app.in = { session = "bob"; job = "b1"; prompt = "Hello" }
+    expect model.out where meta.app.session == "bob" && meta.app.job == "b1"
+    app.in = { session = "alice"; job = "a2"; prompt = "Another independent job" }
+    expect model.out where meta.app.session == "alice" && meta.app.job == "a2"
+    expect app.unknown == nothing
+    expect app.failed == nothing
+  }
+  scenario missing_usage {
+    app.in = { session = "alice"; job = "missing"; prompt = "Hello" }
+    expect app.unknown where data.reason == "usage not reported"
+    app.in = { session = "alice"; job = "null"; prompt = "Hello" }
+    expect app.unknown where data.reason == "usage not reported"
+    expect app.failed == nothing
+  }
+  scenario observed_zero {
+    app.in = { session = "alice"; job = "zero"; prompt = "Hello" }
+    expect model.out where data.usage is ResponseUsage && data.usage.input_tokens == 0u && data.usage.output_tokens == 0u && data.usage.total_tokens == 0u
+    expect app.unknown == nothing
+  }
+  scenario schema_failure {
+    app.in = { session = "bob"; job = "invalid"; prompt = "Hello" }
+    expect app.failed where data is DecodeFailed
+    expect app.unknown
+    expect model.out == nothing
+  }
+  scenario transport_failure {
+    app.in = { session = "alice"; job = "timeout"; prompt = "Hello" }
+    advance duration("10s")
+    expect app.failed == TimeoutExpired {}
+    expect app.unknown
+    expect model.out == nothing
+  }
+  scenario http_errors {
+    app.in = { session = "alice"; job = "server_error"; prompt = "Hello" }
+    expect app.failed where data is ServerError && data.status == 500
+    expect model.out
+    app.in = { session = "alice"; job = "error_body"; prompt = "Hello" }
+    expect app.failed where data is DecodeFailed
+    expect model.out == nothing
   }
 }

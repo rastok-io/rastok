@@ -49,7 +49,7 @@ fn mock_matches_validate_complete_replies_per_leaf() {
             r#"
 {M0_PROBE}
 lab m0_probe {{
-  simulation s on app {{
+  simulation s {{
     mock echo {{
       on in match data == "hello" {{
         true => {{ {reply} }}
@@ -80,7 +80,7 @@ fn a_mock_multi_emission_refuses_at_check_instead_of_faulting_during_simulation(
         r#"
 {M0_PROBE}
 lab m0_probe {{
-  simulation s on app {{
+  simulation s {{
     mock echo {{
       on in {{
         (out, err) = "two frames"
@@ -2120,13 +2120,13 @@ fn the_jsonl_codec_compiles() {
 fn unknown_and_unproduced_expectation_targets_refuse() {
     // A typo or an unproduced conventional name cannot create an
     // observation target; predicates still owe a boolean.
-    let base = "graph g : App {\n  operator relay {\n    on in { out = . }\n  }\n  in -> relay -> out\n}\n\nlab g {\n  simulation s on app {\n    scenario sc {\n      app.in = { text = \"x\" }\n      EXPECT\n    }\n  }\n}\n";
+    let base = "graph g : App {\n  operator relay {\n    on in { out = . }\n  }\n  in -> relay -> out\n}\n\nlab g {\n  simulation s {\n    scenario sc {\n      app.in = { text = \"x\" }\n      EXPECT\n    }\n  }\n}\n";
     let cases = [
-        ("expect nothing relay.typo", E_PORT_UNKNOWN),
-        ("expect nothing app.typo", E_PORT_UNKNOWN),
-        ("expect nothing relay.err", E_PORT_UNKNOWN),
-        ("expect nothing app.err", E_PORT_UNKNOWN),
-        ("expect nothing app.out where 42", E_EXPR),
+        ("expect relay.typo == nothing", E_PORT_UNKNOWN),
+        ("expect app.typo == nothing", E_PORT_UNKNOWN),
+        ("expect relay.err == nothing", E_PORT_UNKNOWN),
+        ("expect app.err == nothing", E_PORT_UNKNOWN),
+        ("expect 0 app.out where 42", E_EXPR),
     ];
     for (expect, code) in cases {
         let source = base.replace("EXPECT", expect);
@@ -2143,7 +2143,7 @@ fn unknown_and_unproduced_expectation_targets_refuse() {
 
 #[test]
 fn lab_fragments_merge_and_homonym_simulations_refuse() {
-    let source = "graph g : App {\n  operator o {\n    on in { out = . }\n  }\n  in -> o -> out\n}\n\nlab g {\n  simulation a on app { }\n}\n\nlab g {\n  simulation b on app { }\n}\n\nlab g {\n  simulation a on app { }\n}\n";
+    let source = "graph g : App {\n  operator o {\n    on in { out = . }\n  }\n  in -> o -> out\n}\n\nlab g {\n  simulation a { }\n}\n\nlab g {\n  simulation b { }\n}\n\nlab g {\n  simulation a { }\n}\n";
     let (hir, bag) = check_source(source);
     // Fragments merged into one corpus of two simulations…
     let hir = hir.expect("the unit checks");
@@ -2189,7 +2189,7 @@ fn a_duplicated_edge_refuses_whatever_its_spelling() {
 
 #[test]
 fn duplicate_mocks_refuse_at_both_levels() {
-    let base = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"cat\"\n    codec = lines\n    idempotent = true; behavior = deterministic\n  }\n  operator o {\n    input in: struct { text: text }\n    on in { out = data.text }\n  }\n  in -> o -> shell -> out\n}\n\nlab g {\n  simulation s on app {\nBODY  }\n}\n";
+    let base = "graph g : App {\n  connector shell : Process {\n    mode = job ; command = \"cat\"\n    codec = lines\n    idempotent = true; behavior = deterministic\n  }\n  operator o {\n    input in: struct { text: text }\n    on in { out = data.text }\n  }\n  in -> o -> shell -> out\n}\n\nlab g {\n  simulation s {\nBODY  }\n}\n";
     let simulation_level = base.replace(
         "BODY",
         "    mock shell { on in { out = . } }\n    mock shell { on in { out = . } }\n",

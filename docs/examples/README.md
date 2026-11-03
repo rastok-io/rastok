@@ -41,6 +41,14 @@ The [documentation audit](../architecture/documentation-audit-2026-09-09.md)
 retains the earlier checkpoint; its bounded-join destination finding is now
 corrected and regression-tested.
 
+Current examples put mocks and scenarios directly in `lab <name>`. An optional
+`simulation <name>` groups another mock world. `expect port` requires one
+delivery, `expect N port` requires N, and `== value` or `where predicate`
+filters those deliveries. `== nothing` asserts absence. Successive expectations
+read the same window until the next input or time advance. The Lab names keep
+the existing `simulation.scenario.trace` filenames; production hashes and
+reference trace bytes do not change with this source-syntax migration.
+
 | Example | Demonstrates | Scenarios |
 |---|---|---:|
 | [gauge](../../examples/gauge.rkg) | One typed Operator and a public App output | 1 |

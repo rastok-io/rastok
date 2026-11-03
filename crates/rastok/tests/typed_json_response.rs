@@ -340,7 +340,7 @@ fn the_lab_emits_the_same_declared_struct_and_needs_no_downstream_extractor() {
     let source = source("json", "output out: ModelResponse")
         + r#"
 lab app {
-  simulation nominal on app {
+  simulation nominal {
     mock model {
       on in {
         out = { usage = { input_tokens = 120u } ; cost = decimal("0.0042") as Amount }
@@ -349,7 +349,7 @@ lab app {
     }
     scenario response {
       app.in = json! {}
-      expect model.out count == 1 where data.usage.input_tokens == 120u
+      expect model.out where data.usage.input_tokens == 120u
     }
   }
 }

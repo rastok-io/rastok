@@ -560,17 +560,17 @@ graph app : App {
   }
 }
 lab app {
-  simulation calls on app {
+  simulation calls {
     mock worker { on in { out = nothing } }
     scenario bounded {
       app.in = "same request"
-      expect nothing app.expired
+      expect app.expired == nothing
       advance duration("1s")
-      expect nothing app.expired
+      expect app.expired == nothing
       advance duration("1s")
-      expect nothing app.expired
+      expect app.expired == nothing
       advance duration("1s")
-      expect app.expired count == 1
+      expect app.expired
     }
   }
 }
@@ -601,7 +601,7 @@ lab app {
             "app.in = \"same request\"",
             "app.in = \"same request\"\n      app.in = \"same request\"",
         )
-        .replace("app.expired count == 1", "app.expired count == 2");
+        .replace("expect app.expired\n", "expect 2 app.expired\n");
     let compilation =
         compiler::compile(&[&concurrent], &ContractCatalog::try_m0().unwrap()).unwrap();
     let runs = rastok::lab::run(&compilation.plan, GraphVersion(1), &compilation.labs[0]);
@@ -978,11 +978,11 @@ graph app : App {{
   worker.exit -> nothing
 }}
 lab app {{
-  simulation completed on app {{
+  simulation completed {{
     mock worker {{ on in {{ {outputs}; exit = {terminal} }} }}
     scenario one_call {{
       app.in = "request"
-      expect app.out count == {frame_count}
+      expect {frame_count} app.out
     }}
   }}
 }}
@@ -1035,7 +1035,7 @@ graph app : App {
   worker.exit -> nothing
 }
 lab app {
-  simulation repeated on app {
+  simulation repeated {
     mock worker { on in { out = 9; exit = Completed { status = 200 } } }
     scenario twice { app.in = 3 }
   }

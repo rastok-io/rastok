@@ -227,8 +227,8 @@ pub const W_DEAD_OUTPUT: Code = Code::new("W-DEAD-OUTPUT");
 /// A whole Graph has no possible external admission.
 pub const W_DEAD_GRAPH: Code = Code::new("W-DEAD-GRAPH");
 
-/// A lab whose name binds to no `: App` graph in the unit.
-pub const E_LAB_NO_APP: Code = Code::new("E-LAB-NO-APP");
+/// More than one logical Lab corpus in the unit.
+pub const E_LAB_DUP: Code = Code::new("E-LAB-DUP");
 
 /// A simulation targeting anything but the App root — the only
 /// executable target today.
@@ -382,45 +382,41 @@ pub fn check(
     checker.verify_output_dispositions(&checked_app);
     checker.verify_composed_routing(&checked_app, app.span);
     checker.in_lab = true;
-    // A lab is a logical corpus: fragments sharing a name merge into
-    // one; a duplicate simulation name inside the merged corpus
-    // refuses — it would shadow silently.
-    let mut labs: Vec<crate::compiler::hir::Lab> = Vec::new();
+    // Merge source fragments before checking their shared mock scope.
+    // A default in one fragment applies to scenarios in every fragment.
+    let mut lab_decls: Vec<crate::compiler::syntax::LabDecl> = Vec::new();
     for (_, tree) in &unit.files {
         for decl in &tree.decls {
-            if let TopDecl::Lab(lab) = decl
-                && let Some(checked) = checker.lab(lab, &checked_app)
-            {
-                match labs.iter_mut().find(|merged| merged.name == checked.name) {
+            if let TopDecl::Lab(lab) = decl {
+                match lab_decls
+                    .iter_mut()
+                    .find(|merged| merged.name.text == lab.name.text)
+                {
                     Some(merged) => {
-                        for simulation in checked.simulations {
-                            if merged
-                                .simulations
-                                .iter()
-                                .any(|existing| existing.name == simulation.name)
-                            {
-                                checker.bag.push(
-                                    Diagnostic::new(
-                                        E_DUP_LAB_IDENTITY,
-                                        Phase::Resolve,
-                                        format!(
-                                            "the simulation `{}` is already declared in lab `{}`",
-                                            simulation.name, merged.name
-                                        ),
-                                    )
-                                    .with_span(lab.name.span)
-                                    .with_field("name", simulation.name.clone()),
-                                );
-                                continue;
-                            }
-                            merged.simulations.push(simulation);
-                        }
+                        merged.mocks.extend(lab.mocks.iter().cloned());
+                        merged.scenarios.extend(lab.scenarios.iter().cloned());
+                        merged.simulations.extend(lab.simulations.iter().cloned());
                     }
-                    None => labs.push(checked),
+                    None => lab_decls.push(lab.clone()),
                 }
             }
         }
     }
+    for lab in lab_decls.iter().skip(1) {
+        checker.bag.push(
+            Diagnostic::new(
+                E_LAB_DUP,
+                Phase::Resolve,
+                "a unit has one logical Lab; use simulations for different mock worlds",
+            )
+            .with_span(lab.name.span)
+            .with_field("name", lab.name.text.clone()),
+        );
+    }
+    let labs = lab_decls
+        .iter()
+        .filter_map(|lab| checker.lab(lab, &checked_app))
+        .collect();
     checker.in_lab = false;
     checker.verify_meta_reads();
     // The asset table's CANONICAL layout (D-2026-08-10-5 as
@@ -867,8 +863,7 @@ impl Checker<'_, '_> {
         }
     }
 
-    /// Checks one lab against the checked App. Labs never enter the
-    /// semantic hash; they compile into their own executable form.
+    /// Checks a Lab against the unit's App, outside production identity.
     fn lab(
         &mut self,
         decl: &crate::compiler::syntax::LabDecl,
@@ -877,29 +872,19 @@ impl Checker<'_, '_> {
         if !self.guard_binding_name(&decl.name, "a lab") {
             return None;
         }
-        if decl.name.text != app.name {
-            self.bag.push(
-                Diagnostic::new(
-                    E_LAB_NO_APP,
-                    Phase::Resolve,
-                    format!(
-                        "the lab `{}` binds to no `: App` graph in this unit",
-                        decl.name.text
-                    ),
-                )
-                .with_span(decl.name.span)
-                .with_field("name", decl.name.text.clone()),
-            );
-            return None;
-        }
+        let lab_mocks = self.mocks(&decl.mocks, app);
         let mut simulations = Vec::new();
+        let mut names = BTreeSet::new();
+        if !decl.scenarios.is_empty() {
+            names.insert(decl.name.text.as_str());
+            simulations.push(crate::compiler::hir::Simulation {
+                name: decl.name.text.clone(),
+                mocks: lab_mocks.clone(),
+                scenarios: self.scenarios(&decl.scenarios, app),
+            });
+        }
         for simulation in &decl.simulations {
-            if decl
-                .simulations
-                .iter()
-                .take_while(|earlier| !std::ptr::eq(*earlier, simulation))
-                .any(|earlier| earlier.name.text == simulation.name.text)
-            {
+            if !names.insert(simulation.name.text.as_str()) {
                 self.bag.push(
                     Diagnostic::new(
                         E_DUP_LAB_IDENTITY,
@@ -914,78 +899,37 @@ impl Checker<'_, '_> {
                 );
                 continue;
             }
-            let target: Vec<&str> = simulation
-                .target
-                .iter()
-                .map(|segment| segment.text.as_str())
-                .collect();
-            if target != ["app"] {
-                self.bag.push(
-                    Diagnostic::new(
-                        E_SIM_TARGET,
-                        Phase::Resolve,
-                        "a simulation closes `app`; sub-graph targets are a deferred capability"
-                            .to_string(),
-                    )
-                    .with_span(simulation.name.span)
-                    .with_field("target", target.join(".")),
-                );
-                continue;
-            }
-            for mock in &simulation.mocks {
-                if simulation
-                    .mocks
-                    .iter()
-                    .take_while(|earlier| !std::ptr::eq(*earlier, mock))
-                    .any(|earlier| {
-                        earlier.path.len() == mock.path.len()
-                            && earlier
-                                .path
-                                .iter()
-                                .zip(&mock.path)
-                                .all(|(a, b)| a.text == b.text)
-                    })
-                {
+            if let Some(target) = &simulation.target {
+                let target: Vec<&str> =
+                    target.iter().map(|segment| segment.text.as_str()).collect();
+                if target != ["app"] && target != ["App"] && target != [app.name.as_str()] {
                     self.bag.push(
                         Diagnostic::new(
-                            E_DUP_LAB_IDENTITY,
+                            E_SIM_TARGET,
                             Phase::Resolve,
-                            "this connector is already mocked at this level".to_string(),
+                            "a simulation closes the unit's App; sub-graph targets are a deferred capability",
                         )
-                        .with_span(mock.span)
-                        .with_field("name", mock.path[0].text.clone()),
-                    );
-                }
-            }
-            let mocks = self.mocks(&simulation.mocks, app);
-            let mut scenarios = Vec::new();
-            for scenario in &simulation.scenarios {
-                if simulation
-                    .scenarios
-                    .iter()
-                    .take_while(|earlier| !std::ptr::eq(*earlier, scenario))
-                    .any(|earlier| earlier.name.text == scenario.name.text)
-                {
-                    self.bag.push(
-                        Diagnostic::new(
-                            E_DUP_LAB_IDENTITY,
-                            Phase::Resolve,
-                            format!(
-                                "the scenario `{}` is already declared in this simulation",
-                                scenario.name.text
-                            ),
-                        )
-                        .with_span(scenario.name.span)
-                        .with_field("name", scenario.name.text.clone()),
+                        .with_span(simulation.name.span)
+                        .with_field("target", target.join(".")),
                     );
                     continue;
                 }
-                scenarios.push(self.scenario(scenario, app));
+            }
+            let mut mocks = lab_mocks.clone();
+            for replacement in self.mocks(&simulation.mocks, app) {
+                if let Some(existing) = mocks
+                    .iter_mut()
+                    .find(|mock| mock.connector == replacement.connector)
+                {
+                    *existing = replacement;
+                } else {
+                    mocks.push(replacement);
+                }
             }
             simulations.push(crate::compiler::hir::Simulation {
                 name: simulation.name.text.clone(),
                 mocks,
-                scenarios,
+                scenarios: self.scenarios(&simulation.scenarios, app),
             });
         }
         Some(crate::compiler::hir::Lab {
@@ -994,17 +938,59 @@ impl Checker<'_, '_> {
         })
     }
 
+    /// The same uniqueness rule applies to direct and grouped scenarios.
+    fn scenarios(
+        &mut self,
+        decls: &[crate::compiler::syntax::ScenarioDecl],
+        app: &Graph,
+    ) -> Vec<crate::compiler::hir::Scenario> {
+        let mut names = BTreeSet::new();
+        let mut scenarios = Vec::new();
+        for scenario in decls {
+            if !names.insert(scenario.name.text.as_str()) {
+                self.bag.push(
+                    Diagnostic::new(
+                        E_DUP_LAB_IDENTITY,
+                        Phase::Resolve,
+                        format!(
+                            "the scenario `{}` is already declared at this level",
+                            scenario.name.text
+                        ),
+                    )
+                    .with_span(scenario.name.span)
+                    .with_field("name", scenario.name.text.clone()),
+                );
+                continue;
+            }
+            scenarios.push(self.scenario(scenario, app));
+        }
+        scenarios
+    }
+
     fn mocks(
         &mut self,
         decls: &[crate::compiler::syntax::MockDecl],
         app: &Graph,
     ) -> Vec<crate::compiler::hir::Mock> {
         let mut mocks = Vec::new();
+        let mut paths = BTreeSet::new();
         for decl in decls {
             let name = &decl.path[0];
             let Ok(path) = node::Path::new(decl.path.iter().map(|part| part.text.clone())) else {
                 continue;
             };
+            if !paths.insert(path.clone()) {
+                self.bag.push(
+                    Diagnostic::new(
+                        E_DUP_LAB_IDENTITY,
+                        Phase::Resolve,
+                        format!("the mock for `{path}` is already declared at this level"),
+                    )
+                    .with_span(decl.span)
+                    .with_field("name", path.to_string()),
+                );
+                continue;
+            }
             let Some(node) = node_at_path(app, &path) else {
                 self.bag.push(
                     Diagnostic::new(
@@ -1239,8 +1225,8 @@ impl Checker<'_, '_> {
         decl: &crate::compiler::syntax::ScenarioDecl,
         app: &Graph,
     ) -> crate::compiler::hir::Scenario {
-        use crate::compiler::hir::{Cmp, ExpectTarget, Expectation, Quantifier, ScenarioStep};
-        use crate::compiler::syntax::{CmpOp, ScenarioItem};
+        use crate::compiler::hir::{ExpectFilter, ExpectTarget, Expectation, ScenarioStep};
+        use crate::compiler::syntax::{ExpectTail, ScenarioItem};
         let mut mocks = Vec::new();
         let mut mocked: Vec<String> = Vec::new();
         let mut steps = Vec::new();
@@ -1518,95 +1504,152 @@ impl Checker<'_, '_> {
                             continue;
                         }
                     };
-                    if expect.nothing && expect.count.is_some() {
-                        // Two quantifiers on one expectation is an
-                        // ambiguous form; refusing beats letting one
-                        // win silently.
-                        self.bag.push(
-                            Diagnostic::new(
-                                E_EXPR,
-                                Phase::Check,
-                                "`nothing` and `count` are two quantifiers; pick one",
-                            )
-                            .with_span(expect.span)
-                            .with_field("detail", "ambiguous quantifier"),
-                        );
-                        continue;
-                    }
-                    let quantifier = if expect.nothing {
-                        Quantifier::Nothing
-                    } else if let Some((op, int)) = &expect.count {
-                        let Ok(count) = int.text.parse::<i64>() else {
-                            // A count too wide to represent is a
-                            // refusal, never a dropped expectation.
-                            self.bag.push(
-                                Diagnostic::new(
-                                    E_EXPR,
-                                    Phase::Check,
-                                    "this count does not fit a 64-bit integer",
-                                )
-                                .with_span(int.span)
-                                .with_field("detail", int.text.clone()),
-                            );
-                            continue;
-                        };
-                        let cmp = match op {
-                            CmpOp::Eq => Cmp::Eq,
-                            CmpOp::Ne => Cmp::Ne,
-                            CmpOp::Lt => Cmp::Lt,
-                            CmpOp::Gt => Cmp::Gt,
-                            CmpOp::Le => Cmp::Le,
-                            CmpOp::Ge => Cmp::Ge,
-                        };
-                        Quantifier::Count(cmp, count)
-                    } else {
-                        Quantifier::Exists
+                    let count = match &expect.count {
+                        Some(int) => match int.text.parse::<u64>() {
+                            Ok(count) => count,
+                            Err(_) => {
+                                self.bag.push(
+                                    Diagnostic::new(
+                                        E_EXPR,
+                                        Phase::Check,
+                                        "this count does not fit a non-negative 64-bit integer",
+                                    )
+                                    .with_span(int.span)
+                                    .with_field("detail", int.text.clone()),
+                                );
+                                continue;
+                            }
+                        },
+                        None if matches!(
+                            &expect.tail,
+                            Some(ExpectTail::Value(SynValue::Nothing(_)))
+                        ) =>
+                        {
+                            0
+                        }
+                        None => 1,
                     };
-                    let predicate = match &expect.predicate {
+                    let filter = match &expect.tail {
                         None => None,
-                        Some(expr) => {
+                        Some(ExpectTail::Value(SynValue::Nothing(_))) => {
+                            if count != 0 {
+                                self.bag.push(
+                                    Diagnostic::new(E_EXPR, Phase::Check,
+                                        "cannot expect a non-zero delivery count equal to `nothing`; write `expect <port> == nothing` or `expect 0 <port>`")
+                                        .with_span(expect.span),
+                                );
+                                continue;
+                            }
+                            None
+                        }
+                        Some(ExpectTail::Value(value)) => {
+                            if count == 0 {
+                                self.bag.push(
+                                    Diagnostic::new(E_EXPR, Phase::Check,
+                                        "`expect 0 <port> == <value>` is contradictory; use `expect <port> == nothing`, `expect 0 <port>`, or `expect 0 <port> where ...`")
+                                        .with_span(expect.span),
+                                );
+                                continue;
+                            }
+                            let port_name = expect
+                                .target
+                                .segments
+                                .last()
+                                .map_or("out", |segment| segment.text.as_str());
+                            let Some(value) = self.expectation_value(
+                                value,
+                                &observed_type,
+                                expect.span,
+                                port_name,
+                            ) else {
+                                continue;
+                            };
+                            Some(ExpectFilter::Value(value))
+                        }
+                        Some(ExpectTail::Where(expr)) => {
                             let signature = expr::Signature::new()
                                 .with("data", observed_type.clone())
                                 .with("meta", DataType::Variant);
-                            match self.expr(expr, &signature) {
-                                Some(tree) => {
-                                    if !matches!(tree.ty, DataType::Bool | DataType::Variant) {
-                                        self.bag.push(
-                                            Diagnostic::new(
-                                                E_EXPR,
-                                                Phase::Check,
-                                                "an expectation predicate must be a bool",
-                                            )
-                                            .with_span(expr.span)
-                                            .with_field(
-                                                "detail",
-                                                "the predicate type is not bool".to_string(),
-                                            ),
-                                        );
-                                        continue;
-                                    }
-                                    Some(tree)
-                                }
-                                None => continue,
+                            let Some(tree) = self.expr(expr, &signature) else {
+                                continue;
+                            };
+                            if !matches!(tree.ty, DataType::Bool | DataType::Variant) {
+                                self.bag.push(
+                                    Diagnostic::new(
+                                        E_EXPR,
+                                        Phase::Check,
+                                        "an expectation predicate must be a bool",
+                                    )
+                                    .with_span(expr.span)
+                                    .with_field("detail", "the predicate type is not bool"),
+                                );
+                                continue;
                             }
+                            Some(ExpectFilter::Where(tree))
                         }
                     };
                     steps.push(ScenarioStep::Expect(Expectation {
-                        label: expect.label.clone(),
-                        quantifier,
+                        count,
                         target,
-                        predicate,
+                        filter,
                     }));
                 }
             }
         }
         crate::compiler::hir::Scenario {
             name: decl.name.text.clone(),
-            label: decl.label.clone(),
             origin: origin.unwrap_or(crate::time::Timestamp::UNIX_EPOCH),
             mocks,
             steps,
         }
+    }
+
+    /// Checks the expected pattern without supplying an input envelope.
+    /// Partial envelope writes inherit only the observed port's static shape;
+    /// the runtime compares the written fields and never constructs a delivery.
+    fn expectation_value(
+        &mut self,
+        value: &SynValue,
+        observed_type: &DataType,
+        span: Span,
+        port_name: &str,
+    ) -> Option<EmitValue> {
+        let envelope_form = matches!(value, SynValue::Braced(body)
+        if body.entries.iter().any(|entry| match entry {
+            StructEntry::Field { key, .. } =>
+                key.segments.first().is_some_and(|root| matches!(root.text.as_str(), "data" | "meta")),
+            StructEntry::Block { name, .. } => matches!(name.text.as_str(), "data" | "meta"),
+        }));
+        let expected = (*observed_type != DataType::Variant).then_some(observed_type);
+        let signature = expr::Signature::new();
+        let value = match value {
+            SynValue::Braced(body) if envelope_form => {
+                self.braced(body, &signature, span, expected)?
+            }
+            _ => self.emit_value(value, &signature, expected, span, port_name)?,
+        };
+        if matches!(value, EmitValue::Identity) {
+            self.deferred("an identity expectation (there is no input)", span);
+            return None;
+        }
+        let origin = if matches!(value, EmitValue::Patch(_)) {
+            BuildOrigin::Handler(Some(observed_type))
+        } else {
+            BuildOrigin::Draft
+        };
+        if *observed_type != DataType::Variant
+            && !self.port_conforms(
+                observed_type,
+                &value,
+                origin,
+                &BTreeMap::new(),
+                port_name,
+                span,
+            )
+        {
+            return None;
+        }
+        Some(value)
     }
 
     fn graph(&mut self, decl: &GraphDecl) -> Graph {
@@ -6853,7 +6896,7 @@ impl Checker<'_, '_> {
                 self.typed_value_tree(value, signature, expected, at, port_name)
                     .map(EmitValue::Data)
             }
-            SynValue::Braced(body) => self.braced(body, signature, at),
+            SynValue::Braced(body) => self.braced(body, signature, at, None),
             SynValue::Nothing(_) => Some(EmitValue::Nothing),
             SynValue::Tagged { .. } => self
                 .typed_value_tree(value, signature, expected, at, port_name)
@@ -6960,6 +7003,7 @@ impl Checker<'_, '_> {
         body: &StructBody,
         signature: &expr::Signature,
         at: Span,
+        data_type: Option<&DataType>,
     ) -> Option<EmitValue> {
         // ONE root extraction for both entry forms: a field's first
         // segment, a sub-block's name — `meta { … }` carries the
@@ -7011,7 +7055,7 @@ impl Checker<'_, '_> {
             }
             StructEntry::Block { .. } => false,
         });
-        let writes = self.field_writes(body, signature)?;
+        let writes = self.field_writes(body, signature, data_type)?;
         if whole_data {
             Some(EmitValue::FreshData(writes))
         } else {
@@ -7023,6 +7067,7 @@ impl Checker<'_, '_> {
         &mut self,
         body: &StructBody,
         signature: &expr::Signature,
+        data_type: Option<&DataType>,
     ) -> Option<Vec<FieldWrite>> {
         let mut writes = Vec::new();
         for entry in &body.entries {
@@ -7079,6 +7124,61 @@ impl Checker<'_, '_> {
                             bare.iter().map(ToString::to_string).collect(),
                         ),
                     };
+                    // An expectation supplies the observed port's type. Reuse
+                    // contextual value construction for its data fields, so
+                    // tagged cases and structural unions compare typed values.
+                    // Ordinary envelope construction keeps its existing rules.
+                    if let crate::envelope::WriteTarget::Data(path) = &target
+                        && let Some(data_type) = data_type
+                        && let Some(expected) = path.iter().try_fold(data_type, |ty, name| match ty
+                        {
+                            DataType::Struct(structure) => structure
+                                .fields()
+                                .iter()
+                                .find(|field| field.name() == name)
+                                .map(|field| field.ty()),
+                            _ => None,
+                        })
+                        && *expected != DataType::Variant
+                    {
+                        match self.emit_value(
+                            value,
+                            signature,
+                            Some(expected),
+                            key.span,
+                            &key_path(key),
+                        )? {
+                            EmitValue::Data(tree) => writes.push(FieldWrite {
+                                target,
+                                value: tree,
+                            }),
+                            EmitValue::FreshData(nested) => {
+                                for mut write in nested {
+                                    match &mut write.target {
+                                        crate::envelope::WriteTarget::Data(inner) => {
+                                            let mut qualified = path.clone();
+                                            qualified.append(inner);
+                                            *inner = qualified;
+                                        }
+                                        _ if !path.is_empty() => {
+                                            self.bag.push(Diagnostic::new(
+                                                E_CONTENT_TYPE,
+                                                Phase::Check,
+                                                "a content type qualifies the whole payload; a nested field has no metadata of its own",
+                                            ).with_span(key.span));
+                                            continue;
+                                        }
+                                        _ => {}
+                                    }
+                                    writes.push(write);
+                                }
+                            }
+                            EmitValue::Identity | EmitValue::Nothing | EmitValue::Patch(_) => {
+                                self.deferred("a nested envelope builder", key.span);
+                            }
+                        }
+                        continue;
+                    }
                     match value {
                         SynValue::Expr(expr) => {
                             let whole_data = matches!(&target, crate::envelope::WriteTarget::Data(path) if path.is_empty());

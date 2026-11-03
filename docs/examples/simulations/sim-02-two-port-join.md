@@ -65,8 +65,8 @@ graph sim02 : App {
 
 ```rastok
 lab sim02 {
-  simulation sim02_two_port_join on app {
-    scenario join_and_eviction "order 42 settles ; order 43's payment never comes" {
+  simulation sim02_two_port_join {
+    scenario join_and_eviction {
 
       // ---- case A : the happy join -----------------------------------------
       orders.out = {
@@ -77,7 +77,7 @@ lab sim02 {
         meta.ext.order_id = "42"
         data = { amount = 99.90 }
       }
-      expect "42 settled" ledger.in where data.status == "settled" && data.amount == 99.90
+      expect ledger.in where data.status == "settled" && data.amount == 99.90
 
       // ---- case B : the abandoned half --------------------------------------
       orders.out = {
@@ -87,7 +87,7 @@ lab sim02 {
 
       advance duration("15m")
 
-      expect "43's order evicted, loudly" dlq.in where data is JoinExpired
+      expect dlq.in where data is JoinExpired
     }
   }
 }
@@ -118,7 +118,7 @@ t=0  P0 born at inbound (payments)        id = H("payments" ‖ 0)   origin = P0
            parent_id = P0.id        origin_id = P0.origin (= P0.id)
            meta.app  = A0's meta.app  (explicit attribution — order's namespace)
      edge settle.out -> ledger.in : S0 delivered.
-     stable. `expect "42 settled"` (window : the payments.out injection) → pass
+     stable. `expect ledger.in where ...` (window: the payments.out injection) passes.
 ```
 
 Provenance note (the 3-piece model, envelope.md §7) : S0's **parent chain**
@@ -151,7 +151,7 @@ advance duration("15m") (target t=15min) :
     stable.
   earliest ≤ 15min ? none → t := 15min. done.
 
-`expect "43's order evicted, loudly"` (window : the advance) → pass
+`expect dlq.in where data is JoinExpired` (window: the advance) passes.
 ```
 
 The lost fact has a full paper trail : `X0 → B0`, key "43", evicted at

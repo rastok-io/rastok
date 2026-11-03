@@ -1,12 +1,12 @@
 lab totals {
-  simulation refereeing on app {
-    scenario accumulates "totals follow the deltas" {
+  simulation refereeing {
+    scenario accumulates {
       app.in = {amount = 5}
-      expect "five" app.out count == 1 where data.total == 5
+      expect app.out where data.total == 5
       app.in = {amount = 7}
-      expect "twelve" app.out count == 1 where data.total == 12
+      expect app.out where data.total == 12
       app.in = {amount = 0}
-      expect "still twelve" app.out count == 1 where data.total == 12
+      expect app.out where data.total == 12
     }
   }
 }

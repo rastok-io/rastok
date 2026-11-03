@@ -82,7 +82,7 @@ graph mixed : App {
 const MIXED_LAB: &str = r#"
 
 lab mixed {
-  simulation scripted on app {
+  simulation scripted {
     mock shell {
       on in {
         out = "process-mock"
@@ -97,10 +97,10 @@ lab mixed {
       }
     }
 
-    scenario both "one world supplies two connector families" {
+    scenario both {
       app.in = { text = "request" }
-      expect "Process replied" app.process_out count == 1 where data == "process-mock"
-      expect "File replied" app.file_out count == 1
+      expect app.process_out where data == "process-mock"
+      expect app.file_out
     }
   }
 }

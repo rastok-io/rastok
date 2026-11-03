@@ -52,25 +52,25 @@ graph sim07 : App {
 
 ```rastok
 lab sim07 {
-  simulation sim07_calendar_dst on app {
+  simulation sim07_calendar_dst {
 
-    scenario spring_forward "02:30 on the skipped night never fires" {
+    scenario spring_forward {
       origin = timestamp("2026-03-28T00:00:00+01:00")     // Saturday, midnight Paris (CET)
 
       advance duration("48h")
 
-      expect "exactly one tick in two days" log.in count == 1
-      expect "and it is Saturday's" log.in
+      expect log.in
+      expect log.in
         where data.fired_at == timestamp("2026-03-28T02:30:00+01:00")
     }
 
-    scenario fall_back "02:30 on the ambiguous night fires once, first occurrence" {
+    scenario fall_back {
       origin = timestamp("2026-10-24T00:00:00+02:00")     // Saturday, midnight Paris (CEST)
 
       advance duration("48h")
 
-      expect "two ticks in two days" log.in count == 2
-      expect "the ambiguous one fired exactly once, as CEST" log.in count == 1
+      expect 2 log.in
+      expect log.in
         where data.fired_at == timestamp("2026-10-25T02:30:00+02:00")
     }
   }
@@ -108,7 +108,7 @@ advance duration("48h") :
           stable.
   no further dated event ≤ 48h → t := 48h.
 
-expect count == 1 : exactly T0's descendant at log.in → PASS
+expect log.in : exactly T0's descendant → PASS
 expect Saturday's instant : data.fired_at == 2026-03-28T02:30+01:00 → PASS
    (timestamp equality is instant-based : +01:00 form ≡ 01:30Z)
 ```
@@ -136,7 +136,7 @@ advance duration("48h") :
            stamp → log.in.        stable.
   nothing ≤ 48h remains → t := 48h.
 
-expect count == 2 : T0's and T1's descendants at log.in → PASS
+expect 2 log.in : T0's and T1's descendants → PASS
 expect the ambiguous one, once, as CEST :
   exactly one delivery with fired_at ≡ 2026-10-25T02:30+02:00 → PASS
   (had the policy fired both occurrences, count would be 2 for that instant’s

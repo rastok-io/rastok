@@ -19,7 +19,7 @@
 | Typed Connector outcomes use ordinary `exit` ports with resolved journal policy | delivery-semantics.md §5 |
 | The pending-connection table is volatile ; response delivery is best-effort | HttpServer Driver obligation |
 | Mock `after <duration>` = dated emission, swept by `advance` | simulation-semantics.md §5.1 |
-| `expect nothing` / `count == N` windows | simulation-semantics.md §5.2 |
+| `expect port == nothing` / `expect N port` windows | simulation-semantics.md §5.2 |
 | Open requests are **bounded** → immediate 503, `Overloaded` journaled ; the engaged are protected | stdlib.md §3.1, delivery-semantics.md §2 |
 | A test-scale bound must produce the same real refusal path as production | open conformance boundary (§5) |
 
@@ -67,9 +67,9 @@ fires only when a join sits on the path).
 
 ```rastok
 lab sim06 {
-  simulation sim06_http_respond on app {
+  simulation sim06_http_respond {
 
-    scenario answered "the graph answers within the budget ; the open request completes" {
+    scenario answered {
       mock llm {
         on in {
           after duration("1s")
@@ -82,15 +82,15 @@ lab sim06 {
         data = { q = "meaning of life?" }
       }
 
-      expect "llm called" llm.in where data.prompt == "meaning of life?"
+      expect llm.in where data.prompt == "meaning of life?"
 
       advance duration("2s")
 
-      expect "answer reached the endpoint" api.in where data.answer == "42"
-      expect nothing api.exit
+      expect api.in where data.answer == "42"
+      expect api.exit == nothing
     }
 
-    scenario expired "the graph answers too late ; 504 first, the orphan is discarded" {
+    scenario expired {
       mock llm {
         on in {
           after duration("6s")                 // > the 5s open-request budget
@@ -105,14 +105,14 @@ lab sim06 {
 
       advance duration("10s")
 
-      expect "504 path taken" api.exit where data is RequestExpired
-      expect "the graph still answered" wrap.out count == 1 where data.answer == "too late"
-      expect "exactly one completion attempt" api.in count == 1
+      expect api.exit where data is RequestExpired
+      expect wrap.out where data.answer == "too late"
+      expect api.in
       // the DISCARD of that one late delivery is asserted by the golden trace,
       // not by an expect.
     }
 
-    scenario newsletter_rush "two served, the third politely refused (Overloaded/503)" {
+    scenario newsletter_rush {
       mock api { max_open_requests = 2 }        // driver settings on an ingress mock —
                                                 // prod : thousands ; here : the testable scale
       mock llm {
@@ -129,13 +129,13 @@ lab sim06 {
       api.out = { meta.ext.visitor = "v3"  data = { q = "rain coat" } }
 
       // the refusal is IMMEDIATE — zero virtual time has passed
-      expect "the third hit the bound" api.exit where data is Overloaded
-      expect nothing llm.in                     // a refusal at the door : v3 never entered the graph
+      expect api.exit where data is Overloaded
+      expect llm.in == nothing                     // a refusal at the door : v3 never entered the graph
 
       advance duration("5s")
 
-      expect "both engaged clients served" api.in count == 2 where data.answer == "the linen one"
-      expect nothing api.exit                   // no 504 : the bound protected the engaged
+      expect 2 api.in where data.answer == "the linen one"
+      expect api.exit == nothing                   // no 504 : the bound protected the engaged
     }
   }
 }
@@ -170,7 +170,7 @@ t=0  R0 born at inbound (ack after durable INBOUND)
      mock matches ; `after 1s` → scripted closure due t = 1           ← dated #3
      mailboxes empty → stable.                    window ① complete
 
-expect "llm called" : E1 delivered to llm.in, data.prompt matches → PASS
+expect : E1 delivered to llm.in, data.prompt matches → PASS
 
 advance duration("2s")                        (target t = 2 ; window ②)
   t=1  OUTBOUND closed (mock reply) → E2 on llm.out (p:in, parent E1)
@@ -184,8 +184,8 @@ advance duration("2s")                        (target t = 2 ; window ②)
            is DISARMED (call closed by completion)
   no dated event ≤ 2 remains → t := 2. stable.
 
-expect "answer reached the endpoint" : E3 at api.in in window ② → PASS
-expect nothing api.exit : zero exceptional exit deliveries → PASS
+expect : E3 at api.in in window ② → PASS
+expect api.exit == nothing : zero exceptional exit deliveries → PASS
 ```
 
 Lineage of the answer : `E3 → E2 → E1 → R0` — one unbroken origin chain,
@@ -219,9 +219,9 @@ advance duration("10s")                       (target t = 10 ; window ②)
        stable.
   t=8 disarmed ; nothing ≤ 10 remains → t := 10.
 
-expect "504 path taken"    : X at api.exit, data is RequestExpired → PASS
-expect "the graph still answered" : E3' on wrap.out, count == 1 → PASS
-expect "exactly one completion attempt" : E3' at api.in, count == 1 → PASS
+expect : X at api.exit, data is RequestExpired → PASS
+expect wrap.out : exactly E3' → PASS
+expect api.in : exactly E3' → PASS
    (the delivery HAPPENED in the graph plane ; the discard is the driver's,
     and the golden trace records it)
 ```
@@ -242,8 +242,8 @@ t=0  action 1 : R1 born (seq 0) — accepted : pending table {R1} (1/2)
          the same posture as MalformedRequest) → journal policy observes it
        stable → window ③
 
-expect "the third hit the bound" (window ③) : X, kind Overloaded → PASS
-expect nothing llm.in (window ③) : zero deliveries — v3 never entered → PASS
+expect (window ③) : X, kind Overloaded → PASS
+expect llm.in == nothing (window ③) : zero deliveries — v3 never entered → PASS
 
 advance duration("5s")                                  (window ④)
   t=4  both scripted closures fire : llm.out replies → wrap → api.in ×2
@@ -251,9 +251,8 @@ advance duration("5s")                                  (window ④)
        both budget timers (t=5) DISARMED by completion
   t=5  nothing armed remains → t := 5.
 
-expect "both engaged clients served" : two deliveries at api.in,
-  data.answer == "the linen one", count == 2 → PASS
-expect nothing api.exit (window ④) : X was window ③ ; no 504 → PASS
+expect 2 api.in where data.answer == "the linen one" → PASS
+expect api.exit == nothing (window ④) : X was window ③ ; no 504 → PASS
    — the bound protected the engaged : v1/v2 completed inside their
    budget, indifferent to the crush.
 ```

@@ -1,13 +1,13 @@
 lab pressures {
-  simulation refereeing on app {
-    scenario from_bar "bar converts" {
+  simulation refereeing {
+    scenario from_bar {
       app.in = {value = 3, unit = "bar"}
-      expect "converted" app.out count == 1 where data.kpa == 300
+      expect app.out where data.kpa == 300
     }
 
-    scenario from_kpa "kilopascal passes through" {
+    scenario from_kpa {
       app.in = {value = 250, unit = "kpa"}
-      expect "unchanged" app.out count == 1 where data.kpa == 250
+      expect app.out where data.kpa == 250
     }
   }
 }

@@ -36,8 +36,8 @@ rastok simulate examples/keyed-retry.rkg --compare examples/traces/two-tenants
 ```
 
 ```text
-PASS ui_tour.two_tenants: Bob completes once; only Alice retries
-PASS ui_tour.lifetime: a quiet keyed instance closes and opens a fresh generation
+PASS ui_tour.two_tenants
+PASS ui_tour.lifetime
 2 scenario(s), 0 failed
 ```
 
@@ -119,15 +119,15 @@ rastok simulate examples/keyed-retry.rkg --compare examples/traces/two-tenants
 ```
 
 ```text
-FAIL ui_tour.two_tenants: Bob completes once; only Alice retries
-     expect app.done count == 1 where data.tenant == "alice"  (keyed-retry.rkg:102)
+FAIL ui_tour.two_tenants
+     expect app.done where data.tenant == "alice"  (keyed-retry.rkg:101)
      nothing observed
      where data.tenant == "alice" is false for 0 of 0 deliveries; count 0, expected 1
-     expect answer.in count == 1 where data is Answer && data.tenant == "alice"  (keyed-retry.rkg:103)
+     expect answer.in where data is Answer && data.tenant == "alice"  (keyed-retry.rkg:102)
      nothing observed
      where data is Answer && data.tenant == "alice" is false for 0 of 0 deliveries; count 0, expected 1
      golden divergence: record 6: retry_protocol(43) . parent_id(2)[0][4]; expected e0091a67cd4992a8…(32 bytes); got 8783e6cca4a7d30f…(32 bytes); cause: TRANSACTION "model" · trigger "l:retry" · cause_id f3df1105112054d3…(16 bytes)
-FAIL ui_tour.lifetime: a quiet keyed instance closes and opens a fresh generation
+FAIL ui_tour.lifetime
      golden divergence: record 6: retry_protocol(43) . parent_id(2)[0][4]; expected e0091a67cd4992a8…(32 bytes); got 8783e6cca4a7d30f…(32 bytes); cause: TRANSACTION "model" · trigger "l:retry" · cause_id f3df1105112054d3…(16 bytes)
 2 scenario(s), 2 failed
 ```

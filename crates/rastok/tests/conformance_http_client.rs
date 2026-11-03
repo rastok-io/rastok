@@ -307,16 +307,16 @@ graph authenticated : App {
 }
 
 lab authenticated {
-  simulation scripted on app {
+  simulation scripted {
     mock client {
       on in {
         out = "scripted"
         exit = Completed { status = 200 }
       }
     }
-    scenario same_plan "the mock consumes the same boot-bound descriptor" {
+    scenario same_plan {
       app.in = "request"
-      expect "scripted response" app.out count == 1 where data == "scripted"
+      expect app.out where data == "scripted"
     }
   }
 }

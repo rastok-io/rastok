@@ -25,15 +25,15 @@ graph resident : App {
 }
 
 lab resident {
-  simulation dialogue on app {
+  simulation dialogue {
     mock child { on in match {
       data == "quit" => exit = Exited { exit_code = 0; signal = null }
       _ => out = data
     } }
-    scenario conversation "two writes, one child" {
+    scenario conversation {
       app.in = "hello"
       expect app.out where data == "hello"
-      expect nothing app.exit
+      expect app.exit == nothing
       app.in = "again"
       expect app.out where data == "again"
       app.in = "quit"
@@ -316,10 +316,10 @@ graph mixed : App {
   resident.exit -> nothing
 }
 lab mixed {
-  simulation modes on app {
+  simulation modes {
     mock once { on in { out = data; exit = Exited { exit_code = 0; signal = null } } }
     mock resident { on in { out = data } }
-    scenario interleaved "one Call per input, one shared Session" {
+    scenario interleaved {
       app.in = "first"
       expect app.job where data == "first"
       expect app.service where data == "first"

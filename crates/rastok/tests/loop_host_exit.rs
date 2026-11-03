@@ -151,7 +151,7 @@ graph app : App {
 
     let forged_driver = format!(
         r#"{source}
-lab app {{ simulation forged on app {{
+lab app {{ simulation forged {{
   mock job {{ on in {{ exit = LoopExpired {{ last_state = data }} }} }}
   scenario attempt {{ app.in = "request" }}
 }} }}"#

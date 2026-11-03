@@ -37,7 +37,7 @@ graph constants : App {
 
 const LAB: &str = r#"
 lab constants {
-  simulation scripted on app {
+  simulation scripted {
     mock nested.echo {
       on in where data == "reply: hello" {
         val reply = "accepted"
@@ -47,9 +47,9 @@ lab constants {
     }
     scenario roundtrip {
       app.in = { meta.ext.session_id = "22222222222222222222222222222222"; data = "hello" }
-      expect app.out count == 1 where data == "accepted" && meta.ext.session_id == "22222222222222222222222222222222"
+      expect app.out where data == "accepted" && meta.ext.session_id == "22222222222222222222222222222222"
       advance duration("1s")
-      expect nothing app.out
+      expect app.out == nothing
     }
   }
 }
@@ -134,7 +134,7 @@ graph constants : App {
   in -> echo -> out
 }
 lab constants {
-  simulation s on app {
+  simulation s {
     scenario s {
       app.in = message.text
       expect app.out where data == "hellobobhello"
@@ -241,7 +241,7 @@ graph constants : App {
   in -> echo -> out
 }
 lab constants {
-  simulation s on app {
+  simulation s {
     scenario s {
       app.in = false
       expect app.out where data == "yes"
@@ -332,7 +332,7 @@ graph typed : App {
   in -> reply -> out
 }
 lab typed {
-  simulation s on app {
+  simulation s {
     scenario s {
       app.in = "go"
       expect app.out where data == "done" && price == decimal("1.20") && answer is Ok && answer.message == data

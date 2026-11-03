@@ -15,11 +15,9 @@ graph gauge : App {
   meter.score -> measure
 }
 
-lab gauge {
-  simulation golden on app {
-    scenario roundtrip "text in at the named input, its size at the named output" {
-      app.feed = "salut"
-      expect "sized" app.measure count == 1 where data == 5
-    }
+lab golden {
+  scenario roundtrip {
+    app.feed = "salut"
+    expect app.measure == 5
   }
 }

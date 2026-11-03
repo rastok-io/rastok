@@ -7,23 +7,23 @@
 //! faulty file still reach the tree.
 //!
 //! The parsed subset covers declarations, handlers, statements, and
-//! wiring. `lab` bodies are recognized and skipped whole until the
-//! scenario stage.
+//! wiring. Lab declarations use the same value and handler productions;
+//! their checked scenarios remain outside the production plan.
 
 use crate::compiler::lexer::{
     E_LEX_UNTERMINATED_COMMENT, E_LEX_UNTERMINATED_STRING, Lexer, StatementHead, TerminatorSet,
     Token, TokenKind, ValueHead,
 };
 use crate::compiler::syntax::{
-    Annotation, Attribute, BaseType, CmpOp, ConnectorDecl, Dispatch, EdgeCaseSet, EdgeDecl,
-    EdgeDestination, EdgeEndpoint, EdgeMatch, EdgeMatchArm, ErrorNode, ExpectStep, ExprSource,
-    FieldDecl, FrontendPayload, FrontendValue, GraphDecl, GraphItem, Guard, HandlerDecl, IntLit,
-    LValue, LabDecl, MatchArm, MatchSelector, MockDecl, Name, OperatorDecl, OperatorItem, PortDecl,
-    PortDirection, PortPath, RemovedLifecycleHook, RemovedLifetimeValue, RemovedPartitionDecl,
-    RemovedPartitionField, RemovedPerClause, RemovedWindowMode, ScalarType, ScenarioDecl,
-    ScenarioItem, SchemaAnnotation, SchemaAnnotationArgument, SchemaAnnotationConstant,
-    SimulationDecl, Statement, StructBody, StructEntry, SubBlock, SyntaxTree, TaggedCaseDecl,
-    TopDecl, Trigger, TypeRef, ValDecl, Value, VarDecl,
+    Annotation, Attribute, BaseType, ConnectorDecl, Dispatch, EdgeCaseSet, EdgeDecl,
+    EdgeDestination, EdgeEndpoint, EdgeMatch, EdgeMatchArm, ErrorNode, ExpectStep, ExpectTail,
+    ExprSource, FieldDecl, FrontendPayload, FrontendValue, GraphDecl, GraphItem, Guard,
+    HandlerDecl, IntLit, LValue, LabDecl, MatchArm, MatchSelector, MockDecl, Name, OperatorDecl,
+    OperatorItem, PortDecl, PortDirection, PortPath, RemovedLifecycleHook, RemovedLifetimeValue,
+    RemovedPartitionDecl, RemovedPartitionField, RemovedPerClause, RemovedWindowMode, ScalarType,
+    ScenarioDecl, ScenarioItem, SchemaAnnotation, SchemaAnnotationArgument,
+    SchemaAnnotationConstant, SimulationDecl, Statement, StructBody, StructEntry, SubBlock,
+    SyntaxTree, TaggedCaseDecl, TopDecl, Trigger, TypeRef, ValDecl, Value, VarDecl,
 };
 use crate::diagnostics::{Bag, Code, Diagnostic, Phase, SourceId, Span};
 
@@ -497,7 +497,7 @@ impl<'src> Parser<'src, '_> {
         SyntaxTree { decls }
     }
 
-    /// `lab IDENT { (simulation | experiment | theorem)* }`.
+    /// `lab IDENT { (mock | scenario | simulation | experiment | theorem)* }`.
     fn lab_decl(&mut self, start: usize) -> TopDecl {
         self.bump();
         let Some(name) = self.name("the lab name") else {
@@ -506,6 +506,8 @@ impl<'src> Parser<'src, '_> {
         if self.expect(TokenKind::LBrace, "`{`").is_none() {
             return TopDecl::Error(self.recover(start));
         }
+        let mut mocks = Vec::new();
+        let mut scenarios = Vec::new();
         let mut simulations = Vec::new();
         loop {
             let token = self.peek();
@@ -517,6 +519,16 @@ impl<'src> Parser<'src, '_> {
                 (TokenKind::Eof, _) => {
                     self.error_expected("`}`");
                     break;
+                }
+                (TokenKind::Ident, "mock") => {
+                    if let Some(mock) = self.mock_decl() {
+                        mocks.push(mock);
+                    }
+                }
+                (TokenKind::Ident, "scenario") => {
+                    if let Some(scenario) = self.scenario_decl() {
+                        scenarios.push(scenario);
+                    }
                 }
                 (TokenKind::Ident, "simulation") => {
                     if let Some(simulation) = self.simulation_decl() {
@@ -537,13 +549,17 @@ impl<'src> Parser<'src, '_> {
                     self.deferred(construct, self.span_from(block_start));
                 }
                 _ => {
-                    self.error_expected("`simulation`, `experiment`, or `theorem`");
+                    self.error_expected(
+                        "`mock`, `scenario`, `simulation`, `experiment`, or `theorem`",
+                    );
                     self.bump();
                 }
             }
         }
         TopDecl::Lab(LabDecl {
             name,
+            mocks,
+            scenarios,
             simulations,
             span: self.span_from(start),
         })
@@ -586,18 +602,19 @@ impl<'src> Parser<'src, '_> {
         }
     }
 
-    /// `simulation IDENT on graph_ref { (mock | scenario)* }`.
+    /// `simulation IDENT (":" graph_ref)? { (mock | scenario)* }`.
     fn simulation_decl(&mut self) -> Option<SimulationDecl> {
         let start = self.peek().span.range().start;
         self.bump();
         let name = self.name("the simulation name")?;
-        let on = self.peek();
-        if !(on.kind == TokenKind::Ident && on.text == "on") {
-            self.error_expected("`on`");
+        let target = if self.eat(TokenKind::Colon).is_some() {
+            Some(self.dotted_names("the simulation target")?)
+        } else if self.peek().kind == TokenKind::Ident && self.peek().text == "on" {
+            self.error_expected("`:` or `{` (`simulation <name> on app` was replaced by `simulation <name> { ... }` or `simulation <name> : App { ... }`)");
             return None;
-        }
-        self.bump();
-        let target = self.dotted_names("the simulation target")?;
+        } else {
+            None
+        };
         self.expect(TokenKind::LBrace, "`{`")?;
         let mut mocks = Vec::new();
         let mut scenarios = Vec::new();
@@ -678,13 +695,12 @@ impl<'src> Parser<'src, '_> {
         })
     }
 
-    /// `scenario IDENT STRING? { (injection | advance | expect |
+    /// `scenario IDENT { (injection | advance | expect |
     /// mock | …)* }`.
     fn scenario_decl(&mut self) -> Option<ScenarioDecl> {
         let start = self.peek().span.range().start;
         self.bump();
         let name = self.name("the scenario name")?;
-        let label = self.string_literal();
         self.expect(TokenKind::LBrace, "`{`")?;
         let mut body = Vec::new();
         loop {
@@ -772,99 +788,41 @@ impl<'src> Parser<'src, '_> {
         }
         Some(ScenarioDecl {
             name,
-            label,
             body,
             span: self.span_from(start),
         })
     }
 
-    /// `expect STRING? nothing? port_ref (count cmp INT)? (where
-    /// expr)?`.
+    /// `expect INT? port_ref ("==" value | "where" expr)?`.
     fn expect_step(&mut self) -> Option<ExpectStep> {
         let start = self.peek().span.range().start;
         self.bump();
-        let label = self.string_literal();
-        let nothing = if self.peek().kind == TokenKind::Ident && self.peek().text == "nothing" {
-            self.bump();
-            true
-        } else {
-            false
-        };
-        let target = self.lvalue()?;
-        let count = if self.peek().kind == TokenKind::Ident && self.peek().text == "count" {
-            self.bump();
-            let op = self.cmp_op()?;
-            let int = self.expect(TokenKind::Int, "a count")?;
-            Some((
-                op,
-                IntLit {
-                    text: String::from(int.text),
-                    span: int.span,
-                },
-            ))
+        let count = if self.peek().kind == TokenKind::Int && !self.peek().newline_before {
+            let int = self.bump();
+            Some(IntLit {
+                text: String::from(int.text),
+                span: int.span,
+            })
         } else {
             None
         };
-        let predicate = if self.peek().kind == TokenKind::Ident && self.peek().text == "where" {
+        let target = self.lvalue()?;
+        let tail = if self.peek().newline_before {
+            None
+        } else if self.eat(TokenKind::EqEq).is_some() {
+            Some(ExpectTail::Value(self.value(&ATTR_POSITION)))
+        } else if self.peek().kind == TokenKind::Ident && self.peek().text == "where" {
             self.bump();
-            Some(self.expr(&ATTR_POSITION))
+            Some(ExpectTail::Where(self.expr(&ATTR_POSITION)))
         } else {
             None
         };
         Some(ExpectStep {
-            label,
-            nothing,
-            target,
             count,
-            predicate,
+            target,
+            tail,
             span: self.span_from(start),
         })
-    }
-
-    /// One comparison operator — single maximal-munch lexemes
-    /// (D-2026-08-13-1, review round 6).
-    fn cmp_op(&mut self) -> Option<CmpOp> {
-        match self.peek().kind {
-            TokenKind::EqEq => {
-                self.bump();
-                Some(CmpOp::Eq)
-            }
-            TokenKind::BangEq => {
-                self.bump();
-                Some(CmpOp::Ne)
-            }
-            TokenKind::LtEq => {
-                self.bump();
-                Some(CmpOp::Le)
-            }
-            TokenKind::Lt => {
-                self.bump();
-                Some(CmpOp::Lt)
-            }
-            TokenKind::GtEq => {
-                self.bump();
-                Some(CmpOp::Ge)
-            }
-            TokenKind::Gt => {
-                self.bump();
-                Some(CmpOp::Gt)
-            }
-            _ => {
-                self.error_expected("a comparison operator");
-                None
-            }
-        }
-    }
-
-    /// An optional string literal, quotes stripped.
-    fn string_literal(&mut self) -> Option<String> {
-        let token = self.peek();
-        if token.kind != TokenKind::Str {
-            return None;
-        }
-        let text = token.text;
-        self.bump();
-        Some(text[1..text.len().saturating_sub(1)].to_string())
     }
 
     /// Dotted same-line names: `app`, `sessions.codex`.
@@ -3883,15 +3841,15 @@ graph m0_probe : App {
         let mut bag = Bag::new();
         let source = r#"
 lab m0_probe {
-  simulation smoke on app {
+  simulation smoke {
     mock echo {
       on in { out = { text = "salut" } }
     }
-    scenario roundtrip "one message through" {
+    scenario roundtrip {
       app.in = { text = "salut" }
-      expect app.out count == 1 where data.text == "salut"
+      expect app.out where data.text == "salut"
       advance duration("5s")
-      expect nothing app.err
+      expect app.err == nothing
     }
   }
 }
@@ -3905,11 +3863,11 @@ val x = 1
         assert_eq!(lab.name.text, "m0_probe");
         let simulation = &lab.simulations[0];
         assert_eq!(simulation.name.text, "smoke");
-        assert_eq!(simulation.target[0].text, "app");
+        assert!(simulation.target.is_none());
         assert_eq!(simulation.mocks[0].path[0].text, "echo");
         assert_eq!(simulation.mocks[0].handlers.len(), 1);
         let scenario = &simulation.scenarios[0];
-        assert_eq!(scenario.label.as_deref(), Some("one message through"));
+        assert_eq!(scenario.name.text, "roundtrip");
         assert!(
             matches!(&scenario.body[0], ScenarioItem::Injection { target, .. }
             if target.segments[0].text == "app" && target.segments[1].text == "in")
@@ -3917,30 +3875,23 @@ val x = 1
         let ScenarioItem::Expect(first) = &scenario.body[1] else {
             panic!("expected an expect step");
         };
-        assert!(!first.nothing);
-        assert_eq!(
-            first.count,
-            Some((
-                CmpOp::Eq,
-                IntLit {
-                    text: String::from("1"),
-                    span: first.count.as_ref().unwrap().1.span
-                }
-            ))
-        );
-        assert!(first.predicate.is_some());
+        assert!(first.count.is_none());
+        assert!(matches!(first.tail, Some(ExpectTail::Where(_))));
         assert!(matches!(&scenario.body[2], ScenarioItem::Advance { .. }));
         let ScenarioItem::Expect(last) = &scenario.body[3] else {
             panic!("expected the void expect");
         };
-        assert!(last.nothing);
+        assert!(matches!(
+            last.tail,
+            Some(ExpectTail::Value(Value::Nothing(_)))
+        ));
         assert!(matches!(tree.decls[1], TopDecl::Val(_)));
     }
 
     #[test]
     fn experiments_and_theorems_are_refused_whole() {
         let mut bag = Bag::new();
-        let source = "lab m0_probe {\n  experiment probe on app { profile = \"staging\" }\n  theorem safety over smoke { anything { nested } }\n}\n";
+        let source = "lab m0_probe {\n  experiment probe : app { scenario observation {} }\n  theorem safety { anything { nested } }\n}\n";
         let tree = parse(SourceId::new(0), source, &mut bag);
         let constructs: Vec<&str> = bag
             .diagnostics()

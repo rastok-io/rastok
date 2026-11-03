@@ -182,9 +182,9 @@ graph app : App {
   }
   in -> account -> out
 }
-lab app { simulation billing on app { scenario adjustment {
+lab app { simulation billing { scenario adjustment {
   app.in = 1
-  expect app.out count == 1
+  expect app.out
 } } }
 "#;
     let compiled = compile(&[source], &ContractCatalog::try_m0().expect("catalogue"))

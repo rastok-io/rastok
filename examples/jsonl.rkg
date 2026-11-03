@@ -19,18 +19,16 @@ graph relay : App {
   sift -> out
 }
 
-lab relay {
-  simulation golden on app {
-    mock shell {
-      on in {
-        out = {"status": "ok", "value": 7}
-        exit = Exited { exit_code = 0, signal = null }
-      }
+lab golden {
+  mock shell {
+    on in {
+      out = {"status": "ok", "value": 7}
+      exit = Exited { exit_code = 0, signal = null }
     }
+  }
 
-    scenario roundtrip "a struct request opens one canonical line; the mock answers the wire's shape" {
-      app.in = { price = decimal("19.99"), n = 42 }
-      expect "sifted" app.out count == 1 where data == 7
-    }
+  scenario roundtrip {
+    app.in = { price = decimal("19.99"), n = 42 }
+    expect app.out == 7
   }
 }

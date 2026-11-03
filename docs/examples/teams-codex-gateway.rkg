@@ -321,12 +321,12 @@ graph teams_inbound : App {
 // =============================================================================
 
 lab teams_inbound {
-  simulation teams_gateway on app {
+  simulation teams_gateway {
 
     // The world, shared by the scenarios : codex is scripted per scenario ;
     // The nested HTTP Driver must be covered wherever it is called.
 
-    scenario plain_message "user sends a plain Teams message" {
+    scenario plain_message {
       mock sessions.codex {
         on in where data.method == "turn/start" {
           out = {                     // meta is written → long form (the { … } sugar carries data only)
@@ -352,12 +352,12 @@ lab teams_inbound {
         }
       }
 
-      expect "turn/start"     sessions.codex.in where (data.method == "turn/start" && data.params.prompt == "Bonjour")
-      expect "Teams activity" teams_delivery.teams_out.in where (
+      expect sessions.codex.in where (data.method == "turn/start" && data.params.prompt == "Bonjour")
+      expect teams_delivery.teams_out.in where (
         data.type == "message" && data.text.contains("Bonjour"))
     }
 
-    scenario approval_cycle "user approves a Codex tool request" {
+    scenario approval_cycle {
       mock sessions.codex {
         on in where data.method == "turn/start" {
           out = {
@@ -387,7 +387,7 @@ lab teams_inbound {
         conversation = { id = "conv-1" }
         channelData = { tenant = { id = "tenant-x" } }
       }
-      expect "adaptive card" teams_delivery.teams_out.in where (
+      expect teams_delivery.teams_out.in where (
          data.attachments[0].contentType == "application/vnd.microsoft.card.adaptive")
 
       teams_in.out = {
@@ -398,12 +398,12 @@ lab teams_inbound {
         conversation = { id = "conv-1" }
         channelData = { tenant = { id = "tenant-x" } }
       }
-      expect "peer response reaches codex" sessions.codex.in where (
+      expect sessions.codex.in where (
          meta.app.kind == "jsonrpc.peer_response" && meta.app.rpc_id == "42" && data.decision == "approve")
-      expect "final message" teams_delivery.teams_out.in where data.text.matches("completed|done")
+      expect teams_delivery.teams_out.in where data.text.matches("completed|done")
     }
 
-    scenario dlq_on_delivery_failure "a Teams API failure lands in the DLQ, loudly" {
+    scenario dlq_on_delivery_failure {
       mock sessions.codex {
         on in where data.method == "turn/start" {
           out = {
@@ -426,11 +426,11 @@ lab teams_inbound {
         channelData = { tenant = { id = "tenant-x" } }
       }
 
-      expect "delivery attempted" teams_delivery.teams_out.in where data.type == "message"
-      expect "failed delivery in DLQ" dlq.in     where data.delivered == false
+      expect teams_delivery.teams_out.in where data.type == "message"
+      expect dlq.in     where data.delivered == false
     }
 
-    scenario unknown_user "an unknown Teams user is dropped before Codex" {
+    scenario unknown_user {
       teams_in.out = {
         type = "message"
         from = { aadObjectId = "intruder-999" }
@@ -439,8 +439,8 @@ lab teams_inbound {
         conversation = { id = "conv-1" }
         channelData = { tenant = { id = "tenant-x" } }
       }
-      expect "unknown user dropped"  auth.rejected where meta.app.skip_reason == "unknown_user"
-      expect nothing sessions.codex.in                       // codex never sees the intruder
+      expect auth.rejected where meta.app.skip_reason == "unknown_user"
+      expect sessions.codex.in == nothing                       // codex never sees the intruder
     }
   }
 }

@@ -133,10 +133,10 @@ graph fold : App {
     on in { out = data }
   } in -> relay -> out
 }
-lab fold { simulation smoke on app {
-  scenario first "a { label" {
+lab fold { simulation smoke {
+  scenario first { // a { comment is not a scope
     app.in = "}"
-    expect app.out count == 1 // }
+    expect app.out // }
   } scenario second { app.in = "{" }
 } }
 `);
@@ -915,7 +915,7 @@ test('the explanatory path is reachable with Tab and keyboard alone', { timeout:
   assert.match(await page.locator('#execution-state').innerText(), /playback paused/);
 });
 
-test('failed expect shows the observed field difference and expect nothing shows the offender', { timeout: 60000 }, async t => {
+test('failed expect shows the observed field difference and absence shows the offender', { timeout: 60000 }, async t => {
   const page = await openTour(t, undefined, 'crates/rastok/tests/fixtures/ui-explanation.rkg');
   await finish(page);
   assert.equal(await page.locator('#tab-assertion').getAttribute('aria-selected'), 'true');
@@ -925,7 +925,7 @@ test('failed expect shows the observed field difference and expect nothing shows
   await page.locator('#scenario-select').selectOption('inspect\u0000unwanted');
   await page.locator('#timeline-position').filter({ hasText: /Session 1 · transition 0$/ }).waitFor();
   await finish(page);
-  assert.match(await page.locator('#assertion').innerText(), /expect nothing app.out.*1 observed · 1 matching/s);
+  assert.match(await page.locator('#assertion').innerText(), /expect app\.out == nothing.*1 observed · 1 matching/s);
   assert.equal(await page.locator('.assertion-envelope').count(), 1);
   await capture(page, 'assertion-unwanted');
 });

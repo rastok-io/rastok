@@ -57,7 +57,9 @@ rastok simulate examples/echo.rkg --compare examples/traces/echo
 ```
 
 Simulation uses Lab mocks and virtual time, not physical Drivers. Without
-`--ui`, it runs every scenario, printing `PASS` or `FAIL` and a final count.
+`--ui`, it runs every scenario, printing `PASS` or `FAIL` followed by
+`simulation.scenario` and a final count. Direct Lab scenarios use the Lab
+name as their simulation name.
 A unit without a Lab refuses.
 
 - `--compare` reads reviewed traces and reports the first difference in

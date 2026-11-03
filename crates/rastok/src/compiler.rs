@@ -364,8 +364,13 @@ fn scenario_definitions(unit: &Unit, sources: &[&str]) -> Vec<ScenarioDefinition
             let syntax::TopDecl::Lab(lab) = declaration else {
                 continue;
             };
-            for simulation in &lab.simulations {
-                for scenario in &simulation.scenarios {
+            let groups = std::iter::once((&lab.name, &lab.scenarios)).chain(
+                lab.simulations
+                    .iter()
+                    .map(|simulation| (&simulation.name, &simulation.scenarios)),
+            );
+            for (simulation_name, scenarios) in groups {
+                for scenario in scenarios {
                     let span = scenario.span;
                     let Some(source) = sources.get(span.source().index() as usize) else {
                         continue;
@@ -401,7 +406,7 @@ fn scenario_definitions(unit: &Unit, sources: &[&str]) -> Vec<ScenarioDefinition
                         })
                         .collect();
                     definitions.push(ScenarioDefinition {
-                        simulation: simulation.name.text.clone(),
+                        simulation: simulation_name.text.clone(),
                         scenario: scenario.name.text.clone(),
                         source: span.source(),
                         first_line,
@@ -426,10 +431,12 @@ fn scenario_definitions(unit: &Unit, sources: &[&str]) -> Vec<ScenarioDefinition
                                     index,
                                     ExpectationSource {
                                         span: step.span,
-                                        predicate: step
-                                            .predicate
-                                            .as_ref()
-                                            .map(|predicate| predicate.span),
+                                        predicate: match &step.tail {
+                                            Some(syntax::ExpectTail::Where(predicate)) => {
+                                                Some(predicate.span)
+                                            }
+                                            None | Some(syntax::ExpectTail::Value(_)) => None,
+                                        },
                                     },
                                 ))
                             })
@@ -825,7 +832,7 @@ mod tests {
     #[test]
     fn scenario_definitions_preserve_authored_dsl_without_affecting_the_plan() {
         let graph = "graph demo : App { input in: int; output out: int; in -> out }";
-        let lab = "lab demo {\n simulation test on app {\n scenario simple {\n // entrée\n app.in = 3\n expect app.out count == 1\n }\n }\n}";
+        let lab = "lab demo {\n simulation test {\n scenario simple {\n // entrée\n app.in = 3\n expect app.out\n }\n }\n}";
         let registry = crate::connector::contract::ContractCatalog::try_m0().expect("catalogue");
         let plain = super::compile(&[graph], &registry).expect("graph");
         let compiled = super::compile(&[graph, lab], &registry).expect("graph and lab");
@@ -839,7 +846,7 @@ mod tests {
         assert_eq!(definition.action_lines, [3, 4]);
         assert_eq!(
             definition.code,
-            "scenario simple {\n // entrée\n app.in = 3\n expect app.out count == 1\n }"
+            "scenario simple {\n // entrée\n app.in = 3\n expect app.out\n }"
         );
     }
     use super::*;

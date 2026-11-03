@@ -12,43 +12,40 @@ still needs a physical boundary test.
 ## Keep the program, supply its world
 
 The real world (App) uses physical Drivers; the virtual world (Lab) supplies
-scripted outcomes and time to the same graph. `lab echo` names the twin
-of the App named `echo`; `simulation smoke on app` groups shared boundary
-behavior and named scenarios for that App. The Lab is not deployed and
-does not enter the program's semantic hash.
+scripted outcomes and time to the same graph. `lab smoke` contains shared
+mocks and scenarios directly. Its name need not match the App name. The Lab
+is not deployed and does not enter the program's semantic hash.
 
-Here is the entire Lab from `examples/echo.rkg`, lines 24–54:
+Here is the entire Lab from `examples/echo.rkg`, lines 24–52:
 
 ```rkg
-lab echo {
-  simulation smoke on app {
+lab smoke {
+  mock shell {
+    on in {
+      out = .
+      exit = Exited { exit_code = 0, signal = null }
+    }
+  }
+
+  scenario roundtrip {
+    app.in = "hello"
+    expect app.out == "hello"
+    expect shell.err == nothing
+  }
+
+  scenario filtered {
+    app.in = ""
+    expect shell.in == nothing
+    expect app.out == nothing
+  }
+
+  scenario silence_expires {
     mock shell {
-      on in {
-        out = .
-        exit = Exited { exit_code = 0, signal = null }
-      }
+      on in { out = nothing }
     }
-
-    scenario roundtrip "a line echoes back" {
-      app.in = "hello"
-      expect "the echo" app.out count == 1 where data == "hello"
-      expect nothing shell.err
-    }
-
-    scenario filtered "an empty line never reaches the shell" {
-      app.in = ""
-      expect nothing shell.in
-      expect nothing app.out
-    }
-
-    scenario silence_expires "a mute shell times out" {
-      mock shell {
-        on in { out = nothing }
-      }
-      app.in = "hello"
-      advance duration("5s")
-      expect "the typed timeout" shell.exit where data is TimeoutExpired
-    }
+    app.in = "hello"
+    advance duration("5s")
+    expect shell.exit == TimeoutExpired {}
   }
 }
 ```
@@ -57,6 +54,14 @@ The mock supplies the Process response, not the Operator's decision. The
 real `relay` handler still filters the input. In `roundtrip`, the script
 returns the request data and one successful terminal. That response passes
 through the normal Contract and journal machinery, which creates its records.
+
+## Group another mock world when needed
+
+An optional `simulation alternate { ... }` inside the Lab groups scenarios
+that share another set of mocks. It defaults to the unit's App; `: App`
+spells that target explicitly. A Lab mock applies to every group unless
+the group replaces it, and a scenario can replace either inherited mock.
+The replacement is the whole mock, never a merge of its branches.
 
 ## Silence must be explicit
 
@@ -69,7 +74,7 @@ typed `TimeoutExpired` terminal. No child process was started.
 For an outbound Call, an uncovered request fails the scenario rather than
 silently timing out. A missing mock and an authored silent mock are
 different tests. A scenario-level mock replaces, rather than extends, the
-simulation-level mock for that Connector. Within a mock, the first
+nearest inherited mock for that Connector. Within a mock, the first
 matching clause in source order supplies the response.
 
 ## Read expectations in their action window
@@ -79,8 +84,9 @@ expectations read that window without consuming it. They do not scan all
 earlier actions in the scenario. Ready work settles before those assertions
 are evaluated, so an expectation does not race a half-finished transition.
 
-`expect app.out count == 1 where ...` checks an exact matching count.
-`expect nothing shell.in` asserts absence. The empty-input scenario therefore
+`expect app.out == "hello"` checks exactly one matching value.
+`expect 3 app.out` checks three deliveries; omitting the number means one.
+`expect shell.in == nothing` asserts absence. The empty-input scenario therefore
 proves more than an empty App output: it proves that the Process was never
 called. Assertions observe ports, not an Operator's private state directly.
 
@@ -92,15 +98,15 @@ of the App boundary, not every child output.
 ## Advance to a deadline, not through a sleep
 
 The sensor example has a five-minute join window between a probe and a
-heartbeat. Its `virtual_day` scenario, from `examples/sensor-alarm.rkg`,
-lines 72–77, supplies no heartbeat:
+heartbeat. Its `virtual_day` scenario in `examples/sensor-alarm.rkg`, lines 71–76,
+supplies no heartbeat:
 
 ```rkg
-scenario virtual_day "twenty-four hours without waiting twenty-four hours" {
+scenario virtual_day {
   app.probe = { sensor = "pump-a" }
   advance duration("24h")
-  expect app.silent count == 1 where data is JoinExpired
-  expect nothing app.alarm
+  expect app.silent where data is JoinExpired
+  expect app.alarm == nothing
 }
 ```
 

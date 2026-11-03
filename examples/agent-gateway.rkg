@@ -90,58 +90,56 @@ graph agent_gateway : App {
   clients.exit -> session_exit
 }
 
-lab agent_gateway {
-  simulation app_server on app {
-    mock conversation.model {
-      // Actual JSON objects are maps, not DSL struct literals.
-      // This fixture's client frames all have the protocol's method field.
-      on in where data is JsonObject {
-        match {
-          data.method == "initialize" => out = { "id": data.id, "result": { "userAgent": "scripted-codex" } }
-          data.method == "initialized" => nothing
-          data.method == "thread/start" => out = { "id": data.id, "result": { "thread": { "id": thread_id } } }
-          data.method == "turn/start" => {
-            val turn_id = "turn-1"
-            out = { "id": data.id, "result": { "turn": { "id": turn_id, "status": "inProgress" } } }
-            out = ({ "method": "item/agentMessage/delta", "params": { "threadId": thread_id, "turnId": turn_id, "itemId": "item-1", "delta": "Hello from the simulated agent." } })
-            out = ({ "method": "turn/completed", "params": { "threadId": thread_id, "turn": { "id": turn_id, "status": "completed" } } })
-          }
-          data.method == "turn/interrupt" => out = { "id": data.id, "result": {:} }
-          _ => out = { "id": data.id, "error": { "code": -32601, "message": "scripted method unavailable" } }
+lab app_server {
+  mock conversation.model {
+    // Actual JSON objects are maps, not DSL struct literals.
+    // This fixture's client frames all have the protocol's method field.
+    on in where data is JsonObject {
+      match {
+        data.method == "initialize" => out = { "id": data.id, "result": { "userAgent": "scripted-codex" } }
+        data.method == "initialized" => nothing
+        data.method == "thread/start" => out = { "id": data.id, "result": { "thread": { "id": thread_id } } }
+        data.method == "turn/start" => {
+          val turn_id = "turn-1"
+          out = { "id": data.id, "result": { "turn": { "id": turn_id, "status": "inProgress" } } }
+          out = ({ "method": "item/agentMessage/delta", "params": { "threadId": thread_id, "turnId": turn_id, "itemId": "item-1", "delta": "Hello from the simulated agent." } })
+          out = ({ "method": "turn/completed", "params": { "threadId": thread_id, "turn": { "id": turn_id, "status": "completed" } } })
         }
+        data.method == "turn/interrupt" => out = { "id": data.id, "result": {:} }
+        _ => out = { "id": data.id, "error": { "code": -32601, "message": "scripted method unavailable" } }
       }
-      on in { out = nothing }
     }
+    on in { out = nothing }
+  }
 
-    scenario two_conversations "same request ids, separate children and correctly addressed notifications" {
-      app.peer = { meta.ext.session_id = alice_session; data = { "id": 0, "method": "initialize", "params": { "clientInfo": { "name": "rastok_gallery", "version": "1" } } } }
-      expect app.reply count == 1 where meta.ext.session_id == alice_session
-      app.peer = { meta.ext.session_id = bob_session; data = { "id": 0, "method": "initialize", "params": { "clientInfo": { "name": "rastok_gallery", "version": "1" } } } }
-      expect app.reply count == 1 where meta.ext.session_id == bob_session
-      app.peer = { meta.ext.session_id = alice_session; data = { "method": "initialized" } }
-      expect nothing app.reply
-      app.peer = { meta.ext.session_id = bob_session; data = { "method": "initialized" } }
-      app.peer = { meta.ext.session_id = alice_session; data = { "id": 1, "method": "thread/start", "params": { "approvalPolicy": "never", "sandbox": "read-only" } } }
-      expect app.reply count == 1
-      app.peer = { meta.ext.session_id = bob_session; data = { "id": 1, "method": "thread/start", "params": { "approvalPolicy": "never", "sandbox": "read-only" } } }
-      expect app.reply count == 1
-      app.peer = { meta.ext.session_id = alice_session; data = { "id": 2, "method": "turn/start", "params": { "threadId": thread_id, "input": [{ "type": "text", "text": "Hello Alice" }] } } }
-      expect app.reply count == 3 where meta.ext.session_id == alice_session
-      expect nothing app.process_exit
-      app.peer = { meta.ext.session_id = bob_session; data = { "id": 2, "method": "turn/start", "params": { "threadId": thread_id, "input": [{ "type": "text", "text": "Hello Bob" }] } } }
-      expect app.reply count == 3 where meta.ext.session_id == bob_session
-      app.close = { meta.ext.session_id = alice_session; data = "operator requested shutdown" }
-      advance duration("2s")
-      expect app.process_exit count == 1 where data is OutcomeUnknown
-      app.peer = { meta.ext.session_id = bob_session; data = { "id": 3, "method": "turn/start", "params": { "threadId": thread_id, "input": [{ "type": "text", "text": "Still here?" }] } } }
-      expect app.reply count == 3 where meta.ext.session_id == bob_session
-      expect nothing app.process_exit
-    }
+  scenario two_conversations {
+    app.peer = { meta.ext.session_id = alice_session; data = { "id": 0, "method": "initialize", "params": { "clientInfo": { "name": "rastok_gallery", "version": "1" } } } }
+    expect app.reply where meta.ext.session_id == alice_session
+    app.peer = { meta.ext.session_id = bob_session; data = { "id": 0, "method": "initialize", "params": { "clientInfo": { "name": "rastok_gallery", "version": "1" } } } }
+    expect app.reply where meta.ext.session_id == bob_session
+    app.peer = { meta.ext.session_id = alice_session; data = { "method": "initialized" } }
+    expect app.reply == nothing
+    app.peer = { meta.ext.session_id = bob_session; data = { "method": "initialized" } }
+    app.peer = { meta.ext.session_id = alice_session; data = { "id": 1, "method": "thread/start", "params": { "approvalPolicy": "never", "sandbox": "read-only" } } }
+    expect app.reply
+    app.peer = { meta.ext.session_id = bob_session; data = { "id": 1, "method": "thread/start", "params": { "approvalPolicy": "never", "sandbox": "read-only" } } }
+    expect app.reply
+    app.peer = { meta.ext.session_id = alice_session; data = { "id": 2, "method": "turn/start", "params": { "threadId": thread_id, "input": [{ "type": "text", "text": "Hello Alice" }] } } }
+    expect 3 app.reply where meta.ext.session_id == alice_session
+    expect app.process_exit == nothing
+    app.peer = { meta.ext.session_id = bob_session; data = { "id": 2, "method": "turn/start", "params": { "threadId": thread_id, "input": [{ "type": "text", "text": "Hello Bob" }] } } }
+    expect 3 app.reply where meta.ext.session_id == bob_session
+    app.close = { meta.ext.session_id = alice_session; data = "operator requested shutdown" }
+    advance duration("2s")
+    expect app.process_exit where data is OutcomeUnknown
+    app.peer = { meta.ext.session_id = bob_session; data = { "id": 3, "method": "turn/start", "params": { "threadId": thread_id, "input": [{ "type": "text", "text": "Still here?" }] } } }
+    expect 3 app.reply where meta.ext.session_id == bob_session
+    expect app.process_exit == nothing
+  }
 
-    scenario unknown_method "a protocol error is data, not a Process terminal" {
-      app.peer = { meta.ext.session_id = alice_session; data = { "id": 0, "method": "fixture/unknown", "params": {:} } }
-      expect app.reply count == 1
-      expect nothing app.process_exit
-    }
+  scenario unknown_method {
+    app.peer = { meta.ext.session_id = alice_session; data = { "id": 0, "method": "fixture/unknown", "params": {:} } }
+    expect app.reply
+    expect app.process_exit == nothing
   }
 }

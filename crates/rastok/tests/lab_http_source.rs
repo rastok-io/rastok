@@ -200,14 +200,14 @@ graph discard : App {
   listener.exit -> nothing
 }
 lab discard {
-  simulation requests on app {
+  simulation requests {
     scenario one {
       listener.out = "discarded deliberately"
-      expect listener.out count == 1
-      expect listener.exit count == 1 where data is Completed
+      expect listener.out
+      expect listener.exit where data is Completed
       advance duration("1s")
-      expect nothing listener.out
-      expect nothing listener.exit
+      expect listener.out == nothing
+      expect listener.exit == nothing
     }
   }
 }
@@ -231,11 +231,11 @@ graph nested : App {
   ingress -> out
 }
 lab nested {
-  simulation requests on app {
+  simulation requests {
     scenario one {
       ingress.listener.out = "hello"
-      expect app.out count == 1 where data == "hello"
-      expect ingress.listener.exit count == 1 where data is Completed
+      expect app.out where data == "hello"
+      expect ingress.listener.exit where data is Completed
     }
   }
 }
@@ -269,12 +269,12 @@ graph typed : App {{
   listener.exit -> nothing
 }}
 lab typed {{
-  simulation requests on app {{
+  simulation requests {{
     scenario one {{
       listener.out = {value}
-      expect listener.out count == 1
-      expect app.out count == 1
-      expect listener.exit count == 1 where data is Completed
+      expect listener.out
+      expect app.out
+      expect listener.exit where data is Completed
     }}
   }}
 }}
@@ -306,10 +306,10 @@ graph blocked : App {
   pair -> out
 }
 lab blocked {
-  simulation requests on app {
+  simulation requests {
     scenario no_partner {
       listener.out = "waiting for b"
-      expect nothing app.out
+      expect app.out == nothing
     }
   }
 }

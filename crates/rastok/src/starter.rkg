@@ -12,10 +12,8 @@ graph starter : App {
 }
 
 lab starter {
-  simulation smoke on app {
-    scenario roundtrip "a typed message becomes a greeting" {
-      app.in = "world"
-      expect app.out count == 1 where data == "Hello, world"
-    }
+  scenario roundtrip_greeting {
+    app.in = "world"
+    expect app.out == "Hello, world"
   }
 }

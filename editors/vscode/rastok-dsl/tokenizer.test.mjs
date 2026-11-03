@@ -114,3 +114,26 @@ connector request : HttpClient + Retry {
     ['json_profile', 'variable.language.rkg'],
   ]) assert.ok(tokens.some(t => t.text === text && t.scopes.includes(scope)), `${text}: missing ${scope}`);
 });
+test('Lab counts and value equality use the ordinary numeric and comparison scopes', () => {
+  const { tokens } = tokenize(`lab smoke {
+  scenario deliveries {
+    expect 3 app.reply == "ok"
+    expect app.failed == nothing
+    expect 0 app.reply where data == "unexpected"
+  }
+  simulation alternate : App {}
+}`);
+  for (const [text, scope] of [
+    ['lab', 'storage.type.declaration.rkg'],
+    ['scenario', 'storage.type.declaration.rkg'],
+    ['simulation', 'storage.type.declaration.rkg'],
+    ['expect', 'keyword.control.rkg'],
+    ['3', 'constant.numeric.integer.rkg'],
+    ['0', 'constant.numeric.integer.rkg'],
+    ['==', 'keyword.operator.comparison.rkg'],
+    ['where', 'keyword.control.rkg'],
+    ['nothing', 'keyword.control.rkg'],
+  ]) assert.ok(tokens.some(token => token.text === text && token.scopes.includes(scope)), `${text}: missing ${scope}`);
+  const count = tokenize('val count = 1').tokens.find(token => token.text === 'count');
+  assert.ok(count && !count.scopes.includes('keyword.control.rkg'));
+});

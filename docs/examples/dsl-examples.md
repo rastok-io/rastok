@@ -307,8 +307,8 @@ outbound HTTP request shape.
 
 ```rastok
 lab teams_inbound {    // binds to `graph teams_inbound : App` (declared in teams-codex-gateway.rkg)
-  simulation teams_gateway on app {
-    scenario plain_message "plain Teams message, agent replies" {
+  simulation teams_gateway {
+    scenario plain_message {
 
       mock sessions.codex {                                 // the composed Process, scripted
         on in where data.method == "turn/start" {
@@ -333,8 +333,8 @@ lab teams_inbound {    // binds to `graph teams_inbound : App` (declared in team
         }
       }
 
-      expect "turn start"     sessions.codex.in where data.method == "turn/start" && data.params.prompt == "Bonjour"
-      expect "Teams activity" teams_out.in where (
+      expect sessions.codex.in where data.method == "turn/start" && data.params.prompt == "Bonjour"
+      expect teams_out.in where (
         data.type == "message" && data.text.contains("Bonjour"))
     }
   }
@@ -424,8 +424,8 @@ graph weather_demo : App {
 }
 
 lab weather_demo {
-  simulation weather on app {
-    scenario paris_sunny "user asks for Paris weather ; API answers clear sky" {
+  simulation weather {
+    scenario paris_sunny {
 
       mock city_weather.weather_api {                         // the scripted partner (root-relative qualified path)
         on in where data.query.city == "Paris" {
@@ -436,11 +436,11 @@ lab weather_demo {
       ask.out = { city = "Paris", country = "FR" }            // injection = emission (+ sugar)
 
       // The intermediate contract (observation is legal on any port) :
-      expect "request well-formed" city_weather.build_request.out where (
+      expect city_weather.build_request.out where (
         data.url == "https://api.weather.example/v1/current" && data.method == "GET" && data.query.city == "Paris")
 
       // The public outcome :
-      expect "simplified response" replies.in where (
+      expect replies.in where (
         data.city == "Paris" && data.temperature == 17.5 && data.condition == "partly_cloudy")
     }
   }

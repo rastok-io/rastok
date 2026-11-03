@@ -134,14 +134,14 @@ graph builders : App {
   build.quiet -> quiet
 }
 lab builders {
-  simulation construction on app {
-    scenario forms "all constructors cross the same package boundary" {
+  simulation construction {
+    scenario forms {
       app.in = { n = 5 }
-      expect app.copied count == 1 where data.n == 5
-      expect app.patched count == 1 where data.n == 7 && meta.app.mark == "patched"
-      expect app.fresh count == 1 where data.n == 7
-      expect app.scalar count == 1 where data == 7
-      expect nothing app.quiet
+      expect app.copied where data.n == 5
+      expect app.patched where data.n == 7 && meta.app.mark == "patched"
+      expect app.fresh where data.n == 7
+      expect app.scalar where data == 7
+      expect app.quiet == nothing
     }
   }
 }

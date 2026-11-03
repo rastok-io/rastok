@@ -55,14 +55,14 @@ graph sim05 : App {
 
 ```rastok
 lab sim05 {
-  simulation sim05_golden on app {
-    scenario two_pings "alice pings twice ; every record accounted for" {
+  simulation sim05_golden {
+    scenario two_pings {
       mock notify {
         on in { out = { ok = true } }
       }
       ping.out = { meta.ext.user_id = "alice", data = { } }
       ping.out = { meta.ext.user_id = "alice", data = { } }
-      expect "counted twice" notify.in count == 1 where data.n == 2
+      expect notify.in where data.n == 2
     }
   }
 }
@@ -127,7 +127,7 @@ for readability and are excluded from the causal-core fingerprint.
 GOLDEN FINGERPRINT = blake3( canonical causal-core bytes of records 1..10 )
 ```
 
-The expectation (`count == 1 where data.n == 2` at `notify.in`, window =
+The expectation (`expect notify.in where data.n == 2`, window =
 second injection) : one delivery matches (C2) → **pass**.
 
 ## 5. The byte-discipline, stated on this trace

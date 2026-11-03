@@ -15,18 +15,18 @@ graph presence : App {
   in -> inspect -> out
 }
 lab presence {
-  simulation objects on app {
+  simulation objects {
     scenario absent {
       app.in = { "other": 1 }
-      expect app.out count == 1 where data == false
+      expect app.out where data == false
     }
     scenario null_is_present {
       app.in = { "usage": null }
-      expect app.out count == 1 where data == true
+      expect app.out where data == true
     }
     scenario zero_is_present {
       app.in = { "usage": 0 }
-      expect app.out count == 1 where data == true
+      expect app.out where data == true
     }
   }
 }

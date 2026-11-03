@@ -18,15 +18,13 @@ graph countdown : App {
   in -> count -> out
 }
 
-lab countdown {
-  simulation proof on app {
-    scenario positive "three recurrences, then one result" {
-      app.in = 3
-      expect app.out count == 1 where data == "liftoff"
-    }
-    scenario already_finished "a nonpositive input needs no recurrence" {
-      app.in = 0
-      expect app.out count == 1 where data == "liftoff"
-    }
+lab proof {
+  scenario positive {
+    app.in = 3
+    expect app.out == "liftoff"
+  }
+  scenario already_finished {
+    app.in = 0
+    expect app.out == "liftoff"
   }
 }

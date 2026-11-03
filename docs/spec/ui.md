@@ -483,7 +483,7 @@ append a record or modify the live machine.
 - **Assertion evidence.** A failed expect automatically selects Assertion with
   the authored assertion, exact Lab target window, observed/matching counts and
   recorded envelopes. Direct field comparisons show observed/expected values;
-  `expect nothing` shows its offenders. Evidence is re-derived by the existing
+  `expect port == nothing` shows its offenders. Evidence is re-derived by the existing
   assertion evaluator, not a second definition of success. Unsupported comparison
   shapes retain the assertion and envelope evidence, without an invented field
   diff. Unknown predicate evaluation is unknown, never zero matches.

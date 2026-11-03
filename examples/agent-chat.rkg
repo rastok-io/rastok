@@ -143,61 +143,59 @@ graph agent_chat : App {
   clients.exit -> session_exit
 }
 
-lab agent_chat {
-  simulation browser_protocol on app {
-    mock conversation.model {
-      on in where data is JsonObject && has(data.method) match {
-        data.method == "initialize" => out = { "id": data.id, "result": { "userAgent": "scripted-codex" } }
-        data.method == "initialized" => nothing
-        data.method == "thread/start" => out = { "id": data.id, "result": { "thread": { "id": "thread-1" } } }
-        data.method == "turn/start" => {
-          out = { "id": data.id, "result": { "turn": { "id": "turn-1", "status": "inProgress" } } }
-          out = ({ "method": "item/agentMessage/delta", "params": { "threadId": "thread-1", "turnId": "turn-1", "itemId": "item-1", "delta": "Hello from the simulated Codex." } })
-          out = ({ "method": "turn/completed", "params": { "threadId": "thread-1", "turn": { "id": "turn-1", "status": "completed" } } })
-        }
-        _ => nothing
+lab browser_protocol {
+  mock conversation.model {
+    on in where data is JsonObject && has(data.method) match {
+      data.method == "initialize" => out = { "id": data.id, "result": { "userAgent": "scripted-codex" } }
+      data.method == "initialized" => nothing
+      data.method == "thread/start" => out = { "id": data.id, "result": { "thread": { "id": "thread-1" } } }
+      data.method == "turn/start" => {
+        out = { "id": data.id, "result": { "turn": { "id": "turn-1", "status": "inProgress" } } }
+        out = ({ "method": "item/agentMessage/delta", "params": { "threadId": "thread-1", "turnId": "turn-1", "itemId": "item-1", "delta": "Hello from the simulated Codex." } })
+        out = ({ "method": "turn/completed", "params": { "threadId": "thread-1", "turn": { "id": "turn-1", "status": "completed" } } })
       }
+      _ => nothing
     }
-    scenario alice_and_bob "two names, two resident children; quitting Alice leaves Bob and the listeners alive" {
-      app.peer = { meta.ext.session_id = alice_session; data = { "nickname": "alice", "kind": "rpc", "rpc": { "id": 0, "method": "initialize", "params": { "clientInfo": { "name": "rastok_chat", "version": "1" } } } } }
-      expect app.reply count == 1 where meta.ext.session_id == alice_session
-      app.peer = { meta.ext.session_id = bob_session; data = { "nickname": "bob", "kind": "rpc", "rpc": { "id": 0, "method": "initialize", "params": { "clientInfo": { "name": "rastok_chat", "version": "1" } } } } }
-      expect app.reply count == 1 where meta.ext.session_id == bob_session
-      app.peer = { meta.ext.session_id = alice_session; data = { "nickname": "alice", "kind": "rpc", "rpc": { "method": "initialized" } } }
-      app.peer = { meta.ext.session_id = bob_session; data = { "nickname": "bob", "kind": "rpc", "rpc": { "method": "initialized" } } }
-      expect nothing app.reply
-      app.peer = { meta.ext.session_id = alice_session; data = { "nickname": "alice", "kind": "rpc", "rpc": { "id": 1, "method": "thread/start", "params": { "approvalPolicy": "never", "sandbox": "read-only", "ephemeral": true } } } }
-      expect app.reply count == 1
-      app.peer = { meta.ext.session_id = bob_session; data = { "nickname": "bob", "kind": "rpc", "rpc": { "id": 1, "method": "thread/start", "params": { "approvalPolicy": "never", "sandbox": "read-only", "ephemeral": true } } } }
-      expect app.reply count == 1
-      app.peer = { meta.ext.session_id = alice_session; data = { "nickname": "alice", "kind": "rpc", "rpc": { "id": 2, "method": "turn/start", "params": { "threadId": "thread-1", "input": [{ "type": "text", "text": "Hello Alice" }] } } } }
-      expect app.reply count == 3 where meta.ext.session_id == alice_session
-      app.peer = { meta.ext.session_id = bob_session; data = { "nickname": "bob", "kind": "rpc", "rpc": { "id": 2, "method": "turn/start", "params": { "threadId": "thread-1", "input": [{ "type": "text", "text": "Hello Bob" }] } } } }
-      expect app.reply count == 3 where meta.ext.session_id == bob_session
-      app.peer = { meta.ext.session_id = alice_session; data = { "nickname": "alice", "kind": "quit" } }
-      expect app.reply count == 1 where data is JsonObject && data.kind == "closing"
-      advance duration("2s")
-      expect app.process_exit count == 1 where data is OutcomeUnknown
-      app.peer = { meta.ext.session_id = bob_session; data = { "nickname": "bob", "kind": "rpc", "rpc": { "id": 3, "method": "turn/start", "params": { "threadId": "thread-1", "input": [{ "type": "text", "text": "Still here?" }] } } } }
-      expect app.reply count == 3 where meta.ext.session_id == bob_session
-      expect nothing app.process_exit
-    }
-    scenario duplicate_name "another socket cannot take Alice's process or quit it" {
-      app.peer = { meta.ext.session_id = alice_session; data = { "nickname": "alice", "kind": "rpc", "rpc": { "id": 0, "method": "initialize", "params": {:} } } }
-      expect app.reply count == 1
-      app.peer = { meta.ext.session_id = bob_session; data = { "nickname": "alice", "kind": "quit" } }
-      expect app.reply count == 1 where meta.ext.session_id == bob_session && data is JsonObject && data.kind == "error"
-      expect nothing app.process_exit
-      app.peer = { meta.ext.session_id = bob_session; data = { "nickname": "alice", "kind": "rpc", "rpc": { "id": 0, "method": "initialize", "params": {:} } } }
-      expect app.reply count == 1 where meta.ext.session_id == bob_session && data is JsonObject && data.kind == "error"
-      expect nothing app.process_exit
-    }
-    scenario invalid_message "bad input and unsupported methods do not start a child" {
-      app.peer = { meta.ext.session_id = alice_session; data = { "nickname": 42, "kind": "quit" } }
-      expect app.reply count == 1
-      app.peer = { meta.ext.session_id = alice_session; data = { "nickname": "alice", "kind": "rpc", "rpc": { "id": 0, "method": "command/exec", "params": {:} } } }
-      expect app.reply count == 1 where data is JsonObject && data.kind == "error"
-      expect nothing app.process_exit
-    }
+  }
+  scenario alice_and_bob {
+    app.peer = { meta.ext.session_id = alice_session; data = { "nickname": "alice", "kind": "rpc", "rpc": { "id": 0, "method": "initialize", "params": { "clientInfo": { "name": "rastok_chat", "version": "1" } } } } }
+    expect app.reply where meta.ext.session_id == alice_session
+    app.peer = { meta.ext.session_id = bob_session; data = { "nickname": "bob", "kind": "rpc", "rpc": { "id": 0, "method": "initialize", "params": { "clientInfo": { "name": "rastok_chat", "version": "1" } } } } }
+    expect app.reply where meta.ext.session_id == bob_session
+    app.peer = { meta.ext.session_id = alice_session; data = { "nickname": "alice", "kind": "rpc", "rpc": { "method": "initialized" } } }
+    app.peer = { meta.ext.session_id = bob_session; data = { "nickname": "bob", "kind": "rpc", "rpc": { "method": "initialized" } } }
+    expect app.reply == nothing
+    app.peer = { meta.ext.session_id = alice_session; data = { "nickname": "alice", "kind": "rpc", "rpc": { "id": 1, "method": "thread/start", "params": { "approvalPolicy": "never", "sandbox": "read-only", "ephemeral": true } } } }
+    expect app.reply
+    app.peer = { meta.ext.session_id = bob_session; data = { "nickname": "bob", "kind": "rpc", "rpc": { "id": 1, "method": "thread/start", "params": { "approvalPolicy": "never", "sandbox": "read-only", "ephemeral": true } } } }
+    expect app.reply
+    app.peer = { meta.ext.session_id = alice_session; data = { "nickname": "alice", "kind": "rpc", "rpc": { "id": 2, "method": "turn/start", "params": { "threadId": "thread-1", "input": [{ "type": "text", "text": "Hello Alice" }] } } } }
+    expect 3 app.reply where meta.ext.session_id == alice_session
+    app.peer = { meta.ext.session_id = bob_session; data = { "nickname": "bob", "kind": "rpc", "rpc": { "id": 2, "method": "turn/start", "params": { "threadId": "thread-1", "input": [{ "type": "text", "text": "Hello Bob" }] } } } }
+    expect 3 app.reply where meta.ext.session_id == bob_session
+    app.peer = { meta.ext.session_id = alice_session; data = { "nickname": "alice", "kind": "quit" } }
+    expect app.reply where data is JsonObject && data.kind == "closing"
+    advance duration("2s")
+    expect app.process_exit where data is OutcomeUnknown
+    app.peer = { meta.ext.session_id = bob_session; data = { "nickname": "bob", "kind": "rpc", "rpc": { "id": 3, "method": "turn/start", "params": { "threadId": "thread-1", "input": [{ "type": "text", "text": "Still here?" }] } } } }
+    expect 3 app.reply where meta.ext.session_id == bob_session
+    expect app.process_exit == nothing
+  }
+  scenario duplicate_name {
+    app.peer = { meta.ext.session_id = alice_session; data = { "nickname": "alice", "kind": "rpc", "rpc": { "id": 0, "method": "initialize", "params": {:} } } }
+    expect app.reply
+    app.peer = { meta.ext.session_id = bob_session; data = { "nickname": "alice", "kind": "quit" } }
+    expect app.reply where meta.ext.session_id == bob_session && data is JsonObject && data.kind == "error"
+    expect app.process_exit == nothing
+    app.peer = { meta.ext.session_id = bob_session; data = { "nickname": "alice", "kind": "rpc", "rpc": { "id": 0, "method": "initialize", "params": {:} } } }
+    expect app.reply where meta.ext.session_id == bob_session && data is JsonObject && data.kind == "error"
+    expect app.process_exit == nothing
+  }
+  scenario invalid_message {
+    app.peer = { meta.ext.session_id = alice_session; data = { "nickname": 42, "kind": "quit" } }
+    expect app.reply
+    app.peer = { meta.ext.session_id = alice_session; data = { "nickname": "alice", "kind": "rpc", "rpc": { "id": 0, "method": "command/exec", "params": {:} } } }
+    expect app.reply where data is JsonObject && data.kind == "error"
+    expect app.process_exit == nothing
   }
 }

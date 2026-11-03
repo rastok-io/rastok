@@ -14,7 +14,7 @@ graph accounts : App {
 }
 
 lab accounts {
-  simulation keys on app {
+  simulation keys {
     scenario routed_key {
       app.in = { account = "actual-account"; tenant = "not-the-instance-key" }
       expect app.out where data.account == "actual-account"

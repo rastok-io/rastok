@@ -1,13 +1,13 @@
 lab extract {
-  simulation refereeing on app {
+  simulation refereeing {
     mock forwarder {
       on in { out = .; exit = Exited { exit_code = 0; signal = null } }
     }
 
-    scenario unwraps "the payload travels bare" {
+    scenario unwraps {
       app.in = {site = "alpha-7", payload = "flow 12"}
-      expect "forwarded" forwarder.in count == 1 where data == "flow 12"
-      expect "returned" app.out count == 1 where data == "flow 12"
+      expect forwarder.in where data == "flow 12"
+      expect app.out where data == "flow 12"
     }
   }
 }

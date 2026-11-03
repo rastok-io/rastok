@@ -23,7 +23,7 @@ graph app : App {
 }
 
 lab app {
-  simulation retained on app {
+  simulation retained {
     mock call {
       on in where now() == timestamp("1970-01-01T00:00:00Z") {
         out = { tokens = 10; detail = "private-held-response" }
@@ -36,9 +36,9 @@ lab app {
     }
     scenario second_attempt {
       app.in = json! {}
-      expect nothing app.out
+      expect app.out == nothing
       advance duration("100ms")
-      expect app.out count == 1 where data.tokens == 20
+      expect app.out where data.tokens == 20
     }
   }
 }

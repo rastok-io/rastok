@@ -1,14 +1,14 @@
 lab hysteresis {
-  simulation refereeing on app {
-    scenario latching "the alarm trips high and releases low" {
+  simulation refereeing {
+    scenario latching {
       app.in = {value = 100}
-      expect "starts normal" app.out count == 1 where data.state == "normal"
+      expect app.out where data.state == "normal"
       app.in = {value = 121}
-      expect "trips" app.out count == 1 where data.state == "tripped"
+      expect app.out where data.state == "tripped"
       app.in = {value = 100}
-      expect "holds" app.out count == 1 where data.state == "tripped"
+      expect app.out where data.state == "tripped"
       app.in = {value = 79}
-      expect "releases" app.out count == 1 where data.state == "normal"
+      expect app.out where data.state == "normal"
     }
   }
 }

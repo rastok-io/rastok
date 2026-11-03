@@ -34,14 +34,14 @@ graph explanations : App {
 }
 
 lab explanations {
-  simulation inspect on app {
+  simulation inspect {
     scenario mismatch {
       app.in = 7
       expect app.out where data.value == 8
     }
     scenario unwanted {
       app.in = 7
-      expect nothing app.out
+      expect app.out == nothing
     }
     scenario prestate {
       app.in = 7

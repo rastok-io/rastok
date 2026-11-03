@@ -73,47 +73,45 @@ graph dialogues : App {
   conversation.exit -> exit
 }
 
-lab dialogues {
-  simulation scripted_model on app {
-    mock conversation.model {
-      on in where data is Turn match {
-        data.prompt == "quit" => exit = Exited { exit_code = 0; signal = null }
-        data.prompt == "garden" => out = { tenant = data.tenant; answer = "Plant tomatoes." }
-        data.prompt == "water?" => out = { tenant = data.tenant; answer = "Water the tomatoes in the morning." }
-        data.prompt == "trip" => out = { tenant = data.tenant; answer = "Visit Kyoto." }
-        data.prompt == "how long?" => out = { tenant = data.tenant; answer = "Three days in Kyoto." }
-        _ => out = { tenant = data.tenant; answer = "I am still here." }
-      }
+lab scripted_model {
+  mock conversation.model {
+    on in where data is Turn match {
+      data.prompt == "quit" => exit = Exited { exit_code = 0; signal = null }
+      data.prompt == "garden" => out = { tenant = data.tenant; answer = "Plant tomatoes." }
+      data.prompt == "water?" => out = { tenant = data.tenant; answer = "Water the tomatoes in the morning." }
+      data.prompt == "trip" => out = { tenant = data.tenant; answer = "Visit Kyoto." }
+      data.prompt == "how long?" => out = { tenant = data.tenant; answer = "Three days in Kyoto." }
+      _ => out = { tenant = data.tenant; answer = "I am still here." }
     }
-    scenario alice_and_bob "two resident children, interleaved turns, Alice closes alone" {
-      app.in = { tenant = "alice"; prompt = "garden" }
-      expect app.out count == 1 where data.tenant == "alice" && data.answer == "Plant tomatoes."
-      expect nothing app.exit
-      app.in = { tenant = "bob"; prompt = "trip" }
-      expect app.out count == 1 where data.tenant == "bob"
-      app.in = { tenant = "alice"; prompt = "water?" }
-      expect app.out count == 1 where data.answer == "Water the tomatoes in the morning."
-      app.in = { tenant = "bob"; prompt = "how long?" }
-      expect app.out count == 1 where data.answer == "Three days in Kyoto."
-      app.close = { tenant = "alice"; prompt = "stop this child" }
-      advance duration("2s")
-      expect app.exit count == 1 where data is OutcomeUnknown
-      app.in = { tenant = "bob"; prompt = "still there?" }
-      expect app.out count == 1 where data.tenant == "bob" && data.answer == "I am still here."
-      app.in = { tenant = "bob"; prompt = "quit" }
-      expect app.exit count == 1 where data is Exited
-    }
-    scenario fresh_child "quit ends the resource; a new input opens a new child" {
-      app.in = { tenant = "alice"; prompt = "garden" }
-      expect app.out count == 1
-      app.in = { tenant = "alice"; prompt = "quit" }
-      expect app.exit count == 1 where data is Exited
-      advance duration("10s")
-      expect nothing app.out
-      app.in = { tenant = "alice"; prompt = "trip" }
-      expect app.out count == 1 where data.answer == "Visit Kyoto."
-      app.in = { tenant = "alice"; prompt = "quit" }
-      expect app.exit count == 1
-    }
+  }
+  scenario alice_and_bob {
+    app.in = { tenant = "alice"; prompt = "garden" }
+    expect app.out where data.tenant == "alice" && data.answer == "Plant tomatoes."
+    expect app.exit == nothing
+    app.in = { tenant = "bob"; prompt = "trip" }
+    expect app.out where data.tenant == "bob"
+    app.in = { tenant = "alice"; prompt = "water?" }
+    expect app.out where data.answer == "Water the tomatoes in the morning."
+    app.in = { tenant = "bob"; prompt = "how long?" }
+    expect app.out where data.answer == "Three days in Kyoto."
+    app.close = { tenant = "alice"; prompt = "stop this child" }
+    advance duration("2s")
+    expect app.exit where data is OutcomeUnknown
+    app.in = { tenant = "bob"; prompt = "still there?" }
+    expect app.out where data.tenant == "bob" && data.answer == "I am still here."
+    app.in = { tenant = "bob"; prompt = "quit" }
+    expect app.exit where data is Exited
+  }
+  scenario fresh_child {
+    app.in = { tenant = "alice"; prompt = "garden" }
+    expect app.out
+    app.in = { tenant = "alice"; prompt = "quit" }
+    expect app.exit where data is Exited
+    advance duration("10s")
+    expect app.out == nothing
+    app.in = { tenant = "alice"; prompt = "trip" }
+    expect app.out where data.answer == "Visit Kyoto."
+    app.in = { tenant = "alice"; prompt = "quit" }
+    expect app.exit
   }
 }

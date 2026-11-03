@@ -1,20 +1,20 @@
 lab tariffs {
-  simulation refereeing on app {
-    scenario low "a cheap hour bands low" {
+  simulation refereeing {
+    scenario low {
       app.in = {price = 49}
-      expect "low" app.out count == 1 where data.band == "low"
+      expect app.out where data.band == "low"
     }
 
-    scenario mid "the band edges are mid" {
+    scenario mid {
       app.in = {price = 50}
-      expect "mid" app.out count == 1 where data.band == "mid"
+      expect app.out where data.band == "mid"
       app.in = {price = 150}
-      expect "still mid" app.out count == 1 where data.band == "mid"
+      expect app.out where data.band == "mid"
     }
 
-    scenario high "a spike bands high" {
+    scenario high {
       app.in = {price = 151}
-      expect "high" app.out count == 1 where data.band == "high"
+      expect app.out where data.band == "high"
     }
   }
 }

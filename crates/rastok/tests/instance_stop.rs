@@ -559,7 +559,7 @@ graph app : App {{
   client.exit -> exit
 }}
 lab app {{
-  simulation isolation on app {{
+  simulation isolation {{
     mock client {{ on in {{ out = nothing }} }}
     scenario two_instances {{
       app.in = {{ tenant = "alice"; action = "call" }}
@@ -568,11 +568,11 @@ lab app {{
       advance duration("500ms")
       app.in = {{ tenant = "alice"; action = "stop" }}
       advance duration("500ms")
-      expect nothing app.exit
+      expect app.exit == nothing
       advance duration("1s")
-      expect client.exit count == 1 where data is OutcomeUnknown
+      expect client.exit where data is OutcomeUnknown
       advance duration("98s")
-      expect client.exit count == 1 where data is TimeoutExpired
+      expect client.exit where data is TimeoutExpired
     }}
   }}
 }}

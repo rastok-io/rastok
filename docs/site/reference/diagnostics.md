@@ -46,14 +46,14 @@ Independent plan validation can also surface these semantic refusals.
 | Code | When it fires | What the author changes | Example message excerpt |
 |---|---|---|---|
 | `E-APP-COUNT` | The compilation unit has zero or several App roots. | Keep exactly one graph annotated App. | “a deployed unit needs exactly one `: App` graph, found 0” |
-| `E-DUP-LAB-IDENTITY` | Simulation, scenario, mock or origin declarations conflict. | Remove the repeated declaration or distinguish its name. | “the simulation `a` is already declared in lab `g`” |
+| `E-DUP-LAB-IDENTITY` | Simulation, scenario, mock or origin declarations conflict. | Remove the repeated declaration or distinguish its name. | “the scenario `same` is already declared at this level” |
 | `E-DUP-NODE` | Two children share a name in one Graph. | Give each child its own name. | “the node name `o` is already declared in this graph” |
 | `E-DUP-TYPE` | Two type declarations share a name. | Keep one definition for that name. | “the type `T` is already declared” |
-| `E-LAB-NO-APP` | A Lab name does not identify the unit's App. | Use the App graph's declared name after lab. | “the lab `absent` binds to no `: App` graph in this unit” |
+| `E-LAB-DUP` | More than one logical Lab name is declared. | Keep one Lab name; use simulation groups for different mock worlds. | “a unit has one logical Lab; use simulations for different mock worlds” |
 | `E-NAME-CLASH` | A child and a Graph port share a name. | Rename one declaration. | “`work` already names a Graph port; ports and children share one namespace” |
 | `E-NAME-RESERVED` | A declaration uses a language-reserved name. | Choose a name that is not reserved. | “`nothing` is a reserved word” |
 | `E-RESOLVE-UNKNOWN` | A referenced name has no declaration in scope. | Declare the name or correct its spelling. | “`ghost` names neither a Graph port nor a child Node in this Graph” |
-| `E-SIM-TARGET` | A simulation targets something other than app. | Simulate the complete App boundary. | “a simulation closes `app`; sub-graph targets are a deferred capability” |
+| `E-SIM-TARGET` | A simulation targets something other than the unit's App. | Omit the target or name the complete App boundary. | “a simulation closes the unit's App; sub-graph targets are a deferred capability” |
 
 ### Types, wiring and execution rules
 
@@ -160,8 +160,6 @@ Source registry: `docs/spec/diagnostics.md`, “Registry”.
 
 | Code | Status in this build | Specification |
 |---|---|---|
-| `E-LAB-DUP` | Lab fragments merge; duplicate declarations use `E-DUP-LAB-IDENTITY`. | `docs/spec/grammar.md` |
-| `E-EXPERIMENT-PROFILE` | Experiments refuse at the parser's deferred-syntax boundary. | `docs/spec/grammar.md` |
 | `E-SAGA-DURABILITY` | Saga durability checking is a deferred tool surface. | `docs/spec/diagnostics.md`, Registry |
 | `E-COMPENSATE-KEY` | Compensation-key checking is deferred with Saga. | `docs/spec/diagnostics.md`, Registry |
 | `E-REPLAY-VERSION-MISMATCH` | Replay checks compatibility, but does not emit this structured code. | `docs/spec/identity.md` |

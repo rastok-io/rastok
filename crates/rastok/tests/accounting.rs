@@ -140,7 +140,7 @@ graph app : App {
   input in: Usage
   in -> nothing
 }
-lab app { simulation usage on app { scenario original_values {
+lab app { simulation usage { scenario original_values {
   app.in = { input_tokens = 10u; cached_tokens = 20u }
 } } }
 "#],

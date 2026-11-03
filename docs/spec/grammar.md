@@ -144,8 +144,9 @@ The rules :
   together — a project may hold several units. The exactly-one-`: App` rule
   below is checked per unit. The unit's simulations, experiments and
   theorems live in the **`lab`**
-  whose name matches the App's ; each `simulation` names its closed graph
-  explicitly (`on app` today — sub-graph targets are deferred, E-SIM-TARGET)
+  with a name independent of the App. Direct scenarios need no intermediate
+  simulation block; an explicit `simulation` defaults to the unit's App
+  and may spell `: App` (other targets defer with E-SIM-TARGET)
   ([simulation-semantics.md](simulation-semantics.md) §2, Boundaries).
 - **`: App` is the root Graph Extension**: it marks the deployment entry
   point. A deployed unit has
@@ -1210,8 +1211,9 @@ deferred.
 
 ## `simulation` blocks
 
-The simulation surface mirrors the graph grammar. A `simulation` is a named set
-of `scenario` blocks sharing optional mocks. A scenario contributes the world's
+The Lab surface mirrors the graph grammar. A Lab can hold mocks and scenarios
+directly; an optional `simulation` groups scenarios with their own mocks.
+A scenario contributes the world's
 half of the journal : injections at inbound Connector outputs, virtual-time
 advances, fault steps, restarts, and expectations. The graph under test is the
 same graph used in production ; only its external Connectors are replaced by
@@ -1221,8 +1223,8 @@ Example :
 
 ```rastok
 lab teams_gateway {
-  simulation teams_channel on app {
-    scenario plain_message "plain Teams message" {
+  simulation teams_channel {
+    scenario plain_message {
       inbound.out = {
         meta.app.source = "teams"
         data = {
@@ -1249,7 +1251,7 @@ lab teams_gateway {
         }
       }
 
-      expect "Teams activity" outbound.in where (
+      expect outbound.in where (
         data.type == "message" &&
         data.text == "Bonjour")
     }
@@ -1267,8 +1269,9 @@ Semantics :
   external peer; they are not Connector-owned DSL handlers and do not become
   application `Dispatch` in the plan. An uncovered external call fails the
   scenario loudly.
-- `expect "label" outbound.in where (...)` observes deliveries since the last
-  action step. `expect nothing ...` is the explicit empty-window quantifier.
+- `expect outbound.in where (...)` requires exactly one matching delivery
+  since the last injection or time advance. `expect port == nothing` requires
+  an empty window; neither expectation consumes the window.
 
 The complete simulation contract is in
 [simulation-semantics.md](simulation-semantics.md). The productions below are
@@ -1332,8 +1335,8 @@ Required Rust extensions for the parser to land :
 | Port naming | Ports are role-named with no direction suffix ; direction comes from the `input` / `output` keyword or use position. `in` / `out` / `err` are conventional spellings, not keywords or mandatory rows. |
 | Branchement | Fan-out (`a -> { b; c }`) or fan-in (`{ a; b } -> c`). Real DSL primitive. |
 | Endpoint | Connector that owns an external resource address/lifecycle and declares explicit envelope ports. |
-| `scenario` | one executable case inside a `simulation` : a fixture (the scripted world-half of the journal) + expectations. See simulation-semantics.md. |
-| `mock` | scenario/simulation-level stand-in for a calling Connector — its body is ordinary handler grammar (+ `after`). Replaces the Driver, not the bookkeeping. |
+| `scenario` | One executable case directly in a Lab or inside a simulation: scripted inputs, mock responses, time advances and expectations. See simulation-semantics.md. |
+| `mock` | Lab-, simulation- or scenario-level script for a Connector, using ordinary handler grammar. Replaces the Driver, not the bookkeeping; delayed replies remain deferred. |
 | Multi-tenancy | Expressed by a keyed owner (`instance = { key = … }`). The runtime materializes one logical instance per canonical key and may assign each keyed boundary to an independent virtual shard. Environmental isolation and physical placement remain outside this grammar. |
 
 ## Formal grammar
@@ -1405,7 +1408,7 @@ DECL_KW    = { "graph", "operator", "connector",
                "val", "var", "input", "output", "on",
                "start", "stop", "match",                               // Operator lifecycle and Dispatch
                "where", "having", "within", "last",
-               "lab", "simulation", "experiment", "theorem", "over",  // the Lab surface
+               "lab", "simulation", "experiment", "theorem",  // the Lab surface
                "scenario", "defaults",
                "expect", "envelope", "advance", "mock",
                "after", "crash", "restart",                            // scenario steps (simulation-semantics.md §5)
@@ -1884,95 +1887,61 @@ edge_config       ::= "{" struct_body "}"                            // applied 
 // The exact target instance is bound before producer commit; see instances §7.3.
 
 // ============ SIMULATION GRAMMAR ============
-// A simulation = a named SET of scenarios sharing a world (mocks, prelude).
+// One logical Lab per unit is optional and is never deployed (E-LAB-DUP).
+// Its name need not match the App.
+// Same-named fragments merge across the unit before checking their members.
+// Direct scenarios form an implicit simulation named after their Lab.
+// Lab source never enters the production plan, graph_version or semantic hash.
+lab_decl        ::= "lab" IDENT "{" lab_item* "}"
+lab_item        ::= mock_decl
+                  | scenario_decl
+                  | simulation_decl
+                  | experiment_decl
+                  | theorem_decl
 
-// ---- the Lab — the App's twin, never deployed ----
-// `lab <name>` binds to the unit's `graph <name> : App` (E-LAB-NO-APP if none).
-// CARDINALITY : a Lab is OPTIONAL — an App without a lab compiles (coverage
-// tooling reports the absence) ; at most ONE lab identity per App.
-// A Lab is a LOGICAL corpus : several `lab <name> { … }` blocks — same name,
-// any files of the unit — are FRAGMENTS merged into one Lab with one
-// namespace (duplicate member names across fragments = E-LAB-DUP). No other
-// grouping sugar (no package/import/file-namespace) : braces and names only.
-// A Lab never deploys and never alters the production graph or its
-// graph_version.
-lab_decl          ::= "lab" IDENT "{" lab_body "}"
-lab_body          ::= ( simulation_decl | experiment_decl | theorem_decl )*
+simulation_decl ::= "simulation" IDENT ( ":" graph_ref )? "{"
+                      ( mock_decl | scenario_decl )*
+                    "}"
+experiment_decl ::= "experiment" IDENT ( ":" "app" )? "{"
+                      ( mock_decl | scenario_decl )*
+                    "}"
+theorem_decl    ::= "theorem" IDENT "{" expr* "}"
 
-simulation_decl   ::= "simulation" IDENT "on" graph_ref "{" ( mock_decl | scenario_decl )* "}"
-                                                                      // `on` names the ONE graph the simulation closes.
-                                                                      // The executable target is `app` (the App root) ;
-                                                                      // a sub-graph target parses and type-checks but is
-                                                                      // DEFERRED (E-SIM-TARGET : closing a sub-graph needs a
-                                                                      // birth recipe for envelopes entering its public ports —
-                                                                      // not yet defined ; wrap the sub-graph in a thin App).
-experiment_decl   ::= "experiment" IDENT "on" "app" "{" experiment_body "}"
-                                                                      // the target is `app`, LITERALLY — an experiment runs
-                                                                      // the deployed App ; a sub-graph target is meaningless
-                                                                      // here (unlike simulation, whose graph_ref is kept for
-                                                                      // future sub-graph closure).
-experiment_body   ::= ( "profile" "=" expr                            // EXACTLY ONE (0 or ≥2 = E-EXPERIMENT-PROFILE) ;
-                                                                      // a constant, text-typed Rastok expression referencing an
-                                                                      // EXTERNAL deployment profile — no secret, no
-                                                                      // endpoint in the DSL
-                      | mock_decl                                     // mocks stay legal for the boundaries NOT under test
-                      | scenario_decl )*
-                                                                      // an experiment runs the REAL App against ≥1 real
-                                                                      // Connector boundary, in REAL time : `advance` AND the
-                                                                      // `origin` scenario attribute are compile errors inside
-                                                                      // an experiment (both belong to virtual time) ;
-                                                                      // observation waits are real and bounded (profile-level
-                                                                      // knob, deliberately not new DSL surface).
-theorem_decl      ::= "theorem" IDENT "over" IDENT "{" reserved_block "}"
-                                                                      // RESERVED SURFACE : declared, parsed for
-                                                                      // balance, NOT yet specified. `over <simulation>` names
-                                                                      // the lab simulation whose mocks/hypotheses close the
-                                                                      // graph. A theorem states a UNIVERSAL property over all
-                                                                      // admissible trajectories of (graph + simulation) — it
-                                                                      // is never "run a few times". There is NO `check` block :
-                                                                      // a bounded challenge is an OPERATION on a
-                                                                      // theorem (CLI), not a declaration. See
-                                                                      // simulation-semantics.md §Theorem.
-graph_ref         ::= "app" | IDENT ( "." IDENT )*                    // `app` = the pre-bound App root ; else a root-relative path
-reserved_block    ::= /* balanced braces, content opaque — reserved until the
-                       theorem property grammar is specified */
-scenario_decl     ::= "scenario" IDENT STRING? "{" scenario_body "}"
-scenario_body     ::= ( scenario_attr | mock_decl | scenario_step )*
-scenario_attr     ::= "origin" "=" expr                               // civil-time anchor : virtual t=0 ≡ this instant
-                                                                      // (needed by Calendar ; absent + Calendar used = warning)
+// Omission selects the unit's App. app, App and the App graph's declared
+// name are equivalent targets. Other targets refuse with E-SIM-TARGET.
+// Experiments and theorems remain named deferrals in the current compiler.
+graph_ref       ::= "app" | IDENT ( "." IDENT )*
+node_ref        ::= IDENT ( "." IDENT )*
 
-scenario_step     ::= injection
-                    | "advance" expr                                  // the discrete sweep (constant duration ; execution-model §8)
-                    | "crash" "after" crash_selector                  // fault injection : stop at a journal-record boundary
-                    | "restart"                                       // standard recovery (fold + outbound triage)
-                    | expect_step
+mock_decl       ::= "mock" node_ref "{" handler_decl* "}"
+scenario_decl   ::= "scenario" IDENT "{" scenario_item* "}"
+scenario_item   ::= "origin" "=" expr
+                  | mock_decl
+                  | scenario_step
 
-injection         ::= port_ref "=" value ( "seq" INT )?              // THE EMISSION SYNTAX — injects at an inbound
-                                                                      // Connector's out only (lineage stays true) ;
-                                                                      // value = a braced value, classified as everywhere ;
-                                                                      // `seq` : explicit inbound_seq
+scenario_step   ::= port_ref "=" value ( "seq" INT )?
+                  | "advance" expr
+                  | expect_step
+                  | "crash" node_ref
+                  | "restart" node_ref
 
-crash_selector    ::= IDENT "." record_kind ( "#" INT )?              // reserve.outbound_open#2
-record_kind       ::= "inbound" | "tx" | "outbound_open" | "outbound_closed"
+expect_step     ::= "expect" INT? port_ref expect_tail?
+expect_tail     ::= "==" value
+                  | "where" expr
 
-expect_step       ::= "expect" STRING?                                // optional label, for reports
-                      ( "nothing" )?                                  // the void quantifier (∅)
-                      port_ref
-                      ( "count" cmp_op INT )?                         // exact-count quantifier
-                      ( "where" expr )?                               // the predicate (Rastok expression — the grid applies)
-cmp_op            ::= "==" | "!=" | "<" | ">" | "<=" | ">="
-                    // window rule : an expect reads the deliveries since the last
-                    // ACTION step (injection / advance / crash / restart), without
-                    // consuming them. Default quantifier = ∃ (at least one match).
-                    // `app.<port>` is a legal port_ref when that App boundary port exists.
+// Count is an exact nonnegative u64, defaulting to one.
+// == nothing means zero deliveries; an explicit nonzero count refuses.
+// == value and where expr count matching deliveries, not the whole window.
+// Zero with == a non-nothing value refuses; zero with where is valid.
+// A newline after port_ref terminates the expectation, even before == or where.
+// An injection or advance opens a window. Expectations read it without
+// consuming observations. crash/restart remain named deferrals.
+// Mock lookup replaces the whole mock per Connector: scenario, simulation,
+// then Lab. Duplicate mocks at one level refuse with E-DUP-LAB-IDENTITY.
+// Duplicate scenarios or simulations at one level also refuse. A Lab with
+// direct scenarios cannot declare an explicit simulation of its own name.
+// origin can appear at most once in a scenario.
 
-mock_decl         ::= "mock" IDENT ( "." IDENT )* "{" handler_decl* "}"   // dotted = a composed node (sessions.codex) ; handler-shaped Lab
-                                                                      // Driver script, not Connector-owned application Dispatch ; two levels :
-                                                                      // simulation-shared / scenario override
-                                                                      // (whole-mock replacement, nearest wins)
-// Inside a MOCK handler body only, one extra statement is legal :
-//   "after" expr                                                     // dated emission (constant duration) — the reply joins the
-                                                                      // dated-events queue, swept by advance
 ```
 
 ### LL(1) decision table
@@ -1985,19 +1954,23 @@ parser never needs to peek further than one token.
 | `top_decl` | `graph` | `graph_decl` |
 | `top_decl` | `lab` | `lab_decl` |
 | `top_decl` | `val` | `val_decl` |
-| `lab_body` | `simulation` | `simulation_decl` (header : IDENT `on` graph_ref) |
-| `lab_body` | `experiment` | `experiment_decl` (header: IDENT `on app`) |
-| `lab_body` | `theorem` | `theorem_decl` (header : IDENT `over` IDENT ; body reserved) |
-| `simulation_decl` body | `mock` | `mock_decl` (shared) |
-| `simulation_decl` body | `scenario` | `scenario_decl` |
-| `experiment_body` | `profile` — next is `=` | the profile attribute (mandatory) |
-| `experiment_body` | `mock` / `scenario` | as in a simulation (but `advance` is illegal inside) |
-| `scenario_body` | `origin` — next is `=` | `scenario_attr` |
-| `scenario_body` | `mock` | `mock_decl` (override, nearest wins) |
-| `scenario_body` | `advance` / `crash` / `restart` / `expect` | the matching `scenario_step` |
-| `scenario_body` | IDENT — next is `.` or `=` | `injection` (`port_ref = value`) |
-| `expect_step` | after `port_ref` : IDENT `count` | count quantifier ; `where` → predicate ; else done |
-| mock `handler_body` | `after` — next is an expression span | dated-emission statement (mocks only ; constant duration) |
+| `lab_decl` body | `mock` / `scenario` / `simulation` / `experiment` / `theorem` | The corresponding declaration |
+| `lab_decl` body | `}` | End the Lab |
+| `simulation_decl` after IDENT | `:` | Read `graph_ref`, then `{` |
+| `simulation_decl` after IDENT | `{` | Default target: the unit's App |
+| `simulation_decl` body | `mock` / `scenario` | Shared mock or scenario |
+| `experiment_decl` after IDENT | `:` / `{` | Explicit `app` or default App; execution deferred |
+| `scenario_decl` after IDENT | `{` | Open the scenario, without a string label |
+| `scenario_item` | `origin` followed by `=` | Civil origin declaration |
+| `scenario_item` | `mock` | Whole-mock override |
+| `scenario_item` | `advance` / `crash` / `restart` / `expect` | The corresponding step |
+| `scenario_item` | IDENT followed by `.` or `=` | Injection: `port_ref = value` |
+| `expect_step` after `expect` | INT | Exact count, followed by `port_ref` |
+| `expect_step` after `expect` | IDENT | Default count one; start `port_ref` |
+| `expect_step` after `port_ref` | Newline | End the expectation without consuming the next line |
+| `expect_step` after `port_ref` | `==` on the same line | Read the ordinary `value` production |
+| `expect_step` after `port_ref` | `where` on the same line | Read a boolean expression |
+| `expect_step` after `port_ref` | Other token | No filter; end this expectation |
 | `graph_body` | IDENT — next is `->` / `<->` | `edge_decl` |
 | `graph_body` | `{` | `edge_decl` (`source_set`) |
 | `graph_body` | `.` | DEAD boundary-wiring form → migration refusal with the explicit port name |

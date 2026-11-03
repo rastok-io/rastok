@@ -29,26 +29,71 @@ pub fn expectation_json(
                 .map(crate::plan::ResolvedPort::annotations)
                 .unwrap_or(&EMPTY_ANNOTATIONS)
         });
-    let rows: Vec<_> = inspection.envelopes.iter().map(|envelope| {
-        let mut env = BTreeMap::new();
-        env.insert(String::from("meta"), EvalValue::from(crate::runtime::meta_value(envelope.meta())));
-        if let Some(value) = envelope.data().materialized_value() { env.insert(String::from("data"), EvalValue::from(value.clone())); }
-        let matched = inspection.expectation.predicate.as_ref().map_or(Some(true), |predicate| match crate::expr::eval(predicate, &env) { Ok(EvalValue::Bool(value)) => Some(value), _ => None });
-        let mut differences = Vec::new();
-        if let Some(predicate) = &inspection.expectation.predicate {
-            explain_comparisons(&predicate.root, &env, &mut differences);
-        }
-        json!({ "envelope_id": envelope.meta().sys().id().to_string(), "matched": matched,
-            "data": data_json(envelope.data(), annotations), "meta": meta_json(envelope.meta()), "comparisons": differences })
-    }).collect();
+    let rows: Vec<_> = inspection
+        .envelopes
+        .iter()
+        .map(|envelope| {
+            let matched =
+                crate::lab::expectation_matches_envelope(plan, inspection.expectation, envelope)
+                    .ok();
+            let mut env = BTreeMap::new();
+            env.insert(
+                String::from("meta"),
+                EvalValue::from(crate::runtime::meta_value(envelope.meta())),
+            );
+            if let Some(value) = envelope.data().materialized_value() {
+                env.insert(String::from("data"), EvalValue::from(value.clone()));
+            }
+            let mut differences = Vec::new();
+            match &inspection.expectation.filter {
+                Some(crate::compiler::hir::ExpectFilter::Where(predicate)) => {
+                    explain_comparisons(&predicate.root, &env, &mut differences);
+                }
+                Some(crate::compiler::hir::ExpectFilter::Value(
+                    crate::compiler::hir::EmitValue::Data(expected),
+                )) => {
+                    if let (Some(actual), Some(expected), Some(held)) = (
+                        envelope.data().materialized_value(),
+                        crate::expr::eval(expected, &BTreeMap::new())
+                            .ok()
+                            .and_then(|value| value.into_value().ok()),
+                        matched,
+                    ) {
+                        differences.push(json!({
+                        "field": "data", "operator": "==",
+                        "actual": materialized_value_json(actual, annotations),
+                        "expected": materialized_value_json(&expected, annotations), "held": held,
+                    }));
+                    }
+                }
+                None | Some(crate::compiler::hir::ExpectFilter::Value(_)) => {}
+            }
+            json!({
+                "envelope_id": envelope.meta().sys().id().to_string(),
+                "matched": matched,
+                "data": data_json(envelope.data(), annotations),
+                "meta": meta_json(envelope.meta()),
+                "comparisons": differences,
+            })
+        })
+        .collect();
     let matched = rows
         .iter()
         .all(|row| row["matched"].is_boolean())
         .then(|| rows.iter().filter(|row| row["matched"] == true).count());
-    json!({ "failed": inspection.failure.is_some(), "message": inspection.failure,
+    let expectation = inspection.expectation;
+    let quantifier = if expectation.count == 0 && expectation.filter.is_none() {
+        json!({"kind": "nothing", "operator": "==", "expected_count": 0, "text": "0 deliveries"})
+    } else {
+        json!({"kind": "count", "operator": "==", "expected_count": expectation.count,
+            "text": format!("== {}", expectation.count)})
+    };
+    json!({
+        "failed": inspection.failure.is_some(), "message": inspection.failure,
         "target": format!("{}.{}", path.map_or_else(|| String::from("App"), ToString::to_string), port),
-        "quantifier": format!("{:?}", inspection.expectation.quantifier),
-        "observed": rows.len(), "matched": matched, "envelopes": rows })
+        "quantifier": quantifier,
+        "observed": rows.len(), "matched": matched, "envelopes": rows,
+    })
 }
 
 fn explain_comparisons(
@@ -151,7 +196,7 @@ mod tests {
 
     #[test]
     fn classified_predicates_and_assertion_values_are_not_explanation_channels() {
-        let source = r#"
+        let original = r#"
 type Protected = struct { value: int @sensitive(level = restricted) }
 graph hidden : App {
   input in: Protected
@@ -166,43 +211,48 @@ graph hidden : App {
   }
   in -> filter -> out
 }
-lab hidden { simulation inspect on app { scenario private {
+lab hidden { simulation inspect { scenario private {
   app.in = { value = 1234567 }
-  expect app.out count == 1 where data.value == 7654321
+  expect app.out where data.value == 7654321
 } } }
 "#;
-        let compilation = crate::compiler::compile(
-            &[source],
-            &crate::connector::contract::ContractCatalog::try_m0().unwrap(),
-        )
-        .unwrap();
-        let simulation = &compilation.labs[0].simulations[0];
-        let mut session = crate::lab::Simulator::try_new(
-            &compilation.plan,
-            crate::plan::GraphVersion(1),
-            &simulation.name,
-            &simulation.mocks,
-            &simulation.scenarios[0],
-            None,
-        )
-        .unwrap();
-        session.run_to_completion();
-        assert!(!session.report().passed());
-        let evidence = expectation_json(&compilation.plan, &session);
-        assert_eq!(evidence["redacted"], true);
-        assert!(evidence.get("envelopes").is_none());
-        let explained = explanation::history(&compilation.plan, session.journal().records());
-        let decision = explained
-            .records
-            .iter()
-            .filter_map(|record| record.get("decision"))
-            .find(|decision| !decision.is_null())
+        for source in [
+            original.to_string(),
+            original.replace("where data.value == 7654321", "== { value = 7654321 }"),
+        ] {
+            let compilation = crate::compiler::compile(
+                &[&source],
+                &crate::connector::contract::ContractCatalog::try_m0().unwrap(),
+            )
             .unwrap();
-        assert!(decision.get("unavailable").is_some());
-        assert!(decision.get("steps").is_none());
-        for value in [evidence.to_string(), decision.to_string()] {
-            assert!(!value.contains("1234567"));
-            assert!(!value.contains("7654321"));
+            let simulation = &compilation.labs[0].simulations[0];
+            let mut session = crate::lab::Simulator::try_new(
+                &compilation.plan,
+                crate::plan::GraphVersion(1),
+                &simulation.name,
+                &simulation.mocks,
+                &simulation.scenarios[0],
+                None,
+            )
+            .unwrap();
+            session.run_to_completion();
+            assert!(!session.report().passed());
+            let evidence = expectation_json(&compilation.plan, &session);
+            assert_eq!(evidence["redacted"], true);
+            assert!(evidence.get("envelopes").is_none());
+            let explained = explanation::history(&compilation.plan, session.journal().records());
+            let decision = explained
+                .records
+                .iter()
+                .filter_map(|record| record.get("decision"))
+                .find(|decision| !decision.is_null())
+                .unwrap();
+            assert!(decision.get("unavailable").is_some());
+            assert!(decision.get("steps").is_none());
+            for value in [evidence.to_string(), decision.to_string()] {
+                assert!(!value.contains("1234567"));
+                assert!(!value.contains("7654321"));
+            }
         }
     }
 }

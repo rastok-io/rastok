@@ -220,7 +220,7 @@ fn bounded_join_expiry_is_observable_for_time_and_count_evictions() {
         ("last 2", "app.left = 1\napp.left = 2\napp.left = 3"),
     ] {
         let source = format!(
-            "{}\nlab app {{ simulation proof on app {{ scenario eviction {{\n{actions}\nexpect app.expired count == 1 where data is JoinExpired\n}} }} }}",
+            "{}\nlab app {{ simulation proof {{ scenario eviction {{\n{actions}\nexpect app.expired where data is JoinExpired\n}} }} }}",
             join_expiry_source(bound, "pair.expired -> expired"),
         );
         let compilation = compile(&source).unwrap();
@@ -435,7 +435,7 @@ fn a_contract_cardinality_violation_is_not_published_even_without_loop() {
       request.exit -> nothing
     }
     lab app {
-      simulation bad_driver on app {
+      simulation bad_driver {
         mock request { on in { exit = Completed { status = 200 } } }
         scenario omitted_frame { app.in = 3 }
       }

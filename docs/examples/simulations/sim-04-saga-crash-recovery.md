@@ -66,8 +66,8 @@ with `none` makes this app **fail to compile** — `E-SAGA-DURABILITY`,
 
 ```rastok
 lab sim04 {
-  simulation sim04_saga_recovery on app {
-    scenario declined_then_crash "reserve holds, pay declines, crash mid-rollback, recovery finishes it" {
+  simulation sim04_saga_recovery {
+    scenario declined_then_crash {
       mock reserve {
         on in where data.op == "release" { out = { status = "released" } }
         on in                            { out = { status = "held" } }
@@ -82,7 +82,7 @@ lab sim04 {
       }
       crash after reserve.outbound_open#2        // the 2nd outbound open of reserve = the compensation's
       restart
-      expect "saga rolled back, loudly" book_trip.Saga.exit where data is SagaRolledBack
+      expect book_trip.Saga.exit where data is SagaRolledBack
       //   (the window rule : restart is an ACTION step — the recovery deliveries,
       //    including the saga's terminal SagaRolledBack emission, are ITS window)
     }

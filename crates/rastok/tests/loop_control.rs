@@ -148,16 +148,16 @@ graph singleton : App + Loop {
 }
 
 lab singleton {
-  simulation finite on app {
+  simulation finite {
     scenario concurrent_roots_share_no_loop_state {
       app.in = { label = "first"; n = 1 }
-      expect nothing app.done
+      expect app.done == nothing
       app.in = { label = "second"; n = 2 }
-      expect nothing app.done
+      expect app.done == nothing
       advance duration("1s")
-      expect app.done count == 1 where data == "first"
+      expect app.done where data == "first"
       advance duration("1s")
-      expect app.done count == 1 where data == "second"
+      expect app.done where data == "second"
     }
   }
 }
@@ -237,7 +237,7 @@ graph keyed_retry : App + Loop {
 }
 
 lab keyed_retry {
-  simulation retry on app {
+  simulation retry {
     mock shell {
       on in where data is Attempt && data.attempt == 0 { out = nothing }
       on in {
@@ -249,15 +249,15 @@ lab keyed_retry {
 
     scenario two_keys_retry_independently {
       app.in = { tenant = "alice"; attempt = 0 }
-      expect nothing app.done
+      expect app.done == nothing
       app.in = { tenant = "bob"; attempt = 0 }
-      expect nothing app.done
+      expect app.done == nothing
       advance duration("1s")
-      expect nothing app.done
+      expect app.done == nothing
       advance duration("1s")
-      expect app.done count == 1 where data == "alice"
-      expect app.done count == 1 where data == "bob"
-      expect nothing app.failed
+      expect app.done where data == "alice"
+      expect app.done where data == "bob"
+      expect app.failed == nothing
     }
   }
 }
@@ -296,17 +296,17 @@ graph closing : App + Loop {
 }
 
 lab closing {
-  simulation generations on app {
+  simulation generations {
     scenario a_stale_wakeup_cannot_enter_the_successor {
       app.in = { label = "old"; n = 1 }
-      expect nothing app.done
+      expect app.done == nothing
       advance duration("1s")
-      expect nothing app.done
+      expect app.done == nothing
       app.in = { label = "new"; n = 0 }
-      expect app.done count == 1 where data == "new"
+      expect app.done where data == "new"
       advance duration("1s")
-      expect nothing app.done
-      expect nothing app.err
+      expect app.done == nothing
+      expect app.err == nothing
     }
   }
 }
@@ -327,10 +327,10 @@ graph exhaustion : App + Loop {
 }
 
 lab exhaustion {
-  simulation bounded on app {
+  simulation bounded {
     scenario the_last_proposed_state_is_observable {
       app.in = 7
-      expect app.err count == 1 where data is LoopExpired
+      expect app.err where data is LoopExpired
     }
   }
 }

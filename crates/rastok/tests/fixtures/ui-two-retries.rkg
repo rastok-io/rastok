@@ -99,7 +99,7 @@ graph agent_retry : App + Loop {
 }
 
 lab agent_retry {
-  simulation ui_tour on app {
+  simulation ui_tour {
     mock model {
       on in where data is Attempt && data.attempt == 0 {
         out = nothing
@@ -111,20 +111,20 @@ lab agent_retry {
       }
     }
 
-    scenario two_tenants "two keyed retries progress independently" {
+    scenario two_tenants {
       app.in = { tenant = "alice"; prompt = "Explain causal replay"; attempt = 0 }
-      expect nothing app.done
+      expect app.done == nothing
 
       app.in = { tenant = "bob"; prompt = "Explain typed envelopes"; attempt = 0 }
-      expect nothing app.done
+      expect app.done == nothing
 
       advance duration("1s")
-      expect nothing app.done
+      expect app.done == nothing
 
       advance duration("1s")
-      expect app.done count == 1 where data.tenant == "alice" && data.attempts == 2
-      expect app.done count == 1 where data.tenant == "bob" && data.attempts == 2
-      expect nothing app.failed
+      expect app.done where data.tenant == "alice" && data.attempts == 2
+      expect app.done where data.tenant == "bob" && data.attempts == 2
+      expect app.failed == nothing
     }
   }
 }

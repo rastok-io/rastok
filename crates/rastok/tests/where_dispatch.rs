@@ -30,14 +30,14 @@ graph filter : App {
   in -> choose -> out
 }
 lab filter {
-  simulation decisions on app {
+  simulation decisions {
     scenario filter_then_decide {
       app.in = Ignored {}
-      expect nothing app.out
+      expect app.out == nothing
       app.in = Accepted { score = 7 }
-      expect app.out count == 1 where data == 7
+      expect app.out where data == 7
       app.in = Accepted { score = -3 }
-      expect app.out count == 1 where data == 0
+      expect app.out where data == 0
     }
   }
 }
@@ -111,15 +111,15 @@ graph pairing : App {{
   pair.expired -> nothing
 }}
 lab pairing {{
-  simulation candidates on app {{
+  simulation candidates {{
     scenario keep_then_match {{
       app.left = 1
       app.right = 2
-      expect nothing app.out
+      expect app.out == nothing
       app.right = 1
-      expect app.out count == 1 where data == 0
+      expect app.out where data == 0
       app.left = 2
-      expect app.out count == 1 where data == 4
+      expect app.out where data == 4
     }}
   }}
 }}

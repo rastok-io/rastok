@@ -34,9 +34,9 @@ rastok simulate examples/sensor-alarm.rkg --compare examples/traces/sensor-alarm
 ```
 
 ```text
-PASS sensors.hysteresis: separate thresholds and separate sensor states
-PASS sensors.silent_sensor: only the unanswered probe expires
-PASS sensors.virtual_day: twenty-four hours without waiting twenty-four hours
+PASS sensors.hysteresis
+PASS sensors.silent_sensor
+PASS sensors.virtual_day
 3 scenario(s), 0 failed
 ```
 
@@ -94,16 +94,16 @@ rastok simulate examples/sensor-alarm.rkg --compare examples/traces/sensor-alarm
 ```
 
 ```text
-FAIL sensors.hysteresis: separate thresholds and separate sensor states
-     expect app.alarm count == 1 where data.sensor == "pump-a" && data.state == "tripped"  (sensor-alarm.rkg:55)
+FAIL sensors.hysteresis
+     expect app.alarm where data.sensor == "pump-a" && data.state == "tripped"  (sensor-alarm.rkg:54)
      nothing observed
      where data.sensor == "pump-a" && data.state == "tripped" is false for 0 of 0 deliveries; count 0, expected 1
-     expect app.alarm count == 1 where data.state == "normal"  (sensor-alarm.rkg:61)
+     expect app.alarm where data.state == "normal"  (sensor-alarm.rkg:60)
      nothing observed
      where data.state == "normal" is false for 0 of 0 deliveries; count 0, expected 1
      golden divergence: record 3: emissions(23).len; expected 1; got 0; cause: TRANSACTION "hysteresis" · trigger "p:in" · cause_id absent
-PASS sensors.silent_sensor: only the unanswered probe expires
-PASS sensors.virtual_day: twenty-four hours without waiting twenty-four hours
+PASS sensors.silent_sensor
+PASS sensors.virtual_day
 3 scenario(s), 1 failed
 ```
 

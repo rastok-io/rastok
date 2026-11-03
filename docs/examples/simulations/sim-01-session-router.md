@@ -85,8 +85,8 @@ graph sim01 : App {
 
 ```rastok
 lab sim01 {
-  simulation sim01_session_router on app {
-    scenario timeout_path "one message, codex never answers, apology goes back" {
+  simulation sim01_session_router {
+    scenario timeout_path {
 
       mock codex {
         on in where data.op == "turn/start" { out = nothing }   // deliberately never replies
@@ -97,12 +97,12 @@ lab sim01 {
         data = { kind = "message", text = "Bonjour" }
       }
 
-      expect "turn started" codex.in where data.op == "turn/start"
+      expect codex.in where data.op == "turn/start"
 
       advance duration("30s")
 
-      expect "apology delivered" teams.in where data.kind == "apology"
-      expect nothing codex.out                                   // the ghost check, positively assertable
+      expect teams.in where data.kind == "apology"
+      expect codex.out == nothing                                   // the ghost check, positively assertable
     }
   }
 }
@@ -142,7 +142,7 @@ t=0  E0 born at inbound
 Journal so far (per-hop): `[E0 arrival @route[key="alice"] seq0 committed_at=0]`,
 `[E1 emitted by route]`, `[E1 delivered @codex, chrono armed t=10]`.
 
-### Step 2 — `expect "turn started" codex.in where …`
+### Step 2 — `expect codex.in where …`
 
 Evaluated on the stable state : the last envelope delivered to `codex.in` is
 E1, `data.op == "turn/start"` → **pass**. (Zero virtual time consumed.)
@@ -180,7 +180,7 @@ back to the inbound message, crossing the supervision plane without a hole.
 
 Stable state at t=30, window opened by `advance` : E3 delivered to `teams.in`,
 `data.kind == "apology"` → **pass** ; zero deliveries at `codex.out` in the
-window → `expect nothing` **pass** (the call-closed rule, asserted positively).
+window → an absence expectation **pass** (the call-closed rule, asserted positively).
 
 ### Ghost check (the call-closed rule)
 
@@ -188,4 +188,4 @@ Variant of the fixture : the mock replies at `t = 15` (after expiry). Expected :
 the Connector's correlator finds E1's call already closed → the reply is
 **discarded and journaled** (`late response, discarded`) — it never enters any
 mailbox, no envelope is born, the trace above is byte-identical, and
-`expect nothing codex.out` asserts it positively.
+`expect codex.out == nothing` asserts it positively.

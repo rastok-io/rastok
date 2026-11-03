@@ -136,94 +136,92 @@ graph webhook_to_partner : App {
   deliver.failed -> failed
 }
 
-lab webhook_to_partner {
-  simulation webhook on app {
-    mock deliver.partner {
-      on in where data is Webhook && data.event_id == "dead" {
-        out = nothing
-      }
-      on in where data is Webhook && data.event_id == "retry" && now() == timestamp("1970-01-01T00:00:00Z") {
-        out = nothing
-      }
-      on in where data is Webhook && data.event_id == "http-500" && now() == timestamp("1970-01-01T00:00:00Z") {
-        out = { charge = decimal("0.01") as Charge }
-        exit = ServerError { status = 500 }
-      }
-      on in {
-        out = { charge = decimal("0.02") as Charge }
-        exit = Completed { status = 201 }
-      }
+lab webhook {
+  mock deliver.partner {
+    on in where data is Webhook && data.event_id == "dead" {
+      out = nothing
     }
+    on in where data is Webhook && data.event_id == "retry" && now() == timestamp("1970-01-01T00:00:00Z") {
+      out = nothing
+    }
+    on in where data is Webhook && data.event_id == "http-500" && now() == timestamp("1970-01-01T00:00:00Z") {
+      out = { charge = decimal("0.01") as Charge }
+      exit = ServerError { status = 500 }
+    }
+    on in {
+      out = { charge = decimal("0.02") as Charge }
+      exit = Completed { status = 201 }
+    }
+  }
 
-    scenario nominal "ACK, validate, deliver once" {
-      listener.out = { event_id = "ok"; email = "alice@example.test"; amount = 12 }
-      expect listener.exit count == 1 where data is Completed && data.status == 202
-      expect app.done count == 1 where data.event_id == "ok" && data.status == 201
-      expect deliver.partner.in count == 1
-      expect deliver.partner.out count == 1 where data.charge == (decimal("0.02") as Charge)
-      expect nothing app.failed
-    }
+  scenario nominal {
+    listener.out = { event_id = "ok"; email = "alice@example.test"; amount = 12 }
+    expect listener.exit == Completed { status = 202 }
+    expect app.done == { event_id = "ok", status = 201 }
+    expect deliver.partner.in
+    expect deliver.partner.out where data.charge == (decimal("0.02") as Charge)
+    expect app.failed == nothing
+  }
 
-    scenario timeout_then_success "the same request is repeated; only the final result is published" {
-      listener.out = { event_id = "retry"; email = "alice@example.test"; amount = 12 }
-      expect listener.exit count == 1 where data is Completed && data.status == 202
-      expect nothing app.done
-      advance duration("1s")
-      expect deliver.partner.exit count == 1 where data is TimeoutExpired
-      expect nothing deliver.partner.in
-      expect nothing deliver.decide.in
-      advance duration("1s")
-      expect deliver.decide.in count == 1 where data is Completed
-      expect app.done count == 1 where data.event_id == "retry" && data.status == 201
-      expect nothing app.failed
-    }
+  scenario timeout_then_success {
+    listener.out = { event_id = "retry"; email = "alice@example.test"; amount = 12 }
+    expect listener.exit == Completed { status = 202 }
+    expect app.done == nothing
+    advance duration("1s")
+    expect deliver.partner.exit == TimeoutExpired {}
+    expect deliver.partner.in == nothing
+    expect deliver.decide.in == nothing
+    advance duration("1s")
+    expect deliver.decide.in where data is Completed
+    expect app.done == { event_id = "retry", status = 201 }
+    expect app.failed == nothing
+  }
 
-    scenario partner_dead "two attempts, then the last failure unchanged" {
-      listener.out = { event_id = "dead"; email = "alice@example.test"; amount = 12 }
-      advance duration("1s")
-      advance duration("1s")
-      advance duration("1s")
-      expect app.failed count == 1 where data is PartnerFailed
-      expect nothing app.done
-      advance duration("10s")
-      expect nothing deliver.partner.in
-      expect nothing app.failed
-    }
+  scenario partner_dead {
+    listener.out = { event_id = "dead"; email = "alice@example.test"; amount = 12 }
+    advance duration("1s")
+    advance duration("1s")
+    advance duration("1s")
+    expect app.failed where data is PartnerFailed
+    expect app.done == nothing
+    advance duration("10s")
+    expect deliver.partner.in == nothing
+    expect app.failed == nothing
+  }
 
-    scenario duplicate "explicit state suppresses a duplicate, not instance identity alone" {
-      listener.out = { event_id = "same"; email = "alice@example.test"; amount = 12 }
-      expect app.done count == 1
-      listener.out = { event_id = "same"; email = "alice@example.test"; amount = 12 }
-      expect listener.exit count == 1 where data is Completed && data.status == 202
-      expect app.duplicate count == 1 where data == "same"
-      expect nothing deliver.partner.in
-      expect nothing app.done
-      advance duration("5m")
-      listener.out = { event_id = "same"; email = "alice@example.test"; amount = 12 }
-      expect app.done count == 1
-      expect nothing app.duplicate
-    }
+  scenario duplicate {
+    listener.out = { event_id = "same"; email = "alice@example.test"; amount = 12 }
+    expect app.done
+    listener.out = { event_id = "same"; email = "alice@example.test"; amount = 12 }
+    expect listener.exit == Completed { status = 202 }
+    expect app.duplicate == "same"
+    expect deliver.partner.in == nothing
+    expect app.done == nothing
+    advance duration("5m")
+    listener.out = { event_id = "same"; email = "alice@example.test"; amount = 12 }
+    expect app.done
+    expect app.duplicate == nothing
+  }
 
-    scenario invalid_payload "decoded but ill-typed or invalid business data is rejected after ACK" {
-      listener.out = json! { "unexpected": true }
-      expect listener.exit count == 1 where data is Completed && data.status == 202
-      expect app.failed count == 1 where data is Rejected
-      expect nothing deliver.partner.in
-      listener.out = { event_id = "invalid"; email = "alice@example.test"; amount = -1 }
-      expect listener.exit count == 1 where data is Completed && data.status == 202
-      expect app.failed count == 1 where data is Rejected
-      expect nothing deliver.partner.in
-    }
+  scenario invalid_payload {
+    listener.out = json! { "unexpected": true }
+    expect listener.exit == Completed { status = 202 }
+    expect app.failed where data is Rejected
+    expect deliver.partner.in == nothing
+    listener.out = { event_id = "invalid"; email = "alice@example.test"; amount = -1 }
+    expect listener.exit == Completed { status = 202 }
+    expect app.failed where data is Rejected
+    expect deliver.partner.in == nothing
+  }
 
-    scenario http_500 "Retry selects the decoded ServerError and retains its charge" {
-      listener.out = { event_id = "http-500"; email = "alice@example.test"; amount = 12 }
-      expect deliver.partner.exit count == 1 where data is ServerError && data.status == 500
-      expect deliver.partner.out count == 1 where data.charge == (decimal("0.01") as Charge)
-      expect nothing deliver.decide.in
-      expect nothing app.done
-      advance duration("1s")
-      expect app.done count == 1 where data.event_id == "http-500" && data.status == 201
-      expect nothing app.failed
-    }
+  scenario http_500 {
+    listener.out = { event_id = "http-500"; email = "alice@example.test"; amount = 12 }
+    expect deliver.partner.exit == ServerError { status = 500 }
+    expect deliver.partner.out where data.charge == (decimal("0.01") as Charge)
+    expect deliver.decide.in == nothing
+    expect app.done == nothing
+    advance duration("1s")
+    expect app.done == { event_id = "http-500", status = 201 }
+    expect app.failed == nothing
   }
 }

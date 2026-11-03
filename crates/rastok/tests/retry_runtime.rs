@@ -895,18 +895,18 @@ graph app : App {
   call.err -> nothing; call.exit -> nothing
 }
 lab app {
-  simulation time on app {
+  simulation time {
     mock call {
       on in where now() == timestamp("1970-01-01T00:00:00Z") { out = nothing }
       on in { out = data; exit = Exited { exit_code = 0; signal = null } }
     }
     scenario retry {
       app.in = "same request"
-      expect nothing app.out
+      expect app.out == nothing
       advance duration("1s")
-      expect nothing app.out
+      expect app.out == nothing
       advance duration("100ms")
-      expect app.out count == 1 where data == "same request"
+      expect app.out where data == "same request"
     }
   }
 }
@@ -2396,7 +2396,7 @@ graph app : App {
   call.exit -> exit
 }
 lab app {
-  simulation http on app {
+  simulation http {
     mock call {
       on in where now() == timestamp("1970-01-01T00:00:00Z") {
         out = "try later"; exit = ServerError { status = 503 }
@@ -2405,12 +2405,12 @@ lab app {
     }
     scenario repeat {
       app.in = "same operation"
-      expect nothing app.out
-      expect nothing app.exit
+      expect app.out == nothing
+      expect app.exit == nothing
       advance duration("100ms")
-      expect app.out count == 1 where data == "accepted"
-      expect app.exit count == 1
-      expect call.exit count == 1 where data is Completed && data.status == 200
+      expect app.out where data == "accepted"
+      expect app.exit
+      expect call.exit where data is Completed && data.status == 200
     }
   }
 }
@@ -2476,14 +2476,14 @@ fn file_read_and_replace_retry_without_reexecuting_the_prepared_request_on_recov
             "text",
             "\"input.bin\"",
             "out = base64! { b2s= };",
-            "expect app.out count == 1",
+            "expect app.out",
         ),
         (
             "replace",
             "bytes",
             "base64! { b2s= }",
             "",
-            "expect nothing app.out",
+            "expect app.out == nothing",
         ),
     ] {
         let source = format!(
@@ -2501,19 +2501,19 @@ graph app : App {{
   call.exit -> exit
 }}
 lab app {{
-  simulation file on app {{
+  simulation file {{
     mock call {{
       on in where now() == timestamp("1970-01-01T00:00:00Z") {{ exit = IoFailed {{}} }}
       on in {{ {output} exit = Completed {{}} }}
     }}
     scenario repeat {{
       app.in = {request}
-      expect nothing app.out
-      expect nothing app.exit
+      expect app.out == nothing
+      expect app.exit == nothing
       advance duration("100ms")
       {expected}
-      expect app.exit count == 1
-      expect call.exit count == 1 where data is Completed
+      expect app.exit
+      expect call.exit where data is Completed
     }}
   }}
 }}
@@ -2572,7 +2572,7 @@ graph app : App {
   call.exit -> nothing
 }
 lab app {
-  simulation measured on app {
+  simulation measured {
     mock call {
       on in where now() == timestamp("1970-01-01T00:00:00Z") {
         out = { usage = { tokens = 100u }; cost = decimal("0.01") as Amount }
@@ -2585,10 +2585,10 @@ lab app {
     }
     scenario repeat {
       app.in = json! {}
-      expect nothing app.out
+      expect app.out == nothing
       advance duration("100ms")
-      expect app.out count == 1
-      expect call.out count == 1 where data.usage.tokens == 200u
+      expect app.out
+      expect call.out where data.usage.tokens == 200u
     }
   }
 }
@@ -2651,7 +2651,7 @@ graph app : App {
 }
 
 lab app {
-  simulation measured on app {
+  simulation measured {
     mock call {
       on in where now() == timestamp("1970-01-01T00:00:00Z") {
         out = { adjustment = decimal("1.250") as Quantity }
@@ -2664,9 +2664,9 @@ lab app {
     }
     scenario repeat {
       app.in = json! {}
-      expect nothing app.out
+      expect app.out == nothing
       advance duration("100ms")
-      expect app.out count == 1
+      expect app.out
     }
   }
 }
@@ -2716,7 +2716,7 @@ graph app : App {
   call.exit -> nothing
 }
 lab app {
-  simulation measured on app {
+  simulation measured {
     mock call {
       on in where now() == timestamp("1970-01-01T00:00:00Z") {
         out = { credited = decimal("-1.25") as Amount }
@@ -2729,9 +2729,9 @@ lab app {
     }
     scenario repeat {
       app.in = json! {}
-      expect nothing app.out
+      expect app.out == nothing
       advance duration("100ms")
-      expect app.out count == 1
+      expect app.out
     }
   }
 }

@@ -15,13 +15,15 @@
     { "name": "support.variable.retry.rkg", "match": "\\bRetry\\.(attempts|delay|on)\\b" },
     { "name": "entity.other.inherited-class.rkg", "match": "\\b(App|Loop|Retry|Saga)\\b" },
     { "name": "support.class.connector.rkg", "match": "\\b(Process|File|HttpClient|HttpServer|WebSocketClient|WebSocketServer)\\b" },
-    { "name": "keyword.control.rkg", "match": "\\b(on|start|where|within|last|match|nothing|stop|expect|count|advance|crash|after|restart|origin|is|as|in)\\b" },
+    { "name": "keyword.control.rkg", "match": "\\b(on|start|where|within|last|match|nothing|stop|expect|advance|crash|after|restart|origin|is|as|in)\\b" },
     { "name": "storage.type.rkg", "match": "\\bdecimal\\b(?=\\s*\\(\\s*[0-9]+\\s*,)" },
     { "name": "support.function.rkg", "match": "\\b(env|secret|asset|duration|timestamp|decimal|media_type|size|has|now)\\b(?=\\s*\\()" },
     { "name": "storage.type.rkg", "match": "\\b(struct|union|enum|map|array|table|bool|int|long|uint|float|double|number|decimal|text|bytes|variant|date|time|uuid|timestamp|timestamp_ntz|duration|media_type)\\b" },
     { "name": "constant.language.rkg", "match": "\\b(true|false|null)\\b" },
     { "name": "variable.language.rkg", "match": "\\b(data|meta|instance|lifetime|closing|behavior|idempotent|json_profile)\\b" },
+    { "name": "constant.numeric.integer.rkg", "match": "\\b[0-9]+\\b(?![0-9.u])" },
     { "name": "constant.numeric.rkg", "match": "\\b[0-9]+(?:u|\\.[0-9]+)?\\b" },
+    { "name": "keyword.operator.comparison.rkg", "match": "==|!=|<=|>=|<(?!-)|>" },
     { "name": "keyword.operator.rkg", "match": "<->|->|=>|==|!=|<=|>=|&&|\\|\\||[=+*/%!?<>|.-]" },
     { "name": "punctuation.separator.rkg", "match": "[,:;]" },
     { "name": "punctuation.section.rkg", "match": "[{}()\\[\\]]" }
@@ -85,7 +87,7 @@
       "patterns": [{ "include": "#reader-braces" }]
     },
     "declarations": {
-      "match": "\\b(graph|operator|connector|lab|simulation|scenario|mock|type|input|output|val|var)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "match": "\\b(graph|operator|connector|lab|simulation|experiment|theorem|scenario|mock|type|input|output|val|var)\\s+([A-Za-z_][A-Za-z0-9_]*)",
       "captures": {
         "1": { "name": "storage.type.declaration.rkg" },
         "2": { "name": "entity.name.type.rkg" }

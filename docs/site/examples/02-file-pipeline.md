@@ -32,10 +32,10 @@ rastok simulate examples/file-pipeline.rkg --compare examples/traces/file-pipeli
 ```
 
 ```text
-PASS files.copy: two lines, eleven bytes, one atomic replacement
-PASS files.empty: empty input never overwrites the target
-PASS files.utf8: one UTF-8 line is three bytes, not two characters
-PASS files.directory: a directory is refused by name
+PASS files.copy
+PASS files.empty
+PASS files.utf8
+PASS files.directory
 4 scenario(s), 0 failed
 ```
 
@@ -125,24 +125,24 @@ rastok simulate examples/file-pipeline.rkg --compare examples/traces/file-pipeli
 ```
 
 ```text
-FAIL files.copy: two lines, eleven bytes, one atomic replacement
-     expect app.bytes_read count == 1 where data == 11  (file-pipeline.rkg:63)
+FAIL files.copy
+     expect app.bytes_read == 11  (file-pipeline.rkg:62)
      nothing observed
-     where data == 11 is false for 0 of 0 deliveries; count 0, expected 1
-     expect write_file.in count == 1 where size(data) == 11  (file-pipeline.rkg:64)
+     expected 1 matching delivery on app.bytes_read, but observed 0
+     expect write_file.in where size(data) == 11  (file-pipeline.rkg:63)
      nothing observed
      where size(data) == 11 is false for 0 of 0 deliveries; count 0, expected 1
      golden divergence: record 7: emissions(23)[0][0]; expected "bytes_read"; got "empty"; cause: TRANSACTION "inspect" · trigger "p:in" · cause_id absent
-PASS files.empty: empty input never overwrites the target
-FAIL files.utf8: one UTF-8 line is three bytes, not two characters
-     expect app.bytes_read count == 1 where data == 3  (file-pipeline.rkg:76)
+PASS files.empty
+FAIL files.utf8
+     expect app.bytes_read == 3  (file-pipeline.rkg:75)
      nothing observed
-     where data == 3 is false for 0 of 0 deliveries; count 0, expected 1
-     expect write_file.in count == 1 where size(data) == 3  (file-pipeline.rkg:77)
+     expected 1 matching delivery on app.bytes_read, but observed 0
+     expect write_file.in where size(data) == 3  (file-pipeline.rkg:76)
      nothing observed
      where size(data) == 3 is false for 0 of 0 deliveries; count 0, expected 1
      golden divergence: record 7: emissions(23)[0][0]; expected "bytes_read"; got "empty"; cause: TRANSACTION "inspect" · trigger "p:in" · cause_id absent
-PASS files.directory: a directory is refused by name
+PASS files.directory
 4 scenario(s), 2 failed
 ```
 

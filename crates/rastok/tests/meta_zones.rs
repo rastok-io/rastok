@@ -155,10 +155,10 @@ graph g : App {
 }
 
 lab g {
-  simulation probing on app {
-    scenario s "a lab-only field is not a field" {
+  simulation probing {
+    scenario s {
       app.in = { v = 1 }
-      expect "never" app.out count == 1 where meta.app.lab_only == "x"
+      expect app.out where meta.app.lab_only == "x"
     }
   }
 }
@@ -179,10 +179,10 @@ graph g : App {
 }
 
 lab g {
-  simulation probing on app {
-    scenario s "the world writes ext, never app" {
+  simulation probing {
+    scenario s {
       app.in = { data = { v = 1 }, meta.app.seeded = "x" }
-      expect "unreached" app.out count == 1
+      expect app.out
     }
   }
 }
@@ -210,10 +210,10 @@ graph g : App {
 }
 
 lab g {
-  simulation probing on app {
-    scenario s "ext in, app kept" {
+  simulation probing {
+    scenario s {
       app.in = { data = { v = 1 }, meta.ext.content_type = "application/json" }
-      expect "the copy landed" app.out count == 1 where meta.app.original_type == "application/json"
+      expect app.out where meta.app.original_type == "application/json"
     }
   }
 }
@@ -267,7 +267,7 @@ fn the_lab_never_moves_the_production_hash() {
     // semantic hash of the deployed graph.
     let graph = "graph g : App {\n  input in: variant\n  operator o {\n    on in {\n      out = {\n        meta.app.kept = \"x\"\n        data = data\n      }\n    }\n  }\n  in -> o -> out\n}\n";
     let with_lab = format!(
-        "{graph}\nlab g {{\n  simulation probing on app {{\n    scenario s \"observes\" {{\n      app.in = {{ v = 1 }}\n      expect \"out\" app.out count == 1 where meta.app.kept == \"x\"\n    }}\n  }}\n}}\n"
+        "{graph}\nlab g {{\n  simulation probing {{\n    scenario s {{\n      app.in = {{ v = 1 }}\n      expect app.out where meta.app.kept == \"x\"\n    }}\n  }}\n}}\n"
     );
     let bare = compile(
         &[graph],

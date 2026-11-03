@@ -125,58 +125,58 @@ graph instances : App {
 }
 
 lab instances {
-  simulation lifecycle on app {
-    scenario key_isolation "equivalent composite keys share state; another key does not" {
+  simulation lifecycle {
+    scenario key_isolation {
       app.counted = { tenant = "acme" ; user = 7 }
-      expect "first acme/7" app.count count == 1 where data == 1
+      expect app.count where data == 1
       app.counted = { user = 8 ; tenant = "acme" }
-      expect "acme/8 is isolated" app.count count == 1 where data == 1
+      expect app.count where data == 1
       app.counted = { user = 7 ; tenant = "acme" }
-      expect "equivalent acme/7 returns" app.count count == 1 where data == 2
+      expect app.count where data == 2
     }
 
     scenario persistent_starts_once {
       app.persistent = "a"
-      expect app.persistent_started count == 1
+      expect app.persistent_started
       app.persistent = "b"
-      expect nothing app.persistent_started
+      expect app.persistent_started == nothing
     }
 
     scenario idle_closes_after_silence {
       app.idle = "a"
-      expect nothing app.idle_stopped
+      expect app.idle_stopped == nothing
       advance duration("1s")
-      expect app.idle_stopped count == 1 where data == "idle"
+      expect app.idle_stopped where data == "idle"
     }
 
     scenario fixed_closes_from_start {
       app.fixed = "a"
       advance duration("1s")
-      expect app.fixed_stopped count == 1 where data == "fixed"
+      expect app.fixed_stopped where data == "fixed"
     }
 
     scenario single_pass_gets_a_fresh_generation {
       app.one_shot = "a"
-      expect app.one_shot_started count == 1
-      expect app.one_shot_stopped count == 1
+      expect app.one_shot_started
+      expect app.one_shot_stopped
       app.one_shot = "b"
-      expect app.one_shot_started count == 1
-      expect app.one_shot_stopped count == 1
+      expect app.one_shot_started
+      expect app.one_shot_stopped
     }
 
     scenario tumbling_uses_one_generation_per_nonempty_box {
       app.window = "a"
-      expect app.window_started count == 1
+      expect app.window_started
       advance duration("1s")
-      expect app.window_stopped count == 1
+      expect app.window_stopped
       app.window = "b"
-      expect app.window_started count == 1
+      expect app.window_started
     }
 
     scenario graph_close_is_inner_first_and_observable {
       app.cascade = "a"
       advance duration("1s")
-      expect app.cascade_stopped count == 1 where data == "child"
+      expect app.cascade_stopped where data == "child"
     }
   }
 }
@@ -207,19 +207,19 @@ graph joined : App {
 }
 
 lab joined {
-  simulation correlation on app {
+  simulation correlation {
     scenario one_instance_only {
       app.left = 1
-      expect nothing app.out
+      expect app.out == nothing
       app.right = 2
-      expect nothing app.out
+      expect app.out == nothing
       app.right = 1
-      expect app.out count == 1 where data == 2
+      expect app.out where data == 2
     }
     scenario retained_facts_expire_explicitly {
       app.left = 7
       advance duration("1s")
-      expect app.expired count == 1 where data is JoinExpired
+      expect app.expired where data is JoinExpired
     }
   }
 }

@@ -8,7 +8,7 @@
 //! Execution, not about a test double.
 
 use crate::compiler::hir::{
-    Cmp, EmitValue, ExpectTarget, Expectation, InjectionTarget, Lab, Mock, Quantifier, Scenario,
+    EmitValue, ExpectFilter, ExpectTarget, Expectation, InjectionTarget, Lab, Mock, Scenario,
     ScenarioStep,
 };
 use crate::connector::ConnectorDirection;
@@ -55,8 +55,6 @@ pub struct ScenarioReport {
     pub simulation: String,
     /// The scenario name.
     pub scenario: String,
-    /// The human label, when written.
-    pub label: Option<String>,
     /// Every failed expectation, uncovered call, and fault — in
     /// occurrence order. Empty means green.
     pub failures: Vec<String>,
@@ -309,12 +307,6 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
         &self.scenario.name
     }
 
-    /// Optional human label.
-    #[must_use]
-    pub fn label(&self) -> Option<&str> {
-        self.scenario.label.as_deref()
-    }
-
     /// Index of the next authored action.
     #[must_use]
     pub const fn next_action_index(&self) -> usize {
@@ -467,7 +459,6 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
         ScenarioReport {
             simulation: self.simulation.clone(),
             scenario: self.scenario.name.clone(),
-            label: self.scenario.label.clone(),
             failures: self.failures.clone(),
             assertions: self.assertions.clone(),
         }
@@ -720,7 +711,6 @@ impl<'plan, 'scenario> Simulator<'plan, 'scenario> {
             report: ScenarioReport {
                 simulation: self.simulation,
                 scenario: self.scenario.name.clone(),
-                label: self.scenario.label.clone(),
                 failures: self.failures,
                 assertions: self.assertions,
             },
@@ -850,7 +840,6 @@ fn run_scenario(
             report: ScenarioReport {
                 simulation: String::from(simulation),
                 scenario: scenario.name.clone(),
-                label: scenario.label.clone(),
                 failures: vec![format!("the Lab Driver composition refused: {error}")],
                 assertions: Vec::new(),
             },
@@ -953,6 +942,22 @@ fn expectation_matches(
     expectation: &Expectation,
     deliveries: &[&Envelope],
 ) -> Result<usize, String> {
+    deliveries.iter().try_fold(0, |matched, envelope| {
+        expectation_matches_envelope(plan, expectation, envelope)
+            .map(|held| matched + usize::from(held))
+    })
+}
+
+/// Evaluates one assertion candidate without changing its envelope or window.
+/// Both the Lab verdict and the debugger use this exact comparison.
+pub(crate) fn expectation_matches_envelope(
+    plan: &ValidatedExecutionPlan,
+    expectation: &Expectation,
+    envelope: &Envelope,
+) -> Result<bool, String> {
+    let Some(filter) = &expectation.filter else {
+        return Ok(true);
+    };
     let ty = match &expectation.target {
         ExpectTarget::Boundary(port) => plan
             .resolved_ports()
@@ -969,51 +974,111 @@ fn expectation_matches(
                     .node_port_type(crate::node::NodeIndex::new(index as u32), port)
             }),
     };
-    let name = expectation
-        .label
-        .clone()
-        .unwrap_or_else(|| format!("{:?}", expectation.target));
-    let mut matches = 0usize;
-    for observed in deliveries {
-        match &expectation.predicate {
-            None => matches += 1,
-            Some(tree) => {
-                let mut env = BTreeMap::new();
-                let data = ty.map_or_else(
-                    || runtime::DataSlot::new(observed.data()),
-                    |ty| runtime::DataSlot::typed(observed.data(), ty),
-                );
-                match data.materialize() {
-                    Ok(data) => {
-                        env.insert(String::from("data"), expr::EvalValue::from(data));
-                    }
-                    Err(fault) => {
-                        return Err(format!(
-                            "expect {name}: a delivery's data is unreadable: {fault}"
-                        ));
-                    }
-                }
-                env.insert(
+    let data = ty.map_or_else(
+        || runtime::DataSlot::new(envelope.data()),
+        |ty| runtime::DataSlot::typed(envelope.data(), ty),
+    );
+    let read_data = || {
+        data.materialize()
+            .map_err(|fault| format!("an observed delivery's data is unreadable: {fault}"))
+    };
+    match filter {
+        ExpectFilter::Where(tree) => {
+            let env = BTreeMap::from([
+                (String::from("data"), expr::EvalValue::from(read_data()?)),
+                (
                     String::from("meta"),
-                    expr::EvalValue::from(runtime::meta_value(observed.meta())),
-                );
-                // A faulting or non-boolean predicate fails the
-                // expectation itself — "did not match" would be a
-                // false green with the void quantifier.
-                match expr::eval(tree, &env) {
-                    Ok(expr::EvalValue::Bool(true)) => matches += 1,
-                    Ok(expr::EvalValue::Bool(false)) => {}
-                    Ok(_) => {
-                        return Err(format!("expect {name}: the predicate is not a bool"));
+                    expr::EvalValue::from(runtime::meta_value(envelope.meta())),
+                ),
+            ]);
+            match expr::eval(tree, &env) {
+                Ok(expr::EvalValue::Bool(held)) => Ok(held),
+                Ok(_) => Err(String::from("the expectation predicate is not a bool")),
+                Err(error) => Err(format!("the expectation predicate faulted: {error}")),
+            }
+        }
+        ExpectFilter::Value(expected) => {
+            let empty = BTreeMap::new();
+            let evaluate = |tree: &expr::Tree| {
+                expr::eval(tree, &empty)
+                    .map_err(|error| format!("the expected value faulted: {error}"))?
+                    .into_value()
+                    .map_err(|error| format!("the expected value is unreadable: {error}"))
+            };
+            match expected {
+                EmitValue::Data(tree) => Ok(read_data()? == evaluate(tree)?),
+                EmitValue::FreshData(writes) => {
+                    let mut expected_data = Value::Struct(Vec::new());
+                    let meta = runtime::meta_value(envelope.meta());
+                    let mut metadata_matches = true;
+                    for write in writes {
+                        let expected = evaluate(&write.value)?;
+                        match &write.target {
+                            WriteTarget::Data(path) => {
+                                runtime::apply_struct_write(&mut expected_data, path, expected);
+                            }
+                            WriteTarget::Ext(field) | WriteTarget::App(field) => {
+                                let zone = if matches!(&write.target, WriteTarget::Ext(_)) {
+                                    "ext"
+                                } else {
+                                    "app"
+                                };
+                                metadata_matches &= value_at_path(
+                                    &meta,
+                                    std::iter::once(zone).chain(field.split('.')),
+                                ) == Some(&expected);
+                            }
+                        }
                     }
-                    Err(error) => {
-                        return Err(format!("expect {name}: the predicate faulted: {error}"));
-                    }
+                    Ok(read_data()? == expected_data && metadata_matches)
                 }
+                EmitValue::Patch(writes) => {
+                    let meta = runtime::meta_value(envelope.meta());
+                    for write in writes {
+                        let expected = evaluate(&write.value)?;
+                        let held = match &write.target {
+                            WriteTarget::Data(path) => {
+                                value_at_path(&read_data()?, path.iter().map(String::as_str))
+                                    == Some(&expected)
+                            }
+                            WriteTarget::Ext(field) | WriteTarget::App(field) => {
+                                let zone = if matches!(&write.target, WriteTarget::Ext(_)) {
+                                    "ext"
+                                } else {
+                                    "app"
+                                };
+                                value_at_path(&meta, std::iter::once(zone).chain(field.split('.')))
+                                    == Some(&expected)
+                            }
+                        };
+                        if !held {
+                            return Ok(false);
+                        }
+                    }
+                    Ok(true)
+                }
+                EmitValue::Nothing | EmitValue::Identity => Err(String::from(
+                    "the checked expectation has no constructible value",
+                )),
             }
         }
     }
-    Ok(matches)
+}
+
+/// Reads explicit field paths; a missing field does not equal any value.
+fn value_at_path<'a, 'p>(
+    value: &'a Value,
+    path: impl IntoIterator<Item = &'p str>,
+) -> Option<&'a Value> {
+    path.into_iter()
+        .try_fold(value, |current, field| match current {
+            Value::Struct(fields) => fields
+                .iter()
+                .find(|(name, _)| name == field)
+                .map(|(_, value)| value),
+            Value::Map(fields) => fields.get(field),
+            _ => None,
+        })
 }
 
 fn check_expectation(
@@ -1021,41 +1086,30 @@ fn check_expectation(
     expectation: &Expectation,
     deliveries: &[&Envelope],
 ) -> Option<String> {
-    let matches = match expectation_matches(plan, expectation, deliveries) {
-        Ok(matches) => matches,
+    let matched = match expectation_matches(plan, expectation, deliveries) {
+        Ok(matched) => matched,
         Err(message) => return Some(message),
     };
-    let held = match &expectation.quantifier {
-        Quantifier::Exists => matches >= 1,
-        // The void quantifier counts deliveries, predicate-filtered
-        // when one is written.
-        Quantifier::Nothing => {
-            matches == 0 && (expectation.predicate.is_some() || deliveries.is_empty())
-        }
-        Quantifier::Count(cmp, expected) => {
-            let actual = i64::try_from(matches).unwrap_or(i64::MAX);
-            match cmp {
-                Cmp::Eq => actual == *expected,
-                Cmp::Ne => actual != *expected,
-                Cmp::Lt => actual < *expected,
-                Cmp::Gt => actual > *expected,
-                Cmp::Le => actual <= *expected,
-                Cmp::Ge => actual >= *expected,
-            }
-        }
-    };
-    if held {
-        None
-    } else {
-        let name = expectation
-            .label
-            .clone()
-            .unwrap_or_else(|| format!("{:?}", expectation.target));
-        Some(format!(
-            "expect {name}: {matches} match(es) in a window of {} deliveries",
-            deliveries.len()
-        ))
+    if u64::try_from(matched).ok() == Some(expectation.count) {
+        return None;
     }
+    let target = match &expectation.target {
+        ExpectTarget::Boundary(port) => format!("app.{port}"),
+        ExpectTarget::Node { path, port } => format!("{path}.{port}"),
+    };
+    Some(if expectation.count == 0 && expectation.filter.is_none() {
+        format!("expected no deliveries on {target}, but observed {matched}")
+    } else {
+        let deliveries = if expectation.count == 1 {
+            "delivery"
+        } else {
+            "deliveries"
+        };
+        format!(
+            "expected {} matching {deliveries} on {target}, but observed {matched}",
+            expectation.count
+        )
+    })
 }
 
 /// Builds a world-authored draft from an injection value: `data`
@@ -1622,7 +1676,7 @@ mod tests {
     /// pre-scan of every handler would fail both cases below.
     fn opaque_answer(mock_body: &str) -> (Option<Completion>, Vec<String>) {
         let source = format!(
-            "graph g : App {{\n  connector echo : Process {{\n    mode = job ; command = \"cat\"\n    codec = lines\n    idempotent = true; behavior = deterministic\n  }}\n  in -> echo -> out\n  echo.err -> nothing\n  echo.exit -> nothing\n}}\n\nlab g {{\n  simulation probing on app {{\n    mock echo {{\n{mock_body}\n    }}\n    scenario s \"unused\" {{\n      app.in = {{v = 1}}\n    }}\n  }}\n}}\n"
+            "graph g : App {{\n  connector echo : Process {{\n    mode = job ; command = \"cat\"\n    codec = lines\n    idempotent = true; behavior = deterministic\n  }}\n  in -> echo -> out\n  echo.err -> nothing\n  echo.exit -> nothing\n}}\n\nlab g {{\n  simulation probing {{\n    mock echo {{\n{mock_body}\n    }}\n    scenario s {{\n      app.in = {{v = 1}}\n    }}\n  }}\n}}\n"
         );
         let compilation = compile(
             &[source.as_str()],
@@ -1815,7 +1869,7 @@ graph m0_probe : App {
 }
 
 lab m0_probe {
-  simulation smoke on app {
+  simulation smoke {
     mock echo {
       on in where data == "salut" {
         out = "salut"
@@ -1827,26 +1881,26 @@ lab m0_probe {
       }
     }
 
-    scenario roundtrip "one message through a scripted world" {
+    scenario roundtrip {
       app.in = { text = "salut" }
-      expect "the echo came back" app.out count == 1 where data == "salut"
-      expect nothing echo.err
+      expect app.out where data == "salut"
+      expect echo.err == nothing
     }
 
-    scenario silence_expires "a silent driver times out" {
+    scenario silence_expires {
       mock echo {
         on in { out = nothing }
       }
       app.in = { text = "salut" }
-      expect nothing app.out
+      expect app.out == nothing
       advance duration("5s")
-      expect "the budget expired" echo.exit where data is TimeoutExpired
+      expect echo.exit where data is TimeoutExpired
     }
 
-    scenario filtered "an empty text never reaches the world" {
+    scenario filtered {
       app.in = { text = "" }
-      expect nothing echo.in
-      expect nothing app.out
+      expect echo.in == nothing
+      expect app.out == nothing
     }
   }
 }
@@ -2139,17 +2193,17 @@ graph h2_http : App {
 }
 
 lab h2_http {
-  simulation sheet on app {
+  simulation sheet {
     mock client {
       on in {
         out = .
         exit = Completed { status = 200 }
       }
     }
-    scenario call "the network is replaced, not the contract" {
+    scenario call {
       app.in = { request = true }
-      expect "the response is ordinary data" app.out count == 1
-      expect "one HTTP terminal closes the call" client.exit where data is Completed
+      expect app.out
+      expect client.exit where data is Completed
     }
   }
 }
@@ -2173,8 +2227,8 @@ lab h2_http {
         // `expect relay.out` watches departures — the fifth review
         // showed a real emission invisible to its own port.
         let source = PROBE_WITH_LAB.replace(
-            "expect \"the echo came back\" app.out count == 1 where data == \"salut\"",
-            "expect \"the departure\" shout.out count == 1 where data == \"salut\"",
+            "expect app.out where data == \"salut\"",
+            "expect shout.out where data == \"salut\"",
         );
         let compilation = compile(
             &[source.as_str()],
@@ -2195,8 +2249,8 @@ lab h2_http {
         // inspected without a type, and a failed `as` is the runtime fault
         // this expectation is meant to surface.
         let source = PROBE_WITH_LAB.replace(
-            "expect \"the echo came back\" app.out count == 1 where data == \"salut\"",
-            "expect \"the echo came back\" app.out count == 1 where data as bool",
+            "expect app.out where data == \"salut\"",
+            "expect app.out where data as bool",
         );
         let compilation = compile(
             &[source.as_str()],
@@ -2215,8 +2269,8 @@ lab h2_http {
     #[test]
     fn a_broken_expectation_fails_loudly_not_silently() {
         let source = PROBE_WITH_LAB.replace(
-            "expect \"the echo came back\" app.out count == 1 where data == \"salut\"",
-            "expect \"the echo came back\" app.out count == 1 where data == \"nope\"",
+            "expect app.out where data == \"salut\"",
+            "expect app.out where data == \"nope\"",
         );
         let compilation = compile(
             &[source.as_str()],
@@ -2226,7 +2280,10 @@ lab h2_http {
         let runs = run(&compilation.plan, GraphVersion(1), &compilation.labs[0]);
         let roundtrip = &runs[0].report;
         assert!(!roundtrip.passed());
-        assert!(roundtrip.failures[0].contains("the echo came back"));
+        assert!(
+            roundtrip.failures[0]
+                .contains("expected 1 matching delivery on app.out, but observed 0")
+        );
     }
 
     #[test]
@@ -2247,10 +2304,10 @@ graph m0_probe : App {
 }
 
 lab m0_probe {
-  simulation s on app {
+  simulation s {
     scenario overflow {
       app.in = { text = "x" }
-      expect nothing app.out
+      expect app.out == nothing
     }
   }
 }
@@ -2294,7 +2351,7 @@ graph m0_probe : App {
 }
 
 lab m0_probe {
-  simulation smoke on app {
+  simulation smoke {
     scenario unmocked {
       app.in = { text = "salut" }
     }

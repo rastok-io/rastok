@@ -5,6 +5,39 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-11-03-1: Use the value grammar and exact counts in Lab assertions
+
+Yoann decides that the Lab uses the same value forms as graph emissions and
+injections. A Lab may contain mocks and scenarios directly. A named simulation
+is optional and groups scenarios with their own mock defaults.
+
+1. `simulation name` targets the unit's App by default. An explicit
+   `: app`, `: App` or `: <App-name>` selects the same graph.
+   Other targets remain deferred. Lab names no longer bind by homonymy.
+   The existing one-logical-Lab-per-unit limit remains. Same-named
+   fragments merge before checking defaults and scenarios.
+2. Mock resolution replaces a whole mock per Connector, at the nearest
+   level: scenario, simulation, Lab. Duplicate members within one scope
+   refuse. Direct scenarios use the Lab name as their effective simulation
+   name; an explicit simulation cannot collide with that implicit name.
+3. Scenarios and expectations have no string labels. Scenario names carry
+   their intent. `expect [N] port` requires exactly N deliveries, with one
+   as the default. `== nothing` requires zero deliveries. `== value`
+   uses contextual port typing; `where expr` counts true predicates.
+   A nonzero count with `nothing`, or zero with a non-nothing equality
+   value, is contradictory and refuses at Check.
+4. Yoann explicitly retains the existing observation-window rule: an
+   injection or time advance opens the window; successive expectations
+   inspect it without consuming it. This overrides the per-port consuming
+   window described in the initial implementation brief.
+5. Lab changes do not alter the production plan, semantic hash, graph
+   version, package format 24 or diagnostic recording format 5. Existing
+   scenario inputs and effective names are preserved during migration, so
+   their causal trace bytes and paths remain unchanged.
+
+The previous `on app`, label and count-comparison spellings are not aliases.
+Experiments, theorems and scenario crash/restart remain specified but deferred.
+
 ## D-2026-10-23-2 — Implement the relative logical timeline before opening, in format 24
 
 Yoann decides (2026-10-23) that A-T1-12, specified by D-2026-10-10-1,

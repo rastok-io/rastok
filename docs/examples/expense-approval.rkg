@@ -49,7 +49,7 @@ graph expense_approval : App {
 }
 
 lab expense_approval {
-  simulation approvals on app {
+  simulation approvals {
     mock accounting {
       on in {
         out = { entry_id = "acc-1" }
@@ -57,29 +57,29 @@ lab expense_approval {
       }
     }
 
-    scenario decision_before_request "the decision can arrive first" {
+    scenario decision_before_request {
       app.decision = { request_id = "r-42"; approved = true; reason = "" }
-      expect nothing accounting.in
+      expect accounting.in == nothing
       app.request = { request_id = "r-42"; amount = 1250 }
-      expect accounting.in count == 1
-      expect decide.approval count == 1 where data.request_id == "r-42"
-      expect nothing app.rejection
+      expect accounting.in
+      expect decide.approval where data.request_id == "r-42"
+      expect app.rejection == nothing
     }
 
-    scenario rejected "a rejection never reaches accounting" {
+    scenario rejected {
       app.request = { request_id = "r-43"; amount = 1800 }
-      expect nothing accounting.in
+      expect accounting.in == nothing
       app.decision = { request_id = "r-43"; approved = false; reason = "policy" }
-      expect app.rejection count == 1 where data.reason == "policy"
-      expect nothing accounting.in
+      expect app.rejection where data.reason == "policy"
+      expect accounting.in == nothing
     }
 
-    scenario approval_timeout "the missing decision expires in virtual time" {
+    scenario approval_timeout {
       app.request = { request_id = "r-7"; amount = 990 }
-      expect nothing accounting.in
+      expect accounting.in == nothing
       advance duration("48h")
-      expect app.expired count == 1 where data is JoinExpired
-      expect nothing accounting.in
+      expect app.expired where data is JoinExpired
+      expect accounting.in == nothing
     }
   }
 }

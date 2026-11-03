@@ -113,13 +113,13 @@ The Lab lives in the same file. This is the scenario that tests the fault
 case, a process that never answers:
 
 ```rkg
-scenario silence_expires "a mute shell times out" {
+scenario silence_expires {
   mock shell {
     on in { out = nothing }
   }
   app.in = "hello"
   advance duration("5s")
-  expect "the typed timeout" shell.exit where data is TimeoutExpired
+  expect shell.exit == TimeoutExpired {}
 }
 ```
 

@@ -874,11 +874,11 @@ graph joined : App {
   pair.out -> out
 }
 lab joined {
-  simulation inspect on app {
+  simulation inspect {
     scenario pair {
       app.left = 2
       app.right = 7
-      expect app.out count == 1 where data == 7
+      expect app.out where data == 7
     }
   }
 }

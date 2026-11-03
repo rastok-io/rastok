@@ -51,12 +51,12 @@ graph app : App {{
   worker.err -> nothing
 }}
 lab app {{
-  simulation nested on app {{
+  simulation nested {{
     mock worker.request {{ on in {{ out = "ready"; exit = Completed {{ status = 200 }} }} }}
     scenario one {{
       app.in = "request"
-      expect worker.judge.in count == 1 where data == "ready"
-      expect app.out count == 1 where data == "ready"
+      expect worker.judge.in where data == "ready"
+      expect app.out where data == "ready"
     }}
   }}
 }}
@@ -82,13 +82,13 @@ lab app {{
 #[test]
 fn a_graph_call_correlates_its_single_response_with_its_terminal_case() {
     for (reply, assertion, phase, iteration) in [
-        ("ready", "expect app.out count == 1", Phase::Closed, 0),
-        ("retry", "expect nothing app.out", Phase::Expired, 1),
+        ("ready", "expect app.out", Phase::Closed, 0),
+        ("retry", "expect app.out == nothing", Phase::Expired, 1),
     ] {
         let source = format!(
             r#"{HTTP_GRAPH}
 lab app {{
-  simulation calls on app {{
+  simulation calls {{
     mock request {{ on in {{ out = "{reply}"; exit = Completed {{ status = 200 }} }} }}
     scenario response {{
       app.in = "request"
@@ -162,7 +162,7 @@ graph app : App + Loop {{
   {routes}
 }}
 lab app {{
-  simulation calls on app {{
+  simulation calls {{
     mock file {{ on in {{ {reply} }} }}
     scenario bounded {{ app.in = base64! {{ YQ== }} }}
   }}
@@ -188,7 +188,7 @@ fn a_graph_driver_cannot_hide_a_missing_promised_response() {
     let source = format!(
         r#"{HTTP_GRAPH}
 lab app {{
-  simulation broken on app {{
+  simulation broken {{
     mock request {{ on in {{ exit = Completed {{ status = 200 }} }} }}
     scenario one {{ app.in = "request" }}
   }}

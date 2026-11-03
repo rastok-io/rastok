@@ -74,8 +74,8 @@ graph sim03 : App {
 
 ```rastok
 lab sim03 {
-  simulation sim03_loop_retry on app {
-    scenario slow_bank "the bank executes but answers late ; retry must NOT double-pay" {
+  simulation sim03_loop_retry {
+    scenario slow_bank {
       mock pay.bank {
         // Stripe-semantics mock : the FIRST key use executes ; a REUSED key
         // replies instantly with the ORIGINAL outcome (partner-side dedup).
@@ -92,7 +92,7 @@ lab sim03 {
         data = { order_id = "42", payment_id = "pay_42", amount = 99.90, attempt = 0 }
       }
       advance duration("30s")
-      expect "charged exactly once" ledger.in count == 1 where (
+      expect ledger.in where (
         data.status == "charged" && data.charge_id == "ch_1")
     }
   }
@@ -132,7 +132,7 @@ advance duration("30s") (target 30) :
 
   earliest ≤ 30 ?  none → t := 30. done.
 
-`expect … count == 1` → pass.  ONE charge (ch_1), TWO attempts, ZERO double-pay — the count quantifier makes « exactly once » a real assertion.
+`expect port` → pass.  ONE charge (ch_1), TWO attempts, ZERO double-pay — the count quantifier makes « exactly once » a real assertion.
 ```
 
 ### The counterfactual — why the stable-key rule is required

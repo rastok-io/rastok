@@ -46,7 +46,7 @@ The per-item test map lives in [ui.md](../spec/ui.md#evidence-for-this-presentat
 - Clickable envelope lineage and exact produced/consumed command-to-Admit links;
   Done commands do not acquire a fictitious next admission.
 - Bidirectional authored-action/timeline selection, pending deliveries and
-  retained deadlines, failure evidence including `expect nothing`, keyboard
+  retained deadlines, failure evidence including `expect port == nothing`, keyboard
   navigation/search, and two-column instance/session comparison.
 
 All browser pages collect both uncaught exceptions and console errors. This
@@ -107,7 +107,7 @@ The remaining manual checks use existing scenarios, not new runtime behavior:
 - **Failed assertions:** launch
   `target/debug/rastok simulate crates/rastok/tests/fixtures/ui-explanation.rkg --ui`.
   Finish `inspect.mismatch`: the Assertion tab must show `data.value`, observed
-  `7`, expected `8`. Select `inspect.unwanted` and Finish: `expect nothing app.out`
+  `7`, expected `8`. Select `inspect.unwanted` and Finish: `expect app.out == nothing`
   must show the one offending envelope. These failures are intentional fixtures.
 - **Fresh keyboard session:** launch
   `target/debug/rastok simulate examples/keyed-retry.rkg --ui`, or use Reset in

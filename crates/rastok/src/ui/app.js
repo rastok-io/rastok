@@ -1071,9 +1071,7 @@ function renderScenario(scenario, enabled) {
     for (const item of simulation.scenarios || []) {
       options.push({
         value: `${simulation.name}\u0000${item.name}`,
-        label: item.label
-          ? `${simulation.name}.${item.name} · ${item.label}`
-          : `${simulation.name}.${item.name}`,
+        label: `${simulation.name}.${item.name}`,
       });
     }
   }
@@ -2098,7 +2096,7 @@ function renderAssertion(snapshot) {
     target.append(source);
   }
   const summary = document.createElement('p');
-  summary.textContent = `${expectation.target} · ${expectation.observed} observed · ${expectation.matched ?? 'unknown'} matching · expected ${expectation.quantifier}`;
+  summary.textContent = `${expectation.target} · ${expectation.observed} observed · ${expectation.matched ?? 'unknown'} matching · expected ${expectation.quantifier.text}`;
   target.append(summary);
   for (const envelope of expectation.envelopes) {
     const row = document.createElement('div');

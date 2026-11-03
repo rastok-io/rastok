@@ -46,7 +46,7 @@ graph codex_websocket_gateway : App {
 }
 
 lab codex_websocket_gateway {
-  simulation two_sessions on app {
+  simulation two_sessions {
     mock codex {
       on in {
         out = data
@@ -54,19 +54,19 @@ lab codex_websocket_gateway {
       }
     }
 
-    scenario isolation "two logical sessions cannot cross replies" {
+    scenario isolation {
       app.peer = {
         meta.ext.session_id = "11111111111111111111111111111111"
         data = { prompt = "alice" }
       }
-      expect "alice reply" app.reply count == 1 where (
+      expect app.reply where (
         meta.ext.session_id == "11111111111111111111111111111111")
 
       app.peer = {
         meta.ext.session_id = "22222222222222222222222222222222"
         data = { prompt = "bob" }
       }
-      expect "bob reply" app.reply count == 1 where (
+      expect app.reply where (
         meta.ext.session_id == "22222222222222222222222222222222")
     }
   }

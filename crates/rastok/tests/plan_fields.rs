@@ -311,16 +311,16 @@ graph routing : App {
 }
 
 lab routing {
-  simulation cases on app {
-    scenario select "select before routing" {
+  simulation cases {
+    scenario select {
       app.in = true
-      expect app.yes count == 1
-      expect nothing app.no
-      expect app.audit count == 1
+      expect app.yes
+      expect app.no == nothing
+      expect app.audit
       app.in = false
-      expect app.no count == 1
-      expect nothing app.yes
-      expect app.audit count == 1
+      expect app.no
+      expect app.yes == nothing
+      expect app.audit
     }
   }
 }

@@ -128,11 +128,11 @@ async function seek(page, transition) {
     await normal.locator(".graph-node-name").filter({ hasText: /^greet$/ }).click();
     await normal.locator('[data-source-view="0"]').click();
     assert.ok(await normal.locator("#source-code .selected-definition").count());
-    await capture(normal, "debugger-selection", "rastok new hello", "smoke.roundtrip", { selected: "greet" });
+    await capture(normal, "debugger-selection", "rastok new hello", "hello.roundtrip_greeting", { selected: "greet" });
     const identifier = normal.locator("#source-code [data-source-token]").filter({ hasText: /^greet$/ }).first();
     await identifier.hover();
     await normal.locator("#source-tooltip").waitFor({ state: "visible" });
-    await capture(normal, "debugger-hover", "rastok new hello", "smoke.roundtrip", { identifier: "greet" });
+    await capture(normal, "debugger-hover", "rastok new hello", "hello.roundtrip_greeting", { identifier: "greet" });
     await normal.close();
 
     const assertion = await open(await start(["simulate", "assertion.rkg", "--ui"], scratch));
@@ -141,7 +141,7 @@ async function seek(page, transition) {
     const evidence = await assertion.locator("#panel-assertion").innerText();
     assert.match(evidence, /Hello, monde/);
     assert.match(evidence, /Hello, world/);
-    await capture(assertion, "debugger-assertion", "rastok new hello; app.in changed to monde", "smoke.roundtrip");
+    await capture(assertion, "debugger-assertion", "rastok new hello; app.in changed to monde", "hello.roundtrip_greeting");
     assert.deepEqual(errors, []);
     const manifest = {
       revision: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(),

@@ -1,12 +1,12 @@
 lab dedupe {
-  simulation refereeing on app {
-    scenario changes "repeats are swallowed, changes pass" {
+  simulation refereeing {
+    scenario changes {
       app.in = "running"
-      expect "first" app.out count == 1 where data == "running"
+      expect app.out where data == "running"
       app.in = "running"
-      expect nothing app.out
+      expect app.out == nothing
       app.in = "stopped"
-      expect "changed" app.out count == 1 where data == "stopped"
+      expect app.out where data == "stopped"
     }
   }
 }

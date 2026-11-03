@@ -1185,7 +1185,7 @@ fn lab_assets_never_reach_the_production_plan() {
         "mock shell { on in { out = asset(\"seed.bin\") } }\n      app.in = \"x\"",
     ] {
         let source = format!(
-            "graph g : App {{\n  connector shell : Process {{\n    mode = job ; command = \"cat\"\n    codec = lines\n    idempotent = true; behavior = deterministic\n  }}\n  in -> shell -> out\n}}\n\nlab g {{\n  simulation probing on app {{\n    scenario s \"lab asset\" {{\n      {body}\n      expect \"out\" app.out count == 1\n    }}\n  }}\n}}\n"
+            "graph g : App {{\n  connector shell : Process {{\n    mode = job ; command = \"cat\"\n    codec = lines\n    idempotent = true; behavior = deterministic\n  }}\n  in -> shell -> out\n}}\n\nlab g {{\n  simulation probing {{\n    scenario s {{\n      {body}\n      expect app.out\n    }}\n  }}\n}}\n"
         );
         let bag = compile_with_assets(
             &[source.as_str()],

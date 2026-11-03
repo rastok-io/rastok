@@ -298,7 +298,7 @@ graph app : App {
   weighing.exit -> nothing
 }
 lab app {
-  simulation weighing on app {
+  simulation weighing {
     mock weighing {
       on in {
         out = "-1.250"
@@ -307,7 +307,7 @@ lab app {
     }
     scenario correction {
       app.in = "weigh"
-      expect app.out count == 1
+      expect app.out
     }
   }
 }

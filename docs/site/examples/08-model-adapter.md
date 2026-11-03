@@ -36,12 +36,12 @@ RASTOK_SHOWCASE_MODEL_TOKEN=lab-only-not-a-credential RASTOK_SHOWCASE_MODEL_TOKE
 ```
 
 ```text
-PASS responses.two_sessions: three jobs keep their session and original measured response
-PASS responses.missing_usage: absent or null wire usage supplies no sample
-PASS responses.observed_zero: reported zero is evidence, not missing usage
-PASS responses.schema_failure: a mistyped response has no partially retained DATA
-PASS responses.transport_failure: a timeout neither invents usage nor repeats inference
-PASS responses.http_errors: decoding precedes the 5xx terminal classification
+PASS responses.two_sessions
+PASS responses.missing_usage
+PASS responses.observed_zero
+PASS responses.schema_failure
+PASS responses.transport_failure
+PASS responses.http_errors
 6 scenario(s), 0 failed
 ```
 
@@ -112,13 +112,13 @@ RASTOK_SHOWCASE_MODEL_TOKEN=lab-only-not-a-credential RASTOK_SHOWCASE_MODEL_TOKE
 ```
 
 ```text
-FAIL responses.two_sessions: three jobs keep their session and original measured response
+FAIL responses.two_sessions
      golden divergence: record 6: closure(32)[1][0][1][1]; expected 820f868265657272…(399 bytes); got 820f868265657272…(393 bytes); cause: EGRESS "model" · emitting_id 7c6e92c8de6b86d2…(16 bytes) · call_key absent
-PASS responses.missing_usage: absent or null wire usage supplies no sample
-PASS responses.observed_zero: reported zero is evidence, not missing usage
-PASS responses.schema_failure: a mistyped response has no partially retained DATA
-PASS responses.transport_failure: a timeout neither invents usage nor repeats inference
-PASS responses.http_errors: decoding precedes the 5xx terminal classification
+PASS responses.missing_usage
+PASS responses.observed_zero
+PASS responses.schema_failure
+PASS responses.transport_failure
+PASS responses.http_errors
 6 scenario(s), 1 failed
 ```
 

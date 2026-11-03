@@ -429,12 +429,12 @@ The Lab supplies the service response and exercises three cases:
 For example, the timeout scenario is ordinary source:
 
 ```rastok
-scenario approval_timeout "the missing decision expires in virtual time" {
+scenario approval_timeout {
   app.request = { request_id = "r-7"; amount = 990 }
-  expect nothing accounting.in
+  expect accounting.in == nothing
   advance duration("48h")
-  expect app.expired count == 1 where data is JoinExpired
-  expect nothing accounting.in
+  expect app.expired where data is JoinExpired
+  expect accounting.in == nothing
 }
 ```
 
@@ -2180,7 +2180,7 @@ The core recovery tests exercise recorded journals independently of Lab syntax.
 
 Every App may declare its twin: the **lab** — at
 most one *logical* lab per App, possibly split across same-name
-fragments in several files, bound to `graph <name>: App`. It is the App's
+fragments in several files. Its name is independent of the App name. It is the App's
 living corpus of tuning and assurance: everything used to stimulate,
 observe, reproduce, experiment, debug, and eventually verify the App
 lives there, and none of it deploys.
@@ -2202,7 +2202,7 @@ The ontology is a mirror:
 | Production | Lab twin |
 |---|---|
 | App | Lab |
-| Graph | Simulation — closes it (`on app`) |
+| Graph | Simulation: targets the unit's App by default, or explicitly with `: App` |
 | Connector | Mock Driver — replaces the external interaction, never the bookkeeping |
 | deployed App + real profile | Experiment — meets the real world |
 | a concrete execution | Scenario |
@@ -2255,7 +2255,7 @@ prove         →  the future operation that attempts to DISCHARGE a
 ```
 
 `theorem` itself is **not** an operation: it is the reserved
-*declaration* — `theorem <name> over <simulation> { … }` — of a
+*declaration*, `theorem <name> { … }`, of a
 universal property over all admissible trajectories of
 (graph + simulation). And « all admissible trajectories » must itself
 first be defined (input domains, nondeterminism, faults, time,
@@ -2288,7 +2288,7 @@ anything along the way.
 A simulation block describes a possibility space around a graph in a form a
 non-developer can read and write. §1.5 already showed the full shape on the
 approval flow — a mocked partner, injected sources, `advance duration("48h")`, a typed
-outcome asserted on `decide.expired`, an `expect nothing`. Its scenarios are
+outcome asserted on `decide.expired`, and an absence assertion with `== nothing`. Its scenarios are
 acceptance criteria a product owner can read: "the decision may arrive
 first," "a rejection is a business outcome," and "no decision within
 48 hours becomes the typed `JoinExpired` outcome." Nothing waits
@@ -2303,13 +2303,11 @@ Key properties:
   the graph says how the system reacts to envelopes; the simulation says
   which world surrounds it — inbound inputs, mocked Connector behavior,
   virtual time, failures, and expected observations.
-- **A simulation lives in the App's lab and names the graph it closes**
-  — `lab <name>` binds to the unit's `graph <name>: App`, and each
-  simulation declares its target: `on app` (the only executable target
-  today; sub-graph closure is deferred until a birth recipe exists for
-  mid-lineage envelopes). `app` stays pre-bound, and node references in
-  mocks and expectations are
-  root-relative qualified paths (`sessions.codex`).
+- **A Lab contains mocks and scenarios directly.** An optional
+  `simulation name { ... }` groups another mock world. Both forms target
+  the unit's App; `: App` makes an explicit simulation's target visible.
+  Sub-graph targets remain deferred. Mock and expectation paths are
+  root-relative, such as `sessions.codex`.
 - **A scenario is a named slice of that space**: when executed, it becomes
   one deterministic trajectory through the graph, with concrete fixture
   steps, mocked Connector outcomes, and expectations.
@@ -2323,13 +2321,22 @@ Key properties:
 - **Intermediate assertions** (`expect` on any internal port) test
   transformations without isolating nodes; observation is read-only and
   legal anywhere.
-- **Description** is free-form prose, attached as metadata.
+- **Names carry intent.** Scenarios use descriptive identifiers, without
+  string labels. Comments explain context in ordinary source text.
 
-The executable vocabulary includes `after <duration>` (dated mock emission),
-`expect … count == N` (exact count) and `origin` (explicit virtual-time origin).
-The reserved `crash after <record>` / `restart` actions remain deferred; core
-recovery evidence must not be mistaken for a working Lab crash command. The normative
-surface is [simulation-semantics.md](docs/spec/simulation-semantics.md).
+The executable forms are `expect port` (exactly one delivery),
+`expect N port` (exactly N), `expect port == nothing` (absence),
+`expect [N] port == value` (typed equality), and
+`expect [N] port where predicate` (matching count). A payload compares in
+full; an envelope pattern compares its written fields. The brackets denote
+an optional count, not literal syntax. Successive expectations inspect the
+same window until the next injection or time advance. Mock lookup replaces
+a whole mock at the nearest scope: scenario, simulation, Lab.
+
+`origin` declares the virtual timeline's civil anchor. Delayed mock
+`after`, scenario `crash <node>` and `restart <node>` remain deferred;
+core recovery tests do not imply an authored Lab crash command. See
+[simulation-semantics.md](docs/spec/simulation-semantics.md).
 
 ### 6.3 Experiment — where the Lab meets reality
 
@@ -2344,20 +2351,19 @@ their scenario grammar:
 
 ```rastok
 lab checkout {
-  simulation payments on app {
+  simulation payments {
     mock bank {                       // in SIMULATION the bank is scripted
       on in { out = { status = "charged" } }
     }
     scenario accepted {
       orders.out = { meta.ext.order_id = "o-1"
                               data = { amount = 120 } }
-      expect "posted" ledger.in where data.status == "charged"
+      expect ledger.in where data.status == "charged"
     }
   }
 
-  experiment payment_sandbox on app {
-    profile = "bank-sandbox"          // exactly one; a constant Rastok text expression —
-                                      // no secret, no endpoint in the DSL
+  experiment payment_sandbox {
+    // Deployment settings stay outside the Lab source.
     // `bank` is deliberately NOT mocked here : it is the real boundary
     // under test, reached through the profile's sandbox credentials.
     mock notifier {                   // boundaries NOT under test stay mocked
@@ -2366,7 +2372,7 @@ lab checkout {
     scenario accepted {
       orders.out = { meta.ext.order_id = "o-2"
                               data = { amount = 120 } }
-      expect "charged for real" ledger.in where data.status == "charged"
+      expect ledger.in where data.status == "charged"
     }
   }
 }

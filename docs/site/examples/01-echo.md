@@ -35,9 +35,9 @@ rastok simulate examples/echo.rkg --compare examples/traces/echo
 ```
 
 ```text
-PASS smoke.roundtrip: a line echoes back
-PASS smoke.filtered: an empty line never reaches the shell
-PASS smoke.silence_expires: a mute shell times out
+PASS smoke.roundtrip
+PASS smoke.filtered
+PASS smoke.silence_expires
 3 scenario(s), 0 failed
 ```
 
@@ -68,8 +68,8 @@ then to `shell`, then to the App output. The two remaining outputs,
 `shell.err` and `shell.exit`, go to `nothing`: the program explicitly
 discards them. They still exist in the journal and can be checked by the Lab.
 
-Below the App, `lab echo` describes the virtual world. Its `simulation smoke
-on app` groups scenarios for this App and provides their shared mock.
+Below the App, `lab smoke` describes the virtual world. It contains the
+shared mock and scenarios directly; no intermediate simulation block is needed.
 
 `mock shell` supplies the process response. In `on in { ... }`, `out = .`
 means “emit the data this mock received”: the dot is the received data, so the
@@ -79,10 +79,10 @@ for the other forms.
 
 The scenarios are independent:
 
-- `roundtrip` sends `"hello"`; `expect ... count == 1 where data == "hello"`
-  requires exactly one matching App output, then `expect nothing shell.err`
+- `roundtrip` sends `"hello"`; `expect app.out == "hello"`
+  requires exactly one matching App output, then `expect shell.err == nothing`
   requires no error output.
-- `filtered` sends `""`; `expect nothing shell.in` and `expect nothing app.out`
+- `filtered` sends `""`; `expect shell.in == nothing` and `expect app.out == nothing`
   check that the empty line reaches neither the process nor the App output.
 - `silence_expires` replaces the shared mock with `out = nothing`, providing no
   terminal response; `advance duration("5s")` moves virtual time and the final
@@ -158,13 +158,13 @@ rastok simulate examples/echo.rkg --compare examples/traces/echo
 ```
 
 ```text
-FAIL smoke.roundtrip: a line echoes back
-     expect "the echo" app.out count == 1 where data == "hello"  (echo.rkg:35)
+FAIL smoke.roundtrip
+     expect app.out == "hello"  (echo.rkg:34)
      observed app.out: "changed"
-     where data == "hello" is false for 1 of 1 deliveries; count 0, expected 1
+     expected 1 matching delivery on app.out, but observed 0
      golden divergence: record 6: closure(32)[1][0][1][1]; expected 82066568656c6c6f; got 8206676368616e67…(10 bytes); cause: EGRESS "shell" · emitting_id 801cfc175b8f2151…(16 bytes) · call_key absent
-PASS smoke.filtered: an empty line never reaches the shell
-PASS smoke.silence_expires: a mute shell times out
+PASS smoke.filtered
+PASS smoke.silence_expires
 3 scenario(s), 1 failed
 ```
 

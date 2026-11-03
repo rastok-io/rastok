@@ -21,34 +21,32 @@ graph echo : App {
   shell.exit -> nothing
 }
 
-lab echo {
-  simulation smoke on app {
+lab smoke {
+  mock shell {
+    on in {
+      out = .
+      exit = Exited { exit_code = 0, signal = null }
+    }
+  }
+
+  scenario roundtrip {
+    app.in = "hello"
+    expect app.out == "hello"
+    expect shell.err == nothing
+  }
+
+  scenario filtered {
+    app.in = ""
+    expect shell.in == nothing
+    expect app.out == nothing
+  }
+
+  scenario silence_expires {
     mock shell {
-      on in {
-        out = .
-        exit = Exited { exit_code = 0, signal = null }
-      }
+      on in { out = nothing }
     }
-
-    scenario roundtrip "a line echoes back" {
-      app.in = "hello"
-      expect "the echo" app.out count == 1 where data == "hello"
-      expect nothing shell.err
-    }
-
-    scenario filtered "an empty line never reaches the shell" {
-      app.in = ""
-      expect nothing shell.in
-      expect nothing app.out
-    }
-
-    scenario silence_expires "a mute shell times out" {
-      mock shell {
-        on in { out = nothing }
-      }
-      app.in = "hello"
-      advance duration("5s")
-      expect "the typed timeout" shell.exit where data is TimeoutExpired
-    }
+    app.in = "hello"
+    advance duration("5s")
+    expect shell.exit == TimeoutExpired {}
   }
 }

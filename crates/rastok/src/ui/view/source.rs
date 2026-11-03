@@ -406,7 +406,7 @@ mod tests {
     #[test]
     fn source_units_preserve_full_text_and_indexes_once() {
         let graph = "// header\ngraph echo : App { input in: text; output out: text; in -> out }\n";
-        let lab = "lab echo { simulation test on app { scenario one { app.in = \"hello\" } } }\n";
+        let lab = "lab echo { simulation test { scenario one { app.in = \"hello\" } } }\n";
         let compilation = compile(&[graph, lab]);
         let units = units(
             &compilation.plan,
@@ -422,7 +422,7 @@ mod tests {
 
     #[test]
     fn classified_units_withhold_lab_literals_and_keep_line_numbers() {
-        let source = "type Protected = struct { email: text @personal }\ngraph echo : App { input in: Protected; output out: Protected; in -> out }\nlab echo { simulation test on app { scenario one { app.in = { email = \"private@example.test\" } } } }\n";
+        let source = "type Protected = struct { email: text @personal }\ngraph echo : App { input in: Protected; output out: Protected; in -> out }\nlab echo { simulation test { scenario one { app.in = { email = \"private@example.test\" } } } }\n";
         let compilation = compile(&[source]);
         let units = units(
             &compilation.plan,

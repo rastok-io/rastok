@@ -1,22 +1,22 @@
 lab export {
-  simulation refereeing on app {
-    scenario answers "a live exporter replies in time" {
+  simulation refereeing {
+    scenario answers {
       mock exporter {
         on in { out = .; exit = Exited { exit_code = 0; signal = null } }
       }
       app.in = "reading 42"
-      expect "exported" app.out count == 1 where data == "reading 42"
-      expect nothing app.err
+      expect app.out where data == "reading 42"
+      expect app.err == nothing
     }
 
-    scenario hangs "a mute exporter times out at its budget" {
+    scenario hangs {
       mock exporter {
         on in { out = nothing }
       }
       app.in = "reading 43"
       advance duration("2s")
-      expect "the typed timeout" app.err count == 1 where data is TimeoutExpired
-      expect nothing app.out
+      expect app.err where data is TimeoutExpired
+      expect app.out == nothing
     }
   }
 }

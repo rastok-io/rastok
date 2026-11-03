@@ -75,46 +75,44 @@ graph agent_retry : App {
   }
 }
 
-lab agent_retry {
-  simulation ui_tour on app {
-    mock model {
-      on in where data is Request && data.tenant == "alice" && now() == timestamp("1970-01-01T00:00:00Z") {
-        out = nothing
-      }
-      on in {
-        out = data
-        exit = Exited { exit_code = 0; signal = null }
-      }
+lab ui_tour {
+  mock model {
+    on in where data is Request && data.tenant == "alice" && now() == timestamp("1970-01-01T00:00:00Z") {
+      out = nothing
     }
-
-    scenario two_tenants "Bob completes once; only Alice retries" {
-      app.in = { tenant = "alice"; prompt = "Explain causal replay" }
-      expect nothing app.done
-
-      app.in = { tenant = "bob"; prompt = "Explain typed envelopes" }
-      expect app.done count == 1 where data.tenant == "bob"
-
-      advance duration("1s")
-      expect nothing app.done
-      expect nothing model.in
-
-      advance duration("1s")
-      expect app.done count == 1 where data.tenant == "alice"
-      expect answer.in count == 1 where data is Answer && data.tenant == "alice"
-      expect nothing model.in where data is Request && data.tenant == "bob"
-      expect nothing audit.observe.in
-      expect nothing app.done where data.tenant == "bob"
-      expect nothing app.failed
+    on in {
+      out = data
+      exit = Exited { exit_code = 0; signal = null }
     }
+  }
 
-    scenario lifetime "a quiet keyed instance closes and opens a fresh generation" {
-      app.in = { tenant = "bob"; prompt = "First generation" }
-      expect app.done count == 1 where data.prompt == "First generation"
-      advance duration("10s")
-      expect nothing model.in
-      app.in = { tenant = "bob"; prompt = "Next generation" }
-      expect app.done count == 1 where data.prompt == "Next generation"
-      expect nothing app.failed
-    }
+  scenario two_tenants {
+    app.in = { tenant = "alice"; prompt = "Explain causal replay" }
+    expect app.done == nothing
+
+    app.in = { tenant = "bob"; prompt = "Explain typed envelopes" }
+    expect app.done where data.tenant == "bob"
+
+    advance duration("1s")
+    expect app.done == nothing
+    expect model.in == nothing
+
+    advance duration("1s")
+    expect app.done where data.tenant == "alice"
+    expect answer.in where data is Answer && data.tenant == "alice"
+    expect 0 model.in where data is Request && data.tenant == "bob"
+    expect audit.observe.in == nothing
+    expect 0 app.done where data.tenant == "bob"
+    expect app.failed == nothing
+  }
+
+  scenario lifetime {
+    app.in = { tenant = "bob"; prompt = "First generation" }
+    expect app.done where data.prompt == "First generation"
+    advance duration("10s")
+    expect model.in == nothing
+    app.in = { tenant = "bob"; prompt = "Next generation" }
+    expect app.done where data.prompt == "Next generation"
+    expect app.failed == nothing
   }
 }

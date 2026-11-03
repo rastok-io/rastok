@@ -20,7 +20,7 @@ graph echo : App {
 }
 
 lab echo {
-  simulation smoke on app {
+  simulation smoke {
     mock shell {
       on in {
         out = .
@@ -29,8 +29,8 @@ lab echo {
     }
     scenario roundtrip {
       app.in = "salut"
-      expect app.out count == 1 where data == "salut"
-      expect nothing shell.err
+      expect app.out where data == "salut"
+      expect shell.err == nothing
     }
   }
 }

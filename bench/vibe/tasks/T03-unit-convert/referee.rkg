@@ -1,13 +1,13 @@
 lab convert {
-  simulation refereeing on app {
-    scenario freezing "zero converts to thirty-two" {
+  simulation refereeing {
+    scenario freezing {
       app.in = {celsius = 0}
-      expect "converted" app.out count == 1 where data.fahrenheit == 32
+      expect app.out where data.fahrenheit == 32
     }
 
-    scenario boiling "one hundred converts to two-twelve" {
+    scenario boiling {
       app.in = {celsius = 100}
-      expect "converted" app.out count == 1 where data.fahrenheit == 212
+      expect app.out where data.fahrenheit == 212
     }
   }
 }

@@ -52,8 +52,8 @@ rastok simulate examples/agent-gateway.rkg --compare examples/traces/agent-gatew
 ```
 
 ```text
-PASS app_server.two_conversations: same request ids, separate children and correctly addressed notifications
-PASS app_server.unknown_method: a protocol error is data, not a Process terminal
+PASS app_server.two_conversations
+PASS app_server.unknown_method
 2 scenario(s), 0 failed
 ```
 
@@ -138,9 +138,9 @@ rastok simulate examples/agent-chat.rkg
 ```
 
 ```text
-PASS browser_protocol.alice_and_bob: two names, two resident children; quitting Alice leaves Bob and the listeners alive
-PASS browser_protocol.duplicate_name: another socket cannot take Alice's process or quit it
-PASS browser_protocol.invalid_message: bad input and unsupported methods do not start a child
+PASS browser_protocol.alice_and_bob
+PASS browser_protocol.duplicate_name
+PASS browser_protocol.invalid_message
 3 scenario(s), 0 failed
 ```
 
@@ -214,9 +214,9 @@ rastok simulate examples/agent-gateway.rkg --compare examples/traces/agent-gatew
 ```
 
 ```text
-FAIL app_server.two_conversations: same request ids, separate children and correctly addressed notifications
+FAIL app_server.two_conversations
      golden divergence: record 51: envelope(8) . data(5)[1] (ccbor value)[1][1][1][1][0][1][1]; expected "Hello from the simulated agent."; got "A different answer."; cause: INGRESS "conversation.model" · port "out" · sequence 5
-PASS app_server.unknown_method: a protocol error is data, not a Process terminal
+PASS app_server.unknown_method
 2 scenario(s), 1 failed
 ```
 

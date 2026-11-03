@@ -1698,8 +1698,8 @@ mod tests {
     fn scenario_gutter_locations_keep_source_units_and_qualified_names() {
         let graph = "graph echo : App { input in: text; output out: text; in -> out }";
         let labs = [
-            "lab echo {\n simulation first on app {\n  scenario same {\n   app.in = \"first\"\n  }\n }\n}",
-            "lab echo {\n simulation second on app {\n  scenario same { app.in = \"second\" }\n }\n}",
+            "lab echo {\n simulation first {\n  scenario same {\n   app.in = \"first\"\n  }\n }\n}",
+            "lab echo {\n simulation second {\n  scenario same { app.in = \"second\" }\n }\n}",
         ];
         let compilation = crate::compiler::compile(
             &[graph, labs[0], labs[1]],
@@ -1728,9 +1728,9 @@ mod tests {
                 r#"
 type Protected = struct {{ name: text {annotation} }}
 graph demo : App {{ input in: Protected; output out: Protected; in -> out }}
-lab demo {{ simulation test on app {{ scenario classified {{
+lab demo {{ simulation test {{ scenario classified {{
   app.in = {{ name = "private-scenario-literal" }}
-  expect app.out count == 1
+  expect app.out
 }} }} }}
 "#
             );
@@ -2188,7 +2188,7 @@ graph webhook : App {
   listener -> classify -> out
   listener.exit -> nothing
 }
-lab webhook { simulation requests on app { scenario classified {
+lab webhook { simulation requests { scenario classified {
   listener.out = "private-source-literal"
 } } }
 "#;

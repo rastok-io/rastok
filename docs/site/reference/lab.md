@@ -14,23 +14,29 @@ The following notation describes syntax; angle brackets stand for authored
 names or values, not literal characters.
 
 ```text
-lab <App-name> {
-  simulation <name> on app {
+lab <name> {
+  mock <connector-path> { <handlers> }
+  scenario <name> { <actions and expectations> }
+  simulation <name> {
     mock <connector-path> { <handlers> }
-    scenario <name> "optional label" { <actions and expectations> }
+    scenario <name> { <actions and expectations> }
   }
 }
 ```
 
 | Declaration | Scope and rule |
 |---|---|
-| `lab <App-name>` | Matches the compilation unit's App; same-named fragments merge across source files |
-| `simulation <name> on app` | Shared mocks and scenarios for the complete App |
-| `mock <connector-path>` | Names an actual Connector: name a child of the App root directly, or a top-level declaration by its name |
-| `scenario <name> "label"` | Independent run with its own mocks, origin and sequence of actions; label optional |
-| Scenario-level mock | Replaces the whole shared mock for that Connector; branches are not merged |
-| Unit-level `val` | Available in mocks, injections, predicates and durations; Graph-local bindings do not escape into the Lab |
+| `lab <name>` | Verification corpus for the unit's App; same-named fragments merge across source files |
+| Direct `scenario <name>` | Runs in the implicit simulation named after its Lab |
+| `simulation <name>` | Optional group with shared mocks; omission of a target selects the App |
+| `simulation <name> : App` | Explicit App target; `app` and the App graph's declared name also work |
+| `mock <connector-path>` | Names an actual Connector: a child of the App root directly, or a top-level declaration by its name |
+| `scenario <name>` | Independent run with its own mocks, origin and actions; the name carries its intent |
+| Mock override | Replaces the whole mock for that Connector: scenario, then simulation, then Lab |
+| Unit-level `val` | Available in mocks, injections, expectations and durations; Graph-local bindings do not escape into the Lab |
 
+A unit has one logical Lab. Duplicate scenarios or mocks at one level refuse. An explicit simulation
+cannot use its Lab's name when the Lab also contains direct scenarios.
 The Lab is absent from the production package and semantic hash. Mocks do
 not add ports, change Contracts or supply application metadata fields that
 the graph never writes.
@@ -86,17 +92,24 @@ they do not fabricate a Call per frame. See the capability distinctions in
 
 | Form | Assertion |
 |---|---|
-| `expect target.port` | At least one observation |
-| `expect target.port where predicate` | At least one matching observation |
-| `expect target.port count == N where predicate` | Exactly `N` matching observations |
-| `expect nothing target.port` | No observations |
-| `expect nothing target.port where predicate` | No matching observations |
-| `expect "label" target.port ...` | The same assertion with a report label |
+| `expect target.port` | Exactly one observation |
+| `expect N target.port` | Exactly `N` observations, including zero |
+| `expect target.port == nothing` | No observations |
+| `expect [N] target.port == value` | Exactly `N` observations equal to the value; default one |
+| `expect [N] target.port where predicate` | Exactly `N` matching observations; default one |
 
-Count comparisons also accept `!=`, `<`, `<=`, `>` and `>=`. The predicate
-is a checked expression over the observed port type; narrow a `variant`
+Square brackets in this table denote an optional count, not literal syntax.
+Counts are nonnegative integers. A nonzero count with `== nothing` refuses;
+zero with any other equality value also refuses. Use
+`expect 0 target.port where predicate` to require no matching observation.
+
+Equality uses the ordinary value grammar: scalars, records, tagged cases,
+maps, frontends and envelope fields. Values are checked against the observed
+port type. A complete data value compares structurally; an envelope pattern
+without a whole `data` assignment compares only its written fields.
+Predicates are checked over the observed port type; narrow a `variant`
 before reading its fields. An evaluation fault is a scenario fault, not a
-non-match.
+non-match. A newline after the port ends the expectation.
 
 An injection or time advance opens a new observation window. All following
 expectations inspect that window without consuming it; earlier windows are
@@ -138,7 +151,7 @@ is distinct from the diagnostic recording produced by `run --record`:
 |---|---|
 | Sub-graph simulation targets other than `app` | `docs/spec/simulation-semantics.md` §2 |
 | Delayed mock `after` actions | `docs/spec/simulation-semantics.md` §§3, 5.1; `docs/spec/grammar.md`, mock grammar |
-| Scenario `crash after` and `restart` | `docs/spec/simulation-semantics.md` §5.4 |
+| Scenario `crash node` and `restart node` | `docs/spec/simulation-semantics.md` §5.4 |
 | HttpServer `respond` source scripting; delayed/unsolicited Process service scripts | `docs/spec/simulation-semantics.md` §§2, 5.1 |
 | Positive `expect fault` and assertions on private state | `docs/spec/simulation-semantics.md` §5.2 |
 | Automatic outcome coverage, generated scenarios and tags | `docs/spec/simulation-semantics.md` §§7–8 |

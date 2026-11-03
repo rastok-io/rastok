@@ -78,11 +78,9 @@ graph hello : App {
 }
 
 lab hello {
-  simulation smoke on app {
-    scenario roundtrip "a typed message becomes a greeting" {
-      app.in = "world"
-      expect app.out count == 1 where data == "Hello, world"
-    }
+  scenario roundtrip_greeting {
+    app.in = "world"
+    expect app.out == "Hello, world"
   }
 }
 ```
@@ -91,7 +89,7 @@ lab hello {
 $ rastok check hello.rkg
 ok: 2 node(s), semantic hash 6c3cb3abbbfc726fe79f850d6b5d6489e02e89ee545c706378466a7d9f6c6879
 $ rastok simulate hello.rkg
-PASS smoke.roundtrip: a typed message becomes a greeting
+PASS hello.roundtrip_greeting
 1 scenario(s), 0 failed
 ```
 
@@ -116,7 +114,7 @@ rastok simulate hello.rkg --ui
 
 Open the loopback URL printed by the last command, including its access token.
 The simulation starts paused. Choose **Next transition**, or **Finish** to
-reach `Hello, world`. The CLI reports `PASS smoke.roundtrip: a typed message becomes a greeting` when the scenario
+reach `Hello, world`. The CLI reports `PASS hello.roundtrip_greeting` when the scenario
 finishes. Close the viewer from its toolbar when done.
 <!-- quickstart:end -->
 

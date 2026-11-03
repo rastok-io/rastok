@@ -43,10 +43,8 @@ cover the refusal, nested boundaries and actual expiry observations.
 
 | Code | Severity | Phase | Home spec | Meaning (informative) |
 |---|---|---|---|---|
-| E-LAB-DUP | error | resolve | [grammar.md](grammar.md) | **deferred:** more than one logical lab for the same App |
-| E-LAB-NO-APP | error | resolve | [grammar.md](grammar.md) | a lab whose name binds to no `: App` graph in the unit |
-| E-SIM-TARGET | error | resolve | [simulation-semantics.md](simulation-semantics.md) | `simulation … on <graph>` targeting a non-App graph (deferred capability) |
-| E-EXPERIMENT-PROFILE | error | resolve | [grammar.md](grammar.md) | **deferred:** experiment without exactly one constant `profile` |
+| E-LAB-DUP | error | resolve | [grammar.md](grammar.md) | more than one logical Lab name in the unit; same-named fragments merge; field `name` |
+| E-SIM-TARGET | error | resolve | [simulation-semantics.md](simulation-semantics.md) | a simulation names a target other than the unit's App; omitted target, `app`, `App` and its declared name select the App; field `target` |
 | E-SAGA-DURABILITY | error | plan | [effects-and-sagas.md](effects-and-sagas.md) | **deferred:** a Saga whose effective durability resolves to `none` |
 | E-COMPENSATE-KEY | error | plan | [effects-and-sagas.md](effects-and-sagas.md) | **deferred:** compensation without a stable business key |
 | E-REPLAY-VERSION-MISMATCH | error | replay | [identity.md](identity.md) | **deferred:** journal segment hash ≠ loaded graph hash ; replay refused |
@@ -123,7 +121,7 @@ cover the refusal, nested boundaries and actual expiry observations.
 | E-ROUTE-DUPLICATE | error | check | [grammar.md](grammar.md) | route expansion selects the same physical destination twice for one source case; fields `source`, `case`, `destination` |
 | E-ROUTE-MIXED | error | check | [grammar.md](grammar.md) | `nothing` and a real destination are selected together for one source case; fields `source`, `case` |
 | E-UNWIRED-OUTPUT | error | check, plan | [delivery-semantics.md](delivery-semantics.md) | a productible output or closed case has no explicit disposition, recursively including nested Graph boundaries; fields `node`, `port`, `case` (case empty for a whole port) |
-| E-DUP-LAB-IDENTITY | error | resolve | [simulation-semantics.md](simulation-semantics.md) | a duplicated lab identity — simulation, scenario, or mock of one connector at one level — or a repeated scenario origin; fragments merge, homonyms refuse; field `name` |
+| E-DUP-LAB-IDENTITY | error | resolve | [simulation-semantics.md](simulation-semantics.md) | a duplicated simulation, scenario or mock at one level, an explicit simulation colliding with the Lab's implicit group, or a repeated scenario origin; same-named Lab fragments merge before these checks; field `name` |
 | E-INTERNAL-PLAN | error | plan | [plan-package.md](../architecture/plan-package.md) | the lowering emitted a plan its own validator refuses — a compiler defect surfaced as a diagnostic, never a panic; field `detail` |
 | E-PLAN-DEPTH | error | check, plan | [plan-package.md](../architecture/plan-package.md) | at check, an expression exceeds `expr::MAX_EXPRESSION_DEPTH` (128, also the parser recursion bound, one unit per syntactic level); at plan, the exact serialized depth reaches the independent reader bound `canonical_cbor::MAX_NESTING` (256, root at level 0); field `depth` in both phases |
 | W-DEAD-GRAPH | warning | check | [grammar.md](grammar.md) | a nested Graph has no external admission and its output obligations are suspended; field `owner`; unused top-level graph analysis remains deferred |

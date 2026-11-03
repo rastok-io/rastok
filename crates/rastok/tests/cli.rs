@@ -52,7 +52,9 @@ fn new_creates_one_executable_graph_with_a_lab_without_overwriting() {
     assert!(source.contains("lab hello_world"));
     let simulated = rastok().arg("simulate").arg(&path).output().unwrap();
     assert!(simulated.status.success(), "{simulated:?}");
-    assert!(String::from_utf8_lossy(&simulated.stdout).contains("PASS smoke.roundtrip"));
+    assert!(
+        String::from_utf8_lossy(&simulated.stdout).contains("PASS hello_world.roundtrip_greeting")
+    );
     let repeated = rastok()
         .current_dir(&dir)
         .args(["new", "hello-world"])
@@ -1435,16 +1437,16 @@ fn simulate_resolves_boot_refs_from_a_profile_without_cli_secret_values() {
   client.exit -> nothing
 }
 lab deployed {
-  simulation boot on app {
+  simulation boot {
     mock client {
       on in {
         out = "ok"
         exit = Completed { status = 200 }
       }
     }
-    scenario configured "boot refs bind before execution" {
+    scenario configured {
       app.in = "request"
-      expect "reply" app.out count == 1 where data == "ok"
+      expect app.out where data == "ok"
     }
   }
 }
@@ -1504,12 +1506,9 @@ fn simulate_explains_the_authored_assertion_and_its_exact_window() {
     let output = rastok().arg("simulate").arg(&path).output().unwrap();
     assert_eq!(output.status.code(), Some(1));
     let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("FAIL hello.roundtrip_greeting"), "{stdout}");
     assert!(
-        stdout.contains("FAIL smoke.roundtrip: a typed message becomes a greeting"),
-        "{stdout}"
-    );
-    assert!(
-        stdout.contains("expect app.out count == 1 where data == \"Hello, world\"  (hello.rkg:18)"),
+        stdout.contains("expect app.out == \"Hello, world\"  (hello.rkg:17)"),
         "{stdout}"
     );
     assert!(
@@ -1517,9 +1516,7 @@ fn simulate_explains_the_authored_assertion_and_its_exact_window() {
         "{stdout}"
     );
     assert!(
-        stdout.contains(
-            "where data == \"Hello, world\" is false for 1 of 1 deliveries; count 0, expected 1"
-        ),
+        stdout.contains("expected 1 matching delivery on app.out, but observed 0"),
         "{stdout}"
     );
     assert!(!stdout.contains("Boundary(Port"));
@@ -1535,20 +1532,41 @@ fn simulate_assertion_reports_cover_quantifiers_and_empty_windows() {
     std::fs::create_dir_all(&root).unwrap();
     let path = root.join("quantifiers.rkg");
     for (expectation, verdict) in [
-        ("expect app.out count == 2", "count 1, expected 2"),
-        ("expect app.out count != 1", "count 1, expected != 1"),
-        ("expect app.out count < 1", "count 1, expected < 1"),
-        ("expect app.out count <= 0", "count 1, expected <= 0"),
-        ("expect app.out count > 1", "count 1, expected > 1"),
-        ("expect app.out count >= 2", "count 1, expected >= 2"),
-        ("expect nothing app.out", "count 1, expected 0"),
+        (
+            "expect 2 app.out",
+            "expected 2 matching deliveries on app.out, but observed 1",
+        ),
+        (
+            "expect 0 app.out",
+            "expected no deliveries on app.out, but observed 1",
+        ),
+        (
+            "expect app.out == \"other\"",
+            "expected 1 matching delivery on app.out, but observed 0",
+        ),
+        (
+            "expect 2 app.out == \"current\"",
+            "expected 2 matching deliveries on app.out, but observed 1",
+        ),
+        (
+            "expect 0 app.out where data == \"current\"",
+            "count 1, expected 0",
+        ),
+        (
+            "expect 2 app.out where data == \"current\"",
+            "count 1, expected 2",
+        ),
+        (
+            "expect app.out == nothing",
+            "expected no deliveries on app.out, but observed 1",
+        ),
         (
             "expect app.out where data == \"other\"",
-            "count 0, expected at least 1",
+            "count 0, expected 1",
         ),
     ] {
         let source = format!(
-            "graph demo : App {{ input in: text; output out: text; in -> out }}\nlab demo {{ simulation s on app {{ scenario check {{\napp.in = \"first\"\nexpect app.out\napp.in = \"current\"\n{expectation}\n}} }} }}\n"
+            "graph demo : App {{ input in: text; output out: text; in -> out }}\nlab demo {{ simulation s {{ scenario check {{\napp.in = \"first\"\nexpect app.out\napp.in = \"current\"\n{expectation}\n}} }} }}\n"
         );
         std::fs::write(&path, source).unwrap();
         let output = rastok().arg("simulate").arg(&path).output().unwrap();
@@ -1565,7 +1583,7 @@ fn simulate_assertion_reports_cover_quantifiers_and_empty_windows() {
         );
         assert!(stdout.contains(verdict), "{stdout}");
     }
-    std::fs::write(&path, "graph demo : App { input in: text; output out: text; in -> out }\nlab demo { simulation s on app { scenario check { expect app.out } } }").unwrap();
+    std::fs::write(&path, "graph demo : App { input in: text; output out: text; in -> out }\nlab demo { simulation s { scenario check { expect app.out } } }").unwrap();
     let output = rastok().arg("simulate").arg(&path).output().unwrap();
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stdout).contains("nothing observed"));
@@ -1583,9 +1601,9 @@ fn simulate_assertion_reports_never_print_classified_data_or_predicates() {
         r#"
 type Protected = struct { value: int @sensitive(level = restricted) }
 graph hidden : App { input in: Protected; output out: Protected; in -> out }
-lab hidden { simulation s on app { scenario check {
+lab hidden { simulation s { scenario check {
   app.in = { value = 1234567 }
-  expect app.out count == 1 where data.value == 7654321
+  expect app.out where data.value == 7654321
 } } }
 "#,
     )
@@ -1613,7 +1631,7 @@ fn simulate_fails_loudly_on_a_broken_expectation() {
     let path = std::env::temp_dir().join("rastok-cli-evidence-broken.rkg");
     std::fs::write(
         &path,
-        source.replace("data == \"hello\"", "data == \"other\""),
+        source.replace("expect app.out == \"hello\"", "expect app.out == \"other\""),
     )
     .expect("a writable temp dir");
     let output = rastok()
@@ -1624,7 +1642,10 @@ fn simulate_fails_loudly_on_a_broken_expectation() {
     assert!(!output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("FAIL smoke.roundtrip"), "{stdout}");
-    assert!(stdout.contains("the echo"), "the label names it: {stdout}");
+    assert!(
+        stdout.contains("expect app.out"),
+        "the source names it: {stdout}"
+    );
 }
 
 #[test]

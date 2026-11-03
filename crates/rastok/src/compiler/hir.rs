@@ -370,11 +370,10 @@ pub use routing::{
     RouteDestination, RouteRule, RouteSelection,
 };
 
-/// One checked lab: the simulation corpus bound to the App sharing
-/// its name.
+/// One checked Lab: the unit's simulation corpus, outside the production plan.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Lab {
-    /// The lab name — the App's name.
+    /// The Lab name.
     pub name: String,
     /// The checked simulations.
     pub simulations: Vec<Simulation>,
@@ -407,8 +406,6 @@ pub struct Mock {
 pub struct Scenario {
     /// The scenario name.
     pub name: String,
-    /// The optional human label.
-    pub label: Option<String>,
     /// Immutable civil origin; the logical timeline always starts at zero.
     pub origin: crate::time::Timestamp,
     /// Scenario-level mock overrides — whole-mock replacement,
@@ -475,42 +472,21 @@ impl InjectionTarget {
 /// One checked expectation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Expectation {
-    /// The optional report label.
-    pub label: Option<String>,
-    /// How many matches satisfy it.
-    pub quantifier: Quantifier,
+    /// Exact number of matching deliveries in the current observation window.
+    pub count: u64,
     /// The observed target.
     pub target: ExpectTarget,
-    /// The compiled predicate over each delivery.
-    pub predicate: Option<expr::Tree>,
+    /// Optional equality or predicate filter applied to each delivery.
+    pub filter: Option<ExpectFilter>,
 }
 
-/// The three quantifiers, nothing more.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Quantifier {
-    /// At least one match.
-    Exists,
-    /// Zero deliveries in the window.
-    Nothing,
-    /// An exact-count comparison.
-    Count(Cmp, i64),
-}
-
-/// A count comparison.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Cmp {
-    /// `==`
-    Eq,
-    /// `!=`
-    Ne,
-    /// `<`
-    Lt,
-    /// `>`
-    Gt,
-    /// `<=`
-    Le,
-    /// `>=`
-    Ge,
+/// How an expectation selects deliveries in its observation window.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExpectFilter {
+    /// Equality with a contextually typed value or envelope pattern.
+    Value(EmitValue),
+    /// A boolean expression over the observed envelope.
+    Where(expr::Tree),
 }
 
 /// Where an expectation looks.

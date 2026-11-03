@@ -44,12 +44,12 @@ env RASTOK_SHOWCASE_PARTNER_TOKEN=lab-only-not-a-credential \
 ```
 
 ```text
-PASS webhook.nominal: ACK, validate, deliver once
-PASS webhook.timeout_then_success: the same request is repeated; only the final result is published
-PASS webhook.partner_dead: two attempts, then the last failure unchanged
-PASS webhook.duplicate: explicit state suppresses a duplicate, not instance identity alone
-PASS webhook.invalid_payload: decoded but ill-typed or invalid business data is rejected after ACK
-PASS webhook.http_500: Retry selects the decoded ServerError and retains its charge
+PASS webhook.nominal
+PASS webhook.timeout_then_success
+PASS webhook.partner_dead
+PASS webhook.duplicate
+PASS webhook.invalid_payload
+PASS webhook.http_500
 6 scenario(s), 0 failed
 ```
 
@@ -155,32 +155,32 @@ env RASTOK_SHOWCASE_PARTNER_TOKEN=lab-only-not-a-credential RASTOK_SHOWCASE_PART
 ```
 
 ```text
-FAIL webhook.nominal: ACK, validate, deliver once
+FAIL webhook.nominal
      golden divergence: record 12: retry_protocol(43) . parent_id(2)[0][4]; expected [REDACTED]; got [REDACTED]; cause: [REDACTED]
-FAIL webhook.timeout_then_success: the same request is repeated; only the final result is published
-     expect [REDACTED]  (webhook-to-partner.rkg:174)
+FAIL webhook.timeout_then_success
+     expect [REDACTED]  (webhook-to-partner.rkg:173)
+     observed: [REDACTED]
+     Assertion evidence is redacted because this program carries classified data.
+     expect [REDACTED]  (webhook-to-partner.rkg:175)
      observed: [REDACTED]
      Assertion evidence is redacted because this program carries classified data.
      expect [REDACTED]  (webhook-to-partner.rkg:176)
      observed: [REDACTED]
      Assertion evidence is redacted because this program carries classified data.
-     expect [REDACTED]  (webhook-to-partner.rkg:177)
+     golden divergence: record 12: retry_protocol(43) . parent_id(2)[0][4]; expected [REDACTED]; got [REDACTED]; cause: [REDACTED]
+FAIL webhook.partner_dead
+     expect [REDACTED]  (webhook-to-partner.rkg:185)
      observed: [REDACTED]
      Assertion evidence is redacted because this program carries classified data.
      golden divergence: record 12: retry_protocol(43) . parent_id(2)[0][4]; expected [REDACTED]; got [REDACTED]; cause: [REDACTED]
-FAIL webhook.partner_dead: two attempts, then the last failure unchanged
-     expect [REDACTED]  (webhook-to-partner.rkg:186)
+FAIL webhook.duplicate
+     golden divergence: record 12: retry_protocol(43) . parent_id(2)[0][4]; expected [REDACTED]; got [REDACTED]; cause: [REDACTED]
+PASS webhook.invalid_payload
+FAIL webhook.http_500
+     expect [REDACTED]  (webhook-to-partner.rkg:221)
      observed: [REDACTED]
      Assertion evidence is redacted because this program carries classified data.
-     golden divergence: record 12: retry_protocol(43) . parent_id(2)[0][4]; expected [REDACTED]; got [REDACTED]; cause: [REDACTED]
-FAIL webhook.duplicate: explicit state suppresses a duplicate, not instance identity alone
-     golden divergence: record 12: retry_protocol(43) . parent_id(2)[0][4]; expected [REDACTED]; got [REDACTED]; cause: [REDACTED]
-PASS webhook.invalid_payload: decoded but ill-typed or invalid business data is rejected after ACK
-FAIL webhook.http_500: Retry selects the decoded ServerError and retains its charge
-     expect [REDACTED]  (webhook-to-partner.rkg:222)
-     observed: [REDACTED]
-     Assertion evidence is redacted because this program carries classified data.
-     expect [REDACTED]  (webhook-to-partner.rkg:225)
+     expect [REDACTED]  (webhook-to-partner.rkg:224)
      observed: [REDACTED]
      Assertion evidence is redacted because this program carries classified data.
      golden divergence: record 12: retry_protocol(43) . parent_id(2)[0][4]; expected [REDACTED]; got [REDACTED]; cause: [REDACTED]

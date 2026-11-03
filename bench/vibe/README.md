@@ -15,10 +15,10 @@ guided generation, or an expert-only authoring surface.
   never edited after a wave has used it; a language evolution gets a
   new version, and re-running old tasks on a new card measures
   stability.
-- `prompts/v4.md` is the v19 authoring card: plan-owned Call idempotence,
-  no global `effect` attribute, and distinct Loop/Retry meanings. Frozen v1–v3
-  cards remain unchanged for prior-wave attribution. Current references and
-  canned dry attempts use the v19 spelling; select v4 for a new wave.
+- `prompts/v5.md` is the current authoring card: direct Lab scenarios,
+  optional simulation groups, exact-count expectations and typed value equality.
+  Frozen v1–v4 cards remain unchanged for prior-wave attribution. Current
+  referees use the new Lab syntax; select v5 for a new wave.
 - `tasks/T*/` — one directory per task:
   - `task.md` — the statement the model receives (with the pinned
     interface names the referee depends on);

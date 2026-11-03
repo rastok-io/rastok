@@ -1432,7 +1432,6 @@ fn simulation_view(
                 "name": simulation.name,
                 "scenarios": simulation.scenarios.iter().map(|scenario| serde_json::json!({
                     "name": scenario.name,
-                    "label": scenario.label,
                 })).collect::<Vec<_>>(),
             })
         })
@@ -1443,7 +1442,6 @@ fn simulation_view(
             "simulation": session.simulation(),
             "scenario": session.scenario(),
             "definition": rastok::ui::scenario_definition_json(compilation, session.simulation(), session.scenario()),
-            "label": session.label(),
             "next_action_index": session.next_action_index(),
             "action_count": session.action_count(),
             "next_action": session.next_action_kind().map(scenario_action_name),
@@ -1517,13 +1515,7 @@ fn print_scenario_verdict(
 ) {
     let passed = report.passed() && golden_failures.is_empty();
     let verdict = if passed { "PASS" } else { "FAIL" };
-    match &report.label {
-        Some(label) => println!(
-            "{verdict} {}.{}: {label}",
-            report.simulation, report.scenario
-        ),
-        None => println!("{verdict} {}.{}", report.simulation, report.scenario),
-    }
+    println!("{verdict} {}.{}", report.simulation, report.scenario);
     if !passed {
         for failure in rastok::render::scenario_failures(compilation, report)
             .iter()

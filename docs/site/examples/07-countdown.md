@@ -32,8 +32,8 @@ rastok simulate examples/countdown.rkg --compare examples/traces/countdown
 ```
 
 ```text
-PASS proof.positive: three recurrences, then one result
-PASS proof.already_finished: a nonpositive input needs no recurrence
+PASS proof.positive
+PASS proof.already_finished
 2 scenario(s), 0 failed
 ```
 
@@ -108,15 +108,15 @@ rastok simulate examples/countdown.rkg --compare examples/traces/countdown
 ```
 
 ```text
-FAIL proof.positive: three recurrences, then one result
-     expect app.out count == 1 where data == "liftoff"  (countdown.rkg:25)
+FAIL proof.positive
+     expect app.out == "liftoff"  (countdown.rkg:24)
      observed app.out: "changed"
-     where data == "liftoff" is false for 1 of 1 deliveries; count 0, expected 1
+     expected 1 matching delivery on app.out, but observed 0
      golden divergence: record 14: emissions(23)[0][2] . data(5)[1] (ccbor value)[1]; expected "liftoff"; got "changed"; cause: TRANSACTION "count" · trigger "p:in" · cause_id absent
-FAIL proof.already_finished: a nonpositive input needs no recurrence
-     expect app.out count == 1 where data == "liftoff"  (countdown.rkg:29)
+FAIL proof.already_finished
+     expect app.out == "liftoff"  (countdown.rkg:28)
      observed app.out: "changed"
-     where data == "liftoff" is false for 1 of 1 deliveries; count 0, expected 1
+     expected 1 matching delivery on app.out, but observed 0
      golden divergence: record 5: emissions(23)[0][2] . data(5)[1] (ccbor value)[1]; expected "liftoff"; got "changed"; cause: TRANSACTION "count" · trigger "p:in" · cause_id absent
 2 scenario(s), 2 failed
 ```

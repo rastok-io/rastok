@@ -31,11 +31,11 @@ graph sorter : App {
 }
 
 lab sorter {
-  simulation probing on app {
-    scenario split "one input fans to both named outputs" {
+  simulation probing {
+    scenario split {
       app.in = {v = 1}
-      expect "hot side" app.high count == 1
-      expect "cold side" app.low count == 1
+      expect app.high
+      expect app.low
     }
   }
 }
@@ -66,12 +66,12 @@ graph merge : App {
 }
 
 lab merge {
-  simulation probing on app {
-    scenario both "each named input reaches its handler" {
+  simulation probing {
+    scenario both {
       app.alpha = {v = 1}
-      expect "first" app.out count == 1
+      expect app.out
       app.beta = {v = 2}
-      expect "second" app.out count == 1
+      expect app.out
     }
   }
 }
@@ -119,8 +119,8 @@ fn named_inputs_reach_their_handlers() {
 
 fn refusal_code(graph: &str, injection: &str) -> Vec<&'static str> {
     let source = format!(
-        "{graph}\nlab merge {{\n  simulation probing on app {{\n    scenario s \"x\" {{\n      \
-         {injection} = {{v = 1}}\n      expect \"y\" app.out count == 1\n    }}\n  }}\n}}\n"
+        "{graph}\nlab merge {{\n  simulation probing {{\n    scenario s {{\n      \
+         {injection} = {{v = 1}}\n      expect app.out\n    }}\n  }}\n}}\n"
     );
     let bag = compile(
         &[source.as_str()],
@@ -289,10 +289,10 @@ graph typed : App {
 }
 
 lab typed {
-  simulation probing on app {
-    scenario measures "text in, its size out" {
+  simulation probing {
+    scenario measures {
       app.feed = "salut"
-      expect "sized" app.out count == 1 where data == 5
+      expect app.out where data == 5
     }
   }
 }
@@ -355,7 +355,7 @@ fn mismatched_pinned_edge_ends_refuse() {
 
 #[test]
 fn a_typed_injection_refuses_by_contract() {
-    let source = "graph g : App {\n  input alpha : int\n\n  operator o {\n    on a { out = data }\n  }\n  alpha -> o.a\n  o -> out\n}\n\nlab g {\n  simulation probing on app {\n    scenario s \"x\" {\n      app.alpha = \"text\"\n      expect \"y\" app.out count == 1\n    }\n  }\n}\n";
+    let source = "graph g : App {\n  input alpha : int\n\n  operator o {\n    on a { out = data }\n  }\n  alpha -> o.a\n  o -> out\n}\n\nlab g {\n  simulation probing {\n    scenario s {\n      app.alpha = \"text\"\n      expect app.out\n    }\n  }\n}\n";
     let bag = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -434,7 +434,7 @@ fn the_annotation_is_identity() {
 
 fn expect_refusal(expectation: &str) -> Vec<&'static str> {
     let source = format!(
-        "{MERGER_GRAPH}\nlab merge {{\n  simulation probing on app {{\n    scenario s \"x\" {{\n      \
+        "{MERGER_GRAPH}\nlab merge {{\n  simulation probing {{\n    scenario s {{\n      \
          app.alpha = {{v = 1}}\n      {expectation}\n    }}\n  }}\n}}\n"
     );
     let bag = compile(
@@ -451,17 +451,17 @@ fn expect_refusal(expectation: &str) -> Vec<&'static str> {
 #[test]
 fn an_expectation_on_an_input_refuses_by_direction() {
     // The reviewer's false green: the machine logs nothing at an
-    // ingress, so `count == 0` there was vacuously true. An input as
+    // ingress, so `expect 0` there was vacuously true. An input as
     // an observation target now refuses like any wrong direction.
     assert!(
-        expect_refusal("expect \"vacuous\" app.alpha count == 0").contains(&"E-PORT-DIRECTION"),
+        expect_refusal("expect 0 app.alpha").contains(&"E-PORT-DIRECTION"),
         "{:?}",
-        expect_refusal("expect \"vacuous\" app.alpha count == 0")
+        expect_refusal("expect 0 app.alpha")
     );
     assert!(
-        expect_refusal("expect \"implicit\" app.in count == 0").contains(&"E-PORT-DIRECTION"),
+        expect_refusal("expect 0 app.in").contains(&"E-PORT-DIRECTION"),
         "{:?}",
-        expect_refusal("expect \"implicit\" app.in count == 0")
+        expect_refusal("expect 0 app.in")
     );
 }
 
@@ -538,7 +538,7 @@ fn conforming_forms_pass() {
 fn a_typed_injection_matrix_holds_at_the_boundary() {
     let inject = |value: &str| {
         format!(
-            "graph g : App {{\n  input alpha : int\n\n  operator o {{\n    on a {{ out = data }}\n  }}\n  alpha -> o.a\n  o -> out\n}}\n\nlab g {{\n  simulation probing on app {{\n    scenario s \"x\" {{\n      app.alpha = {value}\n      expect \"y\" app.out count == 1\n    }}\n  }}\n}}\n"
+            "graph g : App {{\n  input alpha : int\n\n  operator o {{\n    on a {{ out = data }}\n  }}\n  alpha -> o.a\n  o -> out\n}}\n\nlab g {{\n  simulation probing {{\n    scenario s {{\n      app.alpha = {value}\n      expect app.out\n    }}\n  }}\n}}\n"
         )
     };
     // The reviewer's map through the int input.
@@ -756,7 +756,7 @@ fn the_fold_follows_the_runtime_order() {
 fn a_metadata_only_injection_still_carries_the_draft_struct() {
     // The draft is BORN a struct (`lab::draft`); patching only meta
     // does not change what crosses the pinned scalar input.
-    let source = "graph g : App {\n  input alpha : int\n\n  operator o {\n    on a { out = data }\n  }\n  alpha -> o.a\n  o -> out\n}\n\nlab g {\n  simulation probing on app {\n    scenario s \"x\" {\n      app.alpha = {meta.tag = \"x\"}\n      expect \"y\" app.out count == 1\n    }\n  }\n}\n";
+    let source = "graph g : App {\n  input alpha : int\n\n  operator o {\n    on a { out = data }\n  }\n  alpha -> o.a\n  o -> out\n}\n\nlab g {\n  simulation probing {\n    scenario s {\n      app.alpha = {meta.tag = \"x\"}\n      expect app.out\n    }\n  }\n}\n";
     let bag = compile(
         &[source],
         &ContractCatalog::try_m0().expect("the standard catalogue holds"),
@@ -879,11 +879,11 @@ graph g : App {
 }
 
 lab g {
-  simulation probing on app {
-    scenario s "reserved names are plain fields inside the escape" {
+  simulation probing {
+    scenario s {
       app.in = {v = 1}
-      expect "field named data" app.out count == 1 where data is ReservedPayload && data.data == 7
-      expect "field named meta" app.out count == 1 where data is ReservedPayload && data.meta.flag == true
+      expect app.out where data is ReservedPayload && data.data == 7
+      expect app.out where data is ReservedPayload && data.meta.flag == true
     }
   }
 }
@@ -1222,10 +1222,10 @@ graph g : App {
 }
 
 lab g {
-  simulation probing on app {
-    scenario s "empty records survive an injection" {
+  simulation probing {
+    scenario s {
       app.in = { hollow = {} }
-      expect "the empty record is a field" app.out count == 1 where data is HollowPayload
+      expect app.out where data is HollowPayload
     }
   }
 }
@@ -1260,10 +1260,10 @@ graph g : App {
 }
 
 lab g {
-  simulation probing on app {
-    scenario s "computed overflow" {
+  simulation probing {
+    scenario s {
       app.feed = 1
-      expect "no long through an int pin" app.result count == 0
+      expect 0 app.result
     }
   }
 }
@@ -1479,8 +1479,8 @@ graph g : App {
 }
 
 lab g {
-  simulation probing on app {
-    scenario s "a dynamic wrong shape faults" {
+  simulation probing {
+    scenario s {
       app.in = "wrong"
     }
   }
@@ -1526,8 +1526,8 @@ graph g : App {
 }
 
 lab g {
-  simulation probing on app {
-    scenario s "a text cannot land on an int output" {
+  simulation probing {
+    scenario s {
       app.in = "wrong"
     }
   }
@@ -1581,7 +1581,7 @@ graph g : App {
 }
 
 lab g {
-  simulation probing on app {
+  simulation probing {
     mock shell {
       on in {
         out = {v = 1}
@@ -1589,10 +1589,10 @@ lab g {
       }
     }
 
-    scenario s "a structured reply cannot land on an int input" {
+    scenario s {
       app.in = "go"
-      expect "nothing crosses" app.out count == 0
-      expect "the fault is typed" app.err count == 1
+      expect 0 app.out
+      expect app.err
     }
   }
 }
@@ -1793,7 +1793,7 @@ graph g : App {
 }
 
 lab g {
-  simulation domain_result on app {
+  simulation domain_result {
     scenario rejected {
       app.in = "request"
       expect app.rejected where data is Rejected && data.reason == "no"
@@ -1829,7 +1829,7 @@ graph g : App {
 }
 
 lab g {
-  simulation probing on app {
+  simulation probing {
     mock shell {
       on in {
         out = .
@@ -1837,9 +1837,9 @@ lab g {
       }
     }
 
-    scenario s "a decode-error payload cannot enter an int pin" {
+    scenario s {
       app.in = {v = 1}
-      expect "nothing crosses" app.out count == 0
+      expect 0 app.out
     }
   }
 }
@@ -1987,7 +1987,7 @@ graph g : App {
 }
 
 lab g {
-  simulation probing on app {
+  simulation probing {
     mock shell {
       on in {
         out = "reply"
@@ -1995,9 +1995,9 @@ lab g {
       }
     }
 
-    scenario s "sugar everywhere" {
+    scenario s {
       app.in = {field = 7}
-      expect "the reply lands" app.out count == 1
+      expect app.out
     }
   }
 }
@@ -2227,7 +2227,7 @@ graph g : App {
 }
 
 lab g {
-  simulation probing on app {
+  simulation probing {
     mock shell {
       on in {
         out = {"v": 1}
@@ -2235,9 +2235,9 @@ lab g {
       }
     }
 
-    scenario s "the mock reply follows the jsonl pin" {
+    scenario s {
       app.in = {"field": 7}
-      expect "the reply lands" app.out count == 1
+      expect app.out
     }
   }
 }
@@ -2357,15 +2357,15 @@ graph g : App {
 }
 
 lab g {
-  simulation probing on app {
+  simulation probing {
     mock shell {
       on in { out = nothing }
     }
 
-    scenario s "a timeout payload cannot enter an int pin" {
+    scenario s {
       app.in = "go"
       advance duration("1s")
-      expect "nothing crosses" app.out count == 0
+      expect 0 app.out
     }
   }
 }
