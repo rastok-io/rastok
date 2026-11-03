@@ -4,10 +4,8 @@ description: Describe inputs, boundary outcomes and elapsed time as executable s
 order: 4
 ---
 
-After this chapter you can read a Lab, replace a shared mock for one
-scenario, assert that something did not happen, and advance virtual time
-to a timeout. You can distinguish what simulation establishes from what
-still needs a physical boundary test.
+After this chapter you can read a Lab, override a mock, assert absence,
+advance virtual time, and distinguish simulation evidence from physical tests.
 
 ## Keep the program, supply its world
 
@@ -73,9 +71,8 @@ typed `TimeoutExpired` terminal. No child process was started.
 
 For an outbound Call, an uncovered request fails the scenario rather than
 silently timing out. A missing mock and an authored silent mock are
-different tests. A scenario-level mock replaces, rather than extends, the
-nearest inherited mock for that Connector. Within a mock, the first
-matching clause in source order supplies the response.
+different tests. Within a mock, the first matching clause in source order
+supplies the response.
 
 ## Read expectations in their action window
 
@@ -147,9 +144,8 @@ authentication before admission. Automatic incident-to-scenario conversion
 and authored crash/restart actions are not executable Lab features today;
 see [the current limits](../index.md#what-is-available-today).
 
-The normative sources are `docs/spec/simulation-semantics.md` and
-`docs/spec/execution-model.md`, section 8. `WHITEPAPER.md`, sections 5 and 6,
-explains the distinction between time, simulation and future proof tooling.
+See `docs/spec/simulation-semantics.md`, `docs/spec/execution-model.md` section 8,
+and `WHITEPAPER.md` sections 5 and 6 for the normative rules and context.
 
 ## Summary
 

@@ -4,8 +4,8 @@ description: Choose a Rastok command, supply its options, and distinguish read-o
 order: 9
 ---
 
-After this chapter you can choose a CLI command and interpret its output
-and exit status. Run examples from the checkout root.
+After this chapter you can choose commands and interpret their exit status.
+Run examples from the checkout root.
 
 ## Help and version
 
@@ -58,8 +58,7 @@ rastok simulate examples/echo.rkg --compare examples/traces/echo
 
 Simulation uses Lab mocks and virtual time, not physical Drivers. Without
 `--ui`, it runs every scenario, printing `PASS` or `FAIL` followed by
-`simulation.scenario` and a final count. Direct Lab scenarios use the Lab
-name as their simulation name.
+`simulation.scenario` and a final count. Direct scenarios use their Lab's name.
 A unit without a Lab refuses.
 
 - `--compare` reads reviewed traces and reports the first difference in
