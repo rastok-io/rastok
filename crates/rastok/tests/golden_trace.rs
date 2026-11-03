@@ -334,9 +334,11 @@ fn the_m0_probe_trace_matches_its_golden() {
 /// canonical trace and matches its stored golden or explains why not.
 #[test]
 fn the_lab_scenario_matches_its_stored_golden() {
-    let source = std::fs::read_to_string(example()).expect("the example reads");
+    // This independent canonical witness keeps its original scripted input.
+    // The gallery tests cover the current public Echo example and its traces.
+    let source = include_str!("fixtures/echo-roundtrip.rkg");
     let compilation = rastok::compiler::compile(
-        &[source.as_str()],
+        &[source],
         &rastok::connector::contract::ContractCatalog::try_m0()
             .expect("the standard catalogue holds"),
     )
@@ -389,10 +391,6 @@ fn a_stale_stored_golden_is_named_by_the_diff() {
         divergence.path.contains("data(5)"),
         "the diff names the payload key: {divergence}"
     );
-}
-
-fn example() -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/echo.rkg")
 }
 
 #[test]

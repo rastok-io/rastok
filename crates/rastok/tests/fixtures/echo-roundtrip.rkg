@@ -1,0 +1,36 @@
+// Fixed input for the independent canonical Lab witness.
+// The public Echo example uses hello; this witness keeps its original salut.
+graph echo : App {
+  connector shell : Process {
+    mode = job ; command = "cat"
+    codec = lines
+    idempotent = true; behavior = deterministic
+    timeout = duration("5s")
+  }
+
+  operator relay {
+    on in where data != "" {
+      out = data
+    }
+  }
+
+  in -> relay -> shell -> out
+  shell.err -> nothing
+  shell.exit -> nothing
+}
+
+lab echo {
+  simulation smoke on app {
+    mock shell {
+      on in {
+        out = .
+        exit = Exited { exit_code = 0, signal = null }
+      }
+    }
+    scenario roundtrip {
+      app.in = "salut"
+      expect app.out count == 1 where data == "salut"
+      expect nothing shell.err
+    }
+  }
+}
