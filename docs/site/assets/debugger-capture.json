@@ -1,6 +1,6 @@
 {
-  "revision": "101337ecdd99d46f0ff40eaee4cacdab73ca9034",
-  "binary_sha256": "35d3e5c240ebd6e68f4827f36bcf1dfec08457a956138cd4686af34c44b13c78",
+  "revision": "a85d18318ea4532bf57d0a20f83fdfadcafa035b",
+  "binary_sha256": "8e274e66e6e4bea3b2f35c8d9c43abea99729123f130ba932ae6f531030abc65",
   "viewport": {
     "width": 1352,
     "height": 760
@@ -10,28 +10,28 @@
       "source": "examples/webhook-to-partner.rkg",
       "scenario": "webhook.timeout_then_success",
       "transition": 20,
-      "sha256": "6a62fb06880d251a4084d86a3e7435244feaf398f64711fc136803215f93ab64",
+      "sha256": "0d8e2d87316699dcedc1f329ff8231240ff905f19099f58cf3c7d47f7be84bb5",
       "badges": 7
     },
     "debugger-selection": {
       "source": "rastok new hello",
-      "scenario": "smoke.roundtrip",
+      "scenario": "hello.roundtrip_greeting",
       "transition": 5,
-      "sha256": "630c024b89d6dd159b5d771cf5c4e20a6af5ac33ddf76d1c9ea9c94cdd29561b",
+      "sha256": "aa44c4a6fceb3edd5a55d2ab4e48bf40d87986db7e5a22d52a827d8a494dcdb6",
       "selected": "greet"
     },
     "debugger-hover": {
       "source": "rastok new hello",
-      "scenario": "smoke.roundtrip",
+      "scenario": "hello.roundtrip_greeting",
       "transition": 5,
-      "sha256": "8a9b61a28bee8d85c0cf8f560a76a62ebdd2045629eb8b1f9cb0eaa17741f2ab",
+      "sha256": "906d7e2c98d3e2310f6ca0de7ce83888cca3cd617c8b9b331a5acd981e12891c",
       "identifier": "greet"
     },
     "debugger-assertion": {
       "source": "rastok new hello; app.in changed to monde",
-      "scenario": "smoke.roundtrip",
+      "scenario": "hello.roundtrip_greeting",
       "transition": 5,
-      "sha256": "8f0530a5d7eb7cbfb2ba15f171b82d305913b87719adafb6a6d68c8eee6ef54f"
+      "sha256": "9efa460f4068e5d0fd2e01051e6d73873eac275cc2c2c3266f47c2f805ed43a8"
     }
   },
   "capture": "RASTOK_UI_ASSETS=docs/site/assets node tools/debugger-guide-capture.cjs",
