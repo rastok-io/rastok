@@ -6,18 +6,19 @@ order: 1
 
 ## What is Rastok?
 
-An integration rarely arrives whole. The partner's test environment is not
-ready, or never fails the way production will. The person who knew why a
-retry stops after two attempts has left with the project. A case nobody
-thought of shows up in production, and the logs say what happened, not why.
-Flows break for human reasons before technical ones, and those reasons do
-not go away.
+An integration rarely breaks on the happy path. It breaks on the edge
+cases: unavailable dependencies, unexpected replies, missing or incomplete
+tests. With AI, writing a flow has never been faster; keeping it correct
+and stable over time is another story. **Rastok is a simulation-first
+integration platform.** The specification and exhaustive scenarios are
+written together, in a dedicated, strict language. The same program runs in
+a simulated world, then, without a rewrite, in the real one.
 
-Rastok puts that knowledge in a file that outlives the people and the
-project: the flow, the scenarios that test it, faults included, and a
-journal that explains each run. Within the supported Contract and Lab
-profiles, the same checked program runs against scripted partners in the
-Lab or against real systems in the App, without rewriting the graph.
+Here the simulated world is the Lab and the real one is the App. One file
+holds the flow, the scenarios that test it, faults included, and a journal
+that explains each run. Within the supported Contract and Lab profiles, the
+same checked program runs against scripted partners in the Lab or against
+real systems in the App, without rewriting the graph.
 
 This page is the map. [Getting started](getting-started.md) installs the
 tool and opens the two paths: the user guide, or the
@@ -25,22 +26,30 @@ tool and opens the two paths: the user guide, or the
 
 ## What it is for
 
-Four moments in the life of an integration, and what the file changes at each.
+Most of an integration's life happens in the Lab. Write the flow and its
+scenarios, faults included; simulate; fix, or add a scenario; simulate again.
+That loop needs no partner environment. Confronting the real systems is slow
+and expensive, so it comes after the simulation, not instead of it:
+acceptance with real Drivers once the scenarios pass, then production, where
+an incident is recorded and comes back into the Lab as one more scenario.
 
 ```mermaid
 flowchart LR
-    design["Design: scripted partner, fault scenarios"] --> acceptance["Acceptance: same program, real Drivers"]
-    acceptance --> incident["Incident: recorded facts, replayed"]
-    incident --> change["Change: compared against the goldens"]
-    change --> design
+    subgraph lab ["Virtual world (Lab): where most of the time goes"]
+        design["Design or change: the flow and its scenarios, faults included"] --> simulate["Simulate: scripted partners, virtual time, compared against the goldens"]
+        simulate --> design
+    end
+    simulate -.->|"once the scenarios pass"| acceptance["Acceptance: the same program, real Drivers"]
+    acceptance -.->|"in production"| incident["Incident: recorded facts, replayed"]
+    incident -.->|"one more scenario"| design
 ```
 
 | Moment | What teams usually have | What the file gives |
 |---|---|---|
 | Design | A partner that is not ready, a contract nobody has exercised | A scripted partner in the Lab, with fault scenarios from the first day |
+| Change | The fear of breaking what works | `--compare` against the reviewed goldens, with the first divergence named |
 | Acceptance | A second version of the flow for the real environment | The same checked program, with real Drivers |
 | Incident | Logs that say what happened, not why | Recorded facts, replayed without side effects, then a scenario that reproduces them |
-| Change | The fear of breaking what works | `--compare` against the reviewed goldens, with the first divergence named |
 
 The alpha does not automatically convert a recording into a Lab scenario:
 writing the scenario is a human step. Keep it, with its reviewed golden, so
