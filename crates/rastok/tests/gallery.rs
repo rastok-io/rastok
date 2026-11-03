@@ -13,7 +13,7 @@ fn opening_examples_match_versioned_scenario_goldens() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     for (graph, directory, count) in [
         ("echo", "echo", 3),
-        ("file-pipeline", "file-pipeline", 4),
+        ("file-pipeline", "file-pipeline", 5),
         ("keyed-retry", "two-tenants", 2),
         ("webhook-to-partner", "webhook-to-partner", 6),
         ("sensor-alarm", "sensor-alarm", 3),
@@ -54,6 +54,34 @@ fn opening_examples_match_versioned_scenario_goldens() {
 }
 
 #[test]
+fn the_file_example_rejects_a_threshold_that_discards_one_byte() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let source = std::fs::read_to_string(root.join("examples/file-pipeline.rkg")).unwrap();
+    assert_eq!(source.matches("size(data) > 0").count(), 1);
+    let path = std::env::temp_dir().join(format!(
+        "rastok-gallery-single-byte-{}.rkg",
+        std::process::id()
+    ));
+    std::fs::write(
+        &path,
+        source.replacen("size(data) > 0", "size(data) > 1", 1),
+    )
+    .unwrap();
+    // No reference comparison: the scenario itself must catch this boundary.
+    let output = Command::new(env!("CARGO_BIN_EXE_rastok"))
+        .current_dir(&root)
+        .arg("simulate")
+        .arg(&path)
+        .output()
+        .unwrap();
+    std::fs::remove_file(path).unwrap();
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("FAIL files.single_byte"), "{text}");
+    assert!(text.contains("5 scenario(s), 1 failed"), "{text}");
+}
+
+#[test]
 fn each_gallery_break_it_edit_exposes_a_record_difference_without_saving() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let temporary =
@@ -65,7 +93,7 @@ fn each_gallery_break_it_edit_exposes_a_record_difference_without_saving() {
             "file-pipeline",
             "file-pipeline",
             "size(data) > 0",
-            "size(data) > 20",
+            "size(data) > 1",
         ),
         (
             "keyed-retry",

@@ -77,6 +77,16 @@ annotates the charge where the Connector retains it, before any decision to
 hold or publish the attempt.
 `decide` classifies the final business outcome; it contains no retry logic.
 
+`var seen: bool = false` declares mutable state inside `deduplicate`.
+Each `data.event_id` selects an Operator instance with its own flag,
+initialized to `false` when that instance is created. The first event sets
+it to `true` and is forwarded; a later arrival with the same key reads that
+committed value and takes the duplicate branch. The assignment and emission
+commit together. This is not a global variable or durable deduplication:
+after the instance closes, a new generation starts with `false` again.
+See [Values and mutable state](../guide/06-instances-state-and-time.md#values-and-mutable-state)
+before changing the handler.
+
 Then read the declarations that constrain the path: the idle lifetime, the
 partner's idempotency key, the exhaustive destinations, `@personal` and the
 secret reference. These are reviewable parts of the program and deployment,
@@ -203,6 +213,59 @@ values in divergence messages. Recorded operation facts can differ before
 the final answer does.
 The versioned goldens contain **only the synthetic fixture data**; they are
 not sanitized exports suitable for real personal data.
+
+### Why five attempts also fail this comparison
+
+`Retry.attempts` is a maximum including the first Call, not a promise that
+the partner eventually answers. The `partner_dead` mock stays silent on
+every attempt. Its scenario expects the final failure after two one-second
+timeouts and one second of backoff, then expects no further activity.
+With five attempts, the operation is still waiting at that first assertion:
+the additional attempts move the final failure into the later observation
+window. The scenario no longer describes the configured policy.
+
+There is a separate reason for a golden divergence. Retry facts record the
+original plan's semantic hash. Changing the attempt bound changes that hash,
+even in a scenario whose final business value stays the same. A golden
+comparison checks those facts, not just the last value on `app.done`.
+
+With `Retry.attempts = 5`, this command checks only the scenario assertions:
+
+```sh
+env RASTOK_SHOWCASE_PARTNER_TOKEN=lab-only-not-a-credential RASTOK_SHOWCASE_PARTNER_TOKEN_VERSION=fixture-v1 rastok simulate examples/webhook-to-partner.rkg --deployment examples/webhook-to-partner.deployment.json
+```
+
+```text
+PASS webhook.nominal
+PASS webhook.timeout_then_success
+FAIL webhook.partner_dead
+     expect [REDACTED]  (webhook-to-partner.rkg:173)
+     observed: [REDACTED]
+     Assertion evidence is redacted because this program carries classified data.
+     expect [REDACTED]  (webhook-to-partner.rkg:177)
+     observed: [REDACTED]
+     Assertion evidence is redacted because this program carries classified data.
+PASS webhook.duplicate
+PASS webhook.invalid_payload
+PASS webhook.http_500
+6 scenario(s), 1 failed
+```
+
+Adding `--compare examples/traces/webhook-to-partner` also detects changed
+Retry facts in every scenario that opens a partner operation. Restore the
+reviewed two-attempt policy after this experiment:
+
+```sh
+git checkout -- examples/webhook-to-partner.rkg
+```
+
+If five attempts are an intended policy change, update the exhaustion
+scenario's time advances and expectations, review the changed journal,
+then save the new reference. Do not overwrite references just to remove a
+divergence. [Loops and retries](../guide/07-loops-and-retries.md) explains
+the attempt bound and closure-based delay.
+
+### Inspect the recorded retry
 
 The following 30-second sequence visits recorded states of
 `webhook.timeout_then_success`: admission, timeout, backoff and successful

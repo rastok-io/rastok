@@ -31,6 +31,11 @@ clickable in terminals that support hyperlinks. Leave the process running
 while you inspect it. `--ui-port` selects a port when you need one; otherwise
 the operating system chooses it.
 
+In Terminal on macOS, hold Command and double-click the URL to open it,
+as listed in the [Terminal keyboard shortcuts](https://support.apple.com/guide/terminal/trmlshtcts/mac).
+Other terminals may use a different shortcut. Copying the complete URL into
+your browser also works; do not omit its access token or share it.
+
 Simulation starts paused and can execute its Lab scenario. Diagnostic replay
 reads an existing recording without repeating external effects. These are
 different modes of the same interface, not two names for the Play button.

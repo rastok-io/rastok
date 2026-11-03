@@ -49,6 +49,17 @@ partner produces `JoinExpired`, whose route is as explicit as a normal output.
 Read `advance` in the Lab last: time comes from the scenario, not from sleeps
 hidden in the application.
 
+`var tripped: bool = false` is the memory behind that behavior: a boolean
+cell initialized to `false` for each sensor's Operator instance. At 121,
+pump-a sets it to `true` and emits `tripped`; at 100, it keeps that state
+and emits nothing; at 79, it resets the cell and emits `normal`. Pump-b's
+cell is independent and starts at `false`, so its reading of 100 produces
+no alarm. Each state change commits together with its emission, not as a
+separate shared assignment. The preceding webhook example uses `var seen`
+for the same kind of private memory. See
+[Values and mutable state](../guide/06-instances-state-and-time.md#values-and-mutable-state)
+for the difference between `var`, `val` and an instance key.
+
 There is no Connector in this program. The [Lab reference](../reference/lab.md)
 explains expectations and observation windows; `advance` supplies virtual time.
 

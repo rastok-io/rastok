@@ -61,7 +61,7 @@ hashes nor reference trace bytes.
 | [webhook to partner](../../examples/webhook-to-partner.rkg) | HttpServer ACK, validation, deduplication, native HttpClient Retry, typed per-attempt charges and privacy/secret policy | 6 |
 | [WebSocket gateway](codex-websocket-gateway.rkg) | Session request/response boundary with a scripted Process job | 1 |
 | [expense approval](expense-approval.rkg) | Keyed two-input join, approval/rejection and timed expiry | 3 |
-| [File pipeline](../../examples/file-pipeline.rkg) | Bounded read, byte count including UTF-8, explicit empty/refusal paths, atomic replacement | 4 |
+| [File pipeline](../../examples/file-pipeline.rkg) | Bounded read, byte count including UTF-8 and a single byte, explicit empty/refusal paths, atomic replacement | 5 |
 | [sensor alarm](../../examples/sensor-alarm.rkg) | Per-sensor hysteresis, a missing heartbeat, a virtual day | 3 |
 | [resident dialogue](../../examples/agent-dialogue.rkg) | One JSONL Process per conversation, match mocks, exact child closure, fresh input after quit | 2 |
 | [resident agent gateway](../../examples/agent-gateway.rkg) | WebSocket → per-conversation Process, app-server JSON frames, exact child shutdown, independent sockets | 2 |

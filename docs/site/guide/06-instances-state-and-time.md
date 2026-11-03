@@ -27,6 +27,12 @@ Node has an instance: an Operator owns its mailbox and state; a Connector
 owns its open exchanges. A Graph owns
 containment and lifecycle, not a shared application transaction.
 
+These are logical owners, not a thread or process per key. The current
+hosted Worker executes transactions sequentially while external Calls can
+remain pending. The [execution reference](../reference/execution.md) separates
+that I/O concurrency from the worker pool and distributed placement planned
+for later versions.
+
 The key reads the entering envelope and permitted enclosing immutable
 values. Its type must be valid on every admitting input. Changing the payload (DATA) later
 does not move the current instance. When an address closes and later opens

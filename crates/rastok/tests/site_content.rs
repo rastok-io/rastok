@@ -282,7 +282,7 @@ fn reference_pages_have_the_simple_ordered_contract() {
                 .extension()
                 .is_some_and(|ext| ext == "md"))
             .count(),
-        6
+        7
     );
     let mut orders = std::collections::BTreeSet::new();
     for (index, filename) in [
@@ -292,6 +292,7 @@ fn reference_pages_have_the_simple_ordered_contract() {
         "lab.md",
         "diagnostics.md",
         "stdlib.md",
+        "execution.md",
     ]
     .iter()
     .enumerate()

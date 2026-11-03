@@ -70,4 +70,12 @@ lab files {
     expect app.failed where data is NotAFile
     expect write_file.in == nothing
   }
+  scenario single_byte {
+    mock read_file { on in { out = base64! { eA== }; exit = Completed {} } }
+    app.in = "single-byte.txt"
+    expect app.bytes_read == 1
+    expect write_file.in where size(data) == 1
+    expect app.empty == nothing
+    expect app.failed == nothing
+  }
 }

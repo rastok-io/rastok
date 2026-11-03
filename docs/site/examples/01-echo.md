@@ -45,6 +45,17 @@ This reads `examples/echo.rkg` and compares each scenario with its reviewed
 file in `examples/traces/echo/`. The command starts no external process and
 writes no reference trace.
 
+To inspect the same scenario, use a binary built with `hosted-ui`:
+
+```sh
+rastok simulate examples/echo.rkg --compare examples/traces/echo --ui
+```
+
+Open the complete URL printed by the CLI and keep it private. In Terminal
+on macOS, hold Command and double-click the URL to open it. If your terminal
+does not open links, copy the complete URL into your browser instead.
+The [debugger tour](../debugger.md) explains its controls and source view.
+
 ## Read the program
 
 Open `examples/echo.rkg` and read from top to bottom.

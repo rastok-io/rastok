@@ -5,8 +5,8 @@ teaches: File Contract, explicit deployment root, bounded read, atomic replaceme
 graph: examples/file-pipeline.rkg
 golden: examples/traces/file-pipeline/files.copy.rkc
 command: rastok simulate examples/file-pipeline.rkg --compare examples/traces/file-pipeline
-expected: Four scenarios pass; eleven ASCII bytes or three UTF-8 bytes reach the writer, while empty inputs and directory refusals never do.
-break_it: 'Change size(data) > 0 to size(data) > 20, then rerun the command against its reference traces.'
+expected: Five scenarios pass; nonempty inputs of one, three or eleven bytes reach the writer, while empty inputs and directory refusals never do.
+break_it: 'Change size(data) > 0 to size(data) > 1, then rerun the command against its reference traces.'
 limits:
   - Replacement is atomic for one file, not a transaction over multiple files.
   - The deployment root is explicit; directory operations and watch are not supported.
@@ -36,7 +36,8 @@ PASS files.copy
 PASS files.empty
 PASS files.utf8
 PASS files.directory
-4 scenario(s), 0 failed
+PASS files.single_byte
+5 scenario(s), 0 failed
 ```
 
 For the controls and source view, see [the debugger tour](../debugger.md).
@@ -88,7 +89,9 @@ The Lab supplies `alpha\nbeta\n`: eleven bytes. The Operator counts them and
 forwards a nonempty value to the replacement File Connector. Empty input does
 not overwrite the target. A directory produces `NotAFile`, routed to `failed`.
 The `utf8` scenario counts `é\n` as three bytes, not two characters: the
-reader's `bytes` port determines how the value is read.
+reader's `bytes` port determines how the value is read. `single_byte` supplies
+`x`, exactly one byte, and checks that it reaches the writer rather than the
+`empty` output. This is the smallest input accepted by `size(data) > 0`.
 
 To exercise real disk I/O, use a macOS or Linux shell with `mktemp`, `printf`
 and `cmp` on PATH. This creates a new temporary directory; both file operations
@@ -124,33 +127,30 @@ either file. It does not restore the disk to its earlier contents. Use
 
 ## Break it
 
-Change `size(data) > 0` to `size(data) > 20`. The eleven-byte example is now
-rejected and the writer receives nothing. Run the comparison below.
+Change `size(data) > 0` to `size(data) > 1`. The one-byte input is now
+rejected as empty, but the other four scenarios still pass. Run the comparison:
 
 ```sh
 rastok simulate examples/file-pipeline.rkg --compare examples/traces/file-pipeline
 ```
 
 ```text
-FAIL files.copy
-     expect app.bytes_read == 11  (file-pipeline.rkg:50)
-     nothing observed
-     expected 1 matching delivery on app.bytes_read, but observed 0
-     expect write_file.in where size(data) == 11  (file-pipeline.rkg:51)
-     nothing observed
-     where size(data) == 11 is false for 0 of 0 deliveries; count 0, expected 1
-     golden divergence: record 7: emissions(23)[0][0]; expected "bytes_read"; got "empty"; cause: TRANSACTION "inspect" · trigger "p:in" · cause_id absent
+PASS files.copy
 PASS files.empty
-FAIL files.utf8
-     expect app.bytes_read == 3  (file-pipeline.rkg:63)
+PASS files.utf8
+PASS files.directory
+FAIL files.single_byte
+     expect app.bytes_read == 1  (file-pipeline.rkg:76)
      nothing observed
      expected 1 matching delivery on app.bytes_read, but observed 0
-     expect write_file.in where size(data) == 3  (file-pipeline.rkg:64)
+     expect write_file.in where size(data) == 1  (file-pipeline.rkg:77)
      nothing observed
-     where size(data) == 3 is false for 0 of 0 deliveries; count 0, expected 1
+     where size(data) == 1 is false for 0 of 0 deliveries; count 0, expected 1
+     expect app.empty == nothing  (file-pipeline.rkg:78)
+     observed app.empty: true
+     expected no deliveries on app.empty, but observed 1
      golden divergence: record 7: emissions(23)[0][0]; expected "bytes_read"; got "empty"; cause: TRANSACTION "inspect" · trigger "p:in" · cause_id absent
-PASS files.directory
-4 scenario(s), 2 failed
+5 scenario(s), 1 failed
 ```
 
 Restore the checked-in source (this discards your edits to this example):
@@ -162,8 +162,15 @@ git checkout -- examples/file-pipeline.rkg
 ## Read the golden difference
 
 The first changed Operator transaction names its changed emission and causal
-input. The `bytes_read` and writer assertions also fail. Restore the threshold
-and verify that the original golden matches again.
+input. In `single_byte`, the byte count and writer assertions fail, and the
+`empty` output appears where the scenario expects none. The assertions fail
+even without `--compare`; the golden also locates the first changed record.
+
+A passing scenario tests the inputs and responses it supplies, not every
+possible value. The earlier empty, three-byte and eleven-byte cases could
+not distinguish `> 0` from `> 1`. The one-byte case adds that boundary to the
+reviewed examples. A golden comparison does not prove two programs equivalent
+for inputs absent from the Lab. Restore the threshold and compare again.
 
 ## Carry forward
 

@@ -62,6 +62,15 @@ Start with `instance = { key = data.tenant }`: it selects independent state
 for Alice and Bob. `Retry.attempts = 2` bounds Calls for one retained request,
 including the first; `lifetime` bounds how long an idle instance lives. They
 solve different problems.
+
+An instance is not a thread or a process. The current runtime executes
+Operator transactions one at a time, but an outstanding external Call does
+not prevent another instance from progressing. Bob can finish while Alice
+waits; this does not demonstrate parallel Operator execution. See
+[Instances, state and time](../guide/06-instances-state-and-time.md) for
+ownership and lifetime, and [Execution and concurrency](../reference/execution.md)
+for the current runtime and the planned worker pool.
+
 Then read `model : Process + Retry`, using the [Process contract](../reference/connectors/process.md): `Retry.on = [TimeoutExpired]` selects
 the terminal that permits another attempt. Retry retains the original request
 across attempts. `answer` decodes the final Process frame after the Retry

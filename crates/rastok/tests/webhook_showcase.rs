@@ -175,6 +175,54 @@ fn the_six_webhook_scenarios_are_deterministic_and_count_real_outbound_calls() {
 }
 
 #[test]
+fn extra_attempts_do_not_satisfy_a_two_attempt_exhaustion_scenario() {
+    let catalog = ContractCatalog::try_m0().unwrap();
+    let original = compile(&[SOURCE], &catalog).unwrap();
+    assert_eq!(SOURCE.matches("Retry.attempts = 2").count(), 1);
+    let source = SOURCE.replacen("Retry.attempts = 2", "Retry.attempts = 5", 1);
+    let changed = compile(&[&source], &catalog).unwrap();
+    assert_ne!(
+        original.hash, changed.hash,
+        "the Retry policy belongs to the plan"
+    );
+    let runs = lab::run_program(
+        &changed.plan,
+        changed.hash,
+        GraphVersion(1),
+        &changed.labs[0],
+        Some(&boot(true)),
+    );
+    assert_eq!(
+        runs.iter()
+            .filter(|run| !run.report.passed())
+            .map(|run| run.report.scenario.as_str())
+            .collect::<Vec<_>>(),
+        ["partner_dead"],
+        "success on an early attempt still satisfies the other scenarios"
+    );
+    let dead = runs
+        .iter()
+        .find(|run| run.report.scenario == "partner_dead")
+        .unwrap();
+    assert_eq!(
+        dead.records
+            .iter()
+            .filter(
+                |record| matches!(record, Record::Egress(EgressRecord::Call(call))
+                if matches!(call.status, CallStatus::Open))
+            )
+            .count(),
+        5,
+        "the silent partner exhausts the new bound during the later advance"
+    );
+    assert_eq!(
+        dead.report.assertions.len(),
+        2,
+        "the failure is absent at three seconds and present in the later window"
+    );
+}
+
+#[test]
 fn a_secret_binding_does_not_waive_the_required_privacy_attestation() {
     let compilation = compile(&[SOURCE], &ContractCatalog::try_m0().unwrap()).unwrap();
     for run in lab::run_program(
