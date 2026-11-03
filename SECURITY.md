@@ -6,16 +6,14 @@ release. Security reports are nevertheless welcome.
 Do not disclose a suspected vulnerability in a public issue.
 
 The designated recipient is Yoann Pantic, through `security@rastok.com`,
-with subject prefix `[RASTOK SECURITY]`. **Pre-opening status: this address
-is planned; mailbox/forwarding activation and a receipt test are pending.**
-Do not assume it can receive a report yet. Private vulnerability reporting
-on `rastok-io/rastok` also remains to be enabled and tested before opening.
-Until one private channel is confirmed, keep sensitive details private;
-neither a public issue nor a GitHub `noreply` address is a fallback channel.
+with subject prefix `[RASTOK SECURITY]`. The mailbox is active; keep
+sensitive details out of the subject line. When GitHub private
+vulnerability reporting is offered in the repository's Security tab, it
+reaches the same maintainer and may be used instead. Neither a public issue
+nor a GitHub `noreply` address is a channel for sensitive details.
 
-These are blocking items in the
-[opening checklist](docs/architecture/github-opening-checklist.md), not claims
-that changing this policy provisions a mailbox or activates a GitHub setting.
+The remaining owner actions around these channels are tracked in the
+[opening checklist](docs/architecture/github-opening-checklist.md).
 
 Include:
 
