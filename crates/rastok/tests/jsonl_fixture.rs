@@ -119,7 +119,7 @@ fn the_lab_trace_matches_its_golden_and_seals_the_request_digest() {
     rendered.push_str("seal ");
     rendered.push_str(&trace.seal_hex());
     rendered.push('\n');
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/jsonl-roundtrip.trace");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/jsonl-roundtrip.rkc");
     if std::env::var("RASTOK_SAVE_GOLDENS").is_ok() {
         std::fs::write(&path, &rendered).expect("a writable golden dir");
         return;

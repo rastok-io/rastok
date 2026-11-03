@@ -9,6 +9,10 @@
 > renumbering or reuse of an allocated key, tag or domain.
 > Changing the public version label to 1 remains a pre-publication TODO.
 
+File extensions identify artifacts, not format versions: `.rkg` source,
+`.rkp` plan package, `.rkc` causal reference trace, and `.rkr` diagnostic
+recording. Renaming an artifact does not change its bytes or identities.
+
 ## 1. The semantic hash
 
 The identity of a graph is `blake3(canonical HIR)` — the full 256-bit

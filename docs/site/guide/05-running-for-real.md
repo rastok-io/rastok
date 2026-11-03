@@ -21,8 +21,8 @@ Echo is a small local first run. From the repository root, with a new
 recording filename:
 
 ```sh
-printf 'hello\n' | rastok run examples/echo.rkg --record echo.rkrec
-rastok replay echo.rkrec
+printf 'hello\n' | rastok run examples/echo.rkg --record echo.rkr
+rastok replay echo.rkr
 ```
 
 The first command starts the real `cat` process and prints its echoed

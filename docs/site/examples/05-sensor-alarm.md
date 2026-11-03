@@ -3,7 +3,7 @@ title: 'Sensor alarm: make time an input'
 description: Isolate hysteresis state by sensor, detect a missed heartbeat with a bounded join, and advance through a virtual day without waiting a day.
 teaches: Private state, instance keys, hysteresis, timed joins, JoinExpired, explicit logical time
 graph: examples/sensor-alarm.rkg
-golden: examples/traces/sensor-alarm/sensors.virtual_day.trace
+golden: examples/traces/sensor-alarm/sensors.virtual_day.rkc
 command: rastok simulate examples/sensor-alarm.rkg --compare examples/traces/sensor-alarm
 expected: Three scenarios pass; pump-a trips and clears, pump-b stays isolated, and one unanswered probe expires.
 break_it: 'Change data.value > 120 to data.value > 130, then rerun against its reference traces.'
@@ -22,7 +22,7 @@ threshold crossing from noise, and make the waiting period an explicit input
 to your scenario.
 
 The [file formats](../guide/09-command-line.md#file-formats) are `.rkg` for
-the program and Lab, `.trace` for a reviewed scenario reference and `.rkrec`
+the program and Lab, `.rkc` for a reviewed scenario reference and `.rkr`
 for a real execution recording.
 
 ## Run

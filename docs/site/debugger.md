@@ -22,7 +22,7 @@ Use the `hello.rkg` created in [Getting Started](getting-started.md), or supply
 the path of your program. For an existing recording, use:
 
 ```sh
-rastok replay echo.rkrec --ui
+rastok replay echo.rkr --ui
 ```
 
 The CLI prints a loopback URL. Open that exact URL in your browser; it contains

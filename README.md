@@ -225,10 +225,13 @@ property.
 | `rastok new <name>` | writes a starter graph and its Lab to `<name>.rkg` |
 | `rastok check <file.rkg>...` | compiles the unit and prints its Node count and semantic hash |
 | `rastok simulate <file.rkg>... [--compare <dir> \| --save <dir>] [--ui]` | runs every Lab scenario; compares with or saves golden traces; serves the debugger |
-| `rastok run <file.rkg>... [--file-root <dir>] [--deployment <profile.json>] [--json-logs] [--record <file.rkrec>]` | runs the App against real Drivers, one stdin line per submission |
-| `rastok replay <file.rkrec> [--ui]` | reconstructs a recorded run without Driver I/O |
+| `rastok run <file.rkg>... [--file-root <dir>] [--deployment <profile.json>] [--json-logs] [--record <file.rkr>]` | runs the App against real Drivers, one stdin line per submission |
+| `rastok replay <file.rkr> [--ui]` | reconstructs a recorded run without Driver I/O |
 | `rastok connectors [--json]` | lists the standard Contracts, modes, ports and installed implementations |
 | `rastok --resolve-open-api <project-dir> [--check]` | generates typed endpoints from OpenAPI 3.0 and 3.1 documents |
+
+Rastok uses `.rkg` for source, `.rkp` for compiled plan packages,
+`.rkc` for causal reference traces, and `.rkr` for diagnostic recordings.
 
 The [Command line chapter](docs/site/guide/09-command-line.md) explains every
 command, its options, output streams and exit statuses. The

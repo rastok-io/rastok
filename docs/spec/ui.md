@@ -9,7 +9,7 @@
 
 The debugger observes and controls the checked Lab simulation. It is not an
 editor, a second runtime, a durable monitor or an alternative ingress.
-`replay capture.rkrec --ui` additionally inspects a recorded run read-only
+`replay capture.rkr --ui` additionally inspects a recorded run read-only
 under D-2026-09-09-2; it cannot execute the embedded program.
 
 Logical positions and due instants are signed nanoseconds from the run's
@@ -34,7 +34,7 @@ The page and source fonts are embedded assets: no frontend build, asset filesyst
 lookup or build service. `run --ui` and `check --ui` refuse before effects.
 A build without the capability refuses by name.
 
-For a diagnostic recording, `rastok replay capture.rkrec --ui [--ui-port PORT]`
+For a diagnostic recording, `rastok replay capture.rkr --ui [--ui-port PORT]`
 opens at the empty prefix. Each subsequent transition selects one more recorded
 record. Next transition/Finish navigate locally; Play/Pause, Back and the
 slider inspect the recorded timeline. Reset, retry, scenario actions and all

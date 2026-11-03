@@ -111,7 +111,7 @@ fn public_pages_have_the_site_contract_and_existing_artifacts() {
         assert!(!page.limits.is_empty() && page.limits.iter().all(|s| !s.trim().is_empty()));
         assert!(page.graph.starts_with("examples/"));
         reference(&page.graph, "rkg");
-        reference(&page.golden, "trace");
+        reference(&page.golden, "rkc");
         for section in [
             "Run",
             "Read the program",

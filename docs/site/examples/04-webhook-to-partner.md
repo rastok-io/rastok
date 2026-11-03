@@ -3,7 +3,7 @@ title: 'Webhook to partner: put it together'
 description: Admit a webhook, validate and deduplicate it, then exercise bounded partner retries with privacy, secret and cost evidence.
 teaches: HttpServer ACK, typed validation, explicit deduplication state, HttpClient, finite retry, personal-data policy, secret binding, exact reported cost
 graph: examples/webhook-to-partner.rkg
-golden: examples/traces/webhook-to-partner/webhook.nominal.trace
+golden: examples/traces/webhook-to-partner/webhook.nominal.rkc
 command: env RASTOK_SHOWCASE_PARTNER_TOKEN=lab-only-not-a-credential RASTOK_SHOWCASE_PARTNER_TOKEN_VERSION=fixture-v1 rastok simulate examples/webhook-to-partner.rkg --deployment examples/webhook-to-partner.deployment.json --compare examples/traces/webhook-to-partner
 expected: Six scenarios pass; ACK precedes business completion, retries are bounded, duplicates are suppressed during retention, and 500 is handled as a response.
 break_it: 'Change Retry.attempts = 2 to Retry.attempts = 1, then rerun the same command against its reference traces.'
@@ -28,7 +28,7 @@ All six scenarios have versioned goldens. The captures below show native
 Retry retaining a failed attempt and publishing the final outcome.
 
 The [file formats](../guide/09-command-line.md#file-formats) are `.rkg` for
-the program and Lab, `.trace` for a reviewed scenario reference and `.rkrec`
+the program and Lab, `.rkc` for a reviewed scenario reference and `.rkr`
 for a real execution recording.
 
 ## Run

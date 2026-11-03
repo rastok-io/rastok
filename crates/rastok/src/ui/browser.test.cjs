@@ -575,7 +575,7 @@ test('the webhook gallery remains classified in LIVE, HISTORY and REPLAY without
 test('a real recording is navigable without any execution command or Driver', { timeout: 60000 }, async t => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'rastok-recording-browser-'));
   t.after(() => fs.rm(directory, { recursive: true }));
-  const recording = path.join(directory, 'echo.rkrec');
+  const recording = path.join(directory, 'echo.rkr');
   const run = spawn(rastok, ['run', 'examples/echo.rkg', '--record', recording], { cwd: root });
   let stderr = '';
   run.stderr.on('data', chunk => { stderr += chunk; });

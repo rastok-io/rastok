@@ -3,7 +3,7 @@ title: 'File pipeline: effects with a contract'
 description: Read a bounded file, reject an empty input, count its bytes and atomically replace a second file, then replay without disk access.
 teaches: File Contract, explicit deployment root, bounded read, atomic replacement, named refusal, recorded replay
 graph: examples/file-pipeline.rkg
-golden: examples/traces/file-pipeline/files.copy.trace
+golden: examples/traces/file-pipeline/files.copy.rkc
 command: rastok simulate examples/file-pipeline.rkg --compare examples/traces/file-pipeline
 expected: Four scenarios pass; eleven ASCII bytes or three UTF-8 bytes reach the writer, while empty inputs and directory refusals never do.
 break_it: 'Change size(data) > 0 to size(data) > 20, then rerun the command against its reference traces.'
@@ -20,7 +20,7 @@ could overwrite. How do you make the permitted operation, its limits and its
 refusals visible before the flow runs?
 
 The [file formats](../guide/09-command-line.md#file-formats) are `.rkg` for
-the program and Lab, `.trace` for a reviewed scenario reference and `.rkrec`
+the program and Lab, `.rkc` for a reviewed scenario reference and `.rkr`
 for a real execution recording.
 
 ## Run
@@ -90,10 +90,10 @@ are confined to that directory, and the recording uses an unused path:
 ```sh
 demo_root=$(mktemp -d)
 printf 'alpha\nbeta\n' > "$demo_root/input.txt"
-printf 'input.txt\n' | rastok run examples/file-pipeline.rkg --file-root "$demo_root" --record "$demo_root/copy.rkrec"
+printf 'input.txt\n' | rastok run examples/file-pipeline.rkg --file-root "$demo_root" --record "$demo_root/copy.rkr"
 cmp "$demo_root/input.txt" "$demo_root/copy.txt"
 printf 'changed after recording\n' > "$demo_root/input.txt"
-rastok replay "$demo_root/copy.rkrec"
+rastok replay "$demo_root/copy.rkr"
 ```
 
 The run printed:
@@ -113,7 +113,7 @@ bytes_read: Materialized(Int(11))
 
 Replay prints the same recorded output and seal without reading or replacing
 either file. It does not restore the disk to its earlier contents. Use
-`rastok replay "$demo_root/copy.rkrec" --ui` to inspect the recorded history.
+`rastok replay "$demo_root/copy.rkr" --ui` to inspect the recorded history.
 
 ## Break it
 

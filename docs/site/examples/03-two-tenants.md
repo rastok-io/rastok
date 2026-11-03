@@ -3,7 +3,7 @@ title: 'Two tenants: whose state is this?'
 description: Watch Bob finish once while Alice alone times out, waits for backoff and retries in an isolated keyed instance.
 teaches: Keyed instances, idle lifetime, nested Graph, native Retry, pinned requests and recorded attempts
 graph: examples/keyed-retry.rkg
-golden: examples/traces/two-tenants/ui_tour.two_tenants.trace
+golden: examples/traces/two-tenants/ui_tour.two_tenants.rkc
 command: rastok simulate examples/keyed-retry.rkg --compare examples/traces/two-tenants
 expected: Two scenarios pass; Bob completes in one attempt, Alice in two, and idle expiry opens a fresh generation.
 break_it: 'Change Retry.attempts = 2 to Retry.attempts = 1, then rerun against its reference traces.'
@@ -24,7 +24,7 @@ The versioned goldens cover native Retry: the failed attempt remains visible
 in the journal, while only the final outcome reaches the graph.
 
 The [file formats](../guide/09-command-line.md#file-formats) are `.rkg` for
-the program and Lab, `.trace` for a reviewed scenario reference and `.rkrec`
+the program and Lab, `.rkc` for a reviewed scenario reference and `.rkr`
 for a real execution recording.
 
 ## Run

@@ -64,7 +64,7 @@ A unit without a Lab refuses.
 - `--compare` reads reviewed traces and reports the first difference in
   each differing scenario. A missing reference fails the comparison.
 - `--save` creates or replaces reference files named
-  `<simulation>.<scenario>.trace`. Review the semantic reason for the change;
+  `<simulation>.<scenario>.rkc`. Review the semantic reason for the change;
   saving is not proof that expectations pass.
 - These two options are mutually exclusive. With neither, only scenario
   expectations are checked; no reference trace is read or written.
@@ -78,11 +78,11 @@ otherwise the OS chooses one.
 ## Execute the App: run
 
 ```text
-rastok run <file.rkg>... [--file-root <dir>] [--deployment <profile.json>] [--json-logs] [--record <file.rkrec>]
+rastok run <file.rkg>... [--file-root <dir>] [--deployment <profile.json>] [--json-logs] [--record <file.rkr>]
 ```
 
 ```sh
-printf 'hello\n' | rastok run examples/echo.rkg --record echo.rkrec
+printf 'hello\n' | rastok run examples/echo.rkg --record echo.rkr
 ```
 
 This uses physical Drivers and can start processes, write files or contact
@@ -107,10 +107,10 @@ only one port emits. Lab scenarios are not executed.
 ## Inspect a recording: replay
 
 ```text
-rastok replay <file.rkrec> [--ui [--ui-port <port>]]
+rastok replay <file.rkr> [--ui [--ui-port <port>]]
 ```
 
-`rastok replay echo.rkrec` prints App outputs on stdout and a record-count/seal
+`rastok replay echo.rkr` prints App outputs on stdout and a record-count/seal
 summary on stderr, without Driver I/O. It uses the same output format as `run`:
 values alone for a single App output, `port: value` for several outputs.
 `--ui` uses simulation's port rules and opens read-only recorded history.
@@ -153,9 +153,10 @@ success solely by whether stderr is empty.
 
 ## File formats
 
-`.rkg` holds the program and its Lab. `.trace` holds one scenario's reviewed
-causal reference, read by `simulate --compare`. `.rkrec` records a real run
-for inspection by `replay`, without repeating its external effects.
+- `.rkg`: program and Lab source.
+- `.rkp`: compiled plan package.
+- `.rkc`: causal reference for `simulate --compare`.
+- `.rkr`: execution recording for `replay`, without repeating external effects.
 
 ## Summary
 

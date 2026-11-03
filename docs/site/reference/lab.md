@@ -133,7 +133,7 @@ rastok simulate examples/echo.rkg --save examples/traces/echo
 | Both | Usage error |
 | `--ui` | Inspect simulation boundaries and run them step by step in the debugger (requires a `hosted-ui` build) |
 
-Each file is `<simulation>.<scenario>.trace`. The stored format is
+Each file is `<simulation>.<scenario>.rkc`. The stored format is
 deterministic CBOR rendered as one lowercase hexadecimal line per causal
 record, followed by `seal <BLAKE3 digest>`. The seal covers concatenated
 record bytes. It excludes unsealed observations, such as host timing, but

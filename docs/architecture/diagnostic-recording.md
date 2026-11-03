@@ -17,9 +17,9 @@ The durable deployment Journal remains M2 work.
 ## Commands and observable result
 
 ```sh
-printf 'hello\n' | rastok run examples/echo.rkg --record echo.rkrec
-rastok replay echo.rkrec
-rastok replay echo.rkrec --ui
+printf 'hello\n' | rastok run examples/echo.rkg --record echo.rkr
+rastok replay echo.rkr
+rastok replay echo.rkr --ui
 ```
 
 The first command runs the real Process and records its journal facts. The

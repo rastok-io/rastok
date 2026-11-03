@@ -5,6 +5,21 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-11-03-2: Use one filename family for Rastok artifacts
+
+Yoann adopts `.rkg` for program source, `.rkp` for compiled plan packages,
+`.rkc` for causal reference traces and `.rkr` for diagnostic recordings.
+The source and package extensions stay unchanged; `.rkc` replaces `.trace`
+and `.rkr` replaces `.rkrec` in current files, commands and documentation.
+
+This is a filename change only. Reference bytes and seals, production
+semantic hashes, package format 24 and diagnostic recording format 5 stay
+unchanged. References are renamed, not regenerated. Simulation saves and
+compares the new scenario filenames without an old-extension fallback.
+Recording readers still identify their contents by the existing framing,
+not by a filename suffix. Historical decisions and dated evidence retain
+the artifact names used when they were written.
+
 ## D-2026-11-03-1: Use the value grammar and exact counts in Lab assertions
 
 Yoann decides that the Lab uses the same value forms as graph emissions and

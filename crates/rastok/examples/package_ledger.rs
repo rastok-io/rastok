@@ -203,10 +203,10 @@ fn gallery(manifest: &Path) -> Result<(), String> {
                 }
                 let trace = rastok::golden::project(&run.records);
                 let witness = format!(
-                    "gallery/{directory}/{}.{}.trace",
+                    "examples/traces/{directory}/{}.{}.rkc",
                     run.report.simulation, run.report.scenario,
                 );
-                let path = manifest.join("tests/golden").join(&witness);
+                let path = manifest.join("../..").join(&witness);
                 let (old_count, old_seal) = if path.is_file() {
                     let stored =
                         std::fs::read_to_string(&path).map_err(|error| error.to_string())?;

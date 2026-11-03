@@ -46,8 +46,9 @@ Current examples put mocks and scenarios directly in `lab <name>`. An optional
 delivery, `expect N port` requires N, and `== value` or `where predicate`
 filters those deliveries. `== nothing` asserts absence. Successive expectations
 read the same window until the next input or time advance. The Lab names keep
-the existing `simulation.scenario.trace` filenames; production hashes and
-reference trace bytes do not change with this source-syntax migration.
+the existing simulation and scenario names. References are now named
+`simulation.scenario.rkc`; renaming the extension changes neither production
+hashes nor reference trace bytes.
 
 | Example | Demonstrates | Scenarios |
 |---|---|---:|

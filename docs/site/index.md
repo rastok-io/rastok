@@ -202,8 +202,8 @@ flowchart LR
   controls advance the simulation and record transitions; history navigation
   inspects those recorded transitions. It does not edit the flow or fork
   another world. `run --ui` is not supported.
-- **Recordings.** `rastok run flow.rkg --record capture.rkrec` captures a real
-  run. `rastok replay capture.rkrec`, optionally with `--ui`, reconstructs
+- **Recordings.** `rastok run flow.rkg --record capture.rkr` captures a real
+  run. `rastok replay capture.rkr`, optionally with `--ui`, reconstructs
   the recorded state without any Driver I/O. Recordings are bounded,
   sensitive local files, not a durable deployment journal. The current
   recorder refuses personal-data plans, nonempty deployment attestations

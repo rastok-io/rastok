@@ -301,7 +301,7 @@ fn stored_trace(rendered: &str) -> Trace {
 fn the_m0_probe_trace_matches_its_golden() {
     let records = run(M0_PROBE);
     let rendered = render(&records);
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/m0-probe.trace");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/m0-probe.rkc");
     if std::env::var("RASTOK_SAVE_GOLDENS").is_ok() {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, &rendered).unwrap();
@@ -358,7 +358,7 @@ fn the_lab_scenario_matches_its_stored_golden() {
         roundtrip.report.failures
     );
     let rendered = render(&roundtrip.records);
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/echo-roundtrip.trace");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/echo-roundtrip.rkc");
     if std::env::var("RASTOK_SAVE_GOLDENS").is_ok() {
         std::fs::write(&path, &rendered).expect("a writable golden dir");
         return;

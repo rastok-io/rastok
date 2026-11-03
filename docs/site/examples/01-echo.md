@@ -3,7 +3,7 @@ title: 'Echo: one graph, two worlds'
 description: Run one graph with a real cat process or scripted Lab responses, then inspect a recording without starting the process again.
 teaches: Operator, Connector, Graph, Lab, causal golden, diagnostic replay
 graph: examples/echo.rkg
-golden: examples/traces/echo/smoke.roundtrip.trace
+golden: examples/traces/echo/smoke.roundtrip.rkc
 command: rastok simulate examples/echo.rkg --compare examples/traces/echo
 expected: Three scenarios pass, including a filtered empty line and a timed-out silent process.
 break_it: 'Change the mock line out = . to out = "changed", then run rastok simulate examples/echo.rkg --compare examples/traces/echo.'
@@ -23,8 +23,8 @@ the same. You can test its success, filtering and timeout before starting
 an external process.
 
 The three [file formats](../guide/09-command-line.md#file-formats) have different
-jobs: `.rkg` is the program and its Lab, `.trace` is a scenario's reference
-trace, and `.rkrec` is a recording of a real execution.
+jobs: `.rkg` is the program and its Lab, `.rkc` is a scenario's reference
+trace, and `.rkr` is a recording of a real execution.
 
 ## Run
 
@@ -113,13 +113,13 @@ sequenceDiagram
 ```
 
 To run in the real world, use a macOS or Linux shell with `cat` on PATH.
-The following command starts `cat` and writes `echo.rkrec` in your current
+The following command starts `cat` and writes `echo.rkr` in your current
 directory. A recording captures the real execution so it can be inspected
 without starting that process again. Use an unused filename: existing
 recordings are never overwritten.
 
 ```sh
-printf 'hello\n' | rastok run examples/echo.rkg --record echo.rkrec
+printf 'hello\n' | rastok run examples/echo.rkg --record echo.rkr
 ```
 
 ```text
@@ -131,7 +131,7 @@ Echo has one App output, so stdout contains the value alone. The `recorded:`
 summary goes to stderr. Now inspect the recording:
 
 ```sh
-rastok replay echo.rkrec
+rastok replay echo.rkr
 ```
 
 ```text

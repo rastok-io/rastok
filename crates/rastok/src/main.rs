@@ -28,7 +28,7 @@ use std::process::ExitCode;
 
 mod connector_catalogue;
 
-const USAGE: &str = "usage: rastok new <name>\n       rastok connectors [--json]\n       rastok check <file.rkg>...\n       rastok run <file.rkg>... [--file-root <dir>] [--deployment <profile.json>] [--json-logs] [--record <file.rkrec>]\n       rastok replay <file.rkrec> [--ui [--ui-port <port>]]\n       rastok simulate <file.rkg>... [--deployment <profile.json>] [--compare <dir> | --save <dir>] [--ui [--ui-port <port>]]\n       rastok --resolve-open-api <project-dir> [--check]\n       rastok --help | -h | help\n       rastok --version";
+const USAGE: &str = "usage: rastok new <name>\n       rastok connectors [--json]\n       rastok check <file.rkg>...\n       rastok run <file.rkg>... [--file-root <dir>] [--deployment <profile.json>] [--json-logs] [--record <file.rkr>]\n       rastok replay <file.rkr> [--ui [--ui-port <port>]]\n       rastok simulate <file.rkg>... [--deployment <profile.json>] [--compare <dir> | --save <dir>] [--ui [--ui-port <port>]]\n       rastok --resolve-open-api <project-dir> [--check]\n       rastok --help | -h | help\n       rastok --version";
 
 /// Comparing is read-only; saving explicitly creates or replaces reference traces.
 enum GoldenAction {
@@ -680,7 +680,7 @@ fn recording_checkpoint(
     Ok(())
 }
 
-/// Reconstructs a recorded run from its `.rkrec` file without any Driver
+/// Reconstructs a recorded run from its `.rkr` file without any Driver
 /// I/O, then prints its boundary outputs or serves the read-only debugger.
 fn replay(arguments: &[String]) -> ExitCode {
     let mut path = None;
@@ -1482,7 +1482,7 @@ fn compare_or_save_golden(
     };
     let trace = rastok::golden::project(records);
     let rendered = render_trace(&trace);
-    let path = dir.join(format!("{}.{}.trace", report.simulation, report.scenario));
+    let path = dir.join(format!("{}.{}.rkc", report.simulation, report.scenario));
     if matches!(action, GoldenAction::Save(_)) {
         return std::fs::create_dir_all(dir)
             .and_then(|()| std::fs::write(&path, &rendered))

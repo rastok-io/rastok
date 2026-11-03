@@ -58,7 +58,7 @@ Every page in `examples/` additionally has:
 |---|---|---|
 | `teaches` | string | Concepts demonstrated by the executable example |
 | `graph` | string | Repository-root-relative path to an existing `examples/*.rkg` file |
-| `golden` | string | Repository-root-relative path to an existing canonical `.trace` file |
+| `golden` | string | Repository-root-relative path to an existing canonical `.rkc` file |
 | `command` | string | Tested command, run from the repository root |
 | `expected` | string | Observable result, not a promise or inferred behavior |
 | `break_it` | string | Exact source edit and rerun command that expose a difference |
@@ -68,7 +68,7 @@ References never use absolute paths, `..`, external URLs or symlinks outside
 the checkout. The site reads the graph and golden from these fields; do not
 paste a whole graph or trace into the Markdown body. `golden` identifies the
 representative scenario; `--compare` takes its directory and checks **all**
-scenario files named `<simulation>.<scenario>.trace`.
+scenario files named `<simulation>.<scenario>.rkc`.
 
 No additional field has been introduced. Any extension is documented here
 before use and reported to Yoann for coordination with the site consumer.

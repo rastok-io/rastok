@@ -3,7 +3,7 @@ title: 'Countdown: a bounded loop'
 description: Prove that a countdown terminates, follow its manager commands, and see the checker reject a measure that cannot prove progress.
 teaches: Loop.next, Loop.state, decreasing measures, finite recurrence and the host terminal
 graph: examples/countdown.rkg
-golden: examples/traces/countdown/proof.positive.trace
+golden: examples/traces/countdown/proof.positive.rkc
 command: rastok simulate examples/countdown.rkg --compare examples/traces/countdown
 expected: Two scenarios pass; input 3 reaches liftoff after three recurrences and input 0 finishes immediately.
 break_it: 'Replace Loop.measure = Loop.state.data with Loop.measure = 3 and run rastok check examples/countdown.rkg; E-LOOP refuses the unsupported measure.'
@@ -20,7 +20,7 @@ opposite question: can the program prove that repeated work will finish?
 The answer is written beside the Operator, without a backwards graph edge.
 
 The [file formats](../guide/09-command-line.md#file-formats) are `.rkg` for
-the program and Lab, `.trace` for a reviewed scenario reference and `.rkrec`
+the program and Lab, `.rkc` for a reviewed scenario reference and `.rkr`
 for a real execution recording.
 
 ## Run

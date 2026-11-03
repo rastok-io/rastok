@@ -182,6 +182,8 @@ fn cli_information_help_uses_stdout_and_succeeds_for_every_alias() {
             assert!(stdout.contains(&format!("rastok {command} ")), "{stdout}");
         }
         assert!(stdout.contains("--help") && stdout.contains("--version"));
+        assert!(stdout.contains("--record <file.rkr>"), "{stdout}");
+        assert!(stdout.contains("rastok replay <file.rkr>"), "{stdout}");
         if let Some(expected) = &help {
             assert_eq!(&stdout, expected);
         }
@@ -911,7 +913,7 @@ fn a_recorded_file_run_replays_after_the_world_and_source_are_removed() {
     std::fs::create_dir(&root).expect("unique recording fixture");
     let source = root.join("file.rkg");
     let artifact = root.join("input.bin");
-    let recording = root.join("run.rkrec");
+    let recording = root.join("run.rkr");
     std::fs::write(&artifact, b"original world\n").unwrap();
     std::fs::write(
         &source,
@@ -998,7 +1000,7 @@ fn retry_is_public_in_simulation_and_real_recording_without_recalling_the_world(
     let root = std::env::temp_dir().join(format!("rastok-cli-retry-{}", std::process::id()));
     std::fs::create_dir(&root).unwrap();
     let source = root.join("retry.rkg");
-    let recording = root.join("retry.rkrec");
+    let recording = root.join("retry.rkr");
     let missing = root.join("unavailable-child");
     std::fs::write(
         &source,
@@ -1123,7 +1125,7 @@ graph app : App {{
 fn the_gallery_file_pipeline_replaces_once_and_replay_does_not_touch_the_world() {
     let root = std::env::temp_dir().join(format!("rastok-gallery-file-{}", std::process::id()));
     std::fs::create_dir(&root).unwrap();
-    let recording = root.join("copy.rkrec");
+    let recording = root.join("copy.rkr");
     std::fs::write(root.join("input.txt"), b"alpha\nbeta\n").unwrap();
     let mut child = rastok()
         .arg("run")
@@ -1177,7 +1179,7 @@ fn recording_personal_data_refuses_before_creating_a_file() {
         std::env::temp_dir().join(format!("rastok-cli-record-personal-{}", std::process::id()));
     std::fs::create_dir(&root).unwrap();
     let source = root.join("personal.rkg");
-    let recording = root.join("forbidden.rkrec");
+    let recording = root.join("forbidden.rkr");
     std::fs::write(
         &source,
         "graph g : App { input in: text @personal ; output out: text @personal ; in -> out }",
@@ -1661,8 +1663,21 @@ fn simulate_saves_then_compares_reference_traces() {
         .output()
         .expect("the binary runs");
     assert!(output.status.success(), "{output:?}");
-    assert!(dir.join("smoke.roundtrip.trace").exists());
-    let path = dir.join("smoke.roundtrip.trace");
+    assert!(dir.join("smoke.roundtrip.rkc").exists());
+    let mut names = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<Vec<_>>();
+    names.sort();
+    assert_eq!(
+        names,
+        [
+            std::ffi::OsString::from("smoke.filtered.rkc"),
+            std::ffi::OsString::from("smoke.roundtrip.rkc"),
+            std::ffi::OsString::from("smoke.silence_expires.rkc"),
+        ],
+    );
+    let path = dir.join("smoke.roundtrip.rkc");
     let stored = std::fs::read_to_string(&path).expect("the saved trace");
     let output = rastok()
         .args(["simulate"])

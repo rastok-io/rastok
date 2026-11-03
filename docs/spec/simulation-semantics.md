@@ -440,7 +440,7 @@ is the behavioral fingerprint, versioned next to the scenario :
 
 ```
    scenario ──run──► journal ──canonical serialization──► bytes ──blake3──► fingerprint
-   golden/happy_path.trace  ◄── byte compare ── identical → PASS
+   golden/happy_path.rkc  ◄── byte compare ── identical → PASS
                                                 different → the RECORD-LEVEL DIFF
                                                 (first divergent record, both versions shown)
 ```
@@ -497,7 +497,7 @@ the Lab scenarios with the stored references, without modifying them.
 `--save <dir>` instead creates or replaces those references. The two options
 are mutually exclusive; without either, simulation checks the scenario's
 expectations only. Neither option supplies the Lab's responses. Each scenario
-has its own `<simulation>.<scenario>.trace` in the selected directory. These
+has its own `<simulation>.<scenario>.rkc` in the selected directory. These
 reference traces are not the complete diagnostic recordings used by
 `run --record` and `replay`.
 

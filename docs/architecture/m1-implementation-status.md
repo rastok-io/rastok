@@ -199,9 +199,9 @@ branches and real-I/O experiment debugging remain separate future work.
 Record a real run, then inspect its recorded facts without repeating effects:
 
 ```sh
-printf 'hello\n' | rastok run examples/echo.rkg --record echo.rkrec
-rastok replay echo.rkrec
-rastok replay echo.rkrec --ui
+printf 'hello\n' | rastok run examples/echo.rkg --record echo.rkr
+rastok replay echo.rkr
+rastok replay echo.rkr --ui
 ```
 
 Replay needs neither the source nor the files/processes used by the program.
@@ -217,7 +217,7 @@ Compare a simulation with its reviewed causal reference traces, without
 changing them:
 
 ```sh
-rastok simulate examples/echo.rkg --compare crates/rastok/tests/golden/gallery/echo
+rastok simulate examples/echo.rkg --compare examples/traces/echo
 ```
 
 To intentionally create or replace references, use `--save <dir>` instead

@@ -3,7 +3,7 @@ title: 'Agent gateway: keep a conversation isolated'
 description: Connect WebSocket conversations to resident JSONL processes, simulate interleaved app-server requests, and close one child without interrupting the other.
 teaches: WebSocket and Process Sessions, exact instance ownership, transparent JSON-RPC, match mocks and child closure
 graph: examples/agent-gateway.rkg
-golden: examples/traces/agent-gateway/app_server.two_conversations.trace
+golden: examples/traces/agent-gateway/app_server.two_conversations.rkc
 command: rastok simulate examples/agent-gateway.rkg --compare examples/traces/agent-gateway --ui
 expected: Two scenarios pass; Alice and Bob use separate children, streamed replies keep their socket address, and Bob continues after Alice closes.
 break_it: 'Change the scripted delta "Hello from the simulated agent." to "A different answer." and rerun the complete comparison below.'
@@ -25,7 +25,7 @@ interrupt Bob, and sending a message must not be mistaken for receiving an
 answer.
 
 The [file formats](../guide/09-command-line.md#file-formats) are `.rkg` for
-the program and Lab, `.trace` for a reviewed scenario reference and `.rkrec`
+the program and Lab, `.rkc` for a reviewed scenario reference and `.rkr`
 for a real execution recording.
 
 ## Run

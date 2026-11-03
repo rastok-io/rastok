@@ -20,6 +20,10 @@ Operator, Graph and outbound Call Loops execute and recover within the
 committed deliveries remain journal-owned. Earlier R0–R8 reports are dated
 checkpoints, not the current completion status.
 
+Current reference traces use `.rkc` and diagnostic recordings use `.rkr`.
+Dated reports keep the former filenames as historical evidence; the
+extension change does not change their contents or format versions.
+
 Start with the root [`ARCHITECTURE.md`](../../ARCHITECTURE.md), then use:
 
 - [`parallelism-notes.md`](parallelism-notes.md) for the one-Worker baseline,
