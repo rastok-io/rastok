@@ -2661,14 +2661,49 @@ message-level safety; Rastok additionally fixes the application topology.
 J. Paul Morrison's flow-based programming (formalized in the 1970s,
 canonized in his 2010 book) introduced the idea of building programs
 as networks of independent components exchanging information packets
-through named ports.
+through named ports, with the wiring held outside the components. It is
+Rastok's closest ancestor, and a familiar reference for integration
+architects: Apache NiFi's overview, for example, states that its design
+concepts closely relate to the main ideas of flow-based programming.
 
-**What Rastok takes:** the component-with-named-ports model, the
-information-packet (envelope) abstraction, the visual-friendly graph
-topology.
+**What Rastok takes:** the five pillars of Morrison's model, each with a
+direct counterpart.
 
-**What Rastok leaves behind:** the UI-first emphasis. Rastok is
-text-first, version-controlled, code-reviewable.
+1. *Information packets* are the Envelope (§2.1): a `data` payload and its
+   `meta`, immutable in transit, with an emission identity of its own.
+2. *Components with named ports* are Nodes with typed inputs and outputs
+   (§2.2). A Node emits on its outputs, such as `out`, `err` or a Call's
+   `exit`, and never names the Node downstream.
+3. *External wiring*: the topology belongs to the enclosing Graph (§2.6),
+   never to the code inside a component.
+4. *Bounded buffers*: one bounded activation mailbox per logical instance,
+   and bounded command inboxes for the temporal managers. Backpressure
+   changes pacing, never semantics; ordering lives in the journal.
+5. *Hierarchical composition*: a Graph is itself a Node with inputs and
+   outputs, usable inside another Graph (§3).
+
+**What Rastok changes:** Morrison's model leaves five questions to the
+author. Rastok answers them by construction. The table compares Rastok with
+the classic model as Morrison describes it, not with the current feature set
+of any product built on it.
+
+| Classic flow-based programming | Rastok |
+|---|---|
+| Any component may compute or perform hidden I/O; the network does not tell them apart. | Strict separation: an Operator is pure and deterministic by grammar; only a Connector reaches the outside, under a typed Contract whose `mode`, `behavior` and `idempotent` attributes are plan facts (§2.7). |
+| Loops are back-edges in the network; termination and deadlock are the author's problem. | The spatial graph is a DAG, checked at parse time. Recurrence is temporal: `Loop` requires `Loop.fuel` or an integer `Loop.measure` and expires visibly; `Retry` is finite and may replay an uncertain outcome only under `idempotent = true` (§2.6). |
+| Components run as independent asynchronous processes; the interleaving differs from one run to the next. | Journal-driven deterministic execution: the same inputs and the same logical time produce the same trace, byte for byte (§5, §6). |
+| State is local to a component; partitioning it by customer, session or order is left to the author. | Instances addressed by `instance.key`, five `lifetime` kinds (persistent, idle, fixed, single_pass, tumbling), a bounded `closing`, and joins bounded by `last` or `within` that produce `JoinExpired` instead of waiting forever (§3). |
+| No model of the outside world: testing a network means wiring the real systems or writing stubs by hand. | The Lab lives in the same artefact: `mock`, `scenario`, `advance` on the virtual clock, `golden` traces (§6). |
+
+In one sentence: Rastok keeps the compositional clarity of flow-based
+programming, separates pure computation from external effects, and makes
+execution deterministic and simulable.
+
+**What Rastok leaves behind:** the UI-first emphasis. For many readers the
+term evokes visual editors whose canvas is the source of truth. Rastok is
+text-first, version-controlled and code-reviewable, with the graph as a
+read-only projection (§1.8). Flow-based programming is named here as a
+lineage, not as the category Rastok belongs to.
 
 ### 9.6 Functional Core, Imperative Shell (Gary Bernhardt)
 
@@ -2745,7 +2780,7 @@ application model.
 | Kahn Process Networks              | Per-edge FIFO ordering (network-level KPN determinism explicitly not claimed — joins are journaled timed merges) |
 | I/O Automata                       | State machine as fundamental unit         |
 | Actor Model (Erlang/OTP)           | Supervision, partitioned state            |
-| Flow-Based Programming             | Component-with-ports, envelopes           |
+| Flow-Based Programming             | Component-with-ports, envelopes, external wiring, hierarchical composition |
 | Functional Core, Imperative Shell  | Operator vs Connector distinction         |
 | Host/guest language embedding      | jq / SQL guest languages with fixed executors |
 | Modern dataflow (Beam, Flink, ksqlDB) | Keyed state, co-partitioned joins, `WITHIN` windows, TestStream |
