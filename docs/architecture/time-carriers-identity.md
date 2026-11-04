@@ -15,6 +15,7 @@ with the previous witnesses:
 |---|---|
 | `crates/rastok/tests/golden/echo.rkp`, `gauge.rkp`, `jsonl.rkp` | version field 24 → 1 (one byte shorter), checksum, and the Contract identities inside the body; body tables unchanged |
 | `spikes/rp2350-emu/echo.rkp` | identical to the regenerated echo golden, 1016 → 1015 bytes |
+| Echo semantic hash (printed by the emulated spike, pinned by the CI gate) | `7106f3226fe8df3a74a453377d62e3a11e14e869ed6b2280fe95ccc7c7c94037` → `a062a5a89b3514eda407523eca54910ec81bdcbc613d93f1f7be36f903ba90a1`, moved by the Contract identities inside the plan |
 | `examples/traces/two-tenants/*.rkc` (2 traces) | same record counts (30, 29); 2 records each carry a new Retry protocol identity |
 | `examples/traces/webhook-to-partner/*.rkc` (5 of 6 traces) | same record counts; 1 or 2 records each carry a new Retry protocol identity |
 | `examples/traces/echo`, `file-pipeline`, `sensor-alarm`, `agent-gateway`, `countdown`, `agent-http`, test `.rkc` goldens | byte-identical: no identity record, no movement |
