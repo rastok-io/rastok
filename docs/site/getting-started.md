@@ -111,7 +111,7 @@ The planned 5 November 2026 download location is
 [Rastok releases](https://github.com/rastok-io/rastok/releases): macOS Apple
 silicon and Linux x86-64, with `hosted-ui,hosted-websocket`. Intel Macs and
 other platforms use the source-install fallback. Once the
-repository and `v0.1.0-alpha` tag have been published on Yoann's instruction,
+repository and the `v0.1.0-alpha` tag are published,
 the Rust 1.97.1 source-install fallback is:
 
 ```sh

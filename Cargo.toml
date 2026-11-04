@@ -12,7 +12,7 @@ license = "Apache-2.0"
 repository = "https://github.com/rastok-io/rastok"
 homepage = "https://www.rastok.com"
 documentation = "https://docs.rastok.com"
-publish = false
+publish = true
 
 [workspace.dependencies]
 # Fixed by the identity contract (docs/spec/envelope.md §2.0): changing the

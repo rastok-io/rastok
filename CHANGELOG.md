@@ -1,16 +1,47 @@
 # Changelog
 
-## Unreleased: preparation for v0.1.0-alpha
+## v0.1.0-alpha (5 November 2026)
 
-This is not a released tag. Public release and crate publication await
-5 November 2026 and Yoann's explicit instruction.
+First public alpha, under the Apache 2.0 license. The package format is 1,
+the diagnostic recording format is 1, and the six standard Connector
+Contracts are at `@1` (D-2026-11-03-4); the representations are the ones
+qualified in October under the former internal numbers, and every reference
+trace, test golden and package witness was regenerated from source and
+compared record by record. The
+[identity inventory](docs/architecture/time-carriers-identity.md) records the
+relative logical timeline and the wide civil carriers. The alpha scope stated
+on the site's status block is the release claim; nothing else is.
 
-The current checkout uses **format 24 / diagnostic recording 5**, to be
-labelled public format 1 at publication. The
-[identity inventory](docs/architecture/time-carriers-identity.md) records
-the relative logical timeline and wide civil carriers, with witness regeneration
-approved on 24 October after review.
-External opening gates remain open; these capabilities are not a release claim.
+Since the October review:
+
+- The debugger shows the program source as its main view, with a gutter
+  marker on the selected transition, identifier values on hover and keyboard
+  focus (read only, redaction kept), the graph as a synchronized complementary
+  view, a Play control with playback speed, and a guided tour page. JetBrains Mono is
+  embedded under the SIL Open Font License for the source pane; the
+  Definition inspector tab is removed.
+- Lab scenarios are written directly inside `lab`, without string labels;
+  `expect target.port` means exactly one observation, with `expect N`,
+  `== nothing`, `== value` and `where` forms; `simulation <name> { }` groups
+  shared mocks; expectations no longer consume the observation window.
+- Rastok artifacts use one filename family: `.rkg` source, `.rkp` plan
+  package, `.rkc` causal reference trace, `.rkr` diagnostic recording.
+- A failed scenario is explained from its source line and the recorded
+  evidence; `run` and `replay` print the bare value for single-output
+  applications; the debugger URL is a terminal link only; reference traces
+  live beside their examples under `examples/traces/`.
+- Standard Contract exit types (`FileExit`, `ProcessExit`, `HttpClientExit`,
+  `HttpServerExit`, `WebSocketExit`) resolve without source declarations
+  (D-2026-11-03-3).
+- The documentation gains a nine-chapter guide, eight example chapters that
+  form one learning path (countdown and HTTP model adapter added), one
+  Reference page per Connector plus the execution and standard library pages,
+  an Overview that opens with the product positioning, and a CLI that answers
+  every information request.
+- The README, the whitepaper and the release prose follow the October public
+  narrative, without named product comparisons.
+
+From the October qualification:
 
 - `worker::Supervision` supplies the Worker's input, time and checkpoint services;
   `Host` retains its clustered-machine meaning, without changing execution.
@@ -28,13 +59,6 @@ External opening gates remain open; these capabilities are not a release claim.
   disposition and exact-prefix recovery. Only the final attempt is published.
 - Deterministic Lab scenarios, record-level golden trace comparison and a read-only
   simulation debugger with mailbox, instance, Retry and causal inspection.
-- Source-first simulation debugger: the program source is the primary view,
-  a gutter marker follows the selected transition, identifier summaries open
-  read-only on pointer hover and keyboard focus, source and graph selection
-  stay in step, and the graph is a complementary tab. The Definition inspector
-  tab is removed; node source is reached from the graph or the gutter.
-  JetBrains Mono is embedded under the SIL Open Font License for the source
-  pane. Recordings, goldens and plan identity are unchanged.
 - Explicit simulation reference modes: `--compare <dir>` reads existing
   golden traces without changing them; `--save <dir>` creates or replaces them.
   The modes are mutually exclusive, and neither supplies the Lab responses.
