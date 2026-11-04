@@ -1,6 +1,26 @@
 # Relative logical time — format-24 identity inventory
 
 Date: 23–24 October 2026. Baseline: `21eae53` on `realign/node-ontology`.
+> Note of 3 November 2026: the public release renumbers package format 24 as
+> format 1 and diagnostic recording 5 as recording 1, and the standard
+> Contracts as `@1` (D-2026-11-03-4). The numbers below are the ones in force
+> when this page was written; the representations they describe are unchanged.
+
+## Witness inventory of 3 November 2026 (public version 1)
+
+Regenerated from source after D-2026-11-03-4 and compared record by record
+with the previous witnesses:
+
+| Witness | Movement |
+|---|---|
+| `crates/rastok/tests/golden/echo.rkp`, `gauge.rkp`, `jsonl.rkp` | version field 24 → 1 (one byte shorter), checksum, and the Contract identities inside the body; body tables unchanged |
+| `spikes/rp2350-emu/echo.rkp` | identical to the regenerated echo golden, 1016 → 1015 bytes |
+| `examples/traces/two-tenants/*.rkc` (2 traces) | same record counts (30, 29); 2 records each carry a new Retry protocol identity |
+| `examples/traces/webhook-to-partner/*.rkc` (5 of 6 traces) | same record counts; 1 or 2 records each carry a new Retry protocol identity |
+| `examples/traces/echo`, `file-pipeline`, `sensor-alarm`, `agent-gateway`, `countdown`, `agent-http`, test `.rkc` goldens | byte-identical: no identity record, no movement |
+| Pinned semantic hashes in tests (`lower.rs`, `contracts.rs`, `jsonl_fixture.rs`) | moved with the Contract identities; new values recorded in the tests |
+| Recordings cited by the Echo and File pipeline pages | seals unchanged (`80f12632…`, `bfa1df6b…`) |
+
 Status: **format 24 / recording 5 locally qualified; independent Fable replay
 pending**.
 The baseline below was measured before changing any time carrier. Candidate

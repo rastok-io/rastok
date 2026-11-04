@@ -253,7 +253,7 @@ graph websocket_only : App {
         panic!("a Process-only image cannot create Drivers for WebSocketClient")
     };
     assert!(
-        error.to_string().contains("std/websocket-client@3"),
+        error.to_string().contains("std/websocket-client@1"),
         "the omitted semantic capability is named before any Execution exists: {error}"
     );
 }

@@ -4,7 +4,7 @@ description: Ports, terminal outcomes, settings and qualification evidence for t
 order: 6
 ---
 
-`std/websocket-server@3`. Accepts peer Sessions. Replies follow session lineage or an explicit `correlate`. A pre-admission handshake refusal creates no Session or exit.
+`std/websocket-server@1`. Accepts peer Sessions. Replies follow session lineage or an explicit `correlate`. A pre-admission handshake refusal creates no Session or exit.
 
 ## Declaration
 

@@ -1,6 +1,6 @@
 # Identity and canonical form
 
-> **Format 24, diagnostic recording 5.**
+> **Format 1, diagnostic recording 1.**
 > The [time-carrier inventory](../architecture/time-carriers-identity.md)
 > records the relative logical timeline, immutable civil origin and wide
 > timestamp carriers, with witness regeneration approved on 24 October.

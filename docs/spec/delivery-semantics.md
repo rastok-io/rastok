@@ -219,7 +219,7 @@ Only `Started` transfers ownership and enters the local exactly-once start
 fold. Consequently queue or byte pressure changes pacing but can never be
 reported as an external domain fact.
 
-For `std/file@3`, the post-open worker decodes and executes that descriptor
+For `std/file@1`, the post-open worker decodes and executes that descriptor
 itself; it never re-reads the plan settings. Cooperative cancellation before a
 complete read or atomic-rename commit emits nothing from the Driver, leaving
 the scheduler's won closure authoritative. A completion observed after another
@@ -227,7 +227,7 @@ closure won is handled by the same discarded-response rule as every outbound
 protocol. `DriverPoller::resume` starts no existing open call: filesystem recall
 is a future recovery-fold decision, not replay behavior.
 
-For `std/http-client@3`, the descriptor additionally seals method,
+For `std/http-client@1`, the descriptor additionally seals method,
 absolute URL, lossless ordered headers, exact codec body, authentication and
 idempotency material. The live Driver may try another declared HTTP version
 only while no request byte can have become visible. Once visibility is

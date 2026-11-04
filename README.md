@@ -261,7 +261,7 @@ is still blocking. None is implied by a green Rust test suite. M1 has no
 durable deployment journal, Kafka or SQL Connector; diagnostic recordings
 are not durable recovery or share-safe exports.
 
-The current package format is 24 and the diagnostic recording format 5, both
+The current package format is 1 and the diagnostic recording format 1, both
 registered in [identity.md](docs/spec/identity.md). The current executable
 proof is one continuous path:
 

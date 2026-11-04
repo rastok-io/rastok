@@ -56,7 +56,7 @@ graph hello_echo {
   }
 
   connector log : File {
-    // Prospective append/log profile. The executable std/file@3 surface is
+    // Prospective append/log profile. The executable std/file@1 surface is
     // one explicit read or atomic replace per invocation.
     path = "/var/log/rastok/echo.ndjson"
     codec = ndjson

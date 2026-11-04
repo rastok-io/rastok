@@ -894,7 +894,7 @@ pub struct OwnerValue {
 /// A connector's planned configuration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConnectorSpec {
-    /// Stable semantic contract identity (`std/process@6`).
+    /// Stable semantic contract identity (`std/process@1`).
     pub contract: crate::connector::ContractId,
     /// Inbound/outbound runtime roles required by the contract.
     pub roles: crate::connector::ConnectorDirection,

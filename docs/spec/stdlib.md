@@ -109,9 +109,9 @@ Executable Contracts carry two mandatory kinds of evidence:
 These facts are Registry-free validation material, productibility evidence
 and Loop/Retry host qualification. The standard namespace is `std/`;
 external namespaces must contain a dot. Current ids are
-`std/process@6` (job and service), `std/file@3`,
-`std/http-client@3`, `std/http-server@3`, `std/websocket-client@3`
-and `std/websocket-server@3`. Only these exact Contracts execute in M1.
+`std/process@1` (job and service), `std/file@1`,
+`std/http-client@1`, `std/http-server@1`, `std/websocket-client@1`
+and `std/websocket-server@1`. Only these exact Contracts execute in M1.
 Source names such as `Process` remain unchanged.
 
 ### 1.2 Standard types in source
@@ -215,7 +215,7 @@ There is no parallel `mime_type` spelling.
 
 | Case | Contract |
 |---|---|
-| Stable identity | `std/http-server@3` (exact Contract) |
+| Stable identity | `std/http-server@1` (exact Contract) |
 | Role / Direction | HTTP endpoint; **inbound** Driver role |
 | Exchange | call — one admitted request, at most one protocol response, one typed request-lifecycle `exit` |
 | Ports | `out: T` decoded request; `in: T` graph response in `respond`; `exit: HttpServerExit`; no implicit `err` |
@@ -274,7 +274,7 @@ request.
 
 | Case | Contract |
 |---|---|
-| Stable identity | `std/http-client@3` (exact Contract) |
+| Stable identity | `std/http-client@1` (exact Contract) |
 | Role / Direction | HTTP calls; **outbound caller** |
 | Exchange | call — one request, response outputs, one typed call `exit` |
 | Ports | `in: T` request body, `out: T` every usable response body including non-2xx, `exit: HttpClientExit`; no implicit `err` |
@@ -318,7 +318,7 @@ weaken verification or reinterpret the plan bytes.
 
 | Case | Contract |
 |---|---|
-| Stable identity | `std/process@6` for both modes, using the [current package format](identity.md) |
+| Stable identity | `std/process@1` for both modes, using the [current package format](identity.md) |
 | Role / Direction | Job: outbound Call. Service: both roles, resident Session. The mode resolves direction, exchange and resource lifecycle before lowering; the Contract id does not change. |
 | Ports | `in` → stdin; `out` ← decoded/framed stdout; `err` ← framed stderr data; `exit` ← `ProcessExit` |
 | idempotent / behavior | job: `idempotent: bool = false`; service has no idempotence attribute. `behavior` required for both modes, plan-evaluated |
@@ -618,7 +618,7 @@ run can inject selected values as new roots.
 
 | Case | Contract |
 |---|---|
-| Stable identity | `std/file@3` (exact Contract) |
+| Stable identity | `std/file@1` (exact Contract) |
 | Role / Direction | outbound one-file operation; `mode = read \| replace` is required; `watch` is a known deferred spelling whose inbound role requires a later contract-version decision |
 | Ports | read: `in: variant`, one `out: bytes` on success, then `exit: FileExit`; replace: `in: bytes`, no success `out`, then `exit: FileExit` |
 | idempotent / behavior | `true` / `deterministic` (pre-declared by the File Contract) |
@@ -666,7 +666,7 @@ deletion, overflow, resynchronization and acknowledgement semantics.
 
 | Case | Contract |
 |---|---|
-| Stable identity | `std/websocket-server@3` (exact Contract) |
+| Stable identity | `std/websocket-server@1` (exact Contract) |
 | Role / Direction | both roles over one shared bound listener/session table; accepts remote sessions, receives messages and writes graph replies |
 | Exchange | session — many messages in either direction, exactly one terminal `WebSocketExit` per accepted session |
 | Ports | `out: T` receives complete peer messages; `in: T` sends complete messages; `exit: WebSocketExit` terminates a session; no implicit `err` |
@@ -706,7 +706,7 @@ orphan write, discarded-and-journaled without misrouting or a second exit.
 
 | Case | Contract |
 |---|---|
-| Stable identity | `std/websocket-client@3` (exact Contract) |
+| Stable identity | `std/websocket-client@1` (exact Contract) |
 | Role / Direction | both roles over one shared connection state; opens a remote session, writes graph messages and receives peer messages |
 | Exchange | session — many messages in either direction, exactly one terminal `WebSocketExit` per opened session |
 | Ports | `in: T`, `out: T`, `exit: WebSocketExit`; types follow the same required codec table as WebSocketServer; no implicit `err` |

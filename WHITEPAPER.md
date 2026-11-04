@@ -30,7 +30,7 @@
 
 **Status of this document**
 
-> **Format-24 (2026-10-24), diagnostic recording 5.**
+> **Format-1 (2026-11-05), diagnostic recording 1.**
 > The Node/Executor/Extension model, host-terminal Loop, exact-instance closure,
 > native outbound Call Retry and typed measurement retention are executable.
 > The [C4 qualification](docs/architecture/retry-c4-qualification.md) records
@@ -40,7 +40,7 @@
 > [Connector inventory](docs/architecture/connector-rework-identity.md),
 > with verification in the [qualification report](docs/architecture/connector-rework-qualification.md); external
 > [opening gates](docs/architecture/opening-showcase.md) remain separate.
-> Process uses `std/process@6`: job is an outbound Call, service a resident Session.
+> Process uses `std/process@1`: job is an outbound Call, service a resident Session.
 > Earlier [R9](docs/architecture/rework-r9-qualification.md),
 > [host-terminal](docs/architecture/loop-host-terminal-v17.md) and
 > [exact-instance closure](docs/architecture/instance-stop-command.md) ledgers
@@ -1448,7 +1448,7 @@ exactly what makes replay deterministic (envelope.md §2.0/§8). The
 Connector draws the boundary; the journal captures what crosses it.
 
 **The Contract is not the Driver.** Source names resolve through a compiler
-catalogue to a stable versioned contract id such as `std/process@6`. The
+catalogue to a stable versioned contract id such as `std/process@1`. The
 Contract declares inbound/outbound roles, typed ports, attributes and
 lifecycle rules. A physical Driver supplies real I/O; a Lab model supplies
 scripted arrivals and outcomes through the same pure protocol and admission
@@ -2786,9 +2786,9 @@ ledgers are evidence for Rastok; future design sections are not.
 ## 10. Status
 
 Rastok is experimental, not production-ready. The current format is
-**package 24 / diagnostic recording 5**, with one Node table and Graph-owned wiring.
+**package 1 / diagnostic recording 1**, with one Node table and Graph-owned wiring.
 The approved witness movement and qualification are recorded in the [time-carrier inventory](docs/architecture/time-carriers-identity.md).
-Process job/service modes share the Contract `std/process@6`;
+Process job/service modes share the Contract `std/process@1`;
 File and the four HTTP/WebSocket Contracts use `@3`. These version registers
 are independent. The [Connector identity inventory](docs/architecture/connector-rework-identity.md)
 records the Process-dependent semantic hashes and Retry traces that change.

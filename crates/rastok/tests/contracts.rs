@@ -235,7 +235,7 @@ fn all_four_network_contracts_cross_the_source_to_validated_plan_boundary() {
             "  in -> network -> out",
             rastok::connector::stdlib::HTTP_CLIENT_CONNECTOR_ID,
             rastok::connector::ExchangeKind::Call,
-            "c071a2a881181c82d6fc52841d2f789a803c853da67dd6a3c9f9f39f87c51330",
+            "5709aa5ae68fbb2175be2aa3a0937902927be8f2c5feff4fe1be9d05890d8629",
         ),
         (
             "HttpServer",
@@ -243,7 +243,7 @@ fn all_four_network_contracts_cross_the_source_to_validated_plan_boundary() {
             "  network -> out",
             rastok::connector::stdlib::HTTP_SERVER_CONNECTOR_ID,
             rastok::connector::ExchangeKind::Call,
-            "8be9c5c663158e632bb2f9de4dd20852c59580318ad3198dbac931f46ca18638",
+            "2962c2e19d9370d38e683f16ea857701bf1fc4199fe2eeb4eeb28339e6cfd218",
         ),
         (
             "WebSocketClient",
@@ -251,7 +251,7 @@ fn all_four_network_contracts_cross_the_source_to_validated_plan_boundary() {
             "  in -> network -> out",
             rastok::connector::stdlib::WEBSOCKET_CLIENT_CONNECTOR_ID,
             rastok::connector::ExchangeKind::Session,
-            "33fff893c4ea10aed45047f6b296022138c6ac3cc5528c908c06ee0c0f8b0aff",
+            "5370904835c93ee2d416df0d60f0e185e761ef56c8e275e152e5234fce1df515",
         ),
         (
             "WebSocketServer",
@@ -259,7 +259,7 @@ fn all_four_network_contracts_cross_the_source_to_validated_plan_boundary() {
             "  in -> network -> out",
             rastok::connector::stdlib::WEBSOCKET_SERVER_CONNECTOR_ID,
             rastok::connector::ExchangeKind::Session,
-            "8e023ac5bed6d799511633ba858330494ae6d8e1f901de9c09be7dcd735ad6f8",
+            "4c06335d92b5e88c6e2ca51d8006e1ec12f5a26332fa8c8dc0b0f8df1a107191",
         ),
     ];
     let mut hashes = Vec::new();
@@ -344,8 +344,8 @@ fn network_defaults_are_effective_before_identity() {
     let explicit = compile_one(&explicit).expect("the exact defaults compile");
     assert_eq!(
         omitted.hash.to_string(),
-        "97116fe8c6748306126066065a264bbf0f0e3e6cb38866ae0812069e198ebb5a",
-        "the format-20 Contract/default witness stays pinned"
+        "a4fb15776c076e3d276f8cac3d04a604d9d0a5a5f725c199b8d11cd45d8642a5",
+        "the Contract/default witness stays pinned (public format 1, D-2026-11-03-4)"
     );
     assert_eq!(omitted.hash, explicit.hash);
     assert_eq!(*omitted.plan, *explicit.plan);

@@ -5,6 +5,22 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-11-03-4: Public version 1 for the package format, the recording format and the standard Contracts
+
+Yoann decides that the first public release ships with version 1 everywhere a
+version is visible: package format 1 (formerly 24), diagnostic recording
+format 1 (formerly 5), and the six standard Connector Contracts at `@1`
+(`std/process`, `std/file`, `std/http-client`, `std/http-server`,
+`std/websocket-client`, `std/websocket-server`, formerly `@6` and `@3`).
+The body tables, record schemas and Contract semantics are those of the
+former numbers; only the version fields, the Contract identities and
+therefore the checksums, semantic hashes and witnesses change. Every
+reference trace, test golden and package witness is regenerated from source
+on 3 November 2026 and compared record by record. **Rejected:** keeping the
+internal numbering in public (it tells the history of a private workspace,
+not a compatibility promise); a mapping table between old and new numbers
+(no public artifact ever carried the old ones).
+
 ## D-2026-11-03-3: Make standard Contract types available without imports
 
 Yoann requests that examples and applications use the types compiled into

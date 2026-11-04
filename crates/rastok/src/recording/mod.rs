@@ -25,7 +25,7 @@ use std::io::{Read as _, Write as _};
 use std::path::Path;
 
 const MAGIC: &[u8; 4] = b"RKRC";
-const VERSION: u64 = 5;
+const VERSION: u64 = 1;
 const CHECKSUM_DOMAIN: &[u8] = b"rastok.diagnostic-recording\0";
 /// Upper bound on one diagnostic file, including its embedded plan package.
 pub const MAX_RECORDING_BYTES: usize = 64 * 1024 * 1024;

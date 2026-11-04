@@ -4,7 +4,7 @@ description: Ports, terminal outcomes, settings and qualification evidence for t
 order: 1
 ---
 
-`std/file@3`. One file operation per Call. `read` publishes complete bytes; `replace` stages and atomically replaces one file. Directory operations are outside this Contract.
+`std/file@1`. One file operation per Call. `read` publishes complete bytes; `replace` stages and atomically replaces one file. Directory operations are outside this Contract.
 
 ## Declaration
 

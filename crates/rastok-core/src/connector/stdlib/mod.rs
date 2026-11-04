@@ -301,22 +301,22 @@ pub fn prepare_lines(data: &envelope::Data) -> Result<PreparedRequest, String> {
 }
 
 /// The standard Process contract's stable major-version identity.
-pub const PROCESS_CONNECTOR_ID: &str = "std/process@6";
+pub const PROCESS_CONNECTOR_ID: &str = "std/process@1";
 
 /// The standard single-file contract's stable major-version identity.
-pub const FILE_CONNECTOR_ID: &str = "std/file@3";
+pub const FILE_CONNECTOR_ID: &str = "std/file@1";
 
 /// The standard outbound HTTP call contract's stable identity.
-pub const HTTP_CLIENT_CONNECTOR_ID: &str = "std/http-client@3";
+pub const HTTP_CLIENT_CONNECTOR_ID: &str = "std/http-client@1";
 
 /// The standard inbound HTTP request contract's stable identity.
-pub const HTTP_SERVER_CONNECTOR_ID: &str = "std/http-server@3";
+pub const HTTP_SERVER_CONNECTOR_ID: &str = "std/http-server@1";
 
 /// The standard outbound WebSocket session contract's stable identity.
-pub const WEBSOCKET_CLIENT_CONNECTOR_ID: &str = "std/websocket-client@3";
+pub const WEBSOCKET_CLIENT_CONNECTOR_ID: &str = "std/websocket-client@1";
 
 /// The standard accepted WebSocket session contract's stable identity.
-pub const WEBSOCKET_SERVER_CONNECTOR_ID: &str = "std/websocket-server@3";
+pub const WEBSOCKET_SERVER_CONNECTOR_ID: &str = "std/websocket-server@1";
 
 const NETWORK_BODY_TYPES: &[PortTypeChoice] = &[
     PortTypeChoice {

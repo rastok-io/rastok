@@ -4,7 +4,7 @@ description: Ports, terminal outcomes, settings and qualification evidence for t
 order: 4
 ---
 
-`std/http-server@3`. An inbound HTTP Call. `ack` sends 202 after admission; `respond` waits for the graph response. A malformed body or failed authentication can refuse before admission, without inventing a request envelope or an exit.
+`std/http-server@1`. An inbound HTTP Call. `ack` sends 202 after admission; `respond` waits for the graph response. A malformed body or failed authentication can refuse before admission, without inventing a request envelope or an exit.
 
 ## Declaration
 

@@ -1,15 +1,16 @@
 # Checked examples and historical sketches
 
-The checkout uses **format-24 / diagnostic-recording-5**. Its
+The checkout uses **format-1 / diagnostic-recording-1**. Its
 [time-carrier inventory](../architecture/time-carriers-identity.md) records
 the relative timeline, wide civil values and immutable run origin, with
-witness regeneration approved on 24 October after review.
+witness regeneration approved on 24 October after review and the public
+renumbering to version 1 on 3 November 2026.
 The preceding lifecycle-trigger changes are recorded in the
 [lifecycle identity inventory](../architecture/lifecycle-registry-identity.md).
 The preceding single Process Contract identity is tracked in the
 [Connector identity inventory](../architecture/connector-rework-identity.md),
 with verification in the [qualification report](../architecture/connector-rework-qualification.md).
-Both Process modes use `std/process@6`. That format-22 change moved their
+Both Process modes use `std/process@1`. That format-22 change moved their
 semantic hashes and Process Retry traces. The
 [C4 qualification ledger](../architecture/retry-c4-qualification.md) is dated
 evidence for the native-Retry base. External opening gates remain separate.

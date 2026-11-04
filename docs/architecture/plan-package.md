@@ -1,6 +1,6 @@
 # The plan package — the transportable, verifiable ExecutionPlan
 
-> **Current package format 24, diagnostic recording 5.**
+> **Current package format 1, diagnostic recording 1** (public reset of 3 November 2026; the body tables below are unchanged from the former format 24).
 > The [time-carrier inventory](time-carriers-identity.md) records the approved
 > witness movement and qualification.
 > Civil timestamp values use wide seconds/fraction pairs; the Node-table
@@ -146,7 +146,7 @@ effective claim. A3 follows the canonical operation graph and requires that
 claim to equal its independent derivation exactly. It never rewrites the raw
 row or recovers meaning from payload strings.
 
-## Body tables (format 24)
+## Body tables (format 1, formerly 24)
 
 The body is one canonical CBOR value encoding the `ExecutionPlan`.
 Compound values use fixed-shape arrays with a leading numeric

@@ -224,16 +224,16 @@ mod tests {
 
     #[test]
     fn a_manifest_describes_capabilities_without_loading_driver_code() {
-        let process = entry("process-job", "std/process@6", &["job"]);
-        let file = entry("file", "std/file@3", &["replace", "read"]);
+        let process = entry("process-job", "std/process@1", &["job"]);
+        let file = entry("file", "std/file@1", &["replace", "read"]);
         let manifest = DriverManifest::try_new([process, file]).expect("distinct capabilities");
-        assert_eq!(manifest.entries()[0].connector().as_str(), "std/file@3");
+        assert_eq!(manifest.entries()[0].connector().as_str(), "std/file@1");
         assert_eq!(manifest.entries()[0].name().as_str(), "file");
         assert_eq!(manifest.entries()[0].roles(), ConnectorDirection::Outbound);
         assert_eq!(manifest.entries()[0].exchange(), ExchangeKind::Call);
         assert_eq!(manifest.entries()[0].mode_attribute(), Some("mode"));
         assert_eq!(manifest.entries()[0].modes(), ["read", "replace"]);
-        assert_eq!(manifest.entries()[1].connector().as_str(), "std/process@6");
+        assert_eq!(manifest.entries()[1].connector().as_str(), "std/process@1");
         assert_eq!(manifest.entries()[1].modes(), ["job"]);
         assert!(
             !manifest
@@ -245,7 +245,7 @@ mod tests {
 
     #[test]
     fn duplicate_manifest_claims_never_gain_an_ordering_policy() {
-        let first = entry("process-job", "std/process@6", &["job"]);
+        let first = entry("process-job", "std/process@1", &["job"]);
         let mut second = first.clone();
         second.roles = ConnectorDirection::Inbound;
         let expected = DriverManifestError::Duplicate {
@@ -261,8 +261,8 @@ mod tests {
 
     #[test]
     fn two_implementations_of_the_same_contract_have_stable_manifest_order() {
-        let first = entry("a", "std/file@3", &["read"]);
-        let second = entry("b", "std/file@3", &["replace", "read"]);
+        let first = entry("a", "std/file@1", &["read"]);
+        let second = entry("b", "std/file@1", &["replace", "read"]);
         let forward =
             DriverManifest::try_new([first.clone(), second.clone()]).expect("two implementations");
         let reverse = DriverManifest::try_new([second, first]).expect("reverse registration");
@@ -285,21 +285,21 @@ mod tests {
         assert!(DriverName::new("vendor.file-driver").is_ok());
         for modes in [&[""][..], &["read", "read"][..]] {
             assert!(matches!(
-                DriverManifest::try_new([entry("file", "std/file@3", modes)]),
+                DriverManifest::try_new([entry("file", "std/file@1", modes)]),
                 Err(DriverManifestError::InvalidModes { .. })
             ));
         }
-        let no_selector = DriverManifest::try_new([entry("http-client", "std/http-client@3", &[])])
+        let no_selector = DriverManifest::try_new([entry("http-client", "std/http-client@1", &[])])
             .expect("a Contract without a mode selector");
         assert!(no_selector.entries()[0].modes().is_empty());
         assert_eq!(no_selector.entries()[0].mode_attribute(), None);
-        let mut missing_selector = entry("file", "std/file@3", &["read"]);
+        let mut missing_selector = entry("file", "std/file@1", &["read"]);
         missing_selector.mode_attribute = None;
         assert!(matches!(
             DriverManifest::try_new([missing_selector]),
             Err(DriverManifestError::InvalidModes { .. })
         ));
-        let mut missing_modes = entry("http-client", "std/http-client@3", &[]);
+        let mut missing_modes = entry("http-client", "std/http-client@1", &[]);
         missing_modes.mode_attribute = Some(String::from("mode"));
         assert!(matches!(
             DriverManifest::try_new([missing_modes]),

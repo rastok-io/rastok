@@ -5,7 +5,7 @@
 > `connector::{exchange,driver,stdlib}`; hosted implementations are under
 > `connector::drivers`. See the [File contributor guide](connector-drivers.md),
 > [module map](components.md) and [T5/T9 qualification](connector-rework-qualification.md).
-> Process job/service now share `std/process@6`, with direction and exchange
+> Process job/service now share `std/process@1` (public version 1 of 3 November 2026), with direction and exchange
 > resolved by mode. [Stdlib](../spec/stdlib.md) and the
 > [approved identity movement](connector-rework-identity.md) supersede the
 > mode-specific ids in the dated 7 October checkpoint below, not its behavior.

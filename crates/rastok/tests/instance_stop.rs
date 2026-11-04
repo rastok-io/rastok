@@ -135,7 +135,7 @@ fn forged_packages_cannot_omit_the_lexical_scope_proof() {
     assert!(error.to_string().contains("instance closure"), "{error}");
     assert_eq!(
         plan::FORMAT_VERSION,
-        24,
+        1,
         "the current package requires the exact-instance closure proof"
     );
 }

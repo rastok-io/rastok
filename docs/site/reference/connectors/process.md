@@ -4,7 +4,7 @@ description: Ports, terminal outcomes, settings and qualification evidence for t
 order: 2
 ---
 
-`std/process@6`. `job` starts one child per Call and publishes its ordered frames with the exit. `service` opens a resident child per Node instance on first input and reuses it. One exit ends that child, not each application request.
+`std/process@1`. `job` starts one child per Call and publishes its ordered frames with the exit. `service` opens a resident child per Node instance on first input and reuses it. One exit ends that child, not each application request.
 
 ## Declaration
 

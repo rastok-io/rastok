@@ -4,7 +4,7 @@ description: Ports, terminal outcomes, settings and qualification evidence for t
 order: 5
 ---
 
-`std/websocket-client@3`. Opens a peer Session. Each complete message is one value; each graph write is journaled before I/O. One terminal ends the Session, not a message.
+`std/websocket-client@1`. Opens a peer Session. Each complete message is one value; each graph write is journaled before I/O. One terminal ends the Session, not a message.
 
 ## Declaration
 

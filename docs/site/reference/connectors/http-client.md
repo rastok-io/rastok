@@ -4,7 +4,7 @@ description: Ports, terminal outcomes, settings and qualification evidence for t
 order: 3
 ---
 
-`std/http-client@3`. One HTTP request per Call. Usable response bodies include non-success statuses. Decoded 500–599 responses use `ServerError`; other final statuses use `Completed`. A body decoding fault takes precedence over status classification.
+`std/http-client@1`. One HTTP request per Call. Usable response bodies include non-success statuses. Decoded 500–599 responses use `ServerError`; other final statuses use `Completed`. A body decoding fault takes precedence over status classification.
 
 ## Declaration
 

@@ -88,8 +88,8 @@ fn incomplete_corrupt_and_wrong_version_files_refuse() {
     let Cbor::Array(fields) = &mut tree else {
         panic!("capture row");
     };
-    assert_eq!(fields[0], Cbor::Uint(5));
-    for version in [4, 6, u64::MAX] {
+    assert_eq!(fields[0], Cbor::Uint(1));
+    for version in [0, 2, u64::MAX] {
         let mut tree = tree.clone();
         let Cbor::Array(fields) = &mut tree else {
             panic!("capture row");

@@ -44,7 +44,7 @@ durable deployment journal, Kafka or SQL Connector; diagnostic recordings
 are not durable recovery or share-safe exports. See the
 [opening ledger](opening-showcase.md).
 
-Format 24 separates logical time from civil dates. Logical
+The time-carrier change of 24 October 2026 (package format 1 since the public reset of 3 November) separates logical time from civil dates. Logical
 instants and durations use signed 64-bit nanoseconds; `timestamp` and
 `timestamp_ntz` use signed seconds plus a nanosecond fraction, including dates
 before 1678 and through year 9999. The journal retains the civil origin used

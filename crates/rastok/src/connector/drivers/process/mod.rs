@@ -673,7 +673,7 @@ enum Chunk {
     ReadFailed,
 }
 
-/// Statically linked job factory for `std/process@6`.
+/// Statically linked job factory for `std/process@1`.
 #[derive(Debug)]
 pub struct ProcessFactory {
     id: crate::connector::ContractId,

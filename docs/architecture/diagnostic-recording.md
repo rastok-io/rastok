@@ -1,5 +1,10 @@
 # Diagnostic recording and read-only replay
 
+> Note of 3 November 2026: the public release renumbers package format 24 as
+> format 1 and diagnostic recording 5 as recording 1, and the standard
+> Contracts as `@1` (D-2026-11-03-4). The numbers below are the ones in force
+> when this page was written; the representations they describe are unchanged.
+
 Status: 24 October 2026, diagnostic format **5**, embedding the
 [current plan package](../spec/identity.md). The approved witness movement and
 qualification are recorded in the [time-carrier inventory](time-carriers-identity.md).
