@@ -13,7 +13,9 @@ cargo run --release --manifest-path spikes/h3-quinn-http3/Cargo.toml
 cargo test --manifest-path spikes/h3-quinn-http3/Cargo.toml
 ```
 
-Success ends with `SPIKE_OK`. The dedicated CA and leaf fixtures are test-only.
+Success ends with `SPIKE_OK`. The dedicated CA and leaf fixtures in `certs/`
+are self-signed test-only material for `localhost`, generated for this spike,
+and must never be used by a real Driver.
 
 An explicitly networked, non-CI smoke probe exercises the h3/Quinn client
 against Cloudflare's quiche endpoint with public-root and hostname
