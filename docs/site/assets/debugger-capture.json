@@ -1,6 +1,6 @@
 {
-  "revision": "a85d18318ea4532bf57d0a20f83fdfadcafa035b",
-  "binary_sha256": "8e274e66e6e4bea3b2f35c8d9c43abea99729123f130ba932ae6f531030abc65",
+  "revision": "7d17dc76118b579acf313252eeee86d7c6c44a62",
+  "binary_sha256": "15d19891489e377cddd73a7cdc979c8129dc83cbd46673f7fcfd3a7287d90869",
   "viewport": {
     "width": 1352,
     "height": 760
@@ -10,7 +10,7 @@
       "source": "examples/webhook-to-partner.rkg",
       "scenario": "webhook.timeout_then_success",
       "transition": 20,
-      "sha256": "0d8e2d87316699dcedc1f329ff8231240ff905f19099f58cf3c7d47f7be84bb5",
+      "sha256": "e02690af17578f676c0e54fbe689e31676c028307470b48e19adb62aecca2a3a",
       "badges": 7
     },
     "debugger-selection": {
