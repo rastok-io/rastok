@@ -140,8 +140,8 @@ fn gallery_chapters_form_a_connected_learning_path() {
     let directory = root().join("docs/site/examples");
     let (_, index) = markdown(&root().join("docs/site/getting-started.md"));
     let index = index
-        .split_once("\n## Two ways to learn\n")
-        .expect("Getting Started offers both learning paths")
+        .split_once("\n## Three ways to learn\n")
+        .expect("Getting Started offers the three learning paths")
         .1
         .split_once("\n## How to use the examples\n")
         .expect("the example sequence precedes its reading instructions")

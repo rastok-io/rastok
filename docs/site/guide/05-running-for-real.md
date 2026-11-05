@@ -134,4 +134,4 @@ state ownership, lifetimes and bounded closure. [Command line](09-command-line.m
 options, or try [Webhook to partner](../examples/04-webhook-to-partner.md).
 Run its synthetic scenarios, inspect the bounded retry, then review what a
 real partner and deployment must supply. Return to
-[Getting Started](../getting-started.md#two-ways-to-learn) to choose another example.
+[Getting Started](../getting-started.md#three-ways-to-learn) to choose another example.
