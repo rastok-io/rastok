@@ -118,6 +118,7 @@ the Rust 1.97.1 source-install fallback is:
 cargo install --git https://github.com/rastok-io/rastok --tag v0.1.0-alpha --locked --features hosted-ui,hosted-websocket rastok
 ```
 
-This command is prepared for opening, not yet qualified against a public tag.
-Until then, use the checkout installation above. The public documentation
-address is [docs.rastok.com](https://docs.rastok.com).
+This command was qualified against the public `v0.1.0-alpha` tag on
+5 November 2026 (installation from a clean Cargo home, `rastok --version`,
+`rastok simulate examples/echo.rkg`). The public documentation address is
+[docs.rastok.com](https://docs.rastok.com).
