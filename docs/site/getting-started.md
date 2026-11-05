@@ -56,6 +56,22 @@ lab hello {
 `1 scenario(s), 0 failed`. Start from this file rather than from the grammar;
 [Echo](examples/01-echo.md) then adds a Connector, a mock and a recording.
 
+## With a coding assistant
+
+Open your preferred LLM harness or coding agent in an empty directory and
+give it one instruction, for example:
+
+> Using https://docs.rastok.com/llms.txt, develop a small Rastok program for
+> \<your brief\>, such as "an Operator that classifies a room temperature as
+> comfortable or alarm, with one Lab scenario per branch". Check it with
+> `rastok check` and run it with `rastok simulate`; fix it yourself until both
+> pass.
+
+On 5 November 2026, three different assistants given an instruction of this
+kind, from an empty directory and `llms.txt` alone, each produced a passing
+program on their first attempt. Read what the assistant wrote as you would
+read a colleague's: the compiler and the scenarios are the review.
+
 Debug: follow [The debugger, a guided tour](debugger.md) for its controls,
 source view and assertion evidence.
 
