@@ -18,12 +18,24 @@ associate left to right; the conditional's false branch associates right.
 |---|---|---|
 | Access and narrowing | `data.name`, `items[index]`, `value as T` | Member paths require a known structure; indexes require a checked collection |
 | Unary | `!value`, `-value` | Boolean negation; numeric or duration negation |
-| Multiplication | `*`, `/`, `%` | Checked numeric operations |
-| Addition | `+`, `-` | Numeric operations, text concatenation, supported timestamp/duration arithmetic |
+| Multiplication | `*`, `/`, `%` | Checked numeric operations within one carrier family (below) |
+| Addition | `+`, `-` | Numeric operations within one carrier family, text concatenation, supported timestamp/duration arithmetic |
 | Relation and type test | `==`, `!=`, `<`, `<=`, `>`, `>=`, `is T` | Equality, ordering and type/case test share this parser level |
 | Conjunction | `a && b` | Short-circuits when `a` is false |
 | Disjunction | `a \|\| b` | Short-circuits when `a` is true |
 | Conditional | `test ? yes : no` | Evaluates only the selected branch |
+
+### Numeric operands in this alpha
+
+Arithmetic (`*`, `/`, `%`, `+`, `-`) and ordering (`<`, `<=`, `>`, `>=`) are
+defined between two values of one carrier family: signed integers (`int`,
+`long`), unsigned integers (`uint`), or binary floats (`float`, `double`; a
+literal such as `2.5` is a `double`). Mixing families is refused at
+`rastok check` with `E-EXPR`, as is any arithmetic or ordering on `number`
+or `decimal(p,s)` values: those are carried, projected and compared for
+equality, not computed with, in this alpha. For money, compute in integer
+minor units (cents) and keep the exact decimal for carrying and projection.
+Exact decimal arithmetic is later work.
 
 Integer overflow, invalid indexing, division by zero and a failed explicit
 narrowing are evaluation faults. A fault commits no input consumption,
