@@ -56,22 +56,6 @@ lab hello {
 `1 scenario(s), 0 failed`. Start from this file rather than from the grammar;
 [Echo](examples/01-echo.md) then adds a Connector, a mock and a recording.
 
-## With a coding assistant
-
-Open your preferred LLM harness or coding agent in an empty directory and
-give it one instruction, for example:
-
-> Using https://docs.rastok.com/llms.txt, develop a small Rastok program for
-> \<your brief\>, such as "an Operator that classifies a room temperature as
-> comfortable or alarm, with one Lab scenario per branch". Check it with
-> `rastok check` and run it with `rastok simulate`; fix it yourself until both
-> pass.
-
-On 5 November 2026, three different assistants given an instruction of this
-kind, from an empty directory and `llms.txt` alone, each produced a passing
-program on their first attempt. Read what the assistant wrote as you would
-read a colleague's: the compiler and the scenarios are the review.
-
 Debug: follow [The debugger, a guided tour](debugger.md) for its controls,
 source view and assertion evidence.
 
@@ -93,13 +77,14 @@ one output port. An App with several output ports prints `port: value` instead.
 Two unaided timed installation trials are still required before this
 quickstart is qualified. No elapsed-time claim is made yet.
 
-## Two ways to learn
+## Three ways to learn
 
-Some people read the book first; others open an example and break it. Both
+Some people read the book first; others open an example and break it; others
+hand the first step to a coding assistant and read what it wrote. All three
 paths lead to the same place.
 
 Keep [Reference](reference/types.md) open for types, expressions, Contracts,
-Lab syntax and diagnostic codes while following either path.
+Lab syntax and diagnostic codes while following any of them.
 
 - **By the book.** The [user guide](guide/01-a-program.md) reads the
   language in order: a program, types and expressions, Connectors and
@@ -108,6 +93,16 @@ Lab syntax and diagnostic codes while following either path.
 - **By example.** Eight examples, each built from a question, with a graph to
   read, a scenario to run, something to break and the first golden
   difference to read.
+- **With a coding assistant.** Open your preferred LLM harness or coding
+  agent in an empty directory and give it one instruction, for example:
+  *"Using https://docs.rastok.com/llms.txt, develop a small Rastok program for
+  \<your brief\>, such as an Operator that classifies a room temperature as
+  comfortable or alarm, with one Lab scenario per branch. Check it with
+  `rastok check` and run it with `rastok simulate`; fix it yourself until both
+  pass."* On 5 November 2026, three different assistants given an instruction
+  of this kind, from an empty directory and `llms.txt` alone, each produced a
+  passing program on their first attempt. Read what it wrote as you would
+  read a colleague's: the compiler and the scenarios are the review.
 
 | Guide chapter | What it explains |
 |---|---|
