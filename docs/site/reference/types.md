@@ -90,6 +90,7 @@ and import design still to be discussed.
 | `42`, `42u`, `1.5`, `true`, `null`, `"Ada"` | Intrinsic scalar | Ordinary expression literals retain their checked type |
 | `decimal("12.30")` | `number` carrying an exact decimal | A declared decimal target checks precision and rescales exactly |
 | `duration("2h30m")` | `duration` | Signed duration; units include `h`, `m`, `s`, `ms`, `us`, `ns` |
+| `{ room = "kitchen", celsius = 21 }` | Declared `struct` | Braced field assignments, `name = value`, checked against the struct type expected where the literal appears |
 | `timestamp("2026-10-30T12:00:00Z")` | `timestamp` | Parsed civil instant |
 | `media_type("application/json")` | `media_type` | Parses and canonicalizes a concrete media type |
 | `json! { "count": 42 }` | `variant` | Also accepts scalar JSON; duplicate keys refuse; numbers stay exact |
