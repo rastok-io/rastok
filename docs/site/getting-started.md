@@ -23,6 +23,39 @@ reach `Hello, world`. The CLI reports `PASS hello.roundtrip_greeting` when the s
 finishes. Close the viewer from its toolbar when done.
 <!-- quickstart:end -->
 
+## The file `rastok new hello` writes
+
+The whole program, nineteen lines: one App graph with typed ports, one
+Operator with a handler, and a Lab with one scenario. No Connector, no
+external system.
+
+```rkg
+graph hello : App {
+  input in: text
+  output out: text
+
+  operator greet {
+    input in: text
+    output out: text
+    on in { out = "Hello, " + data }
+  }
+
+  in -> greet -> out
+}
+
+lab hello {
+  scenario roundtrip_greeting {
+    app.in = "world"
+    expect app.out == "Hello, world"
+  }
+}
+```
+
+`rastok check hello.rkg` answers `ok: 2 node(s)` with the semantic hash;
+`rastok simulate hello.rkg` prints `PASS hello.roundtrip_greeting` and
+`1 scenario(s), 0 failed`. Start from this file rather than from the grammar;
+[Echo](examples/01-echo.md) then adds a Connector, a mock and a recording.
+
 Debug: follow [The debugger, a guided tour](debugger.md) for its controls,
 source view and assertion evidence.
 
