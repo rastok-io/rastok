@@ -43,8 +43,8 @@ Conversions have the same alpha limits. `value as T` with `T` a declared
 so a Lab expectation against a `Price` port is written
 `expect app.out == { b = decimal("2.50") as Price }`. The same conversion
 from an integer (`data.quantity as Price`) is refused by `rastok check` in
-this alpha, although the specification describes it; this is tracked as an
-open issue of the repository.
+this alpha, although the specification describes it; this is tracked in
+[issue 4](https://github.com/rastok-io/rastok/issues/4).
 
 Integer overflow, invalid indexing, division by zero and a failed explicit
 narrowing are evaluation faults. A fault commits no input consumption,
