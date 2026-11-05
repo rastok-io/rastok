@@ -100,14 +100,14 @@ the same run in the debugger.
 ## Quickstart
 
 <!-- quickstart:start -->
-Release binaries target macOS Apple silicon and Linux x86-64. Intel Macs and
-other platforms build from source using the same command below.
-
-Build from the repository with Rust **1.97.1** while release binaries are being
-prepared. This installs HTTP/1.1, HTTP/2, WebSocket and the debugger, not HTTP/3.
+Release archives for macOS Apple silicon and Linux x86-64 are attached to
+[v0.1.0-alpha](https://github.com/rastok-io/rastok/releases/tag/v0.1.0-alpha),
+each with a `.sha256` file. On any platform with Rust **1.97.1**, install from
+crates.io instead. Both give HTTP/1.1, HTTP/2, WebSocket and the debugger, not
+HTTP/3.
 
 ```sh
-cargo install --path crates/rastok --locked --features hosted-ui,hosted-websocket
+cargo install rastok --version 0.1.0-alpha --locked --features hosted-ui,hosted-websocket
 rastok new hello
 rastok simulate hello.rkg --ui
 ```
