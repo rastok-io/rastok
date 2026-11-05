@@ -50,7 +50,7 @@ the implemented scope is listed under
 [Status and known limits](#status-and-known-limits), and the runtime makes no
 production-readiness claim.
 
-Public destinations for the planned **5 November 2026** opening:
+Public destinations since the **5 November 2026** opening:
 [website](https://www.rastok.com) ·
 [documentation](https://docs.rastok.com) ·
 [source](https://github.com/rastok-io/rastok) ·
@@ -253,7 +253,7 @@ Rastok is at an early experimental stage. Its specification and
 implementation architecture are under active review, and the runtime
 does not yet make a production-readiness claim.
 
-Opening is planned for **5 November 2026**, on explicit release instruction.
+Rastok opened on **5 November 2026** with `v0.1.0-alpha`.
 The independent HTTP/3 server test against ngtcp2, official Autobahn suite,
 and measurement of the work needed to add a Connector remain **open and
 non-blocking for that opening**. The debugger's final browser qualification

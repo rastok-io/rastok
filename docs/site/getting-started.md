@@ -148,12 +148,10 @@ goes. You do not need a different testing model for each integration.
 
 ## After the public opening
 
-The planned 5 November 2026 download location is
+Release archives are published under
 [Rastok releases](https://github.com/rastok-io/rastok/releases): macOS Apple
 silicon and Linux x86-64, with `hosted-ui,hosted-websocket`. Intel Macs and
-other platforms use the source-install fallback. Once the
-repository and the `v0.1.0-alpha` tag are published,
-the Rust 1.97.1 source-install fallback is:
+other platforms use the source-install fallback, with Rust 1.97.1:
 
 ```sh
 cargo install --git https://github.com/rastok-io/rastok --tag v0.1.0-alpha --locked --features hosted-ui,hosted-websocket rastok
