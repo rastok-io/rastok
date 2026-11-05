@@ -55,8 +55,6 @@ Public destinations since the **5 November 2026** opening:
 [documentation](https://docs.rastok.com) ·
 [source](https://github.com/rastok-io/rastok) ·
 [releases](https://github.com/rastok-io/rastok/releases).
-These addresses are confirmed; this checkout does not claim that the private
-repository or release downloads are already publicly available.
 
 ## A first graph
 
