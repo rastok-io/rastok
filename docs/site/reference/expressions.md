@@ -37,6 +37,15 @@ equality, not computed with, in this alpha. For money, compute in integer
 minor units (cents) and keep the exact decimal for carrying and projection.
 Exact decimal arithmetic is later work.
 
+Conversions have the same alpha limits. `value as T` with `T` a declared
+`decimal(p,s)` (for example `type Price = decimal(18,2)`) accepts a
+`number`, including a `decimal("…")` literal, which is itself a `number`;
+so a Lab expectation against a `Price` port is written
+`expect app.out == { b = decimal("2.50") as Price }`. The same conversion
+from an integer (`data.quantity as Price`) is refused by `rastok check` in
+this alpha, although the specification describes it; this is tracked as an
+open issue of the repository.
+
 Integer overflow, invalid indexing, division by zero and a failed explicit
 narrowing are evaluation faults. A fault commits no input consumption,
 state change or emission from that transaction. Expected domain rejection
