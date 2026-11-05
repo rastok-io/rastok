@@ -119,7 +119,7 @@ finishes. Close the viewer from its toolbar when done.
 <!-- quickstart:end -->
 
 The [Getting Started page](docs/site/getting-started.md) owns this block. Continue with
-the [learning path](docs/site/getting-started.md#two-ways-to-learn): eight examples, from
+the [learning path](docs/site/getting-started.md#three-ways-to-learn): eight examples, from
 [echo](docs/site/examples/01-echo.md) to agents and a
 [typed HTTP model adapter](docs/site/examples/08-model-adapter.md), each with a
 scenario to break.
@@ -299,7 +299,7 @@ distinguish local qualification from the external evidence still open.
 | [WHITEPAPER.md](WHITEPAPER.md) | conceptual model and statement of intent: why Rastok exists, the core model, instances, time and the Lab |
 | [docs/spec/](docs/spec/README.md) | the normative language and runtime contract: grammar, types, expressions, envelope, execution model, delivery and simulation semantics, identity, diagnostics |
 | [ARCHITECTURE.md](ARCHITECTURE.md) and [docs/architecture/](docs/architecture/) | implementation blueprint, diagrams and qualification ledgers |
-| [Learning path](docs/site/getting-started.md#two-ways-to-learn) | the user guide or six hands-on examples, each with a scenario to break |
+| [Learning path](docs/site/getting-started.md#three-ways-to-learn) | the user guide or six hands-on examples, each with a scenario to break |
 | [Example catalogue](docs/examples/README.md) | executable programs, isolated fragments and historical sketches, told apart |
 | [Connector Driver guide](docs/architecture/connector-drivers.md) | how to contribute a Driver behind a standard Contract |
 | [ROADMAP.md](ROADMAP.md) | evidence gates, done and open |

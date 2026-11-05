@@ -99,10 +99,8 @@ Lab syntax and diagnostic codes while following any of them.
   \<your brief\>, such as an Operator that classifies a room temperature as
   comfortable or alarm, with one Lab scenario per branch. Check it with
   `rastok check` and run it with `rastok simulate`; fix it yourself until both
-  pass."* On 5 November 2026, three different assistants given an instruction
-  of this kind, from an empty directory and `llms.txt` alone, each produced a
-  passing program on their first attempt. Read what it wrote as you would
-  read a colleague's: the compiler and the scenarios are the review.
+  pass."* Read what it wrote as you would read a colleague's: the compiler and
+  the scenarios are the review.
 
 | Guide chapter | What it explains |
 |---|---|
