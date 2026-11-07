@@ -98,14 +98,86 @@ the same run in the debugger.
 ## Quickstart
 
 <!-- quickstart:start -->
-Release archives for macOS Apple silicon and Linux x86-64 are attached to
-[v0.1.0-alpha](https://github.com/rastok-io/rastok/releases/tag/v0.1.0-alpha),
-each with a `.sha256` file. On any platform with Rust **1.97.1**, install from
-crates.io instead. Both give HTTP/1.1, HTTP/2, WebSocket and the debugger, not
-HTTP/3.
+Rastok is currently in alpha. Two prebuilt binaries are available:
+**macOS Apple silicon** and **Linux x86-64**, on the
+[release page](https://github.com/rastok-io/rastok/releases/tag/v0.1.0-alpha).
+Copy the command for your system below into a terminal, in an empty directory.
+It downloads, verifies and installs Rastok.
+
+### macOS Apple silicon
+
+For Macs with an Apple M-series chip, running macOS 11 or later:
 
 ```sh
-cargo install rastok --version 0.1.0-alpha --locked --features hosted-ui,hosted-websocket
+curl -fLO https://github.com/rastok-io/rastok/releases/download/v0.1.0-alpha/rastok-0.1.0-alpha-aarch64-apple-darwin.tar.gz && curl -fLO https://github.com/rastok-io/rastok/releases/download/v0.1.0-alpha/rastok-0.1.0-alpha-aarch64-apple-darwin.tar.gz.sha256 && shasum -a 256 -c rastok-0.1.0-alpha-aarch64-apple-darwin.tar.gz.sha256 && tar -xzf rastok-0.1.0-alpha-aarch64-apple-darwin.tar.gz rastok && mkdir -p "$HOME/.local/bin" && install -m 755 rastok "$HOME/.local/bin/rastok" && export PATH="$HOME/.local/bin:$PATH" && rastok --version
+```
+
+### Linux x86-64
+
+For 64-bit Intel or AMD systems with glibc 2.39 or later, such as Ubuntu 24.04.
+`uname -m` should report `x86_64`; `ldd --version` reports your glibc version.
+For Linux ARM64, older glibc or a system using musl, use the source installation
+below.
+
+```sh
+curl -fLO https://github.com/rastok-io/rastok/releases/download/v0.1.0-alpha/rastok-0.1.0-alpha-x86_64-unknown-linux-gnu.tar.gz && curl -fLO https://github.com/rastok-io/rastok/releases/download/v0.1.0-alpha/rastok-0.1.0-alpha-x86_64-unknown-linux-gnu.tar.gz.sha256 && sha256sum -c rastok-0.1.0-alpha-x86_64-unknown-linux-gnu.tar.gz.sha256 && tar -xzf rastok-0.1.0-alpha-x86_64-unknown-linux-gnu.tar.gz rastok && mkdir -p "$HOME/.local/bin" && install -m 755 rastok "$HOME/.local/bin/rastok" && export PATH="$HOME/.local/bin:$PATH" && rastok --version
+```
+
+Each command installs `rastok` in `~/.local/bin` for your user account and
+prints `rastok 0.1.0-alpha`. To use it in new terminals, add
+`export PATH="$HOME/.local/bin:$PATH"` to your shell configuration:
+`~/.zshrc` for zsh (the macOS default), or `~/.bashrc` for bash.
+
+### Other platforms and source builds
+
+<details>
+<summary>Installation and contribution instructions</summary>
+
+Rastok is written in Rust. You can compile it from source if your platform has
+no prebuilt binary, or if you prefer to build it yourself.
+
+First, follow the [official Rust installation instructions](https://rust-lang.org/tools/install/),
+including the build tools listed for your system. This also installs `rustup`,
+which selects the Rust version, and Cargo, which builds and installs Rust
+software. Open a new terminal and install the version used by Rastok:
+
+```sh
+rustup toolchain install 1.97.1
+```
+
+**Install the published release.** Cargo downloads the sources and dependencies,
+compiles them on your machine and installs the executable:
+
+```sh
+cargo +1.97.1 install rastok --version 0.1.0-alpha --locked --features hosted-ui,hosted-websocket
+rastok --version
+```
+
+**Modify the source and contribute.** Clone the repository instead, then build
+and run your local copy. For a pull request, fork the repository on GitHub
+first and use your fork's URL in the clone command:
+
+```sh
+git clone https://github.com/rastok-io/rastok.git
+cd rastok
+cargo +1.97.1 run --locked -p rastok --features hosted-ui,hosted-websocket -- --help
+```
+
+Cargo builds and runs the executable from your working copy. After editing,
+repeat this command or replace `--help` with the Rastok command you want to test.
+The [contribution guide](https://github.com/rastok-io/rastok/blob/main/CONTRIBUTING.md)
+explains the checks and review process for a pull request.
+
+Both installation routes include HTTP/1.1, HTTP/2, WebSocket and the debugger;
+HTTP/3 is not included.
+
+</details>
+
+### Create your first application
+
+In a directory for your work, run:
+
+```sh
 rastok new hello
 rastok simulate hello.rkg --ui
 ```
