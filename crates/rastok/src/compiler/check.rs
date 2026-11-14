@@ -1024,10 +1024,25 @@ impl Checker<'_, '_> {
                 );
                 continue;
             };
-            if node.connector_contract_id().is_none() {
+            let NodeSemantics::Connector {
+                contract,
+                roles,
+                exchange,
+                attributes,
+                ..
+            } = &node.semantics
+            else {
                 self.deferred("a mock of an operator", name.span);
                 continue;
-            }
+            };
+            let mode = attributes
+                .iter()
+                .find(|attribute| attribute.name == "mode")
+                .and_then(|attribute| match &attribute.value {
+                    AttrValue::Word(word) => Some(word.as_str()),
+                    _ => None,
+                });
+            let call = crate::connector::outbound_call_semantics(contract, *roles, *exchange, mode);
             // A mock is a pure function of the request: its handlers
             // check like ordinary handlers, against the connector's
             // own port table — which answers the contract's
@@ -1076,6 +1091,9 @@ impl Checker<'_, '_> {
                             .with_field("port", "exit"),
                         );
                         continue;
+                    }
+                    if let (Some(call), Some(dispatch)) = (call, &handler.dispatch) {
+                        self.check_mock_frames(dispatch, node, contract, call);
                     }
                     // A reply carries data only: its envelope is
                     // constructed by the Connector's own transaction —

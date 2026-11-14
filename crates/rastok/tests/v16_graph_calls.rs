@@ -189,7 +189,7 @@ fn a_graph_driver_cannot_hide_a_missing_promised_response() {
         r#"{HTTP_GRAPH}
 lab app {{
   simulation broken {{
-    mock request {{ on in {{ exit = Completed {{ status = 200 }} }} }}
+    mock request {{ on in {{ val terminal: HttpClientExit = Completed {{ status = 200 }}; exit = terminal }} }}
     scenario one {{ app.in = "request" }}
   }}
 }}

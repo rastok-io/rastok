@@ -15,9 +15,9 @@ impl Execution<'_> {
         else {
             return Ok(None);
         };
-        let violation = |reason| ExecutionFault::ContractViolation {
+        let violation = |reason: &str| ExecutionFault::ContractViolation {
             node: node.path.clone(),
-            reason,
+            reason: reason.to_string(),
         };
         let mut terminals = record
             .emissions
@@ -47,9 +47,10 @@ impl Execution<'_> {
                 .filter(|emission| emission.port == port.port)
                 .count();
             if !production.accepts_count(terminal_case, count) {
-                return Err(violation(
-                    "Call frames contradict the Contract's terminal cardinality",
-                ));
+                return Err(violation(&format!(
+                    "Call terminal `{terminal_case}` contradicts the Contract's cardinality on `{}`: found {count} frame(s)",
+                    port.port,
+                )));
             }
         }
         for emission in &record.emissions {

@@ -1075,7 +1075,12 @@ lab app {
         "{error}"
     );
 
-    let missing_frame = source.replace("out = 9", "out = nothing");
+    // A computed terminal retains the independent runtime refusal; a direct
+    // constructor with a missing frame now refuses at check.
+    let missing_frame = source.replace("out = 9", "out = nothing").replace(
+        "exit = Completed { status = 200 }",
+        "val terminal: HttpClientExit = Completed { status = 200 }; exit = terminal",
+    );
     let compilation =
         compiler::compile(&[&missing_frame], &ContractCatalog::try_m0().unwrap()).unwrap();
     let runs = rastok::lab::run(&compilation.plan, GraphVersion(1), &compilation.labs[0]);

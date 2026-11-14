@@ -14,6 +14,176 @@ use rastok::plan::GraphVersion;
 
 const APP: &str = "graph demo : App { input in: text; output out: text; in -> out }\n";
 
+fn http_mock(dispatch: &str) -> String {
+    format!(
+        r#"graph demo : App {{
+  input in: text
+  connector request : HttpClient {{
+    url = "https://example.test/"
+    codec = text
+    timeout = duration("1s")
+    behavior = deterministic
+  }}
+  in -> request
+  request.out -> nothing
+  request.exit -> nothing
+}}
+lab checks {{
+  mock request {{ on in {dispatch} }}
+  scenario response {{ app.in = "request" }}
+}}
+"#
+    )
+}
+
+fn assert_mock_cardinality(source: &str, terminal: &str, expected: usize, found: usize) {
+    let error = compiler::compile(&[source], &ContractCatalog::try_m0().unwrap())
+        .expect_err("the terminal's frame count must be checked before simulation");
+    let diagnostic = error
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code() == Code::new("E-CONTRACT-REQUIRED"))
+        .expect("a Contract cardinality refusal");
+    for (field, value) in [
+        ("terminal", terminal.to_owned()),
+        ("port", "out".to_owned()),
+        ("expected", expected.to_string()),
+        ("found", found.to_string()),
+    ] {
+        assert!(
+            diagnostic.fields().contains(&(field, value)),
+            "{diagnostic:?}"
+        );
+    }
+    assert_eq!(diagnostic.spans().len(), 1);
+    assert!(source[diagnostic.spans()[0].range()].starts_with("exit = "));
+}
+
+#[test]
+fn a_completed_call_mock_requires_one_response_frame() {
+    assert_mock_cardinality(
+        &http_mock("{ exit = Completed { status = 200 } }"),
+        "Completed",
+        1,
+        0,
+    );
+}
+
+#[test]
+fn a_server_error_call_mock_requires_one_response_frame() {
+    assert_mock_cardinality(
+        &http_mock("{ exit = ServerError { status = 503 } }"),
+        "ServerError",
+        1,
+        0,
+    );
+}
+
+#[test]
+fn a_timed_out_call_mock_cannot_supply_a_response_frame() {
+    assert_mock_cardinality(
+        &http_mock("{ out = \"body\"; exit = TimeoutExpired {} }"),
+        "TimeoutExpired",
+        0,
+        1,
+    );
+}
+
+#[test]
+fn a_completed_call_mock_cannot_supply_two_response_frames() {
+    assert_mock_cardinality(
+        &http_mock("{ out = \"one\"; out = \"two\"; exit = Completed { status = 200 } }"),
+        "Completed",
+        1,
+        2,
+    );
+}
+
+#[test]
+fn a_timed_out_call_mock_needs_no_response_frame() {
+    assert!(
+        reports(&compile(&http_mock("{ exit = TimeoutExpired {} }")))[0]
+            .report
+            .passed()
+    );
+}
+
+#[test]
+fn a_completed_call_mock_with_one_response_frame_passes() {
+    assert!(
+        reports(&compile(&http_mock(
+            "{ out = \"body\"; exit = Completed { status = 200 } }"
+        )))[0]
+            .report
+            .passed()
+    );
+}
+
+#[test]
+fn mock_cardinality_is_per_leaf_and_nothing_is_not_a_frame() {
+    let dispatch = r#"match {
+        data == "request" => { out = "body"; exit = Completed { status = 200 } }
+        _ => { out = nothing; exit = TimeoutExpired {} }
+    }"#;
+    assert!(reports(&compile(&http_mock(dispatch)))[0].report.passed());
+    assert_mock_cardinality(
+        &http_mock(&dispatch.replace("out = \"body\"", "out = nothing")),
+        "Completed",
+        1,
+        0,
+    );
+}
+
+#[test]
+fn file_read_mock_requires_its_completed_bytes() {
+    let app = r#"graph demo : App {
+      connector file : File { mode = read; path = "input.txt" }
+      in -> file
+      file.out -> nothing
+      file.exit -> nothing
+    }"#;
+    let source =
+        format!("{app} lab checks {{ mock file {{ on in {{ exit = Completed {{}} }} }} }}");
+    assert_mock_cardinality(&source, "Completed", 1, 0);
+    compile(&source.replace("exit =", "out = base64! { YQ== }; exit ="));
+}
+
+#[test]
+fn process_job_mock_keeps_zero_or_more_frames() {
+    let app = r#"graph demo : App {
+      input in: text
+      connector process : Process { command = "cat"; codec = lines; behavior = deterministic }
+      in -> process
+      process.out -> nothing
+      process.err -> nothing
+      process.exit -> nothing
+    }"#;
+    for frames in ["", "out = \"one\"; out = \"two\";"] {
+        let source = format!(
+            "{app} lab checks {{ mock process {{ on in {{ {frames} exit = Exited {{ exit_code = 0, signal = null }} }} }} scenario response {{ app.in = \"request\" }} }}"
+        );
+        assert!(reports(&compile(&source))[0].report.passed());
+    }
+}
+
+#[test]
+fn a_computed_mock_terminal_keeps_the_runtime_cardinality_check() {
+    let source =
+        http_mock("{ val terminal: HttpClientExit = Completed { status = 200 }; exit = terminal }");
+    let runs = reports(&compile(&source));
+    assert!(
+        runs[0].report.failures.iter().any(|message| {
+            message.contains("ContractViolation")
+                && message.contains("Completed")
+                && message.contains("out")
+        }),
+        "{:#?}",
+        runs[0].report
+    );
+    assert!(runs[0].records.iter().all(|record| !matches!(record,
+        rastok::journal::Record::Transaction(record) if record.emissions.iter().any(|emission| emission.port.name() == "exit"))));
+}
+
 fn compile(source: &str) -> Compilation {
     compiler::compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap()
 }

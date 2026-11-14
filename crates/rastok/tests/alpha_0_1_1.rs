@@ -150,7 +150,6 @@ fn diagnostic_details_are_not_combined_across_matching_reports() {
 }
 
 #[test]
-#[ignore = "R-150, gate P1"]
 fn r150_a_completed_mock_requires_its_body_at_check() {
     assert_check_refuses(
         "R-150-fake-without-body.rkg",

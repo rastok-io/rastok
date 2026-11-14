@@ -3,6 +3,82 @@
 use super::*;
 
 impl Checker<'_, '_> {
+    /// Source leaves retain the terminal constructor and its diagnostic span.
+    /// Match prefixes contain only pure bindings, so frames cannot accumulate
+    /// across leaves. Computed terminals remain the runtime's responsibility.
+    pub(super) fn check_mock_frames(
+        &mut self,
+        dispatch: &SynDispatch,
+        node: &Node,
+        contract: &crate::connector::ContractId,
+        call: crate::connector::CallSemantics,
+    ) {
+        match dispatch {
+            SynDispatch::Match { arms, .. } => {
+                for arm in arms {
+                    self.check_mock_frames(&arm.dispatch, node, contract, call);
+                }
+            }
+            SynDispatch::Linear { statements, .. } => {
+                let Some((target, case)) =
+                    statements.iter().find_map(|statement| match statement {
+                        SynStatement::Assign {
+                            target,
+                            value: SynValue::Tagged { case, .. },
+                            ..
+                        } if target.segments.len() == 1
+                            && target.segments[0].text == call.terminal() =>
+                        {
+                            Some((target, case))
+                        }
+                        _ => None,
+                    })
+                else {
+                    return;
+                };
+                for (port, production) in call.frame_ports() {
+                    let found = statements.iter().filter(|statement| matches!(statement,
+                        SynStatement::Assign { target, value, .. }
+                            if target.segments.len() == 1 && target.segments[0].text == *port
+                            && !matches!(value, SynValue::Nothing(_))
+                    )).count();
+                    if production.accepts_count(&case.text, found) {
+                        continue;
+                    }
+                    let expected = usize::from(production.accepts_count(&case.text, 1));
+                    let detail = if expected == 1 {
+                        let count = if found == 0 {
+                            "none".to_owned()
+                        } else {
+                            found.to_string()
+                        };
+                        format!(
+                            "requires exactly one `{port}` frame for `{contract}`; this branch emits {count}"
+                        )
+                    } else {
+                        format!("cannot emit `{port}` for `{contract}`; this branch emits {found}")
+                    };
+                    self.bag.push(
+                        Diagnostic::new(
+                            E_CONTRACT_REQUIRED,
+                            Phase::Check,
+                            format!("a mock answer ending in `{}` {detail}", case.text),
+                        )
+                        .with_span(Span::new(
+                            target.span.source(),
+                            target.span.range().start..case.span.range().end,
+                        ))
+                        .with_field("connector", node.path.to_string())
+                        .with_field("terminal", case.text.clone())
+                        .with_field("port", *port)
+                        .with_field("expected", expected.to_string())
+                        .with_field("found", found.to_string()),
+                    );
+                }
+            }
+        }
+    }
+
     pub(super) fn handler(
         &mut self,
         decl: &crate::compiler::syntax::HandlerDecl,

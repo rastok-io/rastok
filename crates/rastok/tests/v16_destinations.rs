@@ -436,7 +436,7 @@ fn a_contract_cardinality_violation_is_not_published_even_without_loop() {
     }
     lab app {
       simulation bad_driver {
-        mock request { on in { exit = Completed { status = 200 } } }
+        mock request { on in { val terminal: HttpClientExit = Completed { status = 200 }; exit = terminal } }
         scenario omitted_frame { app.in = 3 }
       }
     }"#;
