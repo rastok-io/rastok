@@ -53,6 +53,259 @@ fn refusal_with(source: &str, code: &str, needle: &str) {
     );
 }
 
+fn json_request_graph(ty: &str) -> String {
+    format!(
+        r#"graph app : App {{
+      input in: {ty}
+      connector request : HttpClient {{
+        url = "https://example.test/"
+        codec = json
+        behavior = deterministic
+        timeout = duration("1s")
+      }}
+      in -> request
+      request.out -> nothing
+      request.exit -> nothing
+    }}"#
+    )
+}
+
+fn assert_non_json_request(ty: &str, sort: &str) {
+    for field in [
+        format!("struct {{ value: {ty} }}"),
+        format!("array<struct {{ value: {ty} }}>"),
+    ] {
+        let source = json_request_graph(&field);
+        let error = compile_one(&source)
+            .expect_err("a known non-JSON request must refuse before execution");
+        assert!(
+            error.diagnostics().iter().any(|diagnostic| {
+                diagnostic.code().as_str() == "E-TYPE-INVALID"
+                    && diagnostic.message().contains("request.in")
+                    && diagnostic.message().contains("value")
+                    && diagnostic.message().contains(sort)
+            }),
+            "{field}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn json_requests_refuse_bytes() {
+    assert_non_json_request("bytes", "bytes");
+}
+#[test]
+fn json_requests_refuse_duration() {
+    assert_non_json_request("duration", "duration");
+}
+#[test]
+fn json_requests_refuse_timestamp() {
+    assert_non_json_request("timestamp", "timestamp");
+}
+#[test]
+fn json_requests_refuse_date() {
+    assert_non_json_request("date", "date");
+}
+#[test]
+fn json_requests_refuse_time() {
+    assert_non_json_request("time", "time");
+}
+#[test]
+fn json_requests_refuse_timestamp_ntz() {
+    assert_non_json_request("timestamp_ntz", "timestamp_ntz");
+}
+#[test]
+fn json_requests_refuse_uuid() {
+    assert_non_json_request("uuid", "uuid");
+}
+#[test]
+fn json_requests_refuse_non_text_map_keys() {
+    assert_non_json_request("map<int, text>", "map");
+}
+#[test]
+fn json_requests_refuse_tagged_unions() {
+    assert_non_json_request("union { Done {} }", "tagged union");
+}
+
+#[test]
+fn json_requests_accept_the_writers_scalar_and_collection_types() {
+    for ty in [
+        "enum { yes, no }",
+        "decimal(6, 2)",
+        "text?",
+        "map<text, int>",
+        "double",
+        "media_type",
+    ] {
+        compile_one(&json_request_graph(ty)).unwrap();
+    }
+}
+
+#[test]
+fn a_json_encodable_value_hidden_by_variant_completes_its_call() {
+    let source = include_str!("fixtures/alpha_0_1_1/R-176-date-through-a-variant.rkg")
+        .replace("at: timestamp", "at: text")
+        .replace("at = now()", "at = \"now\"");
+    let compiled = compile_one(&source).unwrap();
+    let runs = rastok::lab::run(
+        &compiled.plan,
+        rastok::plan::GraphVersion(1),
+        &compiled.labs[0],
+    );
+    assert_eq!(runs.len(), 1);
+    assert!(runs[0].report.passed(), "{:?}", runs[0].report);
+}
+
+#[test]
+fn a_json_response_can_be_routed_directly_to_another_json_connector() {
+    let source = r#"graph app : App {
+      input in: text
+      output out: variant
+      connector first : HttpClient {
+        url = "https://first.example.test/"
+        method = "POST"; codec = json; behavior = deterministic; timeout = duration("1s")
+      }
+      connector second : HttpClient {
+        url = "https://second.example.test/"
+        method = "POST"; codec = json; behavior = deterministic; timeout = duration("1s")
+      }
+      in -> first -> second -> out
+      first.exit -> nothing
+      second.exit -> nothing
+    }
+    lab forwarded {
+      mock first {
+        on in {
+          out = json! {"ok": true}
+          exit = Completed { status = 200 }
+        }
+      }
+      mock second {
+        on in {
+          out = .
+          exit = Completed { status = 200 }
+        }
+      }
+      scenario response_reaches_the_second_call {
+        app.in = "request"
+        expect first.exit == Completed { status = 200 }
+        expect second.in == json! {"ok": true}
+        expect second.exit == Completed { status = 200 }
+        expect app.out == json! {"ok": true}
+      }
+    }"#;
+    let compiled = compile_one(source).unwrap();
+    let runs = rastok::lab::run(
+        &compiled.plan,
+        rastok::plan::GraphVersion(1),
+        &compiled.labs[0],
+    );
+    assert_eq!(runs.len(), 1);
+    assert!(runs[0].report.passed(), "{:?}", runs[0].report);
+}
+
+#[test]
+fn a_process_service_json_request_with_a_text_kind_reaches_its_mock() {
+    let source = include_str!("fixtures/alpha_0_1_1/R-089-union-in-a-json-frame.rkg")
+        .replace("kind: Kind", "kind: text")
+        .replace("kind = Brief {}", "kind = \"brief\"");
+    let compiled = compile_one(&source).unwrap();
+    let runs = rastok::lab::run(
+        &compiled.plan,
+        rastok::plan::GraphVersion(1),
+        &compiled.labs[0],
+    );
+    assert_eq!(runs.len(), 1);
+    assert!(runs[0].report.passed(), "{:?}", runs[0].report);
+}
+
+#[test]
+fn json_requests_check_inferred_producers_across_graph_boundaries() {
+    let source = r#"graph app : App {
+      input in: text
+      graph nested {
+        input in: text
+        operator stamp { on in { out = { at = timestamp("2026-01-01T00:00:00Z") } } }
+        in -> stamp -> out
+      }
+      connector request : HttpClient {
+        url = "https://example.test/"; codec = json; behavior = deterministic; timeout = duration("1s")
+      }
+      in -> nested -> request
+      request.out -> nothing
+      request.exit -> nothing
+    }"#;
+    refusal_with(source, "E-TYPE-INVALID", "field `at`");
+}
+
+#[test]
+fn a_known_non_json_field_refuses_even_beside_a_variant_field() {
+    for known in ["bytes", "timestamp"] {
+        refusal_with(
+            &json_request_graph(&format!("struct {{ arbitrary: variant, known: {known} }}")),
+            "E-TYPE-INVALID",
+            &format!("field `known` has type {known}"),
+        );
+    }
+}
+
+#[test]
+fn every_json_encoding_connector_checks_its_producer_type() {
+    for (kind, settings, extra_routes) in [
+        (
+            "HttpClient",
+            "url = \"https://example.test\"; timeout = duration(\"1s\"); codec = json; behavior = deterministic",
+            "",
+        ),
+        (
+            "Process",
+            "command = \"cat\"; mode = job; codec = jsonl; behavior = deterministic",
+            "network.err -> nothing",
+        ),
+        (
+            "Process",
+            "command = \"cat\"; mode = service; codec = jsonl; behavior = deterministic",
+            "network.err -> nothing",
+        ),
+        (
+            "WebSocketClient",
+            "url = \"wss://example.test\"; handshake_timeout = duration(\"1s\"); codec = json; behavior = deterministic",
+            "",
+        ),
+        (
+            "WebSocketServer",
+            "listen = \"127.0.0.1:8081\"; handshake_timeout = duration(\"1s\"); codec = json",
+            "",
+        ),
+    ] {
+        let source = network_graph(
+            kind,
+            settings,
+            &format!("input in: struct {{ at: timestamp }}\nin -> network -> out\n{extra_routes}"),
+        );
+        refusal_with(&source, "E-TYPE-INVALID", "field `at`");
+        compile_one(&source.replace("at: timestamp", "at: text"))
+            .unwrap_or_else(|error| panic!("{kind}: {error:?}"));
+    }
+}
+
+#[test]
+fn http_server_checks_the_graph_response_not_the_admitted_request() {
+    let source = r#"graph app : App {
+      connector listener : HttpServer {
+        listen = "127.0.0.1:8080"; codec = json; mode = respond; timeout = duration("1s")
+      }
+      operator reply {
+        on in { out = { at = timestamp("2026-01-01T00:00:00Z") } }
+      }
+      listener -> reply -> listener
+      listener.exit -> nothing
+    }"#;
+    refusal_with(source, "E-TYPE-INVALID", "listener.in");
+    compile_one(&source.replace("timestamp(\"2026-01-01T00:00:00Z\")", "\"now\""))
+        .expect("a JSON response preserves the inbound Call lineage");
+}
+
 #[test]
 fn standard_exit_types_are_available_without_declarations_or_imports() {
     for (name, rule) in [

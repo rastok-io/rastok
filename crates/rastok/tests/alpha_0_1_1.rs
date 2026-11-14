@@ -177,7 +177,6 @@ fn r165_a_bare_route_requires_a_handler_for_the_default_input() {
 }
 
 #[test]
-#[ignore = "R-176, gate P1"]
 fn r176_a_known_timestamp_in_a_json_request_refuses_at_check() {
     assert_check_refuses(
         "R-176-date-in-a-json-body.rkg",

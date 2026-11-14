@@ -11,6 +11,7 @@
 pub mod check;
 mod constants;
 pub mod hir;
+mod json_requests;
 pub mod lexer;
 pub mod lower;
 pub mod parser;
@@ -311,6 +312,10 @@ pub fn compile_with_assets(
             return Err(bag);
         }
     };
+    json_requests::check(&plan, &mut bag);
+    if bag.has_errors() {
+        return Err(bag);
+    }
     match plan.loop_repeat_warnings() {
         Ok(warnings) => {
             for warning in warnings {

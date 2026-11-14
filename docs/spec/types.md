@@ -414,6 +414,23 @@ is an explicit Operator. Connecting `OrderV1` to `OrderV2` without an
 adapter is a type error even when a mechanical migration could be
 guessed.
 
+`JsonEncodable(T)` is checked, not assumed. A JSON-encoding input
+(`codec = json | jsonl | ndjson`) refuses at check with `E-TYPE-INVALID`
+when the resolved type of an attached producer contains, at any depth,
+`bytes`, a temporal type (`duration`, `timestamp`, `date`, `time`,
+`timestamp_ntz`, `interval`), `uuid`, a map whose key is not text, or a
+tagged union. The diagnostic names the first offending field path.
+
+A `variant` producer is always admitted: `variant` is what a JSON codec
+carries, and check cannot see the value behind it. Routing or forwarding
+a `variant` does not read it ([envelope.md](envelope.md) §5.1); the
+encoding boundary does, and judges the value at execution.
+A value read from JSON always has a JSON form. A value built in the
+graph and converted with `as variant` may not; the exchange then ends
+without sending that value, with the refusal its own Contract declares for
+a value it cannot encode. No Contract gains or renames a terminal case
+for it.
+
 ### 4.1 Explicit JSON response types in M1
 
 D-2026-09-16-1 admits `output out: Response` inside HttpClient when
