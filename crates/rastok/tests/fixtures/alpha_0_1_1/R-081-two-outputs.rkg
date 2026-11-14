@@ -1,0 +1,33 @@
+// R-081 — With two outputs, an integer prints as `Materialized(Int(5))`
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   printf 'hello\n' | rastok run R-081-two-outputs.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ printf 'hello\n' | rastok run R-081-two-outputs.rkg
+//   out: hello
+//   size: Materialized(Int(5))
+//   [exit 0]
+//
+// Expected after the fix:
+//   out: hello
+//   size: 5
+
+graph app : App {
+  input in: text
+  output out: text
+  output size: int
+  operator see {
+    input in: text
+    output out: text
+    output size: int
+    on in {
+      out = data
+      size = size(data)
+    }
+  }
+  in -> see
+  see.out -> out
+  see.size -> size
+}

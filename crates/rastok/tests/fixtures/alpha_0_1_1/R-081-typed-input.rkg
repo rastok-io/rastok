@@ -1,0 +1,26 @@
+// R-081 — `rastok run` cannot feed an input that is not text
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   printf '{"id":"A","amount":3}\n' | rastok run R-081-typed-input.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ printf '{"id":"A","amount":3}\n' | rastok run R-081-typed-input.rkg
+//   error: the submission was refused: the draft cannot enter `in`: `in` is declared struct; a text cannot enter it
+//   [exit 1]
+//
+// Expected after the fix:
+//   Open decision. Proposed: each stdin line is read as JSON when the App input is
+//   not `text`, and the command prints `A`. Otherwise the refusal names the limit.
+
+type Order = struct { id: text, amount: int }
+graph app : App {
+  input in: Order
+  output out: text
+  operator see {
+    input in: Order
+    output out: text
+    on in { out = data.id }
+  }
+  in -> see -> out
+}

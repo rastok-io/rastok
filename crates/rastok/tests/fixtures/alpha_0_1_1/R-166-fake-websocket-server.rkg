@@ -1,0 +1,44 @@
+// R-166 — The fake of a WebSocketServer is silent too
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-166-fake-websocket-server.rkg
+//   rastok simulate R-166-fake-websocket-server.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ rastok check R-166-fake-websocket-server.rkg
+//   ok: 2 node(s), semantic hash 3481ae8fefe0e06fb8126650577cc078b9d7469851e4d5dc24a29b8be4a449c4
+//   [exit 0]
+//   $ rastok simulate R-166-fake-websocket-server.rkg
+//   FAIL r166s.a_fake_websocket_server
+//        expect app.out == "pong"  (R-166-fake-websocket-server.rkg:42)
+//        nothing observed
+//        expected 1 matching delivery on app.out, but observed 0
+//   1 scenario(s), 1 failed
+//   [exit 1]
+//
+// Expected after the fix:
+//   Same named refusal as for the client.
+
+graph app : App {
+  input in: text
+  output out: text
+  connector peer : WebSocketServer {
+    listen = "127.0.0.1:18772"
+    handshake_timeout = duration("5s")
+    codec = text
+  }
+  in -> peer
+  peer.out -> out
+  peer.exit -> nothing
+}
+lab r166s {
+  mock peer {
+    on in { out = "pong" }
+  }
+  scenario a_fake_websocket_server {
+    app.in = "ping"
+    expect peer.in
+    expect app.out == "pong"
+  }
+}

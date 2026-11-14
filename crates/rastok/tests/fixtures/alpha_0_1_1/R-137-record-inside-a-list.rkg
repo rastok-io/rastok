@@ -1,0 +1,52 @@
+// R-137 — A record written in place inside a list is refused
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-137-record-inside-a-list.rkg
+//   rastok simulate R-137-record-inside-a-list.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ rastok check R-137-record-inside-a-list.rkg
+//   error[E-EXPR]: assignment is not an expression
+//     --> R-137-record-inside-a-list.rkg:42:30
+//      |
+//   42 |       out = { rows = [{ name = "Alice", age = 30 }, { name = "Bob", age = 42 }] }
+//      |                              ^
+//     = detail: assignment is not an expression
+//
+//   error[E-EXPR]: assignment is not an expression
+//     --> R-137-record-inside-a-list.rkg:50:40
+//      |
+//   50 |     expect app.out == { rows = [{ name = "Alice", age = 30 }, { name = "Bob", age = 42 }] }
+//      |                                        ^
+//     = detail: assignment is not an expression
+//   [exit 1]
+//   $ rastok simulate R-137-record-inside-a-list.rkg
+//   error[E-EXPR]: assignment is not an expression
+//     --> R-137-record-inside-a-list.rkg:42:30
+//   … (12 more lines in today/R-137-record-inside-a-list.txt)
+//
+// Expected after the fix:
+//   Both commands succeed, in the Operator and in the Lab expectation: this is the
+//   array example of grammar.md.
+
+type Row = struct { name: text, age: int }
+type Rows = struct { rows: array<Row> }
+graph app : App {
+  input in: bool
+  output out: Rows
+  operator make {
+    input in: bool
+    output out: Rows
+    on in {
+      out = { rows = [{ name = "Alice", age = 30 }, { name = "Bob", age = 42 }] }
+    }
+  }
+  in -> make -> out
+}
+lab r137 {
+  scenario records_written_in_place_inside_a_list {
+    app.in = true
+    expect app.out == { rows = [{ name = "Alice", age = 30 }, { name = "Bob", age = 42 }] }
+  }
+}

@@ -1,0 +1,35 @@
+// R-090 — The same contradiction on an untyped output
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-090-untyped-output.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ rastok check R-090-untyped-output.rkg
+//   error[E-PORT-TYPE]: `a.out` requires struct, but a producer supplies struct
+//     = port: out
+//     = expected: struct
+//     = found: struct
+//   [exit 1]
+//
+// Expected after the fix:
+//   Still refused, E-PORT-TYPE. The message shows both types and the fields that differ: `turn` and `note`.
+
+type Frame = struct { article: text, turn: int }
+type Other = struct { article: text, note: text }
+graph app : App {
+  input in: Other
+  output out: text
+  operator a {
+    input in: Other
+    output out
+    on in { out = data }
+  }
+  operator o {
+    input in: Frame
+    output out: text
+    on in { out = data.article }
+  }
+  in -> a -> o
+  o.out -> out
+}

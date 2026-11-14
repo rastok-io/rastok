@@ -1,0 +1,34 @@
+// R-091 — `!= Editor {}` in a guard: a correct refusal, an unclear message
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-091-compare-with-a-case.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ rastok check R-091-compare-with-a-case.rkg
+//   error[E-EXPR]: unexpected trailing input
+//     --> R-091-compare-with-a-case.rkg:29:25
+//      |
+//   29 |       data.by != Editor {} => out = "not the editor"
+//      |                         ^
+//     = detail: unexpected trailing input
+//   [exit 1]
+//
+// Expected after the fix:
+//   Still refused. The message says that a case is tested with `is`.
+
+type Person = union { Writer {}, Editor {} }
+type Move = struct { by: Person }
+graph app : App {
+  input in: Move
+  output out: text
+  operator o {
+    input in: Move
+    output out: text
+    on in match {
+      data.by != Editor {} => out = "not the editor"
+      _ => out = "the editor"
+    }
+  }
+  in -> o -> out
+}

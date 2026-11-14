@@ -1,0 +1,69 @@
+// R-088 — A fake reads a stale `now()` when a Retry attempt falls inside an advance
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-088-stale-now-in-a-fake.rkg
+//   rastok simulate R-088-stale-now-in-a-fake.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ rastok check R-088-stale-now-in-a-fake.rkg
+//   ok: 3 node(s), semantic hash a4ffa51990a727b6c191323ea1237081112ac60188bb75035cbdbaf9a9a45fef
+//   [exit 0]
+//   $ rastok simulate R-088-stale-now-in-a-fake.rkg
+//   PASS r088.the_scenario_stops_on_the_attempt
+//   FAIL r088.the_attempt_falls_inside_one_advance
+//        expect app.code == 15  (R-088-stale-now-in-a-fake.rkg:67)
+//        observed app.code: -1
+//        expected 1 matching delivery on app.code, but observed 0
+//   2 scenario(s), 1 failed
+//   [exit 1]
+//
+// Expected after the fix:
+//   Both scenarios pass: the second attempt, due at 0:15, reads now() == 0:15 and
+//   exits with code 15, whether the scenario stops on it or not.
+
+graph app : App {
+  input in: text
+  output code: int
+  connector job : Process + Retry {
+    command = "true"
+    codec = lines
+    idempotent = true
+    behavior = deterministic
+    timeout = duration("5s")
+    Retry.attempts = 2
+    Retry.on = [TimeoutExpired]
+    Retry.delay = { kind = fixed; after = duration("10s") }
+  }
+  operator read {
+    input in: ProcessExit
+    output out: int
+    on in match {
+      data is Exited => out = data.exit_code
+      _ => out = -1
+    }
+  }
+  in -> job
+  job.out -> nothing
+  job.err -> nothing
+  job.exit -> read -> code
+}
+lab r088 {
+  // First attempt at 0:00, silent. It expires at 0:05. The second attempt is due at 0:15.
+  mock job {
+    on in where now() == timestamp("1970-01-01T00:00:00Z") { out = nothing }
+    on in where now() == timestamp("1970-01-01T00:00:15Z") { exit = Exited { exit_code = 15; signal = null } }
+    on in { exit = Exited { exit_code = 99; signal = null } }
+  }
+  scenario the_scenario_stops_on_the_attempt {
+    app.in = "x"
+    advance duration("5s")
+    advance duration("10s")
+    expect app.code == 15
+  }
+  scenario the_attempt_falls_inside_one_advance {
+    app.in = "x"
+    advance duration("20s")
+    expect app.code == 15
+  }
+}

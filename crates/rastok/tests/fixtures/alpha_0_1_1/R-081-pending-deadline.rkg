@@ -1,0 +1,27 @@
+// R-081 — `rastok run` exits at end of input while a deadline is pending
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   printf 'go\n' | rastok run R-081-pending-deadline.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ printf 'go\n' | rastok run R-081-pending-deadline.rkg
+//   [exit 0]
+//
+// Expected after the fix:
+//   Open decision. Proposed: unchanged in 0.1.1. The guide states that a pending
+//   deadline does not keep the command alive; with input held open, it prints `closed after go`.
+
+graph app : App {
+  input in: text
+  output out: text
+  operator later {
+    input in: text
+    output out: text
+    lifetime = { kind = fixed; after = duration("2s") }
+    var last: text = ""
+    on in { last = data }
+    on stop { out = "closed after " + last }
+  }
+  in -> later -> out
+}

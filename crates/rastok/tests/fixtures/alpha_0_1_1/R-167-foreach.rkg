@@ -1,0 +1,31 @@
+// R-167 — `foreach` is refused as an unknown name
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-167-foreach.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ rastok check R-167-foreach.rkg
+//   error[E-RESOLVE-UNKNOWN]: `foreach` names neither a Graph port nor a child Node in this Graph
+//     --> R-167-foreach.rkg:30:9
+//      |
+//   30 |   in -> foreach -> split -> out
+//      |         ^^^^^^^
+//     = name: foreach
+//   [exit 1]
+//
+// Expected after the fix:
+//   Refused with a message that says `foreach` is a reserved word for a later
+//   per-item fan-out node, not implemented by this build.
+
+type Batch = struct { items: array<text> }
+graph app : App {
+  input in: Batch
+  output out: text
+  operator split {
+    input in: Batch
+    output out: text
+    on in { out = data.items[0] }
+  }
+  in -> foreach -> split -> out
+}

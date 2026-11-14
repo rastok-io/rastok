@@ -1,0 +1,57 @@
+// R-002 — An enum value cannot be written
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-002-enum-value.rkg
+//   rastok simulate R-002-enum-value.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ rastok check R-002-enum-value.rkg
+//   error[E-EXPR]: `Cancelled` is not a visible name
+//     --> R-002-enum-value.rkg:44:49
+//      |
+//   44 |       Pending => out = { id = data.id; status = Cancelled }
+//      |                                                 ^^^^^^^^^
+//     = detail: `Cancelled` is not a visible name
+//
+//   error[E-EXPR]: `Pending` is not a visible name
+//     --> R-002-enum-value.rkg:54:35
+//      |
+//   54 |     app.in = { id = "A"; status = Pending }
+//      |                                   ^^^^^^^
+//     = detail: `Pending` is not a visible name
+//
+//   error[E-EXPR]: `Cancelled` is not a visible name
+//     --> R-002-enum-value.rkg:55:44
+//      |
+//   … (26 more lines in today/R-002-enum-value.txt)
+//
+// Expected after the fix:
+//   Both commands succeed: a bare symbol is a value where the expected type is its
+//   enum, in the Operator, in the injection and in the expectation.
+
+type Status = enum { Pending, Cancelled }
+type Order = struct { id: text, status: Status }
+graph app : App {
+  input in: Order
+  output out: Order
+  output label: text
+  operator cancel {
+    input in: Order
+    output out: Order
+    output label: text
+    on in match data.status {
+      Pending => out = { id = data.id; status = Cancelled }
+      Cancelled => label = "already cancelled"
+    }
+  }
+  in -> cancel
+  cancel.out -> out
+  cancel.label -> label
+}
+lab r002 {
+  scenario an_enum_value_is_written {
+    app.in = { id = "A"; status = Pending }
+    expect app.out == { id = "A"; status = Cancelled }
+  }
+}

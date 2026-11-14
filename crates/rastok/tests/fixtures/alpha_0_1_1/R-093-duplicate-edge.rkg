@@ -1,0 +1,32 @@
+// R-093 — A duplicate edge is refused under E-ROUTE-DUPLICATE, not E-DUP-EDGE
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-093-duplicate-edge.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ rastok check R-093-duplicate-edge.rkg
+//   error[E-ROUTE-DUPLICATE]: destination `o.in` is selected twice for the same source case
+//     --> R-093-duplicate-edge.rkg:30:3
+//      |
+//   30 |   in -> o
+//      |   ^^^^^^^
+//     = source: .in
+//     = case: all
+//   [exit 1]
+//
+// Expected after the fix:
+//   Unchanged output. The spec registry is aligned on the code that is emitted.
+
+graph app : App {
+  input in: text
+  output out: text
+  operator o {
+    input in: text
+    output out: text
+    on in { out = data }
+  }
+  in -> o
+  in -> o
+  o.out -> out
+}

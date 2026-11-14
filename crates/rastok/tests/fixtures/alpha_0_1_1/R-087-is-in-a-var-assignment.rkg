@@ -1,0 +1,48 @@
+// R-087 — An `is` test in a ternary, inside an assignment to a var that reads itself
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-087-is-in-a-var-assignment.rkg
+//   rastok simulate R-087-is-in-a-var-assignment.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ rastok check R-087-is-in-a-var-assignment.rkg
+//   error[E-PORT-TYPE]: `count.in` has no effective payload type; add a type constraint
+//     = port: in
+//     = expected: a resolved logical type
+//     = found: an unsolved inference variable
+//   [exit 1]
+//   $ rastok simulate R-087-is-in-a-var-assignment.rkg
+//   error[E-PORT-TYPE]: `count.in` has no effective payload type; add a type constraint
+//     = port: in
+//     = expected: a resolved logical type
+//     = found: an unsolved inference variable
+//   [exit 1]
+//
+// Expected after the fix:
+//   Both commands succeed: 1, then 1.
+
+type Status = union { Ok {}, Ko {} }
+type Line = struct { status: Status }
+graph app : App {
+  input in: Line
+  output out: int
+  operator count {
+    input in: Line
+    output out: int
+    var n: int = 0
+    on in {
+      n = n + (data.status is Ok ? 1 : 0)
+      out = n
+    }
+  }
+  in -> count -> out
+}
+lab r087 {
+  scenario an_is_test_written_inside_a_ternary {
+    app.in = { status = Ok {} }
+    expect app.out == 1
+    app.in = { status = Ko {} }
+    expect app.out == 1
+  }
+}

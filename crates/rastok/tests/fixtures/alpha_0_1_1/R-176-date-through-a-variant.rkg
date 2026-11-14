@@ -1,0 +1,78 @@
+// R-176 — The same date, hidden behind `as variant`: the type is unknown at check
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-176-date-through-a-variant.rkg
+//   rastok simulate R-176-date-through-a-variant.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ rastok check R-176-date-through-a-variant.rkg
+//   ok: 4 node(s), semantic hash e6d75915e38f0a9bd86abe6fa64b0a0368cf9161c33abe769e308d61e341ef65
+//   [exit 0]
+//   $ rastok simulate R-176-date-through-a-variant.rkg
+//   FAIL r176.a_date_in_a_json_body
+//        expect app.ended == "Completed"  (R-176-date-through-a-variant.rkg:75)
+//        observed app.ended: "DecodeFailed"
+//        expected 1 matching delivery on app.ended, but observed 0
+//        expect app.out == { ok = true }  (R-176-date-through-a-variant.rkg:76)
+//        nothing observed
+//        expected 1 matching delivery on app.out, but observed 0
+//   1 scenario(s), 1 failed
+//   [exit 1]
+//
+// Expected after the fix:
+//   Unchanged in 0.1.1: check cannot see the type. The Call still closes with
+//   `DecodeFailed` before anything is sent. The Reference states it. The name of that
+//   outcome is an open decision (a Contract change).
+
+type Seen = struct { id: text, at: timestamp }
+type Ack = struct { ok: bool }
+graph app : App {
+  input in: text
+  output out: Ack
+  output ended: text
+  operator stamp {
+    input in: text
+    output out: variant
+    on in {
+      val seen = { id = data; at = now() }
+      out = seen as variant
+    }
+  }
+  connector orders : HttpClient {
+    url = "https://o.example.test/row"
+    method = "POST"
+    codec = json
+    json_profile = projected
+    output out: Ack
+    timeout = duration("5s")
+    behavior = deterministic
+  }
+  operator name {
+    input in: HttpClientExit
+    output out: text
+    on in match {
+      data is Completed => out = "Completed"
+      data is DecodeFailed => out = "DecodeFailed"
+      data is TimeoutExpired => out = "TimeoutExpired"
+      _ => out = "other"
+    }
+  }
+  in -> stamp -> orders
+  orders.out -> out
+  orders.exit -> name -> ended
+}
+lab r176 {
+  mock orders {
+    on in {
+      out = { ok = true }
+      exit = Completed { status = 200 }
+    }
+  }
+  scenario a_date_in_a_json_body {
+    app.in = "a"
+    expect orders.in
+    expect app.ended == "Completed"
+    expect app.out == { ok = true }
+  }
+}

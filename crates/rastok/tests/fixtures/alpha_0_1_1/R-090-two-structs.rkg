@@ -1,0 +1,39 @@
+// R-090 — A message that contradicts itself: struct to struct
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-090-two-structs.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ rastok check R-090-two-structs.rkg
+//   error[E-PORT-TYPE]: this route connects struct to struct; pinned ends must agree
+//     --> R-090-two-structs.rkg:38:3
+//      |
+//   38 |   in -> write -> assign -> out
+//      |   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+//     = port: assign.in
+//     = expected: struct
+//     = found: struct
+//   [exit 1]
+//
+// Expected after the fix:
+//   Still refused, E-PORT-TYPE. The message names both types and the first
+//   difference: `Draft` has no field `reviewer`, `Review` has no field `hash`.
+
+type Draft = struct { article: text, hash: text }
+type Review = struct { article: text, reviewer: text }
+graph app : App {
+  input in: text
+  output out: text
+  operator write {
+    input in: text
+    output out: Draft
+    on in { out = { article = data; hash = "h1" } }
+  }
+  operator assign {
+    input in: Review
+    output out: text
+    on in { out = data.reviewer }
+  }
+  in -> write -> assign -> out
+}

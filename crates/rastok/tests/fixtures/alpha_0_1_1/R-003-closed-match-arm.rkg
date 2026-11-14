@@ -1,0 +1,55 @@
+// R-003 — The arm of a closed match does not know its case
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-003-closed-match-arm.rkg
+//   rastok simulate R-003-closed-match-arm.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ rastok check R-003-closed-match-arm.rkg
+//   error[E-EXPR]: `data.outcome.name` does not resolve to a member
+//     --> R-003-closed-match-arm.rkg:42:23
+//      |
+//   42 |       Stored => out = data.outcome.name
+//      |                       ^^^^^^^^^^^^^^^^^
+//     = detail: `data.outcome.name` does not resolve to a member
+//
+//   error[E-EXPR]: `data.outcome.reason` does not resolve to a member
+//     --> R-003-closed-match-arm.rkg:43:24
+//      |
+//   43 |       Refused => out = data.outcome.reason
+//      |                        ^^^^^^^^^^^^^^^^^^^
+//     = detail: `data.outcome.reason` does not resolve to a member
+//   [exit 1]
+//   $ rastok simulate R-003-closed-match-arm.rkg
+//   error[E-EXPR]: `data.outcome.name` does not resolve to a member
+//     --> R-003-closed-match-arm.rkg:42:23
+//   … (12 more lines in today/R-003-closed-match-arm.txt)
+//
+// Expected after the fix:
+//   Both commands succeed: inside the arm `Stored`, `data.outcome` is narrowed to
+//   that case, as after `data.outcome is Stored`.
+
+type Outcome = union { Stored { name: text, size: int }, Refused { reason: text } }
+type Result = struct { id: text, outcome: Outcome }
+graph app : App {
+  input in: Result
+  output out: text
+  operator read {
+    input in: Result
+    output out: text
+    on in match data.outcome {
+      Stored => out = data.outcome.name
+      Refused => out = data.outcome.reason
+    }
+  }
+  in -> read -> out
+}
+lab r003 {
+  scenario the_arm_of_a_closed_match_knows_its_case {
+    app.in = { id = "a"; outcome = Stored { name = "f.csv"; size = 3 } }
+    expect app.out == "f.csv"
+    app.in = { id = "b"; outcome = Refused { reason = "full" } }
+    expect app.out == "full"
+  }
+}

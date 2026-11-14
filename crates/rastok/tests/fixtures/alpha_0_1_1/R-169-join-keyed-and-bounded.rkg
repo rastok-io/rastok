@@ -1,0 +1,109 @@
+// R-169 — The safe pattern of the alpha: one instance per Call, and a bound
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-169-join-keyed-and-bounded.rkg
+//   rastok simulate R-169-join-keyed-and-bounded.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ rastok check R-169-join-keyed-and-bounded.rkg
+//   ok: 6 node(s), semantic hash 740a0f116a2d440e2bf0258ef0c8cf1e5969f748b7a3e75f6191ff96622d5f14
+//   [exit 0]
+//   $ rastok simulate R-169-join-keyed-and-bounded.rkg
+//   PASS r169.second_call_inside_the_window
+//   PASS r169.second_call_after_the_window
+//   2 scenario(s), 0 failed
+//   [exit 0]
+//
+// Expected after the fix:
+//   Unchanged, and no warning: the Operator is keyed by the Call and the join is
+//   bounded. The lone frame of the failed Call leaves through `expired`.
+
+type Ask = struct { id: text }
+type Item = struct { name: text }
+type Seen = struct { name: text, status: int }
+type JoinExpiry = union { JoinExpired {} }
+graph app : App {
+  input ask: Ask
+  output seen: Seen
+  output failed: text
+  output lost: text
+  operator send {
+    input in: Ask
+    output out: variant
+    on in {
+      val body = { id = data.id }
+      out = body as variant
+    }
+  }
+  connector catalog : HttpClient {
+    url = "https://catalog.example.test/item"
+    method = "POST"
+    codec = json
+    json_profile = projected
+    output out: Item
+    timeout = duration("5s")
+    behavior = deterministic
+  }
+  operator pair {
+    input body: Item
+    input exit: HttpClientExit
+    output out: Seen
+    output expired: JoinExpiry
+    instance = { key = meta.sys.parent_id as text }
+    on (body, exit) within duration("30s") match {
+      exit.data is Completed => out = { name = body.data.name; status = exit.data.status }
+      _ => out = { name = body.data.name; status = 0 }
+    }
+  }
+  operator gone {
+    input in: JoinExpiry
+    output out: text
+    on in { out = "expired" }
+  }
+  operator other {
+    input in: HttpClientExit
+    output out: text
+    on in { out = "not completed" }
+  }
+  ask -> send -> catalog
+  catalog.out -> pair.body
+  catalog.exit -> match {
+    Completed -> pair.exit
+    _ -> other
+  }
+  pair.out -> seen
+  pair.expired -> gone
+  gone.out -> lost
+  other.out -> failed
+}
+lab r169 {
+  mock catalog {
+    on in where data is Ask && data.id == "a" {
+      out = { name = "error page" }
+      exit = ServerError { status = 500 }
+    }
+    on in {
+      out = { name = "item b" }
+      exit = Completed { status = 200 }
+    }
+  }
+  scenario second_call_inside_the_window {
+    app.ask = { id = "a" }
+    expect app.failed == "not completed"
+    expect app.seen == nothing
+    advance duration("5s")
+    app.ask = { id = "b" }
+    expect app.seen == { name = "item b"; status = 200 }
+    advance duration("30s")
+    expect app.lost == "expired"
+  }
+  scenario second_call_after_the_window {
+    app.ask = { id = "a" }
+    expect app.failed == "not completed"
+    advance duration("31s")
+    expect app.lost == "expired"
+    app.ask = { id = "b" }
+    expect app.seen == { name = "item b"; status = 200 }
+  }
+}

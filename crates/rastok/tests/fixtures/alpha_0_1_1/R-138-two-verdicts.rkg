@@ -1,0 +1,37 @@
+// R-138 — The same message for an arm that selects two verdicts
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-138-two-verdicts.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ rastok check R-138-two-verdicts.rkg
+//   error[E-LOOP-CONTROL]: cannot prove that Loop `count` always terminates at `in.leaf[1]`: each Loop application must select exactly one of Next, Again, Done, or stop
+//     = owner: count
+//     = path: in.leaf[1]
+//     = detail: each Loop application must select exactly one of Next, Again, Done, or stop
+//   [exit 1]
+//
+// Expected after the fix:
+//   Still refused, with the span of the arm and the reason: two verdicts, a
+//   terminal output and `Loop.next`.
+
+graph app : App {
+  input in: int
+  output out: text
+  operator count : Loop {
+    input in: int
+    output out: text
+    Loop.measure = Loop.state.data
+    on in match {
+      data > 10 => {
+        out = "big"
+        Loop.next = data - 1
+      }
+      data > 0 => Loop.next = data - 1
+      _ => out = "liftoff"
+    }
+  }
+  in -> count
+  count.out -> out
+}

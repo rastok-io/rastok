@@ -1,0 +1,54 @@
+// R-091 — `=> stop` followed by another arm does not parse
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-091-stop-then-another-arm.rkg
+//   rastok simulate R-091-stop-then-another-arm.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ rastok check R-091-stop-then-another-arm.rkg
+//   error[E-PARSE-EXPECTED]: expected a newline, `;`, or `}` after this match arm, found `=>`
+//     --> R-091-stop-then-another-arm.rkg:42:9
+//      |
+//   42 |       _ => out = "zero"
+//      |         ^^
+//     = expected: a newline, `;`, or `}` after this match arm
+//     = found: `=>`
+//
+//   error[E-PARSE-EXPECTED]: expected a top-level declaration, found `in`
+//     --> R-091-stop-then-another-arm.rkg:45:3
+//      |
+//   45 |   in -> o -> out
+//      |   ^^
+//     = expected: a top-level declaration
+//     = found: `in`
+//
+//   error[E-PARSE-EXPECTED]: expected a top-level declaration, found `}`
+//   … (32 more lines in today/R-091-stop-then-another-arm.txt)
+//
+// Expected after the fix:
+//   Both commands succeed: "zero", then nothing. A bare `stop` ends at the end of
+//   its line.
+
+type Move = struct { n: int, ok: bool }
+graph app : App {
+  input in: Move
+  output out: text
+  operator o {
+    input in: Move
+    output out: text
+    on in match {
+      data.n > 0 => stop
+      _ => out = "zero"
+    }
+  }
+  in -> o -> out
+}
+lab r091 {
+  scenario a_bare_stop_followed_by_another_arm {
+    app.in = { n = 0; ok = true }
+    expect app.out == "zero"
+    app.in = { n = 1; ok = true }
+    expect app.out == nothing
+  }
+}

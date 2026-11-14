@@ -1,0 +1,69 @@
+// R-167 — `after` in a fake is refused without naming the deferral
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-167-after-in-a-fake.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ rastok check R-167-after-in-a-fake.rkg
+//   error[E-PARSE-EXPECTED]: a bare expression is not a statement; write `out = <value>` (or `err = Kind { … }`)
+//     --> R-167-after-in-a-fake.rkg:60:7
+//      |
+//   60 |       after duration("12s")
+//      |       ^^^^^^^^^^^^^^^^^^^^^
+//     = expected: a statement
+//     = found: a bare expression
+//   [exit 1]
+//
+// Expected after the fix:
+//   Refused with a named deferral: E-PARSE-DEFERRED, construct = a delayed mock
+//   action (`after`).
+
+type Ask = struct { id: text }
+type Answer = struct { text: text }
+graph app : App {
+  input ask: Ask
+  output done: Answer
+  output ended: int
+  connector agent : HttpClient {
+    url = "https://agent.example.test/run"
+    method = "POST"
+    codec = json
+    json_profile = projected
+    output out: Answer
+    timeout = duration("60s")
+    behavior = deterministic
+  }
+  operator send {
+    input in: Ask
+    output out: variant
+    on in {
+      val body = { id = data.id }
+      out = body as variant
+    }
+  }
+  operator code {
+    input in: HttpClientExit
+    output out: int
+    on in match {
+      data is Completed => out = 200
+      _ => out = 0
+    }
+  }
+  ask -> send -> agent
+  agent.out -> done
+  agent.exit -> code -> ended
+}
+lab r167 {
+  mock agent {
+    on in {
+      after duration("12s")
+      out = { text = "done" }
+      exit = Completed { status = 200 }
+    }
+  }
+  scenario a_fake_that_answers_later {
+    app.ask = { id = "A" }
+    expect app.ended == 200
+  }
+}

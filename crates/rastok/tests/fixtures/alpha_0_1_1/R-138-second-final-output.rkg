@@ -1,0 +1,38 @@
+// R-138 — E-LOOP-CONTROL does not say which path: a second final output
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-138-second-final-output.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ rastok check R-138-second-final-output.rkg
+//   error[E-LOOP-CONTROL]: cannot prove that Loop `count` always terminates at `in.leaf[1]`: each Loop application must select exactly one of Next, Again, Done, or stop
+//     = owner: count
+//     = path: in.leaf[1]
+//     = detail: each Loop application must select exactly one of Next, Again, Done, or stop
+//   [exit 1]
+//
+// Expected after the fix:
+//   Still refused, E-LOOP-CONTROL. The message has a source span on the arm
+//   `data > 10 => status = "too big"`, says that the arm selects no verdict, and
+//   suggests `Loop.terminal = [out, status]`.
+
+graph app : App {
+  input in: int
+  output out: text
+  output status: text
+  operator count : Loop {
+    input in: int
+    output out: text
+    output status: text
+    Loop.measure = Loop.state.data
+    on in match {
+      data > 10 => status = "too big"
+      data > 0 => Loop.next = data - 1
+      _ => out = "liftoff"
+    }
+  }
+  in -> count
+  count.out -> out
+  count.status -> status
+}
