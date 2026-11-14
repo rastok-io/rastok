@@ -143,7 +143,7 @@ pub enum ExecutionFault {
         /// Connector which supplied the contradictory outcome.
         node: node::OwnerPath,
         /// Stable explanation, without payload data.
-        reason: &'static str,
+        reason: String,
     },
     /// The journal refused an operation.
     Journal(crate::journal::Error),

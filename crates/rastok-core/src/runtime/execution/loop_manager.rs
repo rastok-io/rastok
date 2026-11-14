@@ -367,9 +367,9 @@ impl Execution<'_> {
         let node = &self.plan.nodes[slot.index()];
         let terminal = terminal
             .ok_or_else(|| loop_error(instance, "the Call Loop lost its Contract profile"))?;
-        let violation = |reason| ExecutionFault::ContractViolation {
+        let violation = |reason: &str| ExecutionFault::ContractViolation {
             node: node.path.clone(),
-            reason,
+            reason: reason.to_string(),
         };
         let mut packet = LoopRecord {
             context: application

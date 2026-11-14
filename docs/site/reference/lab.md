@@ -53,8 +53,11 @@ the graph never writes.
 | `exit = Case { ... }` | Emit the Contract's typed terminal; unique and last |
 | `out = nothing` with no terminal | Explicit silence: leave the Call awaiting its deadline |
 
-Each non-silent Call response has exactly one final `exit` and the frames
-that terminal permits. A Session response can emit frames without ending
+Each non-silent Call response has exactly one final `exit` and exactly the
+frames that terminal requires. `rastok check` refuses a branch that omits
+a required frame or adds a forbidden one when its terminal is a case
+constructor. A computed terminal keeps the same check at execution.
+A Session response can emit frames without ending
 the resource; an optional exit remains last. For Process service, that
 terminal closes the mock child, not an individual conversation turn.
 An uncovered request or mock evaluation fault fails the scenario.

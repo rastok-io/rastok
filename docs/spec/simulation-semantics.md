@@ -303,6 +303,15 @@ is `.` (`out = .`).
 - **Every mock output is compile-checked** against the resolved type of
   that Connector port. One mock completion may emit several ports
   atomically, exactly like the real boundary.
+- **Every Call mock branch is checked against the Contract's Call
+  cardinality.** For the terminal case the branch emits, each frame port
+  must receive exactly the frames the Contract declares for that case: a
+  port produced *exactly once on* that case is assigned once, a port not
+  produced on that case is not assigned. `port = nothing` assigns no
+  frame. A violation refuses at check with `E-CONTRACT-REQUIRED`. A
+  terminal that the source does not spell as a case constructor is
+  checked at execution, where the same violation faults the scenario and
+  names the case and the port.
 - **Deterministic and stateless** : a mock is a pure function of the
   request envelope ; `after <duration>` joins the dated-events queue (swept
   by `advance`). A Loop that needs distinct scripted attempts carries the
