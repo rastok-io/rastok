@@ -5,6 +5,30 @@
 > evidence. Companion to [`errata.md`](errata.md) (defects found);
 > git history carries the full context of each entry.
 
+## D-2026-11-14-1: The expression bound is measured on the resolved tree
+
+Yoann decides that `expr::MAX_EXPRESSION_DEPTH = 128` keeps its three
+uses from D-2026-10-14-1 and that the Check refusal is measured on the
+tree the checker resolves, conversions included. The checker inserts
+conversions the author did not write: implicit construction into a
+union, a typed constant, a narrowed read, one per nested optional
+constructor. They are part of the transported tree and spend its budget.
+When they push an expression past the bound, check refuses with
+`E-PLAN-DEPTH` and says that inserted conversions count; that cause never
+surfaces as `E-INTERNAL-PLAN`. Depth keeps three independent budgets,
+each with its own refusal: expressions (128), types (128) and the
+serialized plan (256). An expression within 128 written levels can still
+exceed another budget, as it already could. No bound, format number, key,
+tag or semantic hash changes.
+
+**Rejected:** a separate, larger bound for the resolved tree (inserted
+levels are not a small constant: one per nested optional constructor,
+and 32 or 64 added levels on measured constant paths; those 128-level
+source expressions reach serialized levels 268 and 396, beyond the
+reader bound); raising the reader bound (it is dimensioned by measured
+embedded stack use); leaving conversions out of the plan-side walk
+(the plan cannot tell an inserted conversion from an authored `as`).
+
 ## D-2026-11-03-4: Public version 1 for the package format, the recording format and the standard Contracts
 
 Yoann decides that the first public release ships with version 1 everywhere a

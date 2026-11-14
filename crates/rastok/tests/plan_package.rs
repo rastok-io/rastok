@@ -1436,3 +1436,224 @@ fn bounded_source_expressions_still_reach_the_plan_depth_guard() {
         .join()
         .expect("the source and transport boundaries hold");
 }
+
+fn expression_depth_program(output: &str, expression: &str) -> String {
+    format!(
+        "graph g : App {{\n input in: int\n output out: {output}\n\
+         operator o {{\n input in: int\n output out: {output}\n\
+         on in {{ out = {expression} }}\n }}\n in -> o -> out\n}}\n"
+    )
+}
+
+fn assert_resolved_depth_boundary(accepted: String, refused: String) {
+    // As in the transport-depth probe, compiling at the boundary needs more
+    // stack than the host debug harness provides, without changing any budget.
+    std::thread::Builder::new()
+        .name(String::from("resolved-expression-depth"))
+        .stack_size(8 * 1024 * 1024)
+        .spawn(move || {
+            let catalog = ContractCatalog::try_m0().unwrap();
+            let compiled = compile(&[&accepted], &catalog).expect("resolved depth 128 fits");
+            assert_eq!(
+                plan::decode(&plan::encode(&compiled.plan, &compiled.hash)).unwrap(),
+                (compiled.plan, compiled.hash)
+            );
+            let bag = compile(&[&refused], &catalog).expect_err("resolved depth 129 refuses");
+            let diagnostic = assert_depth_refusal(&bag, rastok::diagnostics::Phase::Check, 129);
+            assert!(diagnostic.message().contains("resolved"), "{diagnostic:?}");
+            assert!(
+                diagnostic.message().contains("conversions"),
+                "{diagnostic:?}"
+            );
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+fn assert_depth_refusal(
+    bag: &rastok::diagnostics::Bag,
+    phase: rastok::diagnostics::Phase,
+    depth: usize,
+) -> &rastok::diagnostics::Diagnostic {
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .all(|diagnostic| diagnostic.code().as_str() != "E-INTERNAL-PLAN"),
+        "a depth refusal is never a compiler defect: {bag:?}"
+    );
+    let diagnostic = bag
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code().as_str() == "E-PLAN-DEPTH")
+        .expect("depth refuses by name");
+    assert_eq!(diagnostic.phase(), phase, "{bag:?}");
+    assert!(
+        diagnostic
+            .fields()
+            .iter()
+            .any(|(name, value)| *name == "depth" && value == &depth.to_string()),
+        "{diagnostic:?}"
+    );
+    diagnostic
+}
+
+#[test]
+fn contextual_union_conversions_spend_the_expression_budget() {
+    // A source leaf and 126 additions leave exactly one level for the union.
+    let source =
+        |additions| expression_depth_program("int?", &format!("data{}", " + 1".repeat(additions)));
+    assert_resolved_depth_boundary(source(126), source(127));
+}
+
+#[test]
+fn typed_constant_conversions_spend_the_expression_budget() {
+    // A field of a unit constant is reified with two typed-literal conversions.
+    let source = |additions| {
+        format!(
+            "val constant = {{ field = 1 }}\n{}",
+            expression_depth_program(
+                "int",
+                &format!("constant.field{}", " + 1".repeat(additions))
+            )
+        )
+    };
+    assert_resolved_depth_boundary(source(125), source(126));
+}
+
+#[test]
+fn narrowed_reads_spend_the_expression_budget() {
+    let source = |additions| {
+        expression_depth_program("int", &format!("data{}", " + 1".repeat(additions)))
+            .replace("input in: int", "input in: int?")
+            .replace("on in {", "on in where data is int {")
+    };
+    assert_resolved_depth_boundary(source(126), source(127));
+}
+
+#[test]
+fn typed_constants_narrowing_and_union_construction_share_one_budget() {
+    // Two typed-literal levels, a narrowed read and the destination union
+    // compose on the same path. None gets a separate allowance.
+    let source = |additions| {
+        format!(
+            "val constant: int? = 1\n{}",
+            expression_depth_program("int?", &format!("constant{}", " + 1".repeat(additions)))
+                .replace("on in {", "on in where constant is int {")
+        )
+    };
+    assert_resolved_depth_boundary(source(123), source(124));
+}
+
+#[test]
+fn nested_optional_constructors_spend_the_expression_budget() {
+    let source = |additions| {
+        format!(
+            "type Inner = struct {{ field: int? }}\n\
+             type Outer = struct {{ field: Inner? }}\n{}",
+            expression_depth_program(
+                "Outer",
+                &format!(
+                    "{{ field = {{ field = data{} }} }}",
+                    " + 1".repeat(additions)
+                )
+            )
+        )
+    };
+    // Each struct adds a written level and a conversion on its optional field.
+    assert_resolved_depth_boundary(source(123), source(124));
+}
+
+fn constant_path_depth_program(members: usize, additions: usize) -> String {
+    let constant = format!("{}1{}", "{ field = ".repeat(members), " }".repeat(members));
+    expression_depth_program(
+        "int",
+        &format!(
+            "constant{}{}",
+            ".field".repeat(members),
+            " + 1".repeat(additions)
+        ),
+    )
+    .replacen(
+        "operator o {",
+        &format!("val constant = {constant}\n operator o {{"),
+        1,
+    )
+}
+
+#[test]
+fn lowered_constant_paths_spend_the_expression_budget() {
+    // A Path is one source node; lowering inserts an Index for the member.
+    // A literal map's member type is variant, so the authored cast is required.
+    let source = |additions| {
+        expression_depth_program(
+            "int",
+            &format!("(constant.field as int){}", " + 1".repeat(additions)),
+        )
+        .replacen(
+            "operator o {",
+            "val constant = { \"field\": 1 }\n operator o {",
+            1,
+        )
+    };
+    assert_resolved_depth_boundary(source(125), source(126));
+}
+
+#[test]
+fn oversized_constant_paths_keep_the_two_depth_refusals_distinct() {
+    std::thread::Builder::new()
+        .name(String::from("constant-transport-depth"))
+        .stack_size(8 * 1024 * 1024)
+        .spawn(|| {
+            let catalog = ContractCatalog::try_m0().unwrap();
+            for (members, expression_depth) in [(1, 129), (8, 136)] {
+                let source = constant_path_depth_program(members, 127);
+                let bag = compile(&[&source], &catalog).unwrap_err();
+                assert_depth_refusal(&bag, rastok::diagnostics::Phase::Check, expression_depth);
+            }
+            for (members, serialized_depth) in [(32, 268), (64, 396)] {
+                let source = constant_path_depth_program(members, 127);
+                let bag = compile(&[&source], &catalog).unwrap_err();
+                assert_depth_refusal(&bag, rastok::diagnostics::Phase::Plan, serialized_depth);
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
+fn nested_constructors_keep_the_independent_transport_budget() {
+    std::thread::Builder::new()
+        .name(String::from("constructor-transport-depth"))
+        .stack_size(8 * 1024 * 1024)
+        .spawn(|| {
+            let catalog = ContractCatalog::try_m0().unwrap();
+            // Measured with these exact sources on 0.1.0-alpha as well: the
+            // refusal and its serialized depth must stay unchanged.
+            for (constructors, optional, serialized_depth) in [(100, "", 313), (60, "?", 314)] {
+                let mut source = String::from("type T0 = int\n");
+                for index in 1..=constructors {
+                    source.push_str(&format!(
+                        "type T{index} = struct {{ field: T{}{optional} }}\n",
+                        index - 1,
+                    ));
+                }
+                source.push_str(&expression_depth_program(
+                    &format!("T{constructors}"),
+                    &format!(
+                        "{}1{}",
+                        "{ field = ".repeat(constructors),
+                        " }".repeat(constructors)
+                    ),
+                ));
+                let bag = compile(&[&source], &catalog).unwrap_err();
+                // Expression and type depths fit 128 in both programs. The
+                // serialized containment is the only budget that refuses.
+                assert_depth_refusal(&bag, rastok::diagnostics::Phase::Plan, serialized_depth);
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}

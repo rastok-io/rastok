@@ -14,6 +14,9 @@
   inputs; `variant` payloads retain each Contract's runtime checks and refusals.
 - Detect tagged unions in resident Process JSON frames before execution;
   requests with a text-valued field retain their behavior.
+- Count compiler-added conversions in the unchanged expression depth budget.
+  An expression at the limit that reads a narrowed value can now be refused
+  with `E-PLAN-DEPTH`; excessive resolved depth never reports `E-INTERNAL-PLAN`.
 
 ## v0.1.0-alpha (5 November 2026)
 

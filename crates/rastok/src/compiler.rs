@@ -263,14 +263,12 @@ pub fn compile_with_assets(
             }
         }
     }
-    // A lowering that emits an invalid plan is a compiler bug — but a
-    // bug with a controlled error path, not a vanished process: the
-    // validator exists precisely to catch this disagreement.
+    // Validation also measures growth introduced by lowering. Keep resource
+    // refusals distinct from a disagreement with the compiler's type proof.
     let plan = match ValidatedExecutionPlan::try_from_lowered(plan) {
         Ok(plan) => plan,
-        // The one validation refusal a USER causes: a program deep
-        // enough that its plan would outgrow the format reader's
-        // nesting budget. Every other refusal is a compiler defect.
+        // Serialized containment is checked first, independently of the
+        // expression budget. Preserve this Plan-phase refusal when both fail.
         Err(PlanValidationError::NestingExceeded {
             depth,
             bound: budget,
@@ -286,6 +284,17 @@ pub fn compile_with_assets(
                 )
                 .with_field("depth", depth.to_string()),
             );
+            return Err(bag);
+        }
+        Err(PlanValidationError::InvalidDispatch {
+            reason:
+                crate::plan::DispatchValidationError {
+                    kind: crate::plan::DispatchErrorKind::ExpressionDepth { depth },
+                    ..
+                },
+            ..
+        }) => {
+            bag.push(resolved_expression_depth_diagnostic(depth));
             return Err(bag);
         }
         Err(
@@ -659,6 +668,19 @@ fn source_arms(dispatch: &syntax::Dispatch, source: &str) -> Vec<SourceArm> {
             children: source_arms(&arm.dispatch, source),
         })
         .collect()
+}
+
+fn resolved_expression_depth_diagnostic(depth: usize) -> Diagnostic {
+    Diagnostic::new(
+        E_PLAN_DEPTH,
+        Phase::Check,
+        format!(
+            "the resolved expression reaches depth {depth}, exceeding the expression \
+             depth budget of {}; compiler-added conversions count",
+            crate::expr::MAX_EXPRESSION_DEPTH
+        ),
+    )
+    .with_field("depth", depth.to_string())
 }
 
 fn type_resolution_diagnostic(error: &PlanValidationError) -> Diagnostic {

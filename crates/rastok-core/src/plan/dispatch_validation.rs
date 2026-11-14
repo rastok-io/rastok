@@ -26,7 +26,12 @@ pub enum DispatchErrorKind {
     ImpurePrefix,
     /// A local binding is empty, qualified, reserved or shadows a visible name.
     Binding,
-    /// An expression is malformed, too deep, or contradicts its claimed type.
+    /// An expression exceeds the shared expression depth bound.
+    ExpressionDepth {
+        /// Measured depth of the resolved tree, with its root at depth one.
+        depth: usize,
+    },
+    /// An expression is malformed or contradicts its claimed type.
     Expression,
     /// A predicate has a statically non-boolean type.
     Predicate,
@@ -72,6 +77,11 @@ impl fmt::Display for DispatchValidationError {
             DispatchErrorKind::Expression => {
                 f.write_str("expression or claimed type cannot be re-derived")
             }
+            DispatchErrorKind::ExpressionDepth { depth } => write!(
+                f,
+                "resolved expression depth {depth} exceeds {}",
+                expr::MAX_EXPRESSION_DEPTH
+            ),
             DispatchErrorKind::Predicate => f.write_str("match predicate is not boolean"),
             DispatchErrorKind::CasePartition(error) => fmt::Display::fmt(error, f),
             DispatchErrorKind::Annotations => {
@@ -281,8 +291,14 @@ fn decision_at(
 
 fn tree_at(tree: &Tree, signature: &Signature, path: &str) -> Result<(), DispatchValidationError> {
     // Check the iterative depth bound before either recursive expression walk.
-    if expr::structural_depth(&tree.root) > expr::MAX_EXPRESSION_DEPTH
-        || tree.ty.check_bounds().is_err()
+    let depth = expr::structural_depth(&tree.root);
+    if depth > expr::MAX_EXPRESSION_DEPTH {
+        return Err(DispatchValidationError::at(
+            path,
+            DispatchErrorKind::ExpressionDepth { depth },
+        ));
+    }
+    if tree.ty.check_bounds().is_err()
         || super::validation::expr_canonical(&tree.root).is_err()
         || !expression_has_type(&tree.root, &tree.ty, signature, false)
     {
