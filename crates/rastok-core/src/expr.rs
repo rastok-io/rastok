@@ -472,6 +472,9 @@ fn keyed_map_eq_by(
 pub struct Signature {
     names: BTreeMap<String, DataType>,
     types: BTreeMap<String, NarrowType>,
+    /// Positive path tests retain their conversion as well as their result
+    /// type. `names` keeps the operand type for independent validation.
+    narrowed: BTreeMap<String, Box<NarrowTarget>>,
     /// Exact roots whose descendants belong to Rastok's statically sealed
     /// metadata grid. `meta` itself is implicit; join aliases such as
     /// `left.meta` are declared here so `variant` cannot become a general
@@ -489,7 +492,9 @@ impl Signature {
     /// Declares a visible name, dotted or bare.
     #[must_use]
     pub fn with(mut self, name: impl Into<String>, ty: DataType) -> Self {
-        self.names.insert(name.into(), ty);
+        let name = name.into();
+        self.narrowed.remove(&name);
+        self.names.insert(name, ty);
         self
     }
 
@@ -513,7 +518,13 @@ impl Signature {
     /// The type of an exact name, if declared.
     #[must_use]
     pub fn get(&self, name: &str) -> Option<&DataType> {
-        self.names.get(name)
+        self.narrowed
+            .get(name)
+            .map(|target| match target.as_ref() {
+                NarrowTarget::Type(target) => target.ty(),
+                NarrowTarget::Case { payload, .. } => payload.as_ref(),
+            })
+            .or_else(|| self.names.get(name))
     }
 
     /// Returns the signature that holds when `predicate` evaluated to true.
@@ -533,11 +544,13 @@ impl Signature {
         match predicate {
             Expr::Is { expr, target } => {
                 if let Expr::Path(segments) = expr.as_ref() {
-                    let ty = match target.as_ref() {
-                        NarrowTarget::Type(target) => target.ty().clone(),
-                        NarrowTarget::Case { payload, .. } => (**payload).clone(),
-                    };
-                    self.names.insert(segments.join("."), ty);
+                    let path = segments.join(".");
+                    if matches!(target.as_ref(), NarrowTarget::Type(ty)
+                        if self.get(&path) == Some(ty.ty()))
+                    {
+                        return;
+                    }
+                    self.narrowed.insert(path, target.clone());
                 }
             }
             Expr::Binary {
@@ -966,7 +979,7 @@ pub fn compile(text: &str, signature: &Signature) -> Result<Tree, Vec<Diagnostic
         signature,
         depth: 0,
     };
-    let root = parser.ternary().map_err(|diagnostic| vec![diagnostic])?;
+    let mut root = parser.ternary().map_err(|diagnostic| vec![diagnostic])?;
     // The depth gate, FIRST — before the trailing-input check drops
     // the tree and before the type-checker, the hasher, or the
     // lowering recurse over it on the machine stack. The parser's own
@@ -993,7 +1006,103 @@ pub fn compile(text: &str, signature: &Signature) -> Result<Tree, Vec<Diagnostic
         }]);
     }
     let ty = check(&root, signature, text).map_err(|diagnostic| vec![diagnostic])?;
+    resolve_narrowed_reads(&mut root, signature);
+    // Resolved conversions also spend the transported expression budget.
+    let depth = structural_depth(&root);
+    if depth > MAX_EXPRESSION_DEPTH {
+        dismantle(root);
+        return Err(vec![Diagnostic {
+            kind: DiagnosticKind::TooDeep { depth },
+            message: String::from(
+                "the resolved expression nests deeper than the expression budget",
+            ),
+            range: 0..text.len(),
+        }]);
+    }
     Ok(Tree { root, ty })
+}
+
+/// Member access already exposes a selected payload's fields. Whole-path
+/// reads need the conversion explicitly, including inside collections and
+/// local values. No conversion is inferred on a false or fallback branch.
+fn resolve_narrowed_reads(expr: &mut Expr, signature: &Signature) {
+    match expr {
+        Expr::Path(segments) => {
+            if let Some(target) = signature.narrowed.get(&segments.join(".")) {
+                let path = core::mem::replace(expr, Expr::Literal(Value::Null));
+                *expr = Expr::As {
+                    expr: Box::new(path),
+                    target: target.clone(),
+                };
+            }
+        }
+        Expr::Unary { expr, .. } => resolve_narrowed_reads(expr, signature),
+        Expr::Binary { op, left, right } => {
+            let narrowed;
+            let right_signature = if *op == BinaryOp::And {
+                narrowed = signature.narrowed_by(left);
+                &narrowed
+            } else {
+                signature
+            };
+            resolve_narrowed_reads(left, signature);
+            resolve_narrowed_reads(right, right_signature);
+        }
+        Expr::Ternary {
+            cond,
+            then,
+            otherwise,
+        } => {
+            let narrowed = signature.narrowed_by(cond);
+            resolve_narrowed_reads(cond, signature);
+            resolve_narrowed_reads(then, &narrowed);
+            resolve_narrowed_reads(otherwise, signature);
+        }
+        Expr::Index { base, index } => {
+            resolve_projection_base(base, signature);
+            resolve_narrowed_reads(index, signature);
+        }
+        Expr::Call {
+            function: Function::Has,
+            args,
+        } => {
+            if let Some(base) = args.first_mut() {
+                resolve_projection_base(base, signature);
+            }
+        }
+        Expr::Call { args, .. } | Expr::List(args) => {
+            for arg in args {
+                resolve_narrowed_reads(arg, signature);
+            }
+        }
+        Expr::MapLit(fields) | Expr::Struct(fields) | Expr::Tagged { fields, .. } => {
+            for (_, value) in fields {
+                resolve_narrowed_reads(value, signature);
+            }
+        }
+        // A path tested by `is` is not a value emitted under that test.
+        Expr::Is { expr, .. } if matches!(expr.as_ref(), Expr::Path(_)) => {}
+        Expr::As { expr, target }
+            if matches!(expr.as_ref(), Expr::Path(path)
+            if signature.narrowed.get(&path.join(".")) == Some(target)) => {}
+        Expr::Is { expr, .. } | Expr::As { expr, .. } => resolve_narrowed_reads(expr, signature),
+        Expr::Literal(_) | Expr::Asset(_) => {}
+    }
+}
+
+fn resolve_projection_base(expr: &mut Expr, signature: &Signature) {
+    // Indexing and `has` already inspect the selected structural carrier.
+    // A tagged-case test is different: it selects a struct payload, which
+    // these operations cannot inspect while it still has its case wrapper.
+    if let Expr::Path(path) = expr
+        && !matches!(
+            signature.narrowed.get(&path.join(".")).map(Box::as_ref),
+            Some(NarrowTarget::Case { .. })
+        )
+    {
+        return;
+    }
+    resolve_narrowed_reads(expr, signature);
 }
 
 /// Recognizes the two exact boot-reference forms through the ordinary
@@ -2319,7 +2428,20 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<DataType, Dia
             Ok(DataType::Bool)
         }
         Expr::As { expr, target } => {
-            let source = check(expr, signature, text)?;
+            // The conversion reads the original carrier, not its narrowed
+            // result type. Recheck that exact operand even after a guard has
+            // established the fact; a transported case payload is not trusted.
+            let mut operand_signature;
+            let scope = if let Expr::Path(path) = expr.as_ref()
+                && signature.narrowed.get(&path.join(".")) == Some(target)
+            {
+                operand_signature = signature.clone();
+                operand_signature.narrowed.remove(&path.join("."));
+                &operand_signature
+            } else {
+                signature
+            };
+            let source = check(expr, scope, text)?;
             check_narrowing_compatibility(&source, target).map_err(fail)?;
             Ok(match target.as_ref() {
                 NarrowTarget::Type(target) => target.ty().clone(),
@@ -3189,6 +3311,93 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_narrowed_optional_read_stores_the_conversion_and_returns_its_branch() {
+        let optional = DataType::structural_union(vec![DataType::Text, DataType::Null]).unwrap();
+        let signature = Signature::new().with("id", optional.clone());
+        let predicate = compile("id is text", &signature).unwrap();
+        let scope = signature.narrowed_by(&predicate.root);
+        let read = compile("id", &scope).unwrap();
+        assert!(matches!(&read.root, Expr::As { .. }), "{:?}", read.root);
+        assert_eq!(rederive_type(&read.root, &scope), Some(DataType::Text));
+        let value = optional.narrow(Value::Text("A".into()), None).unwrap();
+        let bindings = BTreeMap::from([("id".to_string(), EvalValue::from(value))]);
+        assert_eq!(eval(&read, &bindings).unwrap(), EvalValue::Text("A".into()));
+    }
+
+    #[test]
+    fn a_narrowed_case_read_rechecks_the_exact_payload_on_transport() {
+        let payload = StructType::new(vec![TypeField::new("code", DataType::INT)]).unwrap();
+        let union = TaggedUnionType::new(vec![
+            crate::datatype::TaggedCase::new("Exited", payload.clone()).unwrap(),
+        ])
+        .unwrap();
+        let signature = Signature::new().with("data", DataType::TaggedUnion(union));
+        let predicate = compile("data is Exited", &signature).unwrap();
+        let scope = signature.narrowed_by(&predicate.root);
+        let mut read = compile("data", &scope).unwrap();
+        assert_eq!(
+            rederive_type(&read.root, &scope),
+            Some(DataType::Struct(payload))
+        );
+        let bindings = BTreeMap::from([(
+            "data".to_string(),
+            EvalValue::TaggedUnion {
+                case: "Exited".into(),
+                payload: vec![("code".into(), EvalValue::Int(7))],
+            },
+        )]);
+        assert_eq!(
+            eval(&read, &bindings).unwrap(),
+            EvalValue::Struct(vec![("code".into(), EvalValue::Int(7))])
+        );
+        let Expr::As { target, .. } = &mut read.root else {
+            panic!("the read carries its conversion")
+        };
+        let NarrowTarget::Case { payload, .. } = target.as_mut() else {
+            panic!("a case conversion")
+        };
+        **payload = DataType::Struct(
+            StructType::new(vec![TypeField::new("code", DataType::Text)]).unwrap(),
+        );
+        assert_eq!(
+            rederive_type(&read.root, &scope),
+            None,
+            "a forged payload is not a narrowing fact"
+        );
+    }
+
+    #[test]
+    fn structural_projection_keeps_its_existing_tree_after_a_type_test() {
+        let signature = Signature::new()
+            .with("data", DataType::Variant)
+            .with_type("Object", DataType::text_map(DataType::Variant));
+        let predicate = compile("data is Object", &signature).unwrap();
+        let scope = signature.narrowed_by(&predicate.root);
+        let index = compile("data[\"value\"]", &scope).unwrap();
+        let Expr::Index { base, .. } = &index.root else {
+            panic!("index")
+        };
+        assert!(matches!(base.as_ref(), Expr::Path(_)));
+        let presence = compile("has(data.value)", &scope).unwrap();
+        let Expr::Call { args, .. } = &presence.root else {
+            panic!("has")
+        };
+        assert!(matches!(args[0], Expr::Path(_)));
+        let bindings = BTreeMap::from([(
+            "data".to_string(),
+            EvalValue::Map(BTreeMap::from([(
+                "value".to_string(),
+                EvalValue::Text("A".into()),
+            )])),
+        )]);
+        assert_eq!(
+            eval(&index, &bindings).unwrap(),
+            EvalValue::Text("A".into())
+        );
+        assert_eq!(eval(&presence, &bindings).unwrap(), EvalValue::Bool(true));
+    }
 
     #[test]
     fn transported_case_narrowing_rederives_the_payload_from_the_source_union() {
