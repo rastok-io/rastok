@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- Check each statically known Call mock terminal against its Contract's frame
+  requirements before simulation; runtime refusals still check computed terminals.
+- Refuse routes to Operator inputs without a single-port or join handler with
+  `E-HANDLER-MISSING`. A bare Node name selects `out` as a source and `in` as a
+  destination, never another port selected from its declarations.
+- Materialize values narrowed by positive `is` tests in conjunctions,
+  conditionals, guarded handlers and guarded match arms, so execution yields
+  the value whose type was checked.
+- Refuse known producer types without a JSON form at JSON-encoding Connector
+  inputs; `variant` payloads retain each Contract's runtime checks and refusals.
+- Detect tagged unions in resident Process JSON frames before execution;
+  requests with a text-valued field retain their behavior.
+
 ## v0.1.0-alpha (5 November 2026)
 
 First public alpha, under the Apache 2.0 license. The package format is 1,
