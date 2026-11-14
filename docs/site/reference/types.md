@@ -101,6 +101,23 @@ and import design still to be discussed.
 Tagged frontends occupy a complete value position. Bind their result before
 using it inside a larger expression. See [Expressions and dispatch](expressions.md).
 
+## JSON request values
+
+A JSON-encoding Connector input refuses a known producer type containing
+`bytes`, `duration`, `timestamp`, `date`, `time`, `timestamp_ntz`, `interval`,
+`uuid`, a map with non-text keys, or a tagged union, at any depth.
+`E-TYPE-INVALID` names the input and the first offending field. Convert the
+value explicitly before sending it. Enum symbols, exact decimals, finite
+floats, optional fields and maps with text keys have JSON forms.
+
+A `variant` producer passes this static check; a JSON value can be forwarded
+directly to another JSON Connector. Its value remains subject to the runtime
+encoder. A `variant` field does not hide a known non-JSON field elsewhere in
+the producer type. See the individual
+[Contracts](contracts.md) for their runtime refusals. Response decoding is
+a separate constraint: an encodable request type is not necessarily an
+admitted JSON response type.
+
 ## Schema projection rules
 
 The schema projection adapters report a path and a named loss reason.

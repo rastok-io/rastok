@@ -58,6 +58,11 @@ Selector: `mode` defaults to `job`.
 
 ## Settings
 
+With `codec = jsonl`, `rastok check` refuses a producer whose resolved type
+contains a [value without a JSON form](../types.md#json-request-values), using
+`E-TYPE-INVALID`. A `variant` producer is checked at execution instead; an
+unencodable request produces `DecodeFailed` before its frame is written.
+
 | Mode | Setting | Domain | Presence / default | Latest phase |
 |---|---|---|---|---|
 | job, service | `args` | `array<text>` | `[]` | instance |

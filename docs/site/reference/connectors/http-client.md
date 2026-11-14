@@ -56,6 +56,11 @@ and the distinction between a Contract, a Lab model and an installed Driver.
 
 ## Settings
 
+With `codec = json`, `rastok check` refuses a producer whose resolved type
+contains a [value without a JSON form](../types.md#json-request-values), using
+`E-TYPE-INVALID`. A `variant` producer is checked at execution instead: an
+unencodable request ends the Call with `DecodeFailed` before it is sent.
+
 | Mode | Setting | Domain | Presence / default | Latest phase |
 |---|---|---|---|---|
 | all | `auth_bearer` | `text` | optional | invocation |

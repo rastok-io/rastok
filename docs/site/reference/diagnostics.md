@@ -110,7 +110,7 @@ Independent plan validation can also surface these semantic refusals.
 | `E-ROUTE-MIXED` | One case is routed both to nothing and to a destination. | Choose discard or delivery for that case. | “`nothing` cannot coexist with a real destination for the same source case” |
 | `E-TYPE-BUDGET` | Type expansion exceeds a nesting, node, width or alias bound. | Reduce the dimension reported in the diagnostic. | “the type `Deep` nests 129 levels deep” |
 | `E-TYPE-DUP` | A field or symbol is repeated inside one type. | Remove or rename the duplicate member. | “the struct field `x` is declared twice” |
-| `E-TYPE-INVALID` | A type constructor violates its invariants. | Correct its parameters, keys or branches. | “array&lt;int32&gt; is not a canonical map-key type” |
+| `E-TYPE-INVALID` | A type constructor violates its invariants, or a JSON input receives a known type without a JSON form. | Correct the type, or explicitly convert the named field before sending it. | “array&lt;int32&gt; is not a canonical map-key type” |
 | `E-TYPE-RECURSIVE` | A named type expands back to itself. | Use a finite nonrecursive type. | “the type `Node` does not expand: `Node` reaches itself” |
 | `E-TYPE-UNRESOLVED` | An inference constraint reaches a position needing a closed type. | Supply a concrete type or enough contextual constraints. | “an open struct is an inference constraint, not an effective type” |
 | `E-UNION-OVERLAP` | Structural-union branches overlap in the values they accept. | Use disjoint branches or a tagged union. | “structural-union branches `int32` and `int64` overlap” |

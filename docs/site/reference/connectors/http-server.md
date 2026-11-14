@@ -53,6 +53,13 @@ Selector: `mode` defaults to `ack`.
 
 ## Settings
 
+In `mode = respond` with `codec = json`, `rastok check` refuses a graph
+response whose resolved type contains a
+[value without a JSON form](../types.md#json-request-values), using
+`E-TYPE-INVALID`. A `variant` response is checked at execution instead; if
+its value cannot be encoded, the Driver sends HTTP 500 and reports
+`OutcomeUnknown`, without sending that value.
+
 | Mode | Setting | Domain | Presence / default | Latest phase |
 |---|---|---|---|---|
 | ack, respond | `auth_bearer` | `text` | optional | instance |
