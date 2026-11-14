@@ -64,8 +64,11 @@ Operator and the wiring remain the same.
 
 ## Account for every possible output
 
-The final three lines are the wiring. `->` carries values in one direction;
-the abbreviated chain uses the resolved default ports. The App input feeds
+The final three lines are the wiring. `->` carries values in one direction.
+A bare Node name in a route means its `out` port as a source and its `in`
+port as a destination; any other port is written `node.port`.
+An Operator input reached by a route needs an `on` handler or a join that
+names it. The App input feeds
 `relay`, its accepted output feeds `shell`, and the echoed text crosses the
 App output boundary.
 

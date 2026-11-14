@@ -12,6 +12,100 @@
 use rastok::compiler::compile;
 use rastok::connector::contract::ContractCatalog;
 
+fn check_handler_route(
+    body: &str,
+    target: &str,
+) -> Result<rastok::compiler::Compilation, rastok::diagnostics::Bag> {
+    let source = format!(
+        "graph app : App {{ input in: text; operator receiver {{ {body} }} in -> {target}; receiver.out -> nothing }}"
+    );
+    compile(&[&source], &ContractCatalog::try_m0().unwrap())
+}
+
+#[test]
+fn a_bare_route_does_not_select_the_only_named_input() {
+    let error =
+        check_handler_route("input event: text; on event { out = data }", "receiver").unwrap_err();
+    let diagnostic = error
+        .diagnostics()
+        .iter()
+        .find(|d| d.code().as_str() == "E-HANDLER-MISSING")
+        .unwrap();
+    assert!(diagnostic.message().contains("route to `receiver.event`"));
+    assert!(
+        diagnostic
+            .fields()
+            .contains(&("node", "receiver".to_owned()))
+    );
+    assert!(diagnostic.fields().contains(&("port", "in".to_owned())));
+    assert_eq!(diagnostic.spans().len(), 1);
+}
+
+#[test]
+fn a_bare_route_with_several_handled_inputs_lists_them_without_choosing() {
+    let error = check_handler_route(
+        "input first: text; input second: text; on first { out = data } on second { out = data }",
+        "receiver",
+    )
+    .unwrap_err();
+    let diagnostic = error
+        .diagnostics()
+        .iter()
+        .find(|d| d.code().as_str() == "E-HANDLER-MISSING")
+        .unwrap();
+    assert!(diagnostic.message().contains("first"));
+    assert!(diagnostic.message().contains("second"));
+    assert!(!diagnostic.message().contains("route to"));
+}
+
+#[test]
+fn a_declared_input_requires_a_handler_when_wired() {
+    let error = check_handler_route(
+        "input in: text; input event: text; on event { out = data }",
+        "receiver.in",
+    )
+    .unwrap_err();
+    let diagnostic = error
+        .diagnostics()
+        .iter()
+        .find(|d| d.code().as_str() == "E-HANDLER-MISSING")
+        .unwrap();
+    assert!(diagnostic.message().contains("no handler for `in`"));
+    assert!(diagnostic.message().contains("event"));
+    assert!(!diagnostic.message().contains("route to"));
+}
+
+#[test]
+fn an_explicit_route_selects_a_named_handler() {
+    check_handler_route(
+        "input event: text; on event { out = data }",
+        "receiver.event",
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_join_is_a_handler_for_each_input_it_consumes() {
+    let source = r#"graph app : App {
+      input in: text
+      operator pair {
+        input left: text
+        input right: text
+        on (left, right) { out = left.data }
+      }
+      in -> { pair.left pair.right }
+      pair.out -> nothing
+    }"#;
+    compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
+}
+
+#[test]
+fn a_rejected_handler_does_not_also_count_as_a_missing_handler() {
+    let error = check_handler_route("on in where data > { nothing }", "receiver").unwrap_err();
+    assert_eq!(error.diagnostics().len(), 1, "{error:?}");
+    assert_eq!(error.diagnostics()[0].code().as_str(), "E-EXPR");
+}
+
 /// One input fanning to two named outputs through named node ports.
 const SORTER: &str = r#"
 graph sorter : App {

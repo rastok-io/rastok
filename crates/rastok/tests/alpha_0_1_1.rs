@@ -168,7 +168,6 @@ fn r150_a_completed_mock_requires_its_body_at_check() {
 }
 
 #[test]
-#[ignore = "R-165, gate P1"]
 fn r165_a_bare_route_requires_a_handler_for_the_default_input() {
     assert_check_refuses(
         "R-165-route-without-port.rkg",

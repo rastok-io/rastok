@@ -68,6 +68,7 @@ Independent plan validation can also surface these semantic refusals.
 | `E-CONTENT-TYPE` | A content-type qualifier appears inside a nested value. | Apply it to the whole payload instead. | “a content type qualifies the WHOLE payload” |
 | `E-CONTRACT-ATTR` | A Connector attribute violates its mode's definition. | Use an allowed value and evaluation site from the Contract catalogue. | “`codec` violates the Process sheet: expected one of ["bytes", "jsonl", "lines"], got `utf16`” |
 | `E-CONTRACT-REQUIRED` | A required Connector setting is missing, or a Call mock's frames contradict its terminal. | Declare the setting, or supply exactly the frames required by that terminal. | “the Process sheet requires `behavior`” |
+| `E-HANDLER-MISSING` | A route delivers to an Operator input that no handler consumes. | Route to an input handled by `on` or a join, or add its handler. A bare destination means `in`. | “`receiver.in` receives deliveries but `receiver` has no handler for `in`” |
 | `E-DATA-ANNOTATION` | A field annotation cannot be resolved or applied consistently. | Correct its name, constant arguments, target or measurement unit. | “unknown data annotation” |
 | `E-DISPATCH-POSITION` | A decision or guard occurs after work or in a conflicting position. | Place the decision first and combine duplicate guards. | “a handler admits at most one `where`; combine predicates or use one `match` dispatch” |
 | `E-DUP-BINDING` | A binding shadows a name already visible in its scope. | Rename the new binding. | “`limit` shadows an already visible binding” |

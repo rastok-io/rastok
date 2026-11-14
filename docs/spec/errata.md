@@ -7,6 +7,18 @@
 > An erratum is not a license to improvise — until the fix lands, the
 > designated home is the contract.
 
+## E-2026-11-14-1: a bare edge endpoint: single declared port vs `in` / `out`: RESOLVED
+
+- **Where:** `grammar.md`, "Edges", the `->` paragraph.
+- **Defect:** the paragraph still described `a -> b` as the source's
+  single declared output port wired to the target's single declared
+  input port. The Graph section of the same file states the rule the
+  compiler implements: an unambiguous child name selects `in` as a
+  destination or `out` as a source.
+- **Resolution:** the Edges paragraph states the same rule. `a -> b` is
+  `a.out -> b.in`; no port is selected from the shape of the Node. A
+  route to an Operator input that no handler consumes refuses at check.
+
 ## E-2026-09-14-1 — type tests lost optional payload witnesses — RESOLVED
 
 - **Where:** `rastok-core/src/expr.rs`, runtime `is`/`as` evaluation.

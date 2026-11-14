@@ -1113,6 +1113,55 @@ impl Checker<'_, '_> {
             self.wrong_direction(reference.span, port_name, direction, required);
             return None;
         }
+        // Rejected handlers do not enter HIR. Their diagnostic takes
+        // precedence over a missing-handler inference from that partial HIR.
+        if !is_source
+            && !self.bag.has_errors()
+            && let Some(target) = target_node
+            && matches!(target.semantics, NodeSemantics::Operator)
+        {
+            let mut handled = BTreeSet::new();
+            for handler in &target.handlers {
+                match &handler.activation {
+                    node::HandlerActivation::Port(port) => {
+                        handled.insert(port.name());
+                    }
+                    node::HandlerActivation::Join { ports, .. } => {
+                        handled.extend(ports.iter().map(node::Port::name));
+                    }
+                    node::HandlerActivation::Lifecycle(_) => {}
+                }
+            }
+            if !handled.contains(port_name) {
+                let hint = if reference.segments.len() == 1
+                    && handled.len() == 1
+                    && let Some(only) = handled.first()
+                {
+                    format!(
+                        "route to `{}.{only}`, or add `on {port_name} {{ ... }}`",
+                        target.path
+                    )
+                } else {
+                    let inputs = if handled.is_empty() {
+                        "none".to_owned()
+                    } else {
+                        handled.into_iter().collect::<Vec<_>>().join(", ")
+                    };
+                    format!(
+                        "handled inputs: {inputs}; add `on {port_name} {{ ... }}` or use a handled input"
+                    )
+                };
+                self.bag.push(Diagnostic::new(
+                    E_HANDLER_MISSING,
+                    Phase::Check,
+                    format!("`{}.{port_name}` receives deliveries but `{}` has no handler for `{port_name}`; {hint}", target.path, target.path),
+                )
+                .with_span(reference.span)
+                .with_field("node", target.path.to_string())
+                .with_field("port", port_name));
+                return None;
+            }
+        }
         let owner = target_node.map_or_else(
             || target_graph.map(|target| EndpointOwner::Graph(target.path.clone())),
             |target| Some(EndpointOwner::Node(target.path.clone())),

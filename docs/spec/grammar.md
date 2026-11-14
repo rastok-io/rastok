@@ -675,7 +675,14 @@ directions are known without a declaration, but a plan row
 exists only when the program declares, handles, emits or wires it. They are
 typed by the same mechanism as every other port. A `Process` maps them
 exactly to stdin, decoded stdout and raw stderr; its ordinary `exit`
-output carries the tagged lifecycle/outcome value. Conventions :
+output carries the tagged lifecycle/outcome value.
+
+An Operator input that has a producer requires a handler: `on <port>`, or
+a join that names it. A route to a handler-less input refuses at check
+with `E-HANDLER-MISSING`. The default spelling `in` gets no exemption: a
+bare `source -> node` targets `node.in`, and `node` must handle `in`.
+
+Conventions :
 
 - ports are named for their role, **no direction suffix** (`event`, `delta`, `flush`)
 - a single-input / single-output node just uses the defaults `in` and `out`
@@ -752,9 +759,12 @@ codex.out -> match {
 a -> b
 ```
 
-Equivalent to the source's single declared output port wired to the target's
-single declared input port. This is a convenience for unambiguous nodes, not an
-edge between ports literally named `out` and `in`.
+`a -> b` is exactly `a.out -> b.in`. A bare child Node name selects its
+default port: `out` where it is the source of the edge, `in` where it is
+the destination. Nothing is selected from the shape of the Node: a Node
+whose only input or output has another name is wired by that name, as in
+`a.result -> b.event`. `err`, `exit` and every other port are always
+named.
 
 ### Discarding output : `-> nothing`
 
