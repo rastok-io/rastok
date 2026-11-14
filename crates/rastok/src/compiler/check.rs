@@ -58,6 +58,8 @@ pub const E_NAME_CLASH: Code = Code::new("E-NAME-CLASH");
 pub const E_RESOLVE_UNKNOWN: Code = Code::new("E-RESOLVE-UNKNOWN");
 /// Diagnostic for a port that the addressed node does not expose.
 pub const E_PORT_UNKNOWN: Code = Code::new("E-PORT-UNKNOWN");
+/// A routed Operator input has no single-port or join handler.
+pub const E_HANDLER_MISSING: Code = Code::new("E-HANDLER-MISSING");
 /// Diagnostic for a write reaching the read-only `meta.sys` namespace.
 pub const E_META_SYS_READONLY: Code = Code::new("E-META-SYS-READONLY");
 /// A metadata path outside the three zones, or outside a zone's

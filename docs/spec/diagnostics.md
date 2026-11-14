@@ -84,6 +84,7 @@ cover the refusal, nested boundaries and actual expiry observations.
 | E-CONNECTOR-UNAVAILABLE | error | check | [stdlib.md](stdlib.md) | a Connector Contract is unknown, only declared without an executable sheet, absent from the compiler catalogue, or has an invalid semantic id; field `type`. Physical Driver availability is checked separately at deployment; Lab simulation does not require one |
 | E-CONTRACT-ATTR | error | check | [stdlib.md](stdlib.md) | an attribute violating its connector contract sheet; fields `attribute`, `detail` |
 | E-CONTRACT-REQUIRED | error | check | [stdlib.md](stdlib.md), [simulation-semantics.md](simulation-semantics.md) | a mandatory contract attribute left undeclared (field `attribute`), or a Call mock branch contradicts its terminal's frame cardinality (fields `connector`, `terminal`, `port`, `expected`, `found`) |
+| E-HANDLER-MISSING | error | check | [grammar.md](grammar.md) | a route delivers to an Operator input that no handler consumes; fields `node`, `port` |
 | E-DUP-BINDING | error | check | [grammar.md](grammar.md) | a binding name shadowing a visible binding or a reserved handler name; field `name` |
 | E-NAME-CLASH | error | resolve | [grammar.md](grammar.md) | a Graph child and one of its boundary ports occupy the same local name; fields `owner`, `name` |
 | E-HANDLER-DUPLICATE | error | check | [grammar.md](grammar.md) | an Operator declares a second handler for the same trigger; fields `node`, `trigger` |
