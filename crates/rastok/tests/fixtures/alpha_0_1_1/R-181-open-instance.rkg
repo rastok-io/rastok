@@ -1,0 +1,79 @@
+// R-181 — The published approval example leaves one instance open per request
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-181-open-instance.rkg
+//   rastok simulate R-181-open-instance.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ rastok check R-181-open-instance.rkg
+//   ok: 2 node(s), semantic hash cf3566dd43b7aac391d8862578e5c62a8fb5702dd84737f269e68b0af91fb7bc
+//   [exit 0]
+//   $ rastok simulate R-181-open-instance.rkg
+//   FAIL r181.a_decided_request_leaves_its_instance_open
+//        expect app.closed == "closed"  (R-181-open-instance.rkg:70)
+//        nothing observed
+//        expected 1 matching delivery on app.closed, but observed 0
+//   FAIL r181.an_expired_request_leaves_its_instance_open
+//        expect app.closed == "closed"  (R-181-open-instance.rkg:77)
+//        nothing observed
+//        expected 1 matching delivery on app.closed, but observed 0
+//   2 scenario(s), 2 failed
+//   [exit 1]
+//
+// Expected after the fix:
+//   This file is the published pattern, instrumented with `on stop`. It keeps
+//   failing: the fix is one line in docs/examples/expense-approval.rkg and in the
+//   white paper excerpt, `lifetime = { kind = idle; after = duration("48h") }`.
+
+type Request = struct { request_id: text, amount: int }
+type Decision = struct { request_id: text, approved: bool, reason: text }
+type Rejection = struct { request_id: text, reason: text }
+type JoinExpiry = union { JoinExpired {} }
+graph expense_approval : App {
+  input request: Request
+  input decision: Decision
+  output approved: Request
+  output rejection: Rejection
+  output expired: JoinExpiry
+  output closed: text
+  operator decide {
+    input request: Request
+    input decision: Decision
+    output approval: Request
+    output rejection: Rejection
+    output expired: JoinExpiry
+    output closed: text
+    instance = { key = data.request_id }
+    on (request, decision) within duration("48h") match {
+      decision.data.approved => approval = request.data
+      _ => rejection = {
+        request_id = request.data.request_id
+        reason = decision.data.reason
+      }
+    }
+    on stop { closed = "closed" }
+  }
+  request -> decide.request
+  decision -> decide.decision
+  decide.approval -> approved
+  decide.rejection -> rejection
+  decide.expired -> expired
+  decide.closed -> closed
+}
+lab r181 {
+  scenario a_decided_request_leaves_its_instance_open {
+    app.request = { request_id = "r-42"; amount = 1250 }
+    app.decision = { request_id = "r-42"; approved = true; reason = "" }
+    expect app.approved where data.request_id == "r-42"
+    advance duration("8760h")
+    expect app.closed == "closed"
+  }
+  scenario an_expired_request_leaves_its_instance_open {
+    app.request = { request_id = "r-7"; amount = 990 }
+    advance duration("48h")
+    expect app.expired where data is JoinExpired
+    advance duration("8760h")
+    expect app.closed == "closed"
+  }
+}

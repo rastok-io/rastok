@@ -1,0 +1,38 @@
+// R-180 — Reading a state that may be absent: the message does not say what to do
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-180-absent-state.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ rastok check R-180-absent-state.rkg
+//   error[E-EXPR]: `dossier.title` does not resolve to a member
+//     --> R-180-absent-state.rkg:33:22
+//      |
+//   33 |     on note { seen = dossier.title }
+//      |                      ^^^^^^^^^^^^^
+//     = detail: `dossier.title` does not resolve to a member
+//   [exit 1]
+//
+// Expected after the fix:
+//   Still refused, E-EXPR. The message says that `dossier` may be absent (`Open?`)
+//   and asks for a test with `is` before reading `title`.
+
+type Open = struct { id: text, title: text }
+type Note = struct { id: text, text: text }
+graph app : App {
+  input open: Open
+  input note: Note
+  output seen: text
+  operator dossier {
+    input open: Open
+    input note: Note
+    output seen: text
+    var dossier: Open? = null
+    on open { dossier = data }
+    on note { seen = dossier.title }
+  }
+  open -> dossier.open
+  note -> dossier.note
+  dossier.seen -> seen
+}

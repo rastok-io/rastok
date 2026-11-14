@@ -1,0 +1,48 @@
+// R-136 — Reading a field of a computed value in one go
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-136-one-shot-member-access.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ rastok check R-136-one-shot-member-access.rkg
+//   error[E-EXPR]: member access on a computed value is outside this build's subset
+//     --> R-136-one-shot-member-access.rkg:41:40
+//      |
+//   41 |       out = data.rows.value[0].customer
+//      |                                        ^
+//     = detail: member access on a computed value is outside this build's subset
+//
+//   error[E-EXPR]: member access on a computed value is outside this build's subset
+//     --> R-136-one-shot-member-access.rkg:42:38
+//      |
+//   42 |       side = (data.shape as Box).side
+//      |                                      ^
+//     = detail: member access on a computed value is outside this build's subset
+//   [exit 1]
+//
+// Expected after the fix:
+//   Still refused in 0.1.1: the one-shot form waits for the optional forms of
+//   0.2.0-alpha. The message suggests naming the value with a `val` first.
+
+type Row = struct { customer: text }
+type Rows = struct { value: array<Row> }
+type Shape = union { Box { side: int }, Dot {} }
+type Ask = struct { rows: Rows, shape: Shape }
+graph app : App {
+  input in: Ask
+  output out: text
+  output side: int
+  operator first {
+    input in: Ask
+    output out: text
+    output side: int
+    on in {
+      out = data.rows.value[0].customer
+      side = (data.shape as Box).side
+    }
+  }
+  in -> first
+  first.out -> out
+  first.side -> side
+}

@@ -1,0 +1,113 @@
+// R-164 — Inside one advance, a fake answers only at the end
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-164-advance-and-fake.rkg
+//   rastok simulate R-164-advance-and-fake.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ rastok check R-164-advance-and-fake.rkg
+//   ok: 5 node(s), semantic hash b2e0ffd9ad2f2c4f935b992ae153d09ca9230dcc8219db31ac374df31553efbc
+//   [exit 0]
+//   $ rastok simulate R-164-advance-and-fake.rkg
+//   FAIL r164.four_samples_in_one_advance
+//        expect 4 app.read  (R-164-advance-and-fake.rkg:95)
+//        observed app.read: {"level":7}
+//        expected 4 matching deliveries on app.read, but observed 1
+//        expect 4 app.ended where data == "Completed"  (R-164-advance-and-fake.rkg:96)
+//        observed app.ended: "TimeoutExpired"
+//        observed app.ended: "TimeoutExpired"
+//        observed app.ended: "TimeoutExpired"
+//        observed app.ended: "Completed"
+//        where data == "Completed" is false for 3 of 4 deliveries; count 1, expected 4
+//   PASS r164.the_same_four_samples_in_four_advances
+//   2 scenario(s), 1 failed
+//   [exit 1]
+//
+// Expected after the fix:
+//   Both scenarios pass. In `four_samples_in_one_advance` the four Calls complete:
+//   each fake answer is part of the drain of the instant that opened its Call
+//   (execution-model.md §8).
+
+type Clock = struct { tick: int }
+type Reading = struct { level: int }
+graph app : App {
+  input start: Clock
+  output read: Reading
+  output ended: text
+  operator clock : Loop {
+    input in: Clock
+    output tick: Clock
+    output err: union { LoopExpired { last_state: Clock } }
+    Loop.fuel = 10
+    Loop.delay = { kind = fixed; after = duration("5s") }
+    on in match {
+      data.tick == 0 => Loop.next = { tick = 1 }
+      _ => {
+        tick = data
+        Loop.next = { tick = data.tick + 1 }
+      }
+    }
+  }
+  operator ask {
+    input in: Clock
+    output out: variant
+    on in {
+      val body = { tick = data.tick }
+      out = body as variant
+    }
+  }
+  connector sensor : HttpClient {
+    url = "https://sensor.example.test/read"
+    method = "POST"
+    codec = json
+    json_profile = projected
+    output out: Reading
+    timeout = duration("2s")
+    behavior = deterministic
+  }
+  operator name {
+    input in: HttpClientExit
+    output out: text
+    on in match {
+      data is Completed => out = "Completed"
+      data is TimeoutExpired => out = "TimeoutExpired"
+      _ => out = "other"
+    }
+  }
+  start -> clock
+  clock.tick -> ask -> sensor
+  clock.err -> nothing
+  sensor.out -> read
+  sensor.exit -> name -> ended
+}
+lab r164 {
+  mock sensor {
+    on in {
+      out = { level = 7 }
+      exit = Completed { status = 200 }
+    }
+  }
+  scenario four_samples_in_one_advance {
+    app.start = { tick = 0 }
+    advance duration("20s")
+    expect 4 sensor.in
+    expect 4 app.read
+    expect 4 app.ended where data == "Completed"
+  }
+  scenario the_same_four_samples_in_four_advances {
+    app.start = { tick = 0 }
+    advance duration("5s")
+    expect app.read
+    expect app.ended == "Completed"
+    advance duration("5s")
+    expect app.read
+    expect app.ended == "Completed"
+    advance duration("5s")
+    expect app.read
+    expect app.ended == "Completed"
+    advance duration("5s")
+    expect app.read
+    expect app.ended == "Completed"
+  }
+}

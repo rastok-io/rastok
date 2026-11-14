@@ -1,0 +1,57 @@
+// R-152 — A second `is` test on a field reached through a first `is` test
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-152-is-after-is.rkg
+//   rastok simulate R-152-is-after-is.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ rastok check R-152-is-after-is.rkg
+//   error[E-EXPR]: `data.confirmed.flight` does not resolve to a member
+//     --> R-152-is-after-is.rkg:43:7
+//      |
+//   43 |       data is Booked && data.confirmed.flight is Receipt => out = "has a flight"
+//      |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+//     = detail: `data.confirmed.flight` does not resolve to a member
+//   [exit 1]
+//   $ rastok simulate R-152-is-after-is.rkg
+//   error[E-EXPR]: `data.confirmed.flight` does not resolve to a member
+//     --> R-152-is-after-is.rkg:43:7
+//      |
+//   43 |       data is Booked && data.confirmed.flight is Receipt => out = "has a flight"
+//      |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+//     = detail: `data.confirmed.flight` does not resolve to a member
+//   [exit 1]
+//
+// Expected after the fix:
+//   Both commands succeed: the right side of `&&` sees the narrowed value, also as
+//   the operand of another `is`.
+
+type Receipt = struct { reservation: text }
+type Receipts = struct { count: int, flight: Receipt? }
+type Result = union {
+  Booked { id: text, confirmed: Receipts }
+  Stopped { id: text, reason: text }
+}
+graph app : App {
+  input in: Result
+  output out: text
+  operator read {
+    input in: Result
+    output out: text
+    on in match {
+      data is Booked && data.confirmed.flight is Receipt => out = "has a flight"
+      data is Booked => out = "booked without a flight"
+      _ => out = "stopped"
+    }
+  }
+  in -> read -> out
+}
+lab r152 {
+  scenario an_is_test_on_a_field_reached_through_an_is_test {
+    app.in = Booked { id = "T1"; confirmed = { count = 1; flight = { reservation = "AF-1" } } }
+    expect app.out == "has a flight"
+    app.in = Booked { id = "T2"; confirmed = { count = 0; flight = null } }
+    expect app.out == "booked without a flight"
+  }
+}

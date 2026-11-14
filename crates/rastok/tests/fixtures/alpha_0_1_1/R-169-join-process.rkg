@@ -1,0 +1,71 @@
+// R-169 — The same shift with a Process that writes nothing
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-169-join-process.rkg
+//   rastok simulate R-169-join-process.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ rastok check R-169-join-process.rkg
+//   ok: 4 node(s), semantic hash 87709d5d8e691d0af30ede845cb6b6f2440c6a58b6d53a12978ec9d888e0e6a7
+//   [exit 0]
+//   $ rastok simulate R-169-join-process.rkg
+//   FAIL r169p.a_run_that_writes_nothing_shifts_the_next_one
+//        expect app.out == { size = 2; code = 0 }  (R-169-join-process.rkg:69)
+//        observed app.out: {"code":7,"size":2}
+//        expected 1 matching delivery on app.out, but observed 0
+//   1 scenario(s), 1 failed
+//   [exit 1]
+//
+// Expected after the fix:
+//   `rastok check` prints W-JOIN-UNPAIRED: `tool.out` produces zero or more frames,
+//   a presence join cannot pair them with `tool.exit`.
+
+type Run = struct { size: int, code: int }
+graph app : App {
+  input in: text
+  output out: Run
+  connector tool : Process {
+    command = "printf"
+    codec = bytes
+    behavior = deterministic
+    timeout = duration("5s")
+  }
+  operator feed {
+    input in: text
+    output out: bytes
+    on in match {
+      data == "empty" => out = base64! { }
+      _ => out = base64! { YQ== }
+    }
+  }
+  operator pair {
+    input body: bytes
+    input exit: ProcessExit
+    output out: Run
+    on (body, exit) match {
+      exit.data is Exited => out = { size = size(body.data); code = exit.data.exit_code }
+      _ => out = { size = size(body.data); code = -1 }
+    }
+  }
+  in -> feed -> tool
+  tool.out -> pair.body
+  tool.err -> nothing
+  tool.exit -> pair.exit
+  pair.out -> out
+}
+lab r169p {
+  mock tool {
+    on in where size(data) == 0 { exit = Exited { exit_code = 7; signal = null } }
+    on in {
+      out = base64! { b2s= }
+      exit = Exited { exit_code = 0; signal = null }
+    }
+  }
+  scenario a_run_that_writes_nothing_shifts_the_next_one {
+    app.in = "empty"
+    expect app.out == nothing
+    app.in = "full"
+    expect app.out == { size = 2; code = 0 }
+  }
+}

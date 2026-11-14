@@ -1,0 +1,91 @@
+// R-169 — A join shifts silently when one side is missing (HttpClient)
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-169-join-http.rkg
+//   rastok simulate R-169-join-http.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ rastok check R-169-join-http.rkg
+//   ok: 5 node(s), semantic hash 534341c7589b19cda4f2be5824cb96fdfb6457197fce8fb3e629acb00a361e63
+//   [exit 0]
+//   $ rastok simulate R-169-join-http.rkg
+//   FAIL r169.a_join_pairs_each_answer_with_its_own_end
+//        expect app.seen == { name = "item b"; status = 200 }  (R-169-join-http.rkg:89)
+//        observed app.seen: {"name":"error page","status":200}
+//        expected 1 matching delivery on app.seen, but observed 0
+//   1 scenario(s), 1 failed
+//   [exit 1]
+//
+// Expected after the fix:
+//   `rastok check` still accepts the program and prints a warning, W-JOIN-UNPAIRED:
+//   `ServerError` produces a frame on `catalog.out`, which feeds `pair.body`, while
+//   its `exit` does not reach `pair.exit`. The scenario still fails: the warning is
+//   the fix, the program is wrong.
+
+type Ask = struct { id: text }
+type Item = struct { name: text }
+type Seen = struct { name: text, status: int }
+graph app : App {
+  input ask: Ask
+  output seen: Seen
+  output failed: text
+  operator send {
+    input in: Ask
+    output out: variant
+    on in {
+      val body = { id = data.id }
+      out = body as variant
+    }
+  }
+  connector catalog : HttpClient {
+    url = "https://catalog.example.test/item"
+    method = "POST"
+    codec = json
+    json_profile = projected
+    output out: Item
+    timeout = duration("5s")
+    behavior = deterministic
+  }
+  operator pair {
+    input body: Item
+    input exit: HttpClientExit
+    output out: Seen
+    on (body, exit) match {
+      exit.data is Completed => out = { name = body.data.name; status = exit.data.status }
+      _ => out = { name = body.data.name; status = 0 }
+    }
+  }
+  operator other {
+    input in: HttpClientExit
+    output out: text
+    on in { out = "not completed" }
+  }
+  ask -> send -> catalog
+  catalog.out -> pair.body
+  catalog.exit -> match {
+    Completed -> pair.exit
+    _ -> other
+  }
+  pair.out -> seen
+  other.out -> failed
+}
+lab r169 {
+  mock catalog {
+    on in where data is Ask && data.id == "a" {
+      out = { name = "error page" }
+      exit = ServerError { status = 500 }
+    }
+    on in {
+      out = { name = "item b" }
+      exit = Completed { status = 200 }
+    }
+  }
+  scenario a_join_pairs_each_answer_with_its_own_end {
+    app.ask = { id = "a" }
+    expect app.failed == "not completed"
+    expect app.seen == nothing
+    app.ask = { id = "b" }
+    expect app.seen == { name = "item b"; status = 200 }
+  }
+}

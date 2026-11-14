@@ -1,0 +1,46 @@
+// R-091 — A value cut after `&&`: a correct refusal, an unclear message
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-091-value-on-two-lines.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ rastok check R-091-value-on-two-lines.rkg
+//   error[E-PARSE-EXPECTED]: a bare expression is not a statement; write `out = <value>` (or `err = Kind { … }`)
+//     --> R-091-value-on-two-lines.rkg:41:9
+//      |
+//   41 |         data.n > 0
+//      |         ^^^^^^^^^^
+//     = expected: a statement
+//     = found: a bare expression
+//
+//   error[E-EXPR]: expected an expression
+//     --> R-091-value-on-two-lines.rkg:40:28
+//      |
+//   40 |       val both = data.ok &&
+//      |                            ^
+//     = detail: expected an expression
+//
+//   error[E-EXPR]: `both` is not a visible name
+//     --> R-091-value-on-two-lines.rkg:42:13
+//   … (5 more lines in today/R-091-value-on-two-lines.txt)
+//
+// Expected after the fix:
+//   Still refused. The message says that a value ends with its line and that
+//   parentheses opened on the same line let it continue.
+
+type Move = struct { n: int, ok: bool }
+graph app : App {
+  input in: Move
+  output out: text
+  operator o {
+    input in: Move
+    output out: text
+    on in {
+      val both = data.ok &&
+        data.n > 0
+      out = both ? "yes" : "no"
+    }
+  }
+  in -> o -> out
+}

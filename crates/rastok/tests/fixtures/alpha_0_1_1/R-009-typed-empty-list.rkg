@@ -1,0 +1,53 @@
+// R-009 — A typed empty list or map cannot be written
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-009-typed-empty-list.rkg
+//   rastok simulate R-009-typed-empty-list.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ rastok check R-009-typed-empty-list.rkg
+//   error[E-PORT-TYPE]: `members` requires array<text>; this value is array<variant>: the value is not assignable to the declared type
+//     --> R-009-typed-empty-list.rkg:40:5
+//      |
+//   40 |     var members: array<text> = []
+//      |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+//     = port: members
+//     = expected: array<text>
+//     = found: array<variant>
+//
+//   error[E-PORT-TYPE]: `counts` requires map<text,int32>; this value is map<text,variant>: the value is not assignable to the declared type
+//     --> R-009-typed-empty-list.rkg:41:5
+//      |
+//   41 |     var counts: map<text, int> = {:}
+//      |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+//     = port: counts
+//     = expected: map<text,int32>
+//     = found: map<text,variant>
+//   … (52 more lines in today/R-009-typed-empty-list.txt)
+//
+// Expected after the fix:
+//   Both commands succeed: `[]` and `{:}` take the type of their position.
+//   `{}` is another case, see R-009-empty-struct-in-a-map-place.rkg.
+
+type Bag = struct { members: array<text>, counts: map<text, int> }
+graph app : App {
+  input in: text
+  output out: Bag
+  operator collect {
+    input in: text
+    output out: Bag
+    var members: array<text> = []
+    var counts: map<text, int> = {:}
+    on in {
+      out = { members = members; counts = counts }
+    }
+  }
+  in -> collect -> out
+}
+lab r009 {
+  scenario an_empty_list_takes_the_type_of_its_place {
+    app.in = "a"
+    expect app.out == { members = []; counts = {:} }
+  }
+}

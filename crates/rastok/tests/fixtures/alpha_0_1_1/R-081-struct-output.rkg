@@ -1,0 +1,27 @@
+// R-081 — `rastok run` prints a struct in Rust debug form
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   printf 'hello\nworld\n' | rastok run R-081-struct-output.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ printf 'hello\nworld\n' | rastok run R-081-struct-output.rkg
+//   Materialized(Struct([("line", Text("hello")), ("size", Int(5))]))
+//   Materialized(Struct([("line", Text("world")), ("size", Int(5))]))
+//   [exit 0]
+//
+// Expected after the fix:
+//   One JSON value per line, the projection the Lab already prints:
+//   {"line":"hello","size":5}
+
+type Seen = struct { line: text, size: int }
+graph app : App {
+  input in: text
+  output out: Seen
+  operator see {
+    input in: text
+    output out: Seen
+    on in { out = { line = data; size = size(data) } }
+  }
+  in -> see -> out
+}

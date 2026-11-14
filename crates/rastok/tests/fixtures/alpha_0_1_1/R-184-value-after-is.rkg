@@ -1,0 +1,56 @@
+// R-184 — After an `is` test, the value passes check and faults at execution
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-184-value-after-is.rkg
+//   rastok simulate R-184-value-after-is.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ rastok check R-184-value-after-is.rkg
+//   ok: 2 node(s), semantic hash 6924f87ee7582665f59bdc742dc0d26af37990b0e3331f8e12d36f8916e45f4d
+//   [exit 0]
+//   $ rastok simulate R-184-value-after-is.rkg
+//   FAIL r184.a_value_used_after_an_is_test
+//        a step faulted: `out.id` is declared text; a structural union cannot enter it
+//        expect app.out == { id = "A"; notes = 2 }  (R-184-value-after-is.rkg:54)
+//        nothing observed
+//        expected 1 matching delivery on app.out, but observed 0
+//   1 scenario(s), 1 failed
+//   [exit 1]
+//
+// Expected after the fix:
+//   Both commands succeed: the scenario passes, the second note yields
+//   { id = "A"; notes = 2 }. A positive `is` fact narrows the value itself.
+
+type Note = struct { id: text }
+type Sum = struct { id: text, notes: int }
+graph app : App {
+  input in: Note
+  output out: Sum
+  operator per_id {
+    input in: Note
+    output out: Sum
+    var id: text? = null
+    var notes: int = 0
+    on in match {
+      id is text => {
+        notes = notes + 1
+        out = { id = id; notes = notes }
+      }
+      _ => {
+        id = data.id
+        notes = 1
+        out = { id = data.id; notes = 1 }
+      }
+    }
+  }
+  in -> per_id -> out
+}
+lab r184 {
+  scenario a_value_used_after_an_is_test {
+    app.in = { id = "A" }
+    expect app.out == { id = "A"; notes = 1 }
+    app.in = { id = "A" }
+    expect app.out == { id = "A"; notes = 2 }
+  }
+}

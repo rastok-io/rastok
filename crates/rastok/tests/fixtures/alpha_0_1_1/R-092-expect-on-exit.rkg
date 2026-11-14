@@ -1,0 +1,61 @@
+// R-092 — `expect x.exit` sees every attempt of a Retry
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-092-expect-on-exit.rkg
+//   rastok simulate R-092-expect-on-exit.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ rastok check R-092-expect-on-exit.rkg
+//   ok: 3 node(s), semantic hash a4ffa51990a727b6c191323ea1237081112ac60188bb75035cbdbaf9a9a45fef
+//   [exit 0]
+//   $ rastok simulate R-092-expect-on-exit.rkg
+//   PASS r092.an_expectation_on_exit_sees_every_attempt
+//   1 scenario(s), 0 failed
+//   [exit 0]
+//
+// Expected after the fix:
+//   Unchanged: this is the journal's truth. The scenario documents the rule and
+//   keeps passing. The Reference and the guide say it.
+
+graph app : App {
+  input in: text
+  output code: int
+  connector job : Process + Retry {
+    command = "true"
+    codec = lines
+    idempotent = true
+    behavior = deterministic
+    timeout = duration("5s")
+    Retry.attempts = 2
+    Retry.on = [TimeoutExpired]
+    Retry.delay = { kind = fixed; after = duration("10s") }
+  }
+  operator read {
+    input in: ProcessExit
+    output out: int
+    on in match {
+      data is Exited => out = data.exit_code
+      _ => out = -1
+    }
+  }
+  in -> job
+  job.out -> nothing
+  job.err -> nothing
+  job.exit -> read -> code
+}
+lab r092 {
+  // Two silent attempts, then the Retry gives up.
+  mock job {
+    on in { out = nothing }
+  }
+  scenario an_expectation_on_exit_sees_every_attempt {
+    app.in = "x"
+    advance duration("5s")
+    expect job.exit where data is TimeoutExpired    // the first attempt, a journal fact
+    expect app.code == nothing                      // nothing was delivered downstream yet
+    advance duration("15s")
+    expect job.exit where data is TimeoutExpired    // the second and last attempt
+    expect app.code == -1                           // the graph receives one terminal
+  }
+}

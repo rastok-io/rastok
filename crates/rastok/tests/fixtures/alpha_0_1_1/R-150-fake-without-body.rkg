@@ -1,0 +1,69 @@
+// R-150 — A fake that ends without a body passes check and faults at execution
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-150-fake-without-body.rkg
+//   rastok simulate R-150-fake-without-body.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ rastok check R-150-fake-without-body.rkg
+//   ok: 4 node(s), semantic hash fff83c9b56157f4652d7906fe3401e97c0cfc43797741d3c4a83e335b7ef4db2
+//   [exit 0]
+//   $ rastok simulate R-150-fake-without-body.rkg
+//   FAIL r150.a_fake_that_ends_without_a_body
+//        a step faulted: ContractViolation at `agent`: Call frames contradict the Contract's terminal cardinality
+//        expect app.ended == 200  (R-150-fake-without-body.rkg:67)
+//        nothing observed
+//        expected 1 matching delivery on app.ended, but observed 0
+//   1 scenario(s), 1 failed
+//   [exit 1]
+//
+// Expected after the fix:
+//   `rastok check` refuses the mock: E-CONTRACT-REQUIRED, naming the terminal case
+//   `Completed`, the port `out` and the Contract's rule (exactly one `out` frame).
+//   Nothing is simulated.
+
+type Ask = struct { id: text }
+type Answer = struct { text: text }
+graph app : App {
+  input ask: Ask
+  output done: Answer
+  output ended: int
+  connector agent : HttpClient {
+    url = "https://agent.example.test/run"
+    method = "POST"
+    codec = json
+    json_profile = projected
+    output out: Answer
+    timeout = duration("60s")
+    behavior = deterministic
+  }
+  operator send {
+    input in: Ask
+    output out: variant
+    on in {
+      val body = { id = data.id }
+      out = body as variant
+    }
+  }
+  operator code {
+    input in: HttpClientExit
+    output out: int
+    on in match {
+      data is Completed => out = 200
+      _ => out = 0
+    }
+  }
+  ask -> send -> agent
+  agent.out -> done
+  agent.exit -> code -> ended
+}
+lab r150 {
+  mock agent {
+    on in { exit = Completed { status = 200 } }
+  }
+  scenario a_fake_that_ends_without_a_body {
+    app.ask = { id = "A" }
+    expect app.ended == 200
+  }
+}

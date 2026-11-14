@@ -1,0 +1,54 @@
+// R-091 — Two `match` in a row: a correct refusal, an unclear message
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-091-two-matches.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ rastok check R-091-two-matches.rkg
+//   error[E-PARSE-EXPECTED]: expected `}`, found `match`
+//     --> R-091-two-matches.rkg:45:7
+//      |
+//   45 |       match {
+//      |       ^^^^^
+//     = expected: `}`
+//     = found: `match`
+//
+//   error[E-PARSE-EXPECTED]: expected a top-level declaration, found `in`
+//     --> R-091-two-matches.rkg:51:3
+//      |
+//   51 |   in -> o
+//      |   ^^
+//     = expected: a top-level declaration
+//     = found: `in`
+//
+//   error[E-PARSE-EXPECTED]: expected a top-level declaration, found `}`
+//   … (7 more lines in today/R-091-two-matches.txt)
+//
+// Expected after the fix:
+//   Still refused. The message says that a `match` is the last form of its block.
+
+type Move = struct { n: int, ok: bool }
+graph app : App {
+  input in: Move
+  output out: text
+  output other: text
+  operator o {
+    input in: Move
+    output out: text
+    output other: text
+    on in {
+      match {
+        data.n > 0 => out = "positive"
+        _ => out = "zero"
+      }
+      match {
+        data.ok => other = "ok"
+        _ => other = "ko"
+      }
+    }
+  }
+  in -> o
+  o.out -> out
+  o.other -> other
+}

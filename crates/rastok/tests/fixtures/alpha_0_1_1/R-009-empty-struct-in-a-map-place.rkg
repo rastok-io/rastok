@@ -1,0 +1,35 @@
+// R-009 — `{}` in a map position is the empty struct, not an empty map
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-009-empty-struct-in-a-map-place.rkg
+//
+// Today (rastok 0.1.0-alpha), first diagnostic only:
+//   $ rastok check R-009-empty-struct-in-a-map-place.rkg
+//   error[E-PORT-TYPE]: `counts` requires map<text,int32>; this value is struct: the value is not assignable to the declared type
+//     --> R-009-empty-struct-in-a-map-place.rkg:29:5
+//      |
+//   29 |     var counts: map<text, int> = {}
+//      |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+//     = port: counts
+//     = expected: map<text,int32>
+//     = found: struct
+//
+// Expected after the fix:
+//   Still refused: `{}` is always the empty struct. The message names
+//   `{:}`, the empty map. The accepted form is in R-009-typed-empty-list.rkg.
+
+type Bag = struct { counts: map<text, int> }
+graph app : App {
+  input in: text
+  output out: Bag
+  operator collect {
+    input in: text
+    output out: Bag
+    var counts: map<text, int> = {}
+    on in {
+      out = { counts = counts }
+    }
+  }
+  in -> collect -> out
+}

@@ -1,0 +1,66 @@
+// R-089 — A tagged union in a JSON frame makes the exchange silent
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-089-union-in-a-json-frame.rkg
+//   rastok simulate R-089-union-in-a-json-frame.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ rastok check R-089-union-in-a-json-frame.rkg
+//   ok: 3 node(s), semantic hash 04df1829d8af218f689033fe8ab6c6cab13d0a82257509e1062f0da63a902aa8
+//   [exit 0]
+//   $ rastok simulate R-089-union-in-a-json-frame.rkg
+//   FAIL r089b.a_union_inside_the_request
+//        expect agent.out where data is Line && data.says == "done"  (R-089-union-in-a-json-frame.rkg:63)
+//        nothing observed
+//        where data is Line && data.says == "done" is false for 0 of 0 deliveries; count 0, expected 1
+//        expect app.out == "line"  (R-089-union-in-a-json-frame.rkg:64)
+//        nothing observed
+//        expected 1 matching delivery on app.out, but observed 0
+//   1 scenario(s), 1 failed
+//   [exit 1]
+//
+// Expected after the fix:
+//   `rastok check` refuses the route `in -> agent`: the resolved request type `Task`
+//   has no JSON form, field `kind` is a tagged union. Same code and message family as
+//   R-176.
+
+type Kind = union { Brief {}, Draft {} }
+type Task = struct { article: text, kind: Kind }
+type Line = struct { article: text, says: text }
+graph app : App {
+  input in: Task
+  output out: text
+  connector agent : Process {
+    mode = service
+    command = "cat"
+    args = []
+    codec = jsonl
+    max_frame = "1MiB"
+    behavior = probabilistic
+  }
+  operator hear {
+    input in: variant
+    output out: text
+    on in match {
+      data is Line => out = "line"
+      _ => out = "garbled"
+    }
+  }
+  in -> agent
+  agent.out -> hear -> out
+  agent.err -> nothing
+  agent.exit -> nothing
+}
+lab r089b {
+  mock agent {
+    on in where data is Task { out = { article = data.article; says = "done" } }
+    on in { out = { article = "?"; says = "not a Task" } }
+  }
+  scenario a_union_inside_the_request {
+    app.in = { article = "A"; kind = Brief {} }
+    expect agent.in where data is Task
+    expect agent.out where data is Line && data.says == "done"
+    expect app.out == "line"
+  }
+}

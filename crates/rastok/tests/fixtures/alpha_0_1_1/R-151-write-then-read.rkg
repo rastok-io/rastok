@@ -1,0 +1,41 @@
+// R-151 — A var written in a handler is read by the next statement
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-151-write-then-read.rkg
+//   rastok simulate R-151-write-then-read.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ rastok check R-151-write-then-read.rkg
+//   ok: 2 node(s), semantic hash a911f9619a5d030ca935a5871b02d439a677144a9d97de97dcb6ed118a862542
+//   [exit 0]
+//   $ rastok simulate R-151-write-then-read.rkg
+//   PASS r151.a_write_is_read_by_the_next_statement
+//   1 scenario(s), 0 failed
+//   [exit 0]
+//
+// Expected after the fix:
+//   Unchanged: the alpha follows the white paper. The Reference sentence is fixed.
+
+graph app : App {
+  input in: int
+  output out: int
+  operator count {
+    input in: int
+    output out: int
+    var total: int = 0
+    on in {
+      total = total + data
+      out = total
+    }
+  }
+  in -> count -> out
+}
+lab r151 {
+  scenario a_write_is_read_by_the_next_statement {
+    app.in = 5
+    expect app.out == 5
+    app.in = 2
+    expect app.out == 7
+  }
+}

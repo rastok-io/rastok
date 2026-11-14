@@ -1,0 +1,61 @@
+// R-152 — The same form in a Lab expectation
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-152-is-after-is-in-the-lab.rkg
+//   rastok simulate R-152-is-after-is-in-the-lab.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ rastok check R-152-is-after-is-in-the-lab.rkg
+//   error[E-EXPR]: `data.confirmed.flight` does not resolve to a member
+//     --> R-152-is-after-is-in-the-lab.rkg:59:26
+//      |
+//   59 |     expect app.out where data is Booked && data.confirmed.flight is Receipt
+//      |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+//     = detail: `data.confirmed.flight` does not resolve to a member
+//   [exit 1]
+//   $ rastok simulate R-152-is-after-is-in-the-lab.rkg
+//   error[E-EXPR]: `data.confirmed.flight` does not resolve to a member
+//     --> R-152-is-after-is-in-the-lab.rkg:59:26
+//      |
+//   59 |     expect app.out where data is Booked && data.confirmed.flight is Receipt
+//      |                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+//     = detail: `data.confirmed.flight` does not resolve to a member
+//   [exit 1]
+//
+// Expected after the fix:
+//   Both commands succeed.
+
+type Receipt = struct { reservation: text }
+type Receipts = struct { count: int, flight: Receipt? }
+type Result = union {
+  Booked { id: text, confirmed: Receipts }
+  Stopped { id: text, reason: text }
+}
+graph app : App {
+  input in: text
+  output out: Result
+  output flat: Receipts
+  operator book {
+    input in: text
+    output out: Result
+    output flat: Receipts
+    on in {
+      val flight = { reservation = "AF-1" }
+      val receipts = { count = 1; flight = flight }
+      out = Booked { id = data; confirmed = receipts }
+      flat = receipts
+    }
+  }
+  in -> book
+  book.out -> out
+  book.flat -> flat
+}
+lab r152 {
+  scenario an_optional_field_under_a_union_case {
+    app.in = "T1"
+    expect app.flat where data.count == 1 && data.flight is Receipt
+    expect app.out where data is Booked && data.confirmed.count == 1
+    expect app.out where data is Booked && data.confirmed.flight is Receipt
+  }
+}

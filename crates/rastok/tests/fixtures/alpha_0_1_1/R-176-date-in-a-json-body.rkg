@@ -1,0 +1,75 @@
+// R-176 — A date in the JSON body of a Call: check passes, the request never leaves
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-176-date-in-a-json-body.rkg
+//   rastok simulate R-176-date-in-a-json-body.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ rastok check R-176-date-in-a-json-body.rkg
+//   ok: 4 node(s), semantic hash 48965268a6f0c242d577b19dd0bbfc1f5758dc2d39be85264a5a0f347e4924b2
+//   [exit 0]
+//   $ rastok simulate R-176-date-in-a-json-body.rkg
+//   FAIL r176.a_date_in_a_json_body
+//        expect app.ended == "Completed"  (R-176-date-in-a-json-body.rkg:72)
+//        observed app.ended: "DecodeFailed"
+//        expected 1 matching delivery on app.ended, but observed 0
+//        expect app.out == { ok = true }  (R-176-date-in-a-json-body.rkg:73)
+//        nothing observed
+//        expected 1 matching delivery on app.out, but observed 0
+//   1 scenario(s), 1 failed
+//   [exit 1]
+//
+// Expected after the fix:
+//   `rastok check` refuses the route into `orders`: the resolved request type `Seen`
+//   has no JSON form, field `at` is a timestamp. Code E-TYPE-INVALID, the path of the
+//   field in the message.
+
+type Seen = struct { id: text, at: timestamp }
+type Ack = struct { ok: bool }
+graph app : App {
+  input in: text
+  output out: Ack
+  output ended: text
+  operator stamp {
+    input in: text
+    output out: Seen
+    on in { out = { id = data; at = now() } }
+  }
+  connector orders : HttpClient {
+    url = "https://o.example.test/row"
+    method = "POST"
+    codec = json
+    json_profile = projected
+    output out: Ack
+    timeout = duration("5s")
+    behavior = deterministic
+  }
+  operator name {
+    input in: HttpClientExit
+    output out: text
+    on in match {
+      data is Completed => out = "Completed"
+      data is DecodeFailed => out = "DecodeFailed"
+      data is TimeoutExpired => out = "TimeoutExpired"
+      _ => out = "other"
+    }
+  }
+  in -> stamp -> orders
+  orders.out -> out
+  orders.exit -> name -> ended
+}
+lab r176 {
+  mock orders {
+    on in {
+      out = { ok = true }
+      exit = Completed { status = 200 }
+    }
+  }
+  scenario a_date_in_a_json_body {
+    app.in = "a"
+    expect orders.in
+    expect app.ended == "Completed"
+    expect app.out == { ok = true }
+  }
+}

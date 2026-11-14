@@ -1,0 +1,49 @@
+// R-086 — An integer cannot be converted to a declared decimal (issue 4)
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-086-integer-to-decimal.rkg
+//   rastok simulate R-086-integer-to-decimal.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ rastok check R-086-integer-to-decimal.rkg
+//   error[E-EXPR]: a int32 cannot be narrowed to decimal(18,2)
+//     --> R-086-integer-to-decimal.rkg:39:19
+//      |
+//   39 |       out = { a = data.q as Price; b = data.u as Price }
+//      |                   ^^^^^^^^^^^^^^^
+//     = detail: a int32 cannot be narrowed to decimal(18,2)
+//   [exit 1]
+//   $ rastok simulate R-086-integer-to-decimal.rkg
+//   error[E-EXPR]: a int32 cannot be narrowed to decimal(18,2)
+//     --> R-086-integer-to-decimal.rkg:39:19
+//      |
+//   39 |       out = { a = data.q as Price; b = data.u as Price }
+//      |                   ^^^^^^^^^^^^^^^
+//     = detail: a int32 cannot be narrowed to decimal(18,2)
+//   [exit 1]
+//
+// Expected after the fix:
+//   Both commands succeed: 7 becomes 7.00, exactly (expressions.md §5).
+
+type Price = decimal(18,2)
+type Line = struct { q: int, u: number }
+type Priced = struct { a: Price, b: Price }
+graph app : App {
+  input in: Line
+  output out: Priced
+  operator f {
+    input in: Line
+    output out: Priced
+    on in {
+      out = { a = data.q as Price; b = data.u as Price }
+    }
+  }
+  in -> f -> out
+}
+lab r086 {
+  scenario an_integer_becomes_an_exact_decimal {
+    app.in = { q = 7; u = decimal("2.50") }
+    expect app.out == { a = decimal("7.00") as Price; b = decimal("2.50") as Price }
+  }
+}

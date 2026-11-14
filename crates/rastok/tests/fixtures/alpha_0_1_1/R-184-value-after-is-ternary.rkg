@@ -1,0 +1,47 @@
+// R-184 — The same defect in the true branch of a ternary
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-184-value-after-is-ternary.rkg
+//   rastok simulate R-184-value-after-is-ternary.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ rastok check R-184-value-after-is-ternary.rkg
+//   ok: 2 node(s), semantic hash 9178f77c6695711cd695c9619be461cd27650788da578f81ce1f55332fb2811a
+//   [exit 0]
+//   $ rastok simulate R-184-value-after-is-ternary.rkg
+//   FAIL r184b.s
+//        a step faulted: `out` is declared text; a structural union cannot enter it
+//        expect app.out == "A"  (R-184-value-after-is-ternary.rkg:45)
+//        nothing observed
+//        expected 1 matching delivery on app.out, but observed 0
+//   1 scenario(s), 1 failed
+//   [exit 1]
+//
+// Expected after the fix:
+//   Both commands succeed: "none", then "A".
+
+type Note = struct { id: text }
+graph app : App {
+  input in: Note
+  output out: text
+  operator o {
+    input in: Note
+    output out: text
+    var id: text? = null
+    on in {
+      val seen = id is text ? id : "none"
+      id = data.id
+      out = seen
+    }
+  }
+  in -> o -> out
+}
+lab r184b {
+  scenario s {
+    app.in = { id = "A" }
+    expect app.out == "none"
+    app.in = { id = "B" }
+    expect app.out == "A"
+  }
+}

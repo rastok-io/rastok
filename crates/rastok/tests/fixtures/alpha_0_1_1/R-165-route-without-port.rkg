@@ -1,0 +1,42 @@
+// R-165 — A route to an Operator input that has no handler passes check
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-165-route-without-port.rkg
+//   rastok simulate R-165-route-without-port.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ rastok check R-165-route-without-port.rkg
+//   ok: 2 node(s), semantic hash cb5a15327f5fc9e79f6e045a1b8c0c51ce3c0b245eec12773de215d6ef314a05
+//   [exit 0]
+//   $ rastok simulate R-165-route-without-port.rkg
+//   FAIL r165.a_route_without_a_port_name
+//        a step faulted: no handler for this trigger
+//        expect app.out == "full"  (R-165-route-without-port.rkg:40)
+//        nothing observed
+//        expected 1 matching delivery on app.out, but observed 0
+//   1 scenario(s), 1 failed
+//   [exit 1]
+//
+// Expected after the fix:
+//   `rastok check` refuses the route `in -> annunciator`: E-HANDLER-MISSING, fields
+//   node = annunciator, port = in. The message names the handled input `storage`
+//   and suggests `annunciator.storage`.
+
+graph app : App {
+  input in: text
+  output out: text
+  operator annunciator {
+    input storage: text
+    output out: text
+    on storage { out = data }
+  }
+  in -> annunciator
+  annunciator.out -> out
+}
+lab r165 {
+  scenario a_route_without_a_port_name {
+    app.in = "full"
+    expect app.out == "full"
+  }
+}

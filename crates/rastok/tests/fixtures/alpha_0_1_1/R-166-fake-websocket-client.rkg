@@ -1,0 +1,68 @@
+// R-166 — The fake of a WebSocketClient never delivers its answer
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-166-fake-websocket-client.rkg
+//   rastok simulate R-166-fake-websocket-client.rkg
+//
+// Today (rastok 0.1.0-alpha):
+//   $ rastok check R-166-fake-websocket-client.rkg
+//   ok: 4 node(s), semantic hash 72b912b23cc20b4bc9c2e331d95ffc7785d3b7792ac24ea5937c21a2e4e46dcb
+//   [exit 0]
+//   $ rastok simulate R-166-fake-websocket-client.rkg
+//   FAIL r166.the_fake_of_a_websocket_client_answers
+//        expect link.out  (R-166-fake-websocket-client.rkg:65)
+//        nothing observed
+//        expected 1 matching delivery on link.out, but observed 0
+//        expect app.out == "receipt"  (R-166-fake-websocket-client.rkg:66)
+//        nothing observed
+//        expected 1 matching delivery on app.out, but observed 0
+//   1 scenario(s), 1 failed
+//   [exit 1]
+//
+// Expected after the fix:
+//   `rastok check` refuses the mock with a named deferral: E-CHECK-DEFERRED,
+//   construct = a WebSocket Session mock. (If WebSocket Session scripts are
+//   admitted in this release instead, the scenario passes.)
+
+type Report = struct { sequence: int }
+type Receipt = struct { sequence: int }
+graph app : App {
+  input in: Report
+  output out: text
+  output closed: text
+  connector link : WebSocketClient {
+    url = "wss://ingest.example.test/reports"
+    codec = json
+    handshake_timeout = duration("5s")
+    behavior = deterministic
+  }
+  operator heard {
+    input in: variant
+    output out: text
+    on in match {
+      data is Receipt => out = "receipt"
+      _ => out = "garbled"
+    }
+  }
+  operator ended {
+    input in: WebSocketExit
+    output out: text
+    on in { out = "session ended" }
+  }
+  in -> link
+  link.out -> heard -> out
+  link.exit -> ended -> closed
+}
+lab r166 {
+  mock link {
+    on in where data is Report { out = { sequence = data.sequence } }
+    on in { out = { sequence = 0 } }
+  }
+  scenario the_fake_of_a_websocket_client_answers {
+    app.in = { sequence = 7 }
+    expect link.in where data is Report
+    expect link.out
+    expect app.out == "receipt"
+  }
+}
