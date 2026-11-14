@@ -79,7 +79,7 @@ number or another narrower type. The receiver still has to be evaluable.
 
 | Form | Selection | Requirement |
 |---|---|---|
-| `value is T` | Tests a type or tagged case | A positive fact narrows the right side of `&&`, a conditional's true branch or a guarded handler |
+| `value is T` | Tests a type or tagged case | A positive fact narrows the right side of `&&`, a conditional's true branch, a guarded handler or a guarded match arm; the narrowed value can be used directly, without repeating `as T` |
 | `value as T` | Checked conversion | Exactly one structural-union branch must match; decimals rescale only exactly |
 | `match value { Case => ... }` | Closed match | Tagged union, enum or bool; exhaustive, disjoint case sets |
 | `match { predicate => ...; _ => ... }` | Ordered predicates | First true predicate wins; fallback is mandatory |

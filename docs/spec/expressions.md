@@ -273,6 +273,12 @@ The implemented minimum is deliberately small and deterministic:
   ternary, and the body of a guarded handler. No negation/disjunction
   inference is invented.
 
+Narrowing is a value operation, not only a typing fact: where a narrowed
+path is read as a value, the checker stores the corresponding resolved
+`Expr::As`, so the evaluator yields the selected branch and never the
+enclosing structural union. Check and execution cannot disagree on a
+narrowed read.
+
 Named aliases are expanded before entering the tree, so alias spelling is
 not identity. The plan serializes the resolved target and any explicit external
 discriminator; it never serializes an alias name or a compiler inference

@@ -9,6 +9,121 @@ use rastok::connector::contract::ContractCatalog;
 use rastok::journal::Record;
 use rastok::plan::{self, GraphVersion};
 
+fn assert_narrowed_values(context: &str) {
+    for (input_type, target, output_type, present, absent, expected, fallback) in [
+        (
+            "text?", "text", "text", "\"A\"", "null", "\"A\"", "\"none\"",
+        ),
+        (
+            "Event",
+            "Present",
+            "Payload",
+            "Present { note = \"A\" }",
+            "Absent {}",
+            "{ note = \"A\" }",
+            "{ note = \"none\" }",
+        ),
+    ] {
+        let read = "data";
+        let (handler, result_type, yes, no) = match context {
+            "and" => (
+                format!("on in {{ out = data is {target} && [{read}] == [expected] }}"),
+                "bool",
+                "true",
+                "false",
+            ),
+            "ternary" => (
+                format!("on in {{ out = data is {target} ? {read} : fallback }}"),
+                output_type,
+                expected,
+                fallback,
+            ),
+            "handler" => (
+                format!("on in where data is {target} {{ out = {read} }}"),
+                output_type,
+                expected,
+                "nothing",
+            ),
+            "match" => (
+                format!("on in match {{ data is {target} => out = {read}; _ => nothing }}"),
+                output_type,
+                expected,
+                "nothing",
+            ),
+            _ => panic!("unknown test context"),
+        };
+        let source = format!(
+            r#"
+type Payload = struct {{ note: text }}
+type Event = union {{ Present {{ note: text }}, Absent {{}} }}
+val expected: {output_type} = {expected}
+val fallback: {output_type} = {fallback}
+graph app : App {{
+  input in: {input_type}
+  output out: {result_type}
+  operator choose {{
+    input in: {input_type}
+    output out: {result_type}
+    {handler}
+  }}
+  in -> choose -> out
+}}
+lab narrowed {{
+  scenario present_and_absent {{
+    app.in = {present}
+    expect app.out == {yes}
+    app.in = {absent}
+    expect app.out == {no}
+  }}
+}}
+"#
+        );
+        let compiled = compile(&[&source], &ContractCatalog::try_m0().unwrap())
+            .unwrap_or_else(|error| panic!("{context}, {input_type}: {error:?}"));
+        let bytes = plan::encode(&compiled.plan, &compiled.hash);
+        let (decoded, _) =
+            plan::decode(&bytes).expect("narrowed expressions validate after transport");
+        let runs = rastok::lab::run(&decoded, GraphVersion(1), &compiled.labs[0]);
+        assert_eq!(runs.len(), 1);
+        assert!(
+            runs[0].report.passed(),
+            "{context}, {input_type}: {:?}",
+            runs[0].report
+        );
+    }
+}
+
+#[test]
+fn a_positive_is_converts_a_whole_value_on_the_right_of_and() {
+    assert_narrowed_values("and");
+}
+
+#[test]
+fn a_positive_is_converts_a_whole_value_in_a_ternary() {
+    assert_narrowed_values("ternary");
+}
+
+#[test]
+fn a_positive_is_converts_a_whole_value_in_a_handler() {
+    assert_narrowed_values("handler");
+}
+
+#[test]
+fn a_positive_is_converts_a_whole_value_in_a_match_arm() {
+    assert_narrowed_values("match");
+}
+
+#[test]
+fn an_explicit_conversion_still_returns_the_selected_value() {
+    // A tagged case is already narrowed to its payload in a guarded body;
+    // the explicit conversion control uses the optional scalar case below.
+    let source = include_str!("fixtures/alpha_0_1_1/R-184-value-after-is-ternary.rkg")
+        .replace("? id :", "? id as text :");
+    let compiled = compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap();
+    let runs = rastok::lab::run(&compiled.plan, GraphVersion(1), &compiled.labs[0]);
+    assert!(runs[0].report.passed(), "{:?}", runs[0].report);
+}
+
 #[test]
 fn a_where_match_is_identical_to_its_explicit_nested_dispatch() {
     let source = r#"

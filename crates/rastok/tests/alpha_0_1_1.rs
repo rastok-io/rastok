@@ -219,7 +219,6 @@ fn r089_a_known_tagged_union_in_a_json_frame_refuses_at_check() {
 }
 
 #[test]
-#[ignore = "R-184, gate P1"]
 fn r184_a_guard_narrows_the_value_read_in_its_body() {
     assert_scenarios_pass(
         "R-184-value-after-is.rkg",
@@ -228,7 +227,6 @@ fn r184_a_guard_narrows_the_value_read_in_its_body() {
 }
 
 #[test]
-#[ignore = "R-184, gate P1"]
 fn r184_a_ternary_narrows_the_value_read_in_its_true_branch() {
     assert_scenarios_pass("R-184-value-after-is-ternary.rkg", &["r184b.s"]);
 }
