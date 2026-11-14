@@ -30,9 +30,11 @@ use crate::datatype::{
 use crate::value::Value;
 
 /// Maximum expression depth, counting the root as one level. The parser's
-/// recursion and the parsed tree use this same bound; plan validation checks
-/// it independently before recursive type checking. Serialized containment
-/// has a separate budget in [`crate::canonical_cbor::MAX_NESTING`].
+/// recursion, the parsed tree and the resolved tree use this same bound.
+/// Compiler-added conversions count in the resolved tree; plan validation
+/// checks it independently before recursive type checking (D-2026-11-14-1).
+/// Serialized containment has a separate budget in
+/// [`crate::canonical_cbor::MAX_NESTING`].
 pub const MAX_EXPRESSION_DEPTH: usize = 128;
 
 /// Names refused explicitly: admitted by full CEL, outside this build.
@@ -1014,7 +1016,7 @@ pub fn compile(text: &str, signature: &Signature) -> Result<Tree, Vec<Diagnostic
         return Err(vec![Diagnostic {
             kind: DiagnosticKind::TooDeep { depth },
             message: String::from(
-                "the resolved expression nests deeper than the expression budget",
+                "the resolved expression exceeds the expression depth budget; compiler-added conversions count",
             ),
             range: 0..text.len(),
         }]);
@@ -2050,12 +2052,12 @@ impl<'a> ExprParser<'_, 'a> {
     }
 }
 
-/// The structural nesting of a parsed expression, measured with an
-/// explicit stack — the walk that bounds every later recursion over
-/// the tree (type-check, hash, lowering, and the exact serialized
-/// walker at validation). Parser literals are scalars, so only the
-/// expression tree contributes to nesting.
-pub(crate) fn structural_depth(root: &Expr) -> usize {
+/// The depth of an expression tree, counting its root as one level.
+///
+/// This iterative walk also counts resolved conversions before later recursive
+/// passes. Containment inside literal values and types has separate bounds.
+#[must_use]
+pub fn structural_depth(root: &Expr) -> usize {
     let mut max = 0;
     let mut stack = vec![(root, 1usize)];
     while let Some((expr, depth)) = stack.pop() {

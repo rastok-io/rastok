@@ -433,8 +433,10 @@ impl Checker<'_, '_> {
             declared_data_type.as_ref(),
         )?;
         // Narrow using authored paths before erasing immutable unit bindings.
-        let where_guard =
-            where_guard.map(|tree| self.inline_unit_constants(tree, &guard_signature));
+        let where_guard = match where_guard {
+            Some(tree) => Some(self.inline_unit_constants(tree, &guard_signature, decl.span)?),
+            None => None,
+        };
         let admission_guard = if is_join {
             where_guard
         } else {
@@ -468,8 +470,12 @@ impl Checker<'_, '_> {
             return None;
         }
         if let Err(error) = crate::plan::validate_dispatch(&dispatch, &signature) {
-            self.bag.push(
-                Diagnostic::new(
+            let diagnostic = match error.kind {
+                crate::plan::DispatchErrorKind::ExpressionDepth { depth } => {
+                    crate::compiler::resolved_expression_depth_diagnostic(depth)
+                        .with_span(decl.span)
+                }
+                _ => Diagnostic::new(
                     crate::compiler::E_INTERNAL_PLAN,
                     Phase::Check,
                     "checked Dispatch contradicts the independent core proof",
@@ -478,7 +484,8 @@ impl Checker<'_, '_> {
                 .with_field("source", node.path.to_string())
                 .with_field("path", error.path.clone())
                 .with_field("detail", error.to_string()),
-            );
+            };
+            self.bag.push(diagnostic);
             return None;
         }
         Some(Handler {
@@ -994,7 +1001,7 @@ impl Checker<'_, '_> {
         )?;
         Some(Dispatch::ClosedMatch {
             prefix,
-            scrutinee: self.inline_unit_constants(scrutinee, signature),
+            scrutinee: self.inline_unit_constants(scrutinee, signature, span)?,
             arms: checked,
         })
     }
@@ -1078,7 +1085,7 @@ impl Checker<'_, '_> {
                         declared_data_type,
                     )?;
                     checked.push(OpenArm {
-                        predicate: self.inline_unit_constants(predicate, signature),
+                        predicate: self.inline_unit_constants(predicate, signature, source.span)?,
                         dispatch: Box::new(dispatch),
                     });
                 }

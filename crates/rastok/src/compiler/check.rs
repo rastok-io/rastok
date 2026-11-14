@@ -602,7 +602,7 @@ impl Checker<'_, '_> {
     /// source with offset-mapped spans.
     fn expr(&mut self, expr: &ExprSource, signature: &expr::Signature) -> Option<expr::Tree> {
         self.expr_with_asset_policy(expr, signature, false)
-            .map(|(tree, _)| self.inline_unit_constants(tree, signature))
+            .and_then(|(tree, _)| self.inline_unit_constants(tree, signature, expr.span))
     }
 
     /// Compiles an expression used as the whole payload. Only this entry
@@ -614,7 +614,23 @@ impl Checker<'_, '_> {
         signature: &expr::Signature,
     ) -> Option<(expr::Tree, Option<String>)> {
         self.expr_with_asset_policy(expr, signature, true)
-            .map(|(tree, content_type)| (self.inline_unit_constants(tree, signature), content_type))
+            .and_then(|(tree, content_type)| {
+                self.inline_unit_constants(tree, signature, expr.span)
+                    .map(|tree| (tree, content_type))
+            })
+    }
+
+    /// Construction and constant substitution can add levels after parsing.
+    /// Bound the resolved tree before evaluating or embedding it in a parent.
+    fn checked_expression_depth(&mut self, tree: expr::Tree, span: Span) -> Option<expr::Tree> {
+        let depth = expr::structural_depth(&tree.root);
+        if depth > expr::MAX_EXPRESSION_DEPTH {
+            self.bag
+                .push(super::resolved_expression_depth_diagnostic(depth).with_span(span));
+            None
+        } else {
+            Some(tree)
+        }
     }
 
     fn expr_with_asset_policy(
@@ -3002,15 +3018,15 @@ impl Checker<'_, '_> {
     }
 
     fn inline_unit_constants(
-        &self,
+        &mut self,
         mut tree: expr::Tree,
         signature: &expr::Signature,
-    ) -> expr::Tree {
-        if self.unit_constants.is_empty() {
-            return tree;
+        span: Span,
+    ) -> Option<expr::Tree> {
+        if !self.unit_constants.is_empty() {
+            tree.root = self.inline_unit_expression(&tree.root, &self.unit_signature(signature));
         }
-        tree.root = self.inline_unit_expression(&tree.root, &self.unit_signature(signature));
-        tree
+        self.checked_expression_depth(tree, span)
     }
 
     fn inline_unit_expression(&self, tree: &expr::Expr, signature: &expr::Signature) -> expr::Expr {
@@ -6141,6 +6157,7 @@ impl Checker<'_, '_> {
         span: Span,
         place: &str,
     ) -> Option<expr::Tree> {
+        let tree = self.checked_expression_depth(tree, span)?;
         if tree.ty == *expected {
             return Some(tree);
         }
@@ -6181,15 +6198,18 @@ impl Checker<'_, '_> {
                 .filter(|branch| tree.ty.is_assignable_to(branch))
                 .count();
             if matches == 1 {
-                return Some(expr::Tree {
-                    root: expr::Expr::As {
-                        expr: Box::new(tree.root),
-                        target: Box::new(expr::NarrowTarget::Type(Box::new(
-                            expr::NarrowType::new(expected.clone()),
-                        ))),
+                return self.checked_expression_depth(
+                    expr::Tree {
+                        root: expr::Expr::As {
+                            expr: Box::new(tree.root),
+                            target: Box::new(expr::NarrowTarget::Type(Box::new(
+                                expr::NarrowType::new(expected.clone()),
+                            ))),
+                        },
+                        ty: expected.clone(),
                     },
-                    ty: expected.clone(),
-                });
+                    span,
+                );
             }
             let detail = if matches == 0 {
                 "the value matches no branch of the destination union"
@@ -6255,7 +6275,7 @@ impl Checker<'_, '_> {
         };
         match expected {
             Some(expected) => self.contextualize_tree(tree, expected, span, place),
-            None => Some(tree),
+            None => self.checked_expression_depth(tree, span),
         }
     }
 
@@ -6338,7 +6358,7 @@ impl Checker<'_, '_> {
         };
         match expected {
             Some(expected) => self.contextualize_tree(tree, expected, span, place),
-            None => Some(tree),
+            None => self.checked_expression_depth(tree, span),
         }
     }
 
@@ -6453,7 +6473,7 @@ impl Checker<'_, '_> {
         };
         match expected {
             Some(expected) => self.contextualize_tree(tree, expected, span, place),
-            None => Some(tree),
+            None => self.checked_expression_depth(tree, span),
         }
     }
 
@@ -6674,18 +6694,21 @@ impl Checker<'_, '_> {
                 None => ty.clone(),
             });
         }
-        Some(expr::Tree {
-            root: expr::Expr::MapLit(
-                pairs
-                    .into_iter()
-                    .map(|(key, root, _)| (key, root))
-                    .collect(),
-            ),
-            // The empty map keeps a compiler-only element hole. The B2 plan
-            // solver recognizes the empty AST and resolves it from context;
-            // `variant` here never enters the validated table as a fallback.
-            ty: DataType::text_map(values.unwrap_or(DataType::Variant)),
-        })
+        self.checked_expression_depth(
+            expr::Tree {
+                root: expr::Expr::MapLit(
+                    pairs
+                        .into_iter()
+                        .map(|(key, root, _)| (key, root))
+                        .collect(),
+                ),
+                // The empty map keeps a compiler-only element hole. The B2 plan
+                // solver recognizes the empty AST and resolves it from context;
+                // `variant` here never enters the validated table as a fallback.
+                ty: DataType::text_map(values.unwrap_or(DataType::Variant)),
+            },
+            at,
+        )
     }
 
     /// Compiles an expression that MUST be one text literal — map

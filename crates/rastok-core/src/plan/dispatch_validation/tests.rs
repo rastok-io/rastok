@@ -405,11 +405,22 @@ fn hostile_expressions_are_refused_before_recursive_type_checking() {
         op: expr::UnaryOp::Not,
         expr: Box::new(deep),
     };
-    for root in [
-        Expr::Path(Vec::new()),
-        Expr::Path(vec!["absent".into()]),
-        deep,
-    ] {
+    assert_refusal(
+        &open(
+            Tree {
+                root: deep,
+                ty: DataType::Bool,
+            },
+            empty(),
+            empty(),
+        ),
+        &signature,
+        "dispatch.arms[0].predicate",
+        DispatchErrorKind::ExpressionDepth {
+            depth: expr::MAX_EXPRESSION_DEPTH + 1,
+        },
+    );
+    for root in [Expr::Path(Vec::new()), Expr::Path(vec!["absent".into()])] {
         let dispatch = open(
             Tree {
                 root,
