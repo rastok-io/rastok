@@ -208,7 +208,6 @@ fn r176_a_variant_request_still_fails_dynamically_with_decode_failed() {
 }
 
 #[test]
-#[ignore = "R-089, gate P1"]
 fn r089_a_known_tagged_union_in_a_json_frame_refuses_at_check() {
     assert_check_refuses(
         "R-089-union-in-a-json-frame.rkg",
