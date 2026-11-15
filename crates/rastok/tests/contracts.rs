@@ -235,7 +235,60 @@ fn json_requests_check_inferred_producers_across_graph_boundaries() {
       request.out -> nothing
       request.exit -> nothing
     }"#;
-    refusal_with(source, "E-TYPE-INVALID", "field `at`");
+    let error = compile_one(source).expect_err("the inferred timestamp cannot enter JSON");
+    assert!(
+        error.diagnostics().iter().any(|diagnostic| {
+            diagnostic.code().as_str() == "E-TYPE-INVALID"
+                && diagnostic.message().contains("field `at`")
+                && diagnostic.message().contains("from `nested.stamp.out`")
+        }),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_json_refusal_identifies_the_bad_producer_among_two_routes() {
+    for (kind, settings, extra_routes) in [
+        (
+            "HttpClient",
+            "url = \"https://example.test\"; codec = json; timeout = duration(\"1s\")",
+            "",
+        ),
+        (
+            "Process",
+            "command = \"cat\"; mode = service; codec = jsonl",
+            "orders.err -> nothing",
+        ),
+    ] {
+        let source = format!(
+            r#"graph app : App {{
+          input in: text
+          operator stamp {{ on in {{ out = {{ at = timestamp("2026-01-01T00:00:00Z") }} }} }}
+          operator text {{ on in {{ out = {{ at = data }} }} }}
+          connector orders : {kind} {{ {settings}; behavior = deterministic }}
+          in -> stamp
+          in -> text
+          stamp -> orders
+          text -> orders
+          orders.out -> nothing
+          orders.exit -> nothing
+          {extra_routes}
+        }}"#
+        );
+        let error = compile_one(&source).expect_err("only stamp has a non-JSON output");
+        let refusals: Vec<_> = error
+            .diagnostics()
+            .iter()
+            .filter(|diagnostic| diagnostic.code().as_str() == "E-TYPE-INVALID")
+            .collect();
+        assert_eq!(refusals.len(), 1, "{error:?}");
+        assert!(
+            refusals[0].message().contains("from `stamp.out`"),
+            "{error:?}"
+        );
+        assert!(refusals[0].message().contains("orders.in"), "{error:?}");
+        assert!(!refusals[0].message().contains("text.out"), "{error:?}");
+    }
 }
 
 #[test]
