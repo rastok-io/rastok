@@ -1225,7 +1225,15 @@ impl DriverFactory for MockConnectorFactory {
         nodes: &[node::Path],
         boot: &crate::deployment::BootBindings,
     ) -> Result<Box<dyn Driver + 'plan>, DriverFactoryError> {
-        let protocol = (self.bind_protocol)(plan, nodes, boot)?;
+        let protocol = (self.bind_protocol)(plan, nodes, boot).map_err(|error| {
+            if error.is_missing_secret() {
+                DriverFactoryError::new(format!(
+                    "{error}: a mocked Connector still seals its resolved request, so the Lab needs a synthetic deployment profile; pass `--deployment <profile.json>` with a `secrets` entry for this reference"
+                ))
+            } else {
+                error
+            }
+        })?;
         Ok(Box::new(MockOutboundDriver {
             plan,
             origin: self.origin,
@@ -1740,6 +1748,41 @@ mod tests {
             outcome.is_some_and(|completion| completion.outputs().len() == 2),
             "the meta-only branch answered"
         );
+    }
+
+    #[test]
+    fn missing_secret_guidance_is_specific_to_mock_preparation() {
+        let compilation = compile(
+            &[include_str!(
+                "../tests/fixtures/alpha_0_1_1/R-139-secret-and-fake.rkg"
+            )],
+            &ContractCatalog::try_m0().unwrap(),
+        )
+        .unwrap();
+        let (_, bind_protocol) = scripted_protocol_binders()
+            .into_iter()
+            .find(|(id, _)| *id == crate::connector::stdlib::HTTP_CLIENT_CONNECTOR_ID)
+            .unwrap();
+        let error = bind_protocol(
+            &compilation.plan,
+            &[node::Path::new(["agent"]).unwrap()],
+            &crate::deployment::BootBindings::empty(),
+        )
+        .err()
+        .expect("the shared request binding refuses the missing secret");
+        assert_eq!(
+            error.to_string(),
+            "secret `AGENT_TOKEN` required by `agent.auth_bearer` is missing"
+        );
+        assert!(error.is_missing_secret());
+        assert!(!DriverFactoryError::new("a different preparation refusal").is_missing_secret());
+
+        let runs = run(&compilation.plan, GraphVersion(1), &compilation.labs[0]);
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].report.failures.len(), 1);
+        assert!(runs[0].report.failures[0].ends_with(
+            "secret `AGENT_TOKEN` required by `agent.auth_bearer` is missing: a mocked Connector still seals its resolved request, so the Lab needs a synthetic deployment profile; pass `--deployment <profile.json>` with a `secrets` entry for this reference"
+        ));
     }
 
     #[test]

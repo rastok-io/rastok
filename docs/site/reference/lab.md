@@ -72,6 +72,39 @@ There is no authored mock invocation counter.
 `now()` is unavailable in Session mock bodies. Mock metadata writes,
 multi-emission statements and Loop commands refuse.
 
+## Secrets in the Lab
+
+A mock replaces the external response, not request preparation. A Connector
+with `secret("logical/reference")` still needs a resolved deployment binding
+to seal its request. Use synthetic material for a simulation, not a production
+credential. The profile names the variable and its attested version, never
+the secret value. For example, the secret entry in
+`examples/webhook-to-partner.deployment.json` is:
+
+```json
+{
+  "reference": "showcase/partner/token",
+  "environment": "RASTOK_SHOWCASE_PARTNER_TOKEN",
+  "version": "fixture-v1"
+}
+```
+
+This entry belongs in the profile's `secrets` array. The example's complete
+profile also supplies its URL and data-policy declarations. From the repository
+root, run it with a synthetic value and the matching `_VERSION` variable:
+
+```sh
+RASTOK_SHOWCASE_PARTNER_TOKEN=lab-only-not-a-credential \
+RASTOK_SHOWCASE_PARTNER_TOKEN_VERSION=fixture-v1 \
+rastok simulate examples/webhook-to-partner.rkg \
+  --deployment examples/webhook-to-partner.deployment.json
+```
+
+A missing binding names the Connector setting and asks for `--deployment`.
+A missing environment value names its variable; a missing or different
+attested version keeps the version-mismatch refusal. Secret material is not
+printed in either message.
+
 ## Actions
 
 | Action | Effect |

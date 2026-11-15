@@ -236,6 +236,13 @@ impl SecretProvider for EnvironmentSecretProvider {
                 binding.provider().clone(),
             ));
         }
+        let material = std::env::var(binding.provider_path());
+        if matches!(material, Err(std::env::VarError::NotPresent)) {
+            return Err(SecretProviderError::EnvironmentNotSet {
+                reference: binding.reference().clone(),
+                variable: binding.provider_path().to_owned(),
+            });
+        }
         let version_name = format!("{}_VERSION", binding.provider_path());
         let actual_version = std::env::var(&version_name)
             .map_err(|_| SecretProviderError::VersionMismatch(binding.reference().clone()))?;
@@ -244,8 +251,8 @@ impl SecretProvider for EnvironmentSecretProvider {
                 binding.reference().clone(),
             ));
         }
-        let material = std::env::var(binding.provider_path())
-            .map_err(|_| SecretProviderError::NotFound(binding.reference().clone()))?;
+        let material =
+            material.map_err(|_| SecretProviderError::NotFound(binding.reference().clone()))?;
         SecretMaterial::new(material.into_bytes())
     }
 }
