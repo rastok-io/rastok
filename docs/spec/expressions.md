@@ -271,7 +271,8 @@ The implemented minimum is deliberately small and deterministic:
   explicitly resolved discriminator before it can become one;
 - a positive `is` fact narrows the right side of `&&`, the true branch of a
   ternary, and the body of a guarded handler. No negation/disjunction
-  inference is invented.
+  inference is invented. A narrowed path is usable wherever a path is
+  read in its scope, including as the operand of another `is`.
 
 Narrowing is a value operation, not only a typing fact: where a narrowed
 path is read as a value, the checker stores the corresponding resolved
@@ -303,6 +304,13 @@ construction into a structural union is stored as an explicit resolved
 `Expr::As`; the expression engine executes a decision already made by the
 checker. The plan gives these constructor nodes and `is`/`as` one canonical
 representation.
+
+When an inferred closed struct enters a declared struct type, contextual
+construction also wraps fields whose destination is optional or another
+structural union. This applies to a struct read from a binding as well as a
+written constructor. The source binding keeps its inferred type; only the
+destination construction changes. Existing resolved union fields retain
+their branch indexes.
 
 Member and index access on `variant` refuse at expression check. A positive
 `is` fact or explicit `as` must first expose a precise struct, map, array or

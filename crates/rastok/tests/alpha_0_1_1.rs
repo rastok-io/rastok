@@ -361,7 +361,6 @@ fn r003_a_closed_match_arm_knows_its_case_payload() {
 }
 
 #[test]
-#[ignore = "R-152, gate P3"]
 fn r152_a_second_is_test_uses_the_first_test_narrowing() {
     assert_scenarios_pass(
         "R-152-is-after-is.rkg",
@@ -370,7 +369,6 @@ fn r152_a_second_is_test_uses_the_first_test_narrowing() {
 }
 
 #[test]
-#[ignore = "R-152, gate P3"]
 fn r152_lab_predicates_use_the_same_narrowing_rule() {
     assert_scenarios_pass(
         "R-152-is-after-is-in-the-lab.rkg",

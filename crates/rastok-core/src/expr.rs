@@ -1070,7 +1070,7 @@ fn compile_contextual(
     }
     resolve_enum_symbols(&mut root, signature, expected, text)
         .map_err(|diagnostic| vec![diagnostic])?;
-    let ty = check(&root, signature, text).map_err(|diagnostic| vec![diagnostic])?;
+    let ty = check(&root, signature, Some(text)).map_err(|diagnostic| vec![diagnostic])?;
     resolve_narrowed_reads(&mut root, signature);
     // Resolved conversions also spend the transported expression budget.
     let depth = structural_depth(&root);
@@ -1121,7 +1121,7 @@ fn resolve_enum_symbols(
         Expr::Binary { op, left, right } => {
             let comparison = matches!(op, BinaryOp::Eq | BinaryOp::Ne);
             let right_type = comparison
-                .then(|| check(right, signature, text).ok())
+                .then(|| check(right, signature, Some(text)).ok())
                 .flatten();
             resolve_enum_symbols(left, signature, right_type.as_ref(), text)?;
             let narrowed;
@@ -1132,7 +1132,7 @@ fn resolve_enum_symbols(
                 signature
             };
             let left_type = comparison
-                .then(|| check(left, signature, text).ok())
+                .then(|| check(left, signature, Some(text)).ok())
                 .flatten();
             resolve_enum_symbols(right, right_signature, left_type.as_ref(), text)?;
         }
@@ -1793,7 +1793,7 @@ impl<'a> ExprParser<'_, 'a> {
     fn ternary_inner(&mut self) -> Result<Expr, Diagnostic> {
         let cond = self.or()?;
         if self.eat(&Tok::Question) {
-            let then = self.or()?;
+            let then = self.under_true_fact(&cond, |parser| parser.or())?;
             self.expect(&Tok::Colon, "`:`")?;
             let otherwise = self.ternary()?;
             return Ok(Expr::Ternary {
@@ -1817,10 +1817,32 @@ impl<'a> ExprParser<'_, 'a> {
     fn and(&mut self) -> Result<Expr, Diagnostic> {
         let mut left = self.relation()?;
         while self.eat(&Tok::AndAnd) {
-            let right = self.relation()?;
+            let right = self.under_true_fact(&left, |parser| parser.relation())?;
             left = binary(BinaryOp::And, left, right);
         }
         Ok(left)
+    }
+
+    /// A suffix resolves its target during parsing, before the later tree
+    /// check. Give that resolution the same positive facts as evaluation.
+    /// Keep the cloned scope out of ordinary recursive parser frames.
+    fn under_true_fact(
+        &mut self,
+        predicate: &Expr,
+        parse: impl FnOnce(&mut ExprParser<'_, 'a>) -> Result<Expr, Diagnostic>,
+    ) -> Result<Expr, Diagnostic> {
+        let signature = self.signature.narrowed_by(predicate);
+        let mut scoped = ExprParser {
+            tokens: self.tokens,
+            pos: self.pos,
+            text: self.text,
+            signature: &signature,
+            depth: self.depth,
+        };
+        let result = parse(&mut scoped);
+        self.pos = scoped.pos;
+        self.depth = scoped.depth;
+        result
     }
 
     fn relation(&mut self) -> Result<Expr, Diagnostic> {
@@ -1980,7 +2002,7 @@ impl<'a> ExprParser<'_, 'a> {
         name: &str,
         range: Range<usize>,
     ) -> Result<NarrowTarget, Diagnostic> {
-        let source = check(expr, self.signature, self.text)?;
+        let source = check(expr, self.signature, Some(self.text))?;
         if let DataType::TaggedUnion(union) = &source
             && let Some(case) = union.cases().iter().find(|case| case.name() == name)
         {
@@ -2301,8 +2323,10 @@ fn binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {
 
 // ===== type checking =====
 
-fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<DataType, Diagnostic> {
-    let whole = 0..text.len();
+// `None` checks a resolved tree, including compiler-generated closed-field
+// projections. Source expressions keep their narrower indexing surface.
+fn check(expr: &Expr, signature: &Signature, text: Option<&str>) -> Result<DataType, Diagnostic> {
+    let whole = 0..text.map_or(0, str::len);
     let fail = |message: String| Diagnostic {
         kind: DiagnosticKind::General,
         message,
@@ -2437,6 +2461,19 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<DataType, Dia
                     } else {
                         Err(fail(String::from("a map key must be text")))
                     }
+                }
+                DataType::Struct(structure) if text.is_none() => {
+                    let Expr::Literal(Value::Text(name)) = index.as_ref() else {
+                        return Err(fail(String::from(
+                            "a resolved struct projection names one field",
+                        )));
+                    };
+                    structure
+                        .fields()
+                        .iter()
+                        .find(|field| field.name() == name)
+                        .map(|field| field.ty().clone())
+                        .ok_or_else(|| fail(format!("the struct has no declared member `{name}`")))
                 }
                 other => Err(fail(format!("a {other:?} cannot be indexed"))),
             }
@@ -2609,7 +2646,7 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<DataType, Dia
 /// explicit immutable environment. Transport validation uses this rather
 /// than trusting [`Tree::ty`]; diagnostics remain the source compiler's job.
 pub(crate) fn rederive_type(expr: &Expr, signature: &Signature) -> Option<DataType> {
-    check(expr, signature, "transported expression").ok()
+    check(expr, signature, None).ok()
 }
 
 fn check_narrowing_compatibility(source: &DataType, target: &NarrowTarget) -> Result<(), String> {
@@ -4532,11 +4569,46 @@ mod tests {
                         args
                     },
                     &signature,
-                    ""
+                    Some("")
                 )
                 .is_err()
             );
         }
+    }
+
+    #[test]
+    fn resolved_struct_projections_do_not_extend_source_indexing() {
+        let structure = DataType::Struct(
+            crate::datatype::StructType::new(vec![crate::datatype::TypeField::new(
+                "name",
+                DataType::Text,
+            )])
+            .unwrap(),
+        );
+        let signature = Signature::new()
+            .with("data", structure)
+            .with("key", DataType::Text);
+        let projection = |index| Expr::Index {
+            base: Box::new(Expr::Path(vec![String::from("data")])),
+            index: Box::new(index),
+        };
+        let named = projection(Expr::Literal(Value::Text(String::from("name"))));
+        assert_eq!(rederive_type(&named, &signature), Some(DataType::Text));
+        assert!(compile(r#"data["name"]"#, &signature).is_err());
+        assert_eq!(
+            rederive_type(
+                &projection(Expr::Literal(Value::Text(String::from("missing")))),
+                &signature
+            ),
+            None
+        );
+        assert_eq!(
+            rederive_type(
+                &projection(Expr::Path(vec![String::from("key")])),
+                &signature
+            ),
+            None
+        );
     }
 
     #[test]
@@ -4811,7 +4883,7 @@ mod tests {
             fields: alloc::vec![(String::from("code"), Expr::Literal(Value::Int(0)))],
         };
         assert_eq!(
-            check(&root, &Signature::new(), "host constructor").expect("the tree is valid"),
+            check(&root, &Signature::new(), None).expect("the tree is valid"),
             DataType::TaggedUnion(union.clone())
         );
         let tree = Tree {
@@ -4834,6 +4906,6 @@ mod tests {
             case,
             fields: alloc::vec![(String::from("message"), Expr::Literal(Value::Int(0)))],
         };
-        assert!(check(&forged, &Signature::new(), "forged").is_err());
+        assert!(check(&forged, &Signature::new(), None).is_err());
     }
 }
