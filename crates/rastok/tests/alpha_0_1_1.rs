@@ -407,7 +407,6 @@ fn r137_inline_records_are_list_elements_in_outputs_and_expectations() {
 }
 
 #[test]
-#[ignore = "R-091, gate P3"]
 fn r091_a_bare_stop_ends_at_its_newline() {
     assert_scenarios_pass(
         "R-091-stop-then-another-arm.rkg",
