@@ -490,3 +490,115 @@ graph cyclic : App {
         "{bag:?}"
     );
 }
+
+#[test]
+fn call_join_pairing_uses_every_terminal_case_and_composed_routes() {
+    let source = include_str!("fixtures/alpha_0_1_1/R-169-join-http.rkg");
+    let nested = source
+        .replace(
+            "  operator pair {",
+            "  graph frames { input in: Item; output out: Item; in -> out }\n  operator pair {",
+        )
+        .replace(
+            "catalog.out -> pair.body",
+            "catalog.out -> frames -> pair.body",
+        );
+    let paired = source.replace(
+        "Completed -> pair.exit",
+        "Completed | ServerError -> pair.exit",
+    );
+    for (program, expected) in [(source, 1), (nested.as_str(), 1), (paired.as_str(), 0)] {
+        let compiled = compile(&[program], &ContractCatalog::try_m0().unwrap()).unwrap();
+        let warnings: Vec<_> = compiled
+            .warnings
+            .iter()
+            .filter(|warning| warning.code().as_str() == "W-JOIN-UNPAIRED")
+            .collect();
+        assert_eq!(warnings.len(), expected, "{:?}", compiled.warnings);
+        if let Some(warning) = warnings.first() {
+            assert!(
+                warning
+                    .message()
+                    .contains("1 to `pair.body`, 0 to `pair.exit`")
+            );
+            assert!(
+                warning
+                    .fields()
+                    .iter()
+                    .any(|(key, value)| *key == "case" && value == "ServerError")
+            );
+        }
+    }
+}
+
+#[test]
+fn only_a_key_and_a_bound_exempt_an_unpaired_call_join() {
+    let source = include_str!("fixtures/alpha_0_1_1/R-169-join-keyed-and-bounded.rkg");
+    for (keyed, bound, expected) in [
+        (true, "within duration(\"30s\")", 0),
+        (true, "last 1", 0),
+        (false, "within duration(\"30s\")", 1),
+        (false, "last 1", 1),
+        (true, "", 1),
+    ] {
+        let source = source.replace("within duration(\"30s\")", bound);
+        let source = if keyed {
+            source
+        } else {
+            source.replace("    instance = { key = meta.sys.parent_id as text }\n", "")
+        };
+        let compiled = compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap();
+        assert_eq!(
+            compiled
+                .warnings
+                .iter()
+                .filter(|warning| warning.code().as_str() == "W-JOIN-UNPAIRED")
+                .count(),
+            expected,
+            "keyed={keyed}, bound={bound}: {:?}",
+            compiled.warnings
+        );
+    }
+    let process = include_str!("fixtures/alpha_0_1_1/R-169-join-process.rkg");
+    let compiled = compile(&[process], &ContractCatalog::try_m0().unwrap()).unwrap();
+    let warning = compiled
+        .warnings
+        .iter()
+        .find(|warning| warning.code().as_str() == "W-JOIN-UNPAIRED")
+        .unwrap();
+    assert!(warning.message().contains("zero or more frames per Call"));
+    assert!(
+        warning
+            .fields()
+            .iter()
+            .any(|(key, value)| *key == "case" && value == "all")
+    );
+}
+
+#[test]
+fn a_file_read_pairs_its_frame_with_completed_only() {
+    let source = r#"
+graph app : App {
+  input in: text
+  output out: bool
+  connector read_file : File {
+    mode = read
+    path = data as text
+    max_read = "1KiB"
+    timeout = duration("1s")
+  }
+  operator pair {
+    input body: bytes
+    input exit: FileExit
+    output out: bool
+    on (body, exit) { out = true }
+  }
+  in -> read_file
+  read_file.out -> pair.body
+  read_file.exit -> match { Completed -> pair.exit; _ -> nothing }
+  pair -> out
+}
+"#;
+    let compiled = compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
+    assert!(compiled.warnings.is_empty(), "{:?}", compiled.warnings);
+}

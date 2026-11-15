@@ -487,7 +487,11 @@ impl ExecutionPlan {
         !constrained
     }
 
-    pub(crate) fn edge_cases(&self, edge: &Edge) -> Option<Vec<String>> {
+    /// Canonical source cases selecting a composed edge. `None` means every
+    /// value reaches this destination, including an unconditional route that
+    /// coexists with case routing. Graph boundary selections are already composed.
+    #[must_use]
+    pub fn edge_cases(&self, edge: &Edge) -> Option<Vec<String>> {
         let mut cases = None;
         for route in self.routes.iter().filter(|route| route.source == edge.from) {
             match &route.selection {

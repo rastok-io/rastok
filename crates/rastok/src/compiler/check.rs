@@ -228,6 +228,8 @@ pub const E_UNWIRED_OUTPUT: Code = Code::new("E-UNWIRED-OUTPUT");
 pub const W_DEAD_OUTPUT: Code = Code::new("W-DEAD-OUTPUT");
 /// A whole Graph has no possible external admission.
 pub const W_DEAD_GRAPH: Code = Code::new("W-DEAD-GRAPH");
+/// A Call's frames and terminal do not supply paired join inputs.
+pub const W_JOIN_UNPAIRED: Code = Code::new("W-JOIN-UNPAIRED");
 
 /// More than one logical Lab corpus in the unit.
 pub const E_LAB_DUP: Code = Code::new("E-LAB-DUP");

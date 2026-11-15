@@ -90,6 +90,14 @@ App's `failed` output. These emissions remain observable in the journal
 even when their destination is `nothing`. An invocation's `exit` does not
 stop the whole Node instance; an instance may serve further invocations.
 
+When joining a Call's body and `exit`, route every terminal that accompanies
+a body to that join. Otherwise a retained body can pair with another Call's
+terminal: `W-JOIN-UNPAIRED` warns about this. A streamed port cannot pair
+zero or more frames with one terminal. To isolate Calls, give the joining
+Operator `instance = { key = meta.sys.parent_id as text }` and a `within`
+or `last` bound, with `expired` routed. A bound alone does not separate Calls.
+See [joins and expiry](06-instances-state-and-time.md).
+
 ## Admission is not business success
 
 The webhook listener, from `examples/webhook-to-partner.rkg`, lines 23–28,

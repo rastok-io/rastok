@@ -6,8 +6,8 @@ order: 5
 
 A graph that leaves a possible outcome with nowhere to go does not compile.
 `E-UNWIRED-OUTPUT` enforces that rule, including outputs that carry a fault.
-This page lists errors; `W-DEAD-GRAPH`, `W-DEAD-OUTPUT` and `W-LOOP-REPEAT`
-are warnings, not refusals.
+Codes starting with `W-`, including `W-JOIN-UNPAIRED`, are warnings,
+not refusals.
 
 Codes identify refusals; messages explain the particular source location.
 The code and structured fields are stable, while message wording can change.
@@ -116,6 +116,18 @@ Independent plan validation can also surface these semantic refusals.
 | `E-UNION-OVERLAP` | Structural-union branches overlap in the values they accept. | Use disjoint branches or a tagged union. | “structural-union branches `int32` and `int64` overlap” |
 | `E-UNWIRED-OUTPUT` | A possible output or case has no explicit disposition. | Wire it to a destination or deliberately discard it with nothing. | “`o.side` can be produced but has no destination; route it or write `o.side -> nothing`” |
 | `E-WIRING-MIGRATION` | Wiring uses a removed spelling or continues after a command. | Use current port paths, match routing and final command destinations. | “edge `when` was removed; route a closed value with `-> match { ... }` or decide in an Operator” |
+
+### Join warnings
+
+| Code | When it fires | What the author changes | Example message excerpt |
+|---|---|---|---|
+| `W-JOIN-UNPAIRED` | A presence join receives frames and a terminal from one Call, but their counts do not pair for every terminal case. | Route every terminal accompanying a frame to the join, or key its Operator by the Call and bound the join with `within` or `last`. | “`ServerError` delivers 1 to `pair.body`, 0 to `pair.exit`; a lone delivery can pair with another Call” |
+
+The fields name the joining `node`, the source `connector`, its frame
+`port` and the terminal `case`. For a zero-or-more frame port, `case = "all"`
+means the warning is independent of one terminal case, not that every run
+fails. A bound without an instance key does not separate Calls. The warning
+does not change execution or make a failed scenario pass.
 
 ## Plan
 
