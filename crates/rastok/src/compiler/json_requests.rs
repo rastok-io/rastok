@@ -69,8 +69,11 @@ pub(super) fn check(plan: &ValidatedExecutionPlan, bag: &mut Bag) {
             _ => ty.to_string(),
         };
         let detail = format!(
-            "`{}.{}` receives a value with no JSON form: {location} has type {type_name}; {hint}",
-            node.path, target.port
+            "`{}.{}` receives a value with no JSON form from `{}.{}`: {location} has type {type_name}; {hint}",
+            node.path,
+            target.port,
+            plan.nodes[edge.from.node.index()].path,
+            edge.from.port
         );
         bag.push(
             Diagnostic::new(super::check::E_TYPE_INVALID, Phase::Check, detail.clone())
