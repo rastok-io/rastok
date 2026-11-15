@@ -2599,6 +2599,10 @@ fn check_narrowing_compatibility(source: &DataType, target: &NarrowTarget) -> Re
                 || source.is_assignable_to(target)
                 || target.is_assignable_to(source)
                 || matches!(
+                    (source, target),
+                    (DataType::Integer(_), DataType::Decimal(_))
+                )
+                || matches!(
                     source,
                     DataType::StructuralUnion(_) | DataType::TaggedUnion(_)
                 )
@@ -4136,6 +4140,57 @@ mod tests {
                 .kind,
             ErrorKind::Narrowing(NarrowingFailure::NoMatch { .. })
         ));
+    }
+
+    #[test]
+    fn typed_integer_to_decimal_conversion_is_exact_and_bounded() {
+        let price = DataType::Decimal(crate::datatype::DecimalType::new(3, 2).unwrap());
+        for (ty, seven, too_large) in [
+            (DataType::INT, EvalValue::Int(7), EvalValue::Int(10)),
+            (DataType::LONG, EvalValue::Int(7), EvalValue::Int(10)),
+            (DataType::UINT, EvalValue::Uint(7), EvalValue::Uint(10)),
+            (
+                DataType::Number,
+                EvalValue::Decimal {
+                    unscaled: 7,
+                    scale: 0,
+                },
+                EvalValue::Decimal {
+                    unscaled: 10,
+                    scale: 0,
+                },
+            ),
+        ] {
+            let signature = Signature::new()
+                .with("data", ty)
+                .with_type("Price", price.clone());
+            let converted = compile_ok("data as Price", &signature);
+            let predicate = compile_ok("data is Price", &signature);
+            let values = BTreeMap::from([(String::from("data"), seven)]);
+            assert_eq!(
+                eval(&converted, &values).unwrap(),
+                EvalValue::Decimal {
+                    unscaled: 700,
+                    scale: 2
+                }
+            );
+            assert_eq!(eval(&predicate, &values).unwrap(), EvalValue::Bool(true));
+            let values = BTreeMap::from([(String::from("data"), too_large)]);
+            assert!(matches!(
+                eval(&converted, &values).unwrap_err().kind,
+                ErrorKind::Narrowing(NarrowingFailure::NoMatch { .. })
+            ));
+            assert_eq!(eval(&predicate, &values).unwrap(), EvalValue::Bool(false));
+            for operator in ["+", "*", ">="] {
+                assert!(
+                    compile(
+                        &format!("(data as Price) {operator} (data as Price)"),
+                        &signature,
+                    )
+                    .is_err()
+                );
+            }
+        }
     }
 
     #[test]

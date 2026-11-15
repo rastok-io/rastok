@@ -37,14 +37,12 @@ equality, not computed with, in this alpha. For money, compute in integer
 minor units (cents) and keep the exact decimal for carrying and projection.
 Exact decimal arithmetic is later work.
 
-Conversions have the same alpha limits. `value as T` with `T` a declared
-`decimal(p,s)` (for example `type Price = decimal(18,2)`) accepts a
-`number`, including a `decimal("…")` literal, which is itself a `number`;
-so a Lab expectation against a `Price` port is written
-`expect app.out == { b = decimal("2.50") as Price }`. The same conversion
-from an integer (`data.quantity as Price`) is refused by `rastok check` in
-this alpha, although the specification describes it; this is tracked in
-[issue 4](https://github.com/rastok-io/rastok/issues/4).
+`value as T` with `T` a declared `decimal(p,s)` (for example
+`type Price = decimal(18,2)`) accepts `int`, `long`, `uint` and `number`.
+`7 as Price` produces exactly `7.00`; exceeding the declared precision or
+discarding non-zero digits is a narrowing fault, never rounding. A
+`decimal("…")` literal is itself a `number`, so a Lab expectation against
+a `Price` port can use `expect app.out == { b = decimal("2.50") as Price }`.
 
 Integer overflow, invalid indexing, division by zero and a failed explicit
 narrowing are evaluation faults. A fault commits no input consumption,

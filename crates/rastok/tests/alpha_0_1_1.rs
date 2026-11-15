@@ -388,7 +388,6 @@ fn r087_a_state_assignment_can_contain_an_is_ternary() {
 }
 
 #[test]
-#[ignore = "R-086, gate P3"]
 fn r086_an_integer_converts_exactly_to_a_declared_decimal() {
     assert_scenarios_pass(
         "R-086-integer-to-decimal.rkg",
