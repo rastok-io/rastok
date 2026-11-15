@@ -20,6 +20,19 @@
 - Count compiler-added conversions in the unchanged expression depth budget.
   An expression at the limit that reads a narrowed value can now be refused
   with `E-PLAN-DEPTH`; excessive resolved depth never reports `E-INTERNAL-PLAN`.
+- Settle ready Call responses before advancing to the next logical deadline,
+  in both simulation and hosted execution. Immediate mock replies no longer
+  time out when one advance crosses several deadlines.
+- Keep `now()` in each Retry mock at that attempt's opening timestamp,
+  including the scenario's civil origin, regardless of where advances stop.
+- Refuse authored WebSocket Session mocks with `E-CHECK-DEFERRED` instead of
+  accepting scripts the Lab cannot execute. WebSocket declarations without
+  mocks and resident Process scripts remain admitted.
+- Explain that Lab expectations on a Connector's `exit` see every Retry
+  attempt terminal, while downstream ports receive only the final batch.
+- Explain why mocked Connectors still need synthetic secret bindings, and
+  name a missing deployment environment variable separately from a version
+  mismatch, without exposing secret material.
 
 ## v0.1.0-alpha (5 November 2026)
 
