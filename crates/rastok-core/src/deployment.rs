@@ -247,6 +247,13 @@ pub enum SecretProviderError {
     ProviderUnavailable(SecretProviderId),
     /// The logical or physical reference was not found.
     NotFound(SecretName),
+    /// The environment-backed provider has no value at the named coordinate.
+    EnvironmentNotSet {
+        /// Logical secret required by the deployment.
+        reference: SecretName,
+        /// Variable named in the profile, never its contents.
+        variable: String,
+    },
     /// The provider could not prove the requested immutable version.
     VersionMismatch(SecretName),
     /// The provider returned no credential bytes.
@@ -268,6 +275,14 @@ impl fmt::Display for SecretProviderError {
             Self::NotFound(reference) => {
                 write!(formatter, "secret `{}` was not found", reference.as_str())
             }
+            Self::EnvironmentNotSet {
+                reference,
+                variable,
+            } => write!(
+                formatter,
+                "secret `{}`: the environment variable `{variable}` named by the deployment profile is not set",
+                reference.as_str()
+            ),
             Self::VersionMismatch(reference) => write!(
                 formatter,
                 "secret `{}` did not match its attested version",

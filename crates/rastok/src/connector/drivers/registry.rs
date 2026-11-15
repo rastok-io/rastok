@@ -97,6 +97,7 @@ pub trait DriverFactory {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DriverFactoryError {
     detail: String,
+    missing_secret: bool,
 }
 
 impl DriverFactoryError {
@@ -105,7 +106,26 @@ impl DriverFactoryError {
     pub fn new(detail: impl Into<String>) -> Self {
         Self {
             detail: detail.into(),
+            missing_secret: false,
         }
+    }
+
+    pub(crate) fn missing_secret(
+        reference: &crate::deployment::SecretName,
+        connector: &node::Path,
+        attribute: &str,
+    ) -> Self {
+        Self {
+            detail: format!(
+                "secret `{}` required by `{connector}.{attribute}` is missing",
+                reference.as_str()
+            ),
+            missing_secret: true,
+        }
+    }
+
+    pub(crate) fn is_missing_secret(&self) -> bool {
+        self.missing_secret
     }
 
     /// Human-readable implementation-specific detail.

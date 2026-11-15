@@ -177,10 +177,9 @@ impl HttpClientRequestSettings {
                     }
                     crate::deployment::BootReference::Secret(reference) => {
                         if boot.secret(&reference).is_none() {
-                            return Err(super::DriverFactoryError::new(format!(
-                                "secret `{}` required by `{path}.{name}` is missing",
-                                reference.as_str()
-                            )));
+                            return Err(super::DriverFactoryError::missing_secret(
+                                &reference, path, name,
+                            ));
                         }
                         boot_secrets.insert((path.clone(), name.clone()), reference);
                     }

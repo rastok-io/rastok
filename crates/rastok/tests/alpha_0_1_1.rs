@@ -278,7 +278,6 @@ fn r092_an_exit_expectation_observes_each_retry_attempt() {
 }
 
 #[test]
-#[ignore = "R-139, gate P2"]
 fn r139_mock_secrets_require_a_profile_and_name_missing_environment_values() {
     let file = "R-139-secret-and-fake.rkg";
     let profile = "R-139-secret-and-fake.deployment.json";

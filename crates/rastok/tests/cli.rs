@@ -1489,6 +1489,50 @@ lab deployed {
 }
 
 #[test]
+fn a_missing_secret_environment_value_is_not_a_version_mismatch() {
+    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/alpha_0_1_1");
+    let missing = "secret `AGENT_TOKEN`: the environment variable `R139_TOKEN` named by the deployment profile is not set";
+    let mismatch = "secret `AGENT_TOKEN` did not match its attested version";
+    for (material, version, expected) in [
+        (None, None, missing),
+        (None, Some("fixture-v1"), missing),
+        (Some("lab-only-not-a-credential"), None, mismatch),
+        (
+            Some("lab-only-not-a-credential"),
+            Some("wrong-version"),
+            mismatch,
+        ),
+    ] {
+        let mut command = rastok();
+        command
+            .current_dir(&fixtures)
+            .args([
+                "simulate",
+                "R-139-secret-and-fake.rkg",
+                "--deployment",
+                "R-139-secret-and-fake.deployment.json",
+            ])
+            .env_remove("R139_TOKEN")
+            .env_remove("R139_TOKEN_VERSION");
+        if let Some(material) = material {
+            command.env("R139_TOKEN", material);
+        }
+        if let Some(version) = version {
+            command.env("R139_TOKEN_VERSION", version);
+        }
+        let output = command
+            .output()
+            .expect("the deployment refusal is reported");
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr).trim(),
+            format!("error: {expected}")
+        );
+    }
+}
+
+#[test]
 fn simulate_explains_the_authored_assertion_and_its_exact_window() {
     let root = std::env::temp_dir().join(format!("rastok-assertion-report-{}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();
