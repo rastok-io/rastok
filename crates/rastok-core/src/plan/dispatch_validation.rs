@@ -147,12 +147,10 @@ fn validate_at(
                 let branch_path = format!("{path}.arms[{index}]");
                 let mut branch = scope.clone();
                 // Selection narrows the closed value without unwrapping it.
-                if matches!(&scrutinee.root, Expr::Path(segments)
-                    if segments.len() == 1 && segments[0] == "data")
-                    && let Some(narrowed) =
-                        super::routing::selected_case_type(&scrutinee.ty, &arm.cases)
+                if let Some(narrowed) =
+                    super::routing::selected_case_type(&scrutinee.ty, &arm.cases)
                 {
-                    branch = branch.with("data", narrowed);
+                    branch = branch.with_selected_cases(&scrutinee.root, narrowed);
                 }
                 validate_at(&arm.dispatch, &branch, depth + 1, &branch_path)?;
             }

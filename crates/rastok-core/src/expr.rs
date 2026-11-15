@@ -477,6 +477,9 @@ pub struct Signature {
     /// Positive path tests retain their conversion as well as their result
     /// type. `names` keeps the operand type for independent validation.
     narrowed: BTreeMap<String, Box<NarrowTarget>>,
+    /// A closed match restricts the cases without converting the value to
+    /// its payload. The declared type remains available after a state write.
+    selected_cases: BTreeMap<String, DataType>,
     /// Exact roots whose descendants belong to Rastok's statically sealed
     /// metadata grid. `meta` itself is implicit; join aliases such as
     /// `left.meta` are declared here so `variant` cannot become a general
@@ -496,6 +499,7 @@ impl Signature {
     pub fn with(mut self, name: impl Into<String>, ty: DataType) -> Self {
         let name = name.into();
         self.narrowed.remove(&name);
+        self.selected_cases.remove(&name);
         self.names.insert(name, ty);
         self
     }
@@ -526,7 +530,28 @@ impl Signature {
                 NarrowTarget::Type(target) => target.ty(),
                 NarrowTarget::Case { payload, .. } => payload.as_ref(),
             })
+            .or_else(|| self.selected_cases.get(name))
             .or_else(|| self.names.get(name))
+    }
+
+    /// Records the closed type selected by a match arm. Unlike a positive
+    /// `is`, selection keeps the tagged value rather than extracting its
+    /// payload, and does not replace the path's declared type.
+    #[must_use]
+    pub fn with_selected_cases(mut self, scrutinee: &Expr, ty: DataType) -> Self {
+        let path = match scrutinee {
+            Expr::Path(path) => path,
+            // A prior positive fact can have materialized a path read as
+            // `As`. Keep that conversion and select the same source path;
+            // an arbitrary computed scrutinee supplies no such fact.
+            Expr::As { expr, target } => match expr.as_ref() {
+                Expr::Path(path) if self.narrowed.get(&path.join(".")) == Some(target) => path,
+                _ => return self,
+            },
+            _ => return self,
+        };
+        self.selected_cases.insert(path.join("."), ty);
+        self
     }
 
     /// Returns the signature that holds when `predicate` evaluated to true.
@@ -542,16 +567,18 @@ impl Signature {
         narrowed
     }
 
-    /// Ends positive facts about a state cell and its members after an
+    /// Ends type facts about a state cell and its members after an
     /// assignment. The right-hand side still uses the pre-write facts;
     /// subsequent statements read the declared types kept in `names`.
     pub fn invalidate_narrowing(&mut self, root: &str) {
-        self.narrowed.retain(|path, _| {
+        let unaffected = |path: &str| {
             path != root
                 && !path
                     .strip_prefix(root)
                     .is_some_and(|suffix| suffix.starts_with('.'))
-        });
+        };
+        self.narrowed.retain(|path, _| unaffected(path));
+        self.selected_cases.retain(|path, _| unaffected(path));
     }
 
     fn apply_true_facts(&mut self, predicate: &Expr) {
@@ -2298,6 +2325,15 @@ fn check(expr: &Expr, signature: &Signature, text: &str) -> Result<DataType, Dia
             let Some((mut current, consumed)) = resolved else {
                 return Err(fail(format!("`{}` is not a visible name", segments[0])));
             };
+            if consumed < segments.len()
+                && matches!(current, DataType::TaggedUnion(_))
+                && let Some(DataType::TaggedUnion(union)) = signature
+                    .selected_cases
+                    .get(&segments[..consumed].join("."))
+                && let [case] = union.cases()
+            {
+                current = DataType::Struct(case.payload().clone());
+            }
             for segment in &segments[consumed..] {
                 current = match current {
                     // Metadata paths are checked against their own sealed

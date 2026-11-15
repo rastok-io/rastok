@@ -113,6 +113,194 @@ fn a_positive_is_converts_a_whole_value_in_a_match_arm() {
     assert_narrowed_values("match");
 }
 
+#[test]
+fn closed_match_members_preserve_complete_tagged_values() {
+    for (opening, path, emission, ending) in [
+        ("on in match data", "data", "data", ""),
+        ("on in { match data", "data", "data", "}"),
+        (
+            "on in { val selected = data; match selected",
+            "selected",
+            "selected",
+            "}",
+        ),
+        ("on in match data", "data", ".", ""),
+    ] {
+        let source = format!(
+            r#"
+type Payload = struct {{ name: text }}
+type Outcome = union {{ Stored {{ name: text }}, Refused {{ reason: text }} }}
+graph app : App {{
+  input in: Outcome
+  output out: Outcome
+  output names: text
+  output payload: Payload
+  operator relay {{
+    input in: Outcome
+    output out: Outcome
+    output names: text
+    output payload: Payload
+    var name: text = ""
+    {opening} {{
+      Stored => {{
+        name = name + {path}.name
+        names = name
+        payload = {path} as Stored
+        out = {emission}
+      }}
+      Refused => out = {emission}
+    }} {ending}
+  }}
+  in -> relay
+  relay.out -> out
+  relay.names -> names
+  relay.payload -> payload
+}}
+lab tests {{ scenario keep_case_and_read_fields {{
+  app.in = Stored {{ name = "first" }}
+  expect app.out == Stored {{ name = "first" }}
+  expect app.names == "first"
+  expect app.payload == {{ name = "first" }}
+  app.in = Stored {{ name = "second" }}
+  expect app.out == Stored {{ name = "second" }}
+  expect app.names == "firstsecond"
+  app.in = Refused {{ reason = "full" }}
+  expect app.out == Refused {{ reason = "full" }}
+}} }}
+"#
+        );
+        let compiled = compile(&[&source], &ContractCatalog::try_m0().unwrap())
+            .unwrap_or_else(|error| panic!("{opening}, {emission}: {error:?}"));
+        let (plan, _) = plan::decode(&plan::encode(&compiled.plan, &compiled.hash)).unwrap();
+        let runs = rastok::lab::run(&plan, GraphVersion(1), &compiled.labs[0]);
+        assert_eq!(runs.len(), 1);
+        assert!(runs[0].report.passed(), "{opening}: {:?}", runs[0].report);
+    }
+}
+
+#[test]
+fn a_closed_match_keeps_an_enclosing_type_conversion() {
+    let source = r#"
+type Outcome = union { Stored { name: text }, Refused { reason: text } }
+val stored: Outcome = Stored { name = "present" }
+graph app : App {
+  input in: variant
+  output out: Outcome
+  output names: text
+  operator relay {
+    input in: variant
+    output out: Outcome
+    output names: text
+    on in where data is Outcome match data {
+      Stored => { names = data.name; out = data }
+      Refused => out = data
+    }
+  }
+  in -> relay
+  relay.out -> out
+  relay.names -> names
+}
+lab tests { scenario dynamic_case {
+  app.in = stored
+  expect app.out == Stored { name = "present" }
+  expect app.names == "present"
+  app.in = "another type"
+  expect app.out == nothing
+} }
+"#;
+    let compiled = compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
+    let (plan, _) = plan::decode(&plan::encode(&compiled.plan, &compiled.hash)).unwrap();
+    let runs = rastok::lab::run(&plan, GraphVersion(1), &compiled.labs[0]);
+    assert_eq!(runs.len(), 1);
+    assert!(runs[0].report.passed(), "{:?}", runs[0].report);
+}
+
+#[test]
+fn closed_match_selection_needs_one_case_and_an_unchanged_path() {
+    for (dispatch, code) in [
+        (
+            "match data { Stored | Refused => out = data.name }",
+            "E-EXPR",
+        ),
+        (
+            "match (true ? data : data) { Stored => out = data.name; Refused => nothing }",
+            "E-EXPR",
+        ),
+        (
+            "match data { Stored => out = data.name }",
+            "E-MATCH-NONEXHAUSTIVE",
+        ),
+        (
+            "match previous { Stored => { previous = Refused { reason = \"full\" }; out = previous.name }; Refused => nothing }",
+            "E-EXPR",
+        ),
+    ] {
+        let source = format!(
+            r#"
+type Outcome = union {{ Stored {{ name: text }}, Refused {{ reason: text }} }}
+graph app : App {{
+  input in: Outcome
+  output out: text
+  operator inspect {{
+    input in: Outcome
+    output out: text
+    var previous: Outcome = Stored {{ name = "before" }}
+    on in {{ {dispatch} }}
+  }}
+  in -> inspect -> out
+}}
+"#
+        );
+        let bag = compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap_err();
+        assert!(
+            bag.diagnostics().iter().any(|d| d.code().as_str() == code),
+            "{dispatch}: {bag:?}"
+        );
+    }
+}
+
+#[test]
+fn a_closed_match_state_write_restores_the_declared_union() {
+    let source = r#"
+type Outcome = union { Stored { name: text }, Refused { reason: text } }
+graph app : App {
+  input in: text
+  output out: Outcome
+  output names: text
+  operator change {
+    input in: text
+    output out: Outcome
+    output names: text
+    var previous: Outcome = Stored { name = "before" }
+    on in match previous {
+      Stored => {
+        names = previous.name
+        previous = Refused { reason = "full" }
+        out = previous
+      }
+      Refused => out = previous
+    }
+  }
+  in -> change
+  change.out -> out
+  change.names -> names
+}
+lab tests { scenario write_ends_selection {
+  app.in = "change"
+  expect app.names == "before"
+  expect app.out == Refused { reason = "full" }
+  app.in = "read"
+  expect app.names == nothing
+  expect app.out == Refused { reason = "full" }
+} }
+"#;
+    let compiled = compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
+    let (plan, _) = plan::decode(&plan::encode(&compiled.plan, &compiled.hash)).unwrap();
+    let runs = rastok::lab::run(&plan, GraphVersion(1), &compiled.labs[0]);
+    assert_eq!(runs.len(), 1);
+    assert!(runs[0].report.passed(), "{:?}", runs[0].report);
+}
+
 fn state_narrowing_source(
     context: &str,
     state: &str,

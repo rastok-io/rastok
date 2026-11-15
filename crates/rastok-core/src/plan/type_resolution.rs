@@ -506,6 +506,9 @@ impl<'plan> Solver<'plan> {
                 self.project_cases(rule.input, &effective[rule.input], rule.cases.as_ref())?;
             if expression_reads_data(&rule.expression.root) {
                 if resolved_expression_type(&rule.expression.root, &input)
+                    .filter(|ty| {
+                        *ty != DataType::Variant || rule.expression.ty == DataType::Variant
+                    })
                     .or_else(|| {
                         (rule.expression.ty != DataType::Variant)
                             .then(|| rule.expression.ty.clone())
@@ -723,6 +726,7 @@ impl<'plan> Solver<'plan> {
                 &expression.root,
                 &self.project_cases(input, &input_type, cases)?,
             )
+            .filter(|ty| *ty != DataType::Variant || expression.ty == DataType::Variant)
             .or_else(|| (expression.ty != DataType::Variant).then(|| expression.ty.clone()))
         {
             if actual.is_assignable_to(expected) {
@@ -869,6 +873,7 @@ fn expression_type(
     if expression_reads_data(&tree.root) {
         if let Some(input) = input
             && let Some(resolved) = resolved_expression_type(&tree.root, input)
+            && (resolved != DataType::Variant || tree.ty == DataType::Variant)
         {
             return Ok(Some(resolved));
         }
@@ -1183,10 +1188,11 @@ fn merge_optional_requirements(
 /// smaller than the expression checker's B3 work: it exists so B2 can tell a
 /// real dynamic value from an unsolved variable. Once a path crosses an
 /// explicit `variant`, its result remains `variant`; no precise constraint is
-/// invented from later field/index spelling. A missing local or state binding
-/// means this input-only pass cannot rederive the result. Its callers may use
-/// the tree's precise result type then; B3 independently verifies that claim
-/// with the complete scope before the plan becomes executable.
+/// invented from later field/index spelling. A missing local or state binding,
+/// or a `variant` narrowed by Dispatch, needs the complete scope this pass
+/// does not carry. Its callers may use the tree's precise result type then;
+/// B3 independently verifies that claim, including the narrowing facts,
+/// before the plan becomes executable.
 pub(super) fn resolved_expression_type(expr: &expr::Expr, input: &DataType) -> Option<DataType> {
     match expr {
         expr::Expr::Path(path) if path.first().is_some_and(|root| root == "data") => {

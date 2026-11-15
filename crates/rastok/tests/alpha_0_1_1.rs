@@ -353,7 +353,6 @@ fn r009_an_empty_struct_is_not_a_map_and_the_refusal_names_the_map_syntax() {
 }
 
 #[test]
-#[ignore = "R-003, gate P3"]
 fn r003_a_closed_match_arm_knows_its_case_payload() {
     assert_scenarios_pass(
         "R-003-closed-match-arm.rkg",
