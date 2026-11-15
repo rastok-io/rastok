@@ -125,7 +125,11 @@ unknown Contract or unsupported exchange profile executable.
 All four HTTP/WebSocket Contracts have effectless role bindings. Binding alone
 does not prove a complete scripted protocol: outgoing Process, File and
 HttpClient Calls execute their mocks; `HttpServer` **ack** executes decoded
-source injections; source `respond` and Session scripting remain named gates.
+source injections; source `respond` and WebSocket Session scripting remain
+named gates.
+A `mock` declared on a Connector whose Session scripting is still a named
+gate refuses at check with `E-CHECK-DEFERRED`; it is never accepted and
+then ignored.
 HttpClient's mock seals the resolved method, URL, lossless headers, body and
 idempotency material before the ordinary EGRESS open. HttpServer's Lab
 proposes an inbound draft and returns a terminal only after committed acceptance.

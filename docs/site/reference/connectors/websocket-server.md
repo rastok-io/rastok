@@ -84,7 +84,12 @@ unencodable message ends the Session with `DecodeFailed` before it is sent.
 | all | `versions` | `array<http/1.1 \| http/2 \| http/3>` | `["http/3", "http/2", "http/1.1"]` | plan |
 | all | `zero_rtt` | `disabled` | `disabled` | plan |
 
-The Lab supplies session-open, frame and terminal observations through the same Session model. It tests graph behavior, not a physical listener, authentication or wire handshake. Explicit correlation never chooses another Connector's Session.
+The Lab has an effectless Session binding, but authored WebSocket Session
+mocks are not executable. `rastok check` refuses a `mock` on this Connector
+with `E-CHECK-DEFERRED`; a declaration without a mock still checks. Driver
+tests cover Session opening, frames and terminal outcomes separately from a
+physical listener, authentication or wire handshake. Explicit correlation
+never chooses another Connector's Session.
 
 ## Qualification inventory
 

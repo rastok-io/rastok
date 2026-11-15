@@ -205,6 +205,56 @@ fn reports(compilation: &Compilation) -> Vec<lab::ScenarioRun> {
 }
 
 #[test]
+fn websocket_contracts_check_but_scripted_session_mocks_are_named_deferrals() {
+    for (contract, setting) in [
+        ("WebSocketClient", "url = \"wss://example.test/socket\""),
+        ("WebSocketServer", "listen = \"127.0.0.1:8080\""),
+    ] {
+        let app = format!(
+            r#"graph app : App {{
+  input in: text
+  output out: text
+  connector socket : {contract} {{
+    {setting}
+    codec = text
+    handshake_timeout = duration("5s")
+    behavior = deterministic
+  }}
+  in -> socket -> out
+  socket.exit -> nothing
+}}
+"#
+        );
+        compile(&app);
+        for body in [
+            "mock socket {}",
+            "simulation group { mock socket {} }",
+            "scenario scripted { mock socket {} }",
+        ] {
+            let source = format!("{app}lab checks {{ {body} }}");
+            let error = compiler::compile(&[&source], &ContractCatalog::try_m0().unwrap())
+                .expect_err("an effectless Session binding cannot execute a mock script");
+            let diagnostic = error
+                .diagnostics()
+                .iter()
+                .find(|diagnostic| diagnostic.code() == Code::new("E-CHECK-DEFERRED"))
+                .unwrap();
+            assert_eq!(diagnostic.phase(), rastok::diagnostics::Phase::Check);
+            assert_eq!(
+                diagnostic.fields(),
+                &[("construct", String::from("a WebSocket Session mock"))]
+            );
+            assert_eq!(
+                diagnostic.message(),
+                "a WebSocket Session mock is outside the executable subset of this build"
+            );
+            assert_eq!(diagnostic.spans().len(), 1);
+            assert_eq!(&source[diagnostic.spans()[0].range()], "mock socket {}");
+        }
+    }
+}
+
+#[test]
 fn direct_scenarios_use_the_lab_name_and_repeated_expectations_keep_the_window() {
     let source = format!(
         r#"{APP}
