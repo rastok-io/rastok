@@ -1050,6 +1050,7 @@ the DSL an explicit data literal uses the tagged-block / list pattern :
 | `struct`  | `{ k = v, … }` ; `{}` empty                   | typed record — `=` decides (D-2026-08-10-6) ; schema inferred, or annotated `: <Schema>` |
 | `map`     | `{ "k": v, … }` ; `{:}` empty                 | text keys — `:` decides ; mixing `=` and `:` refuses           |
 | `array`   | `[ v, v, … ]`                                  | ordered sequence ; `array<struct>` is the relational `table` view |
+| `enum`    | `Symbol`                                       | bare symbol ; typed by the expected type of its position       |
 | `text`    | `"…"` ; `text! { … }`                         | Rastok string, or the verbatim frontend — first newline excluded, margin set by the closing delimiter, no interpolation |
 | `bytes`   | `base64! { … }` ; `asset("path")`             | RFC 4648 standard, mandatory padding, ASCII whitespace ignored ; or build-time repo bytes (D-2026-08-10-5). `hex` and `bytes …` forms are DEAD |
 | `variant` | `json! <json-value>`                           | the complete JSON value grammar (object, array, string, exact number, boolean, null); always `variant`; duplicate keys refuse |

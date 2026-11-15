@@ -8,6 +8,205 @@
 use rastok::compiler::compile;
 use rastok::connector::contract::ContractCatalog;
 
+mod enum_symbols {
+    use super::*;
+
+    fn checked(source: &str) -> rastok::compiler::Compilation {
+        let compilation = compile(
+            &[source],
+            &ContractCatalog::try_m0().expect("standard contracts"),
+        )
+        .expect("contextual enum values");
+        let bytes = rastok::plan::encode(&compilation.plan, &compilation.hash);
+        let (plan, hash) = rastok::plan::decode(&bytes).expect("independent enum validation");
+        assert_eq!(plan, compilation.plan);
+        assert_eq!(hash, compilation.hash);
+        let runs: Vec<_> = compilation
+            .labs
+            .iter()
+            .flat_map(|lab| {
+                rastok::lab::run_program(&plan, hash, rastok::plan::GraphVersion(1), lab, None)
+            })
+            .collect();
+        assert_eq!(runs.len(), 1);
+        assert!(runs[0].report.passed(), "{:?}", runs[0].report);
+        compilation
+    }
+
+    #[test]
+    fn port_injection_and_expectation_use_the_declared_enum() {
+        checked(
+            r#"
+type Status = enum { Pending, Cancelled }
+graph app : App {
+  input in: Status
+  output out: Status
+  operator cancel {
+    input in: Status
+    output out: Status
+    on in { out = Cancelled }
+  }
+  in -> cancel -> out
+}
+lab test { scenario values {
+  app.in = Pending
+  expect app.out == Cancelled
+  expect app.out where data == Cancelled
+} }
+"#,
+        );
+    }
+
+    #[test]
+    fn state_initialization_and_assignment_use_the_declared_enum() {
+        checked(
+            r#"
+type Status = enum { Pending, Cancelled }
+graph app : App {
+  input in: bool
+  output out: Status
+  operator cancel {
+    input in: bool
+    output out: Status
+    var status: Status = Pending
+    on in { out = status; status = Cancelled }
+  }
+  in -> cancel -> out
+}
+lab test { scenario values {
+  app.in = true
+  expect app.out == Pending
+  app.in = true
+  expect app.out == Cancelled
+} }
+"#,
+        );
+    }
+
+    #[test]
+    fn equality_infers_enum_symbols_from_either_operand() {
+        checked(
+            r#"
+type Status = enum { Pending, Cancelled }
+graph app : App {
+  input in: Status
+  output out: bool
+  operator compare {
+    input in: Status
+    output out: bool
+    on in { out = data == Pending && Pending == data && data != Cancelled && Cancelled != data }
+  }
+  in -> compare -> out
+}
+lab test { scenario values {
+  app.in = Pending
+  expect app.out == true
+} }
+"#,
+        );
+    }
+
+    #[test]
+    fn struct_fields_use_the_enum_without_a_symbol_binding() {
+        checked(include_str!("fixtures/alpha_0_1_1/R-002-enum-value.rkg"));
+    }
+
+    #[test]
+    fn mock_output_uses_the_declared_enum() {
+        checked(
+            r#"
+type Status = enum { Pending, Cancelled }
+graph app : App {
+  input in: variant
+  output out: Status
+  connector remote : HttpClient {
+    url = "https://example.test/status"
+    codec = json
+    behavior = deterministic
+    timeout = duration("1s")
+    output out: Status
+  }
+  in -> remote -> out
+  remote.exit -> nothing
+}
+lab test {
+  mock remote { on in { out = Cancelled; exit = Completed { status = 200 } } }
+  scenario values {
+    app.in = json! {}
+    expect app.out == Cancelled
+  }
+}
+"#,
+        );
+    }
+
+    #[test]
+    fn visible_bindings_never_silently_win_over_expected_enum_symbols() {
+        for value in ["Cancelled", "data == Cancelled", "Cancelled != data"] {
+            let output = if value == "Cancelled" {
+                "Status"
+            } else {
+                "bool"
+            };
+            let source = format!(
+                r#"
+type Status = enum {{ Pending, Cancelled }}
+graph app : App {{
+  input in: Status
+  operator compare {{
+    input in: Status
+    output out: {output}
+    on in {{ val Cancelled = data; out = {value} }}
+  }}
+  in -> compare -> out
+}}
+"#
+            );
+            let bag = compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap_err();
+            assert!(bag.diagnostics().iter().any(|diagnostic| {
+                diagnostic.code().as_str() == "E-EXPR"
+                    && diagnostic.message() == "`Cancelled` is both a visible binding and a symbol of the expected enum; rename the binding"
+                    && !diagnostic.spans().is_empty()
+            }), "{bag:?}");
+        }
+    }
+
+    #[test]
+    fn symbols_require_context_and_do_not_add_qualified_or_text_constructors() {
+        for value in ["Cancelled", "Status.Cancelled", "\"Cancelled\" as Status"] {
+            let source = format!(
+                r#"
+type Status = enum {{ Pending, Cancelled }}
+graph app : App {{
+  operator identity {{ output out: variant; on in {{ out = {value} }} }}
+  in -> identity -> out
+}}
+"#
+            );
+            let bag = compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap_err();
+            assert!(
+                bag.diagnostics()
+                    .iter()
+                    .any(|d| d.code().as_str() == "E-EXPR"),
+                "{bag:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn enum_json_is_text_and_deserializes_to_the_same_symbol() {
+        use rastok::datatype::{DataType, EnumType};
+        use rastok::value::Value;
+        let ty = DataType::Enum(EnumType::new(vec!["Pending".into(), "Cancelled".into()]).unwrap());
+        let value = Value::Enum("Cancelled".into());
+        let json = rastok_core::json::write_value(&value).unwrap();
+        assert_eq!(json, "\"Cancelled\"");
+        let (decoded, consumed) = rastok_core::json::parse_value(&json).unwrap();
+        assert_eq!(consumed, json.len());
+        assert_eq!(rastok_core::json::deserialize(&ty, decoded).unwrap(), value);
+    }
+}
+
 fn emitted(body: &str) -> rastok::envelope::Data {
     use rastok::connector::exchange::EnvelopeDraft;
     use rastok::connector::exchange::IngressProposal;

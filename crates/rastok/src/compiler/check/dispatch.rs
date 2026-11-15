@@ -281,7 +281,7 @@ impl Checker<'_, '_> {
         for clause in &decl.guards {
             match clause {
                 crate::compiler::syntax::Guard::Where(expr) if where_guard.is_none() => {
-                    let (tree, _) = self.expr_with_asset_policy(expr, &signature, false)?;
+                    let (tree, _) = self.expr_with_asset_policy(expr, &signature, false, None)?;
                     if !matches!(tree.ty, DataType::Bool | DataType::Variant) {
                         self.bag.push(
                             Diagnostic::new(E_EXPR, Phase::Check, "a where guard must be a bool")
@@ -651,7 +651,16 @@ impl Checker<'_, '_> {
                             SynValue::Error(_) => {}
                             _ => {
                                 let tree = if let SynValue::Expr(source) = value {
-                                    let raw = self.expr(source, signature);
+                                    let raw = self
+                                        .expr_with_asset_policy(
+                                            source,
+                                            signature,
+                                            false,
+                                            Some(&var.ty),
+                                        )
+                                        .and_then(|(tree, _)| {
+                                            self.inline_unit_constants(tree, signature, source.span)
+                                        });
                                     match raw {
                                         Some(tree)
                                             if declared_data_type.is_none()
@@ -835,7 +844,7 @@ impl Checker<'_, '_> {
         activation: &node::HandlerActivation,
         declared_data_type: Option<&DataType>,
     ) -> Option<Dispatch> {
-        let (scrutinee, _) = self.expr_with_asset_policy(source, signature, false)?;
+        let (scrutinee, _) = self.expr_with_asset_policy(source, signature, false, None)?;
         let Some(domain) = closed_case_domain(&scrutinee.ty) else {
             self.bag.push(
                 Diagnostic::new(
@@ -1063,7 +1072,8 @@ impl Checker<'_, '_> {
                         );
                         return None;
                     }
-                    let (predicate, _) = self.expr_with_asset_policy(source, signature, false)?;
+                    let (predicate, _) =
+                        self.expr_with_asset_policy(source, signature, false, None)?;
                     if !matches!(predicate.ty, DataType::Bool | DataType::Variant) {
                         self.bag.push(
                             Diagnostic::new(
