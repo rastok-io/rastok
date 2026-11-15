@@ -6208,12 +6208,13 @@ impl Checker<'_, '_> {
                 );
                 return None;
             }
-            let matches = target
+            let matching: Vec<_> = target
                 .branches()
                 .iter()
                 .filter(|branch| tree.ty.is_assignable_to(branch))
-                .count();
-            if matches == 1 {
+                .collect();
+            if let [branch] = matching.as_slice() {
+                let tree = self.contextualize_tree(tree, branch, span, place)?;
                 return self.checked_expression_depth(
                     expr::Tree {
                         root: expr::Expr::As {
@@ -6227,7 +6228,7 @@ impl Checker<'_, '_> {
                     span,
                 );
             }
-            let detail = if matches == 0 {
+            let detail = if matching.is_empty() {
                 "the value matches no branch of the destination union"
             } else {
                 "the value matches several branches of the destination union"
@@ -6236,6 +6237,48 @@ impl Checker<'_, '_> {
             return None;
         }
         if tree.ty.is_assignable_to(expected) {
+            if let (DataType::Struct(source), DataType::Struct(target)) = (&tree.ty, expected)
+                && requires_union_wrapping(&tree.ty, expected)
+            {
+                // A typed destination may add an optional field wrapper to
+                // an inferred struct. Record that construction in the plan;
+                // runtime conformance must not repair the value. Direct
+                // constructors keep their field trees; other pure expressions
+                // are projected by the statically known closed field set.
+                let mut direct = match &tree.root {
+                    expr::Expr::Struct(fields) => Some(fields.iter()),
+                    _ => None,
+                };
+                let mut fields = Vec::with_capacity(target.fields().len());
+                for (source, target) in source.fields().iter().zip(target.fields()) {
+                    let root = match direct.as_mut().and_then(Iterator::next) {
+                        Some((_, value)) => value.clone(),
+                        None => expr::Expr::Index {
+                            base: Box::new(tree.root.clone()),
+                            index: Box::new(expr::Expr::Literal(crate::value::Value::Text(
+                                source.name().to_string(),
+                            ))),
+                        },
+                    };
+                    let field = self.contextualize_tree(
+                        expr::Tree {
+                            root,
+                            ty: source.ty().clone(),
+                        },
+                        target.ty(),
+                        span,
+                        place,
+                    )?;
+                    fields.push((target.name().to_string(), field.root));
+                }
+                return self.checked_expression_depth(
+                    expr::Tree {
+                        root: expr::Expr::Struct(fields),
+                        ty: expected.clone(),
+                    },
+                    span,
+                );
+            }
             return Some(tree);
         }
         self.port_type_refusal(
@@ -8158,6 +8201,23 @@ fn source_field_names(body: &StructBody) -> Option<Vec<String>> {
     names.sort();
     names.dedup();
     Some(names)
+}
+
+/// Whether assignable struct fields need an explicit union constructor.
+/// Equal resolved unions already carry their canonical branch index.
+fn requires_union_wrapping(source: &DataType, target: &DataType) -> bool {
+    if source == target {
+        return false;
+    }
+    match (source, target) {
+        (_, DataType::StructuralUnion(_)) => true,
+        (DataType::Struct(source), DataType::Struct(target)) => source
+            .fields()
+            .iter()
+            .zip(target.fields())
+            .any(|(source, target)| requires_union_wrapping(source.ty(), target.ty())),
+        _ => false,
+    }
 }
 
 /// A literal expression tree — the compiler's own constants.

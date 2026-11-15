@@ -95,6 +95,14 @@ Inside `Stored => { ... }`, a match on `data` permits `data.name` when
 complete `Stored { ... }` value. Several cases in one arm do not expose
 case-specific fields. Assigning the matched state cell ends the selection.
 
+Later `is` tests can read paths narrowed by earlier tests, for example
+`data is Booked && data.receipt is Receipt && data.receipt.note is text`.
+Each test is evaluated only after the preceding tests succeed.
+
+A struct assigned to a declared type also constructs any optional fields
+that the destination requires. You can bind an inferred struct first and
+then use it in a typed field or output; the original binding keeps its type.
+
 Route selection is separate: `source -> match { Case -> target }` chooses
 among declared destinations using a tag, enum or bool. Its arms contain
 destinations, not expressions. A simple route may coexist with a match,

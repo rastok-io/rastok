@@ -301,6 +301,119 @@ lab tests { scenario write_ends_selection {
     assert!(runs[0].report.passed(), "{:?}", runs[0].report);
 }
 
+#[test]
+fn inferred_struct_fields_are_wrapped_at_the_typed_destination() {
+    let source = r#"
+type Receipt = struct { reservation: text }
+type Receipts = struct { count: int, flight: Receipt? }
+type Nested = struct { copy: Receipts }
+graph app : App {
+  input in: text
+  output out: Receipts
+  output nested: Nested
+  output optional: Receipts?
+  operator book {
+    input in: text
+    output out: Receipts
+    output nested: Nested
+    output optional: Receipts?
+    var saved: Receipts = { count = 0; flight = null }
+    on in {
+      val flight = { reservation = data }
+      val receipts = { count = 1; flight = flight }
+      saved = receipts
+      out = saved
+      nested = { copy = receipts }
+      optional = receipts
+    }
+  }
+  in -> book
+  book.out -> out
+  book.nested -> nested
+  book.optional -> optional
+}
+lab tests { scenario optional_fields {
+  app.in = "first"
+  expect app.out where data.flight is Receipt && data.flight.reservation == "first"
+  expect app.nested where data.copy.flight is Receipt && data.copy.flight.reservation == "first"
+  expect app.optional where data is Receipts && data.flight is Receipt && data.flight.reservation == "first"
+  app.in = "second"
+  expect app.out where data.flight is Receipt && data.flight.reservation == "second"
+} }
+"#;
+    let compiled = compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
+    let (plan, _) = plan::decode(&plan::encode(&compiled.plan, &compiled.hash)).unwrap();
+    let runs = rastok::lab::run(&plan, GraphVersion(1), &compiled.labs[0]);
+    assert_eq!(runs.len(), 1);
+    assert!(runs[0].report.passed(), "{:?}", runs[0].report);
+}
+
+#[test]
+fn successive_is_operands_use_every_prior_positive_fact() {
+    for predicate in [
+        "data is Booked && data.receipt is Receipt && data.receipt.note is text",
+        "data is Booked ? (data.receipt is Receipt ? data.receipt.note is text : false) : false",
+    ] {
+        let source = format!(
+            r#"
+type Receipt = struct {{ note: text? }}
+type Event = union {{ Booked {{ receipt: Receipt? }}, Stopped {{}} }}
+graph app : App {{
+  input in: Event
+  output out: bool
+  operator inspect {{
+    input in: Event
+    output out: bool
+    on in {{ out = {predicate} }}
+  }}
+  in -> inspect -> out
+}}
+lab tests {{ scenario short_circuit {{
+  app.in = Booked {{ receipt = {{ note = "present" }} }}
+  expect app.out == true
+  app.in = Booked {{ receipt = {{ note = null }} }}
+  expect app.out == false
+  app.in = Booked {{ receipt = null }}
+  expect app.out == false
+  app.in = Stopped {{}}
+  expect app.out == false
+}} }}
+"#
+        );
+        let compiled = compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap();
+        let (plan, _) = plan::decode(&plan::encode(&compiled.plan, &compiled.hash)).unwrap();
+        let runs = rastok::lab::run(&plan, GraphVersion(1), &compiled.labs[0]);
+        assert_eq!(runs.len(), 1);
+        assert!(runs[0].report.passed(), "{predicate}: {:?}", runs[0].report);
+    }
+}
+
+#[test]
+fn is_facts_do_not_escape_into_or_or_a_false_branch() {
+    for predicate in [
+        "data is Booked || data.receipt is text",
+        "data is Booked ? true : data.receipt is text",
+    ] {
+        let source = format!(
+            r#"
+type Event = union {{ Booked {{ receipt: text }}, Stopped {{}} }}
+graph app : App {{
+  input in: Event
+  operator inspect {{ input in: Event; on in {{ out = {predicate} }} }}
+  in -> inspect -> out
+}}
+"#
+        );
+        let bag = compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap_err();
+        assert!(
+            bag.diagnostics()
+                .iter()
+                .any(|d| d.code().as_str() == "E-EXPR"),
+            "{bag:?}"
+        );
+    }
+}
+
 fn state_narrowing_source(
     context: &str,
     state: &str,
