@@ -23,6 +23,10 @@
 - Settle ready Call responses before advancing to the next logical deadline,
   in both simulation and hosted execution. Immediate mock replies no longer
   time out when one advance crosses several deadlines.
+- Admit ready resident Process Session mock replies at the logical instant
+  of the input they answer, before the next deadline. Downstream handlers
+  observe the same `now()` with one large advance or several smaller advances,
+  in batch simulation and debugger stepping.
 - Keep `now()` in each Retry mock at that attempt's opening timestamp,
   including the scenario's civil origin, regardless of where advances stop.
 - Refuse authored WebSocket Session mocks with `E-CHECK-DEFERRED` instead of
