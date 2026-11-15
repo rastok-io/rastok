@@ -593,6 +593,14 @@ pub enum Value {
     /// keep their SOURCE spelling and span: the checker decodes them
     /// through the ONE string rule (the Rastok expression language's) and owns duplicates.
     BracedMap(Vec<MapEntry>),
+    /// An array containing host values, such as closed structs. Arrays made
+    /// only of intrinsic expressions retain their opaque expression source.
+    List {
+        /// Elements in source order.
+        items: Vec<Value>,
+        /// The complete array literal.
+        span: Span,
+    },
     /// `nothing` — emit nothing.
     Nothing(Span),
     /// The parser's RECOVERY form: a diagnostic was already pushed
