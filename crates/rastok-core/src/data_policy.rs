@@ -80,6 +80,17 @@ impl Environment {
         self.bindings.iter()
     }
 
+    /// Restores the cell's declared shape and accumulated policy after a
+    /// write; member facts from the pre-write value no longer apply.
+    pub(crate) fn assign_state(&mut self, name: &str, ty: DataType, annotations: AnnotationTable) {
+        self.bindings.retain(|path, _| {
+            !path
+                .strip_prefix(name)
+                .is_some_and(|suffix| suffix.starts_with('.'))
+        });
+        self.insert(name, ty, annotations);
+    }
+
     /// Keep only facts proved by the selected predicate, projecting policy
     /// through the same case/type narrowing as the expression checker.
     pub(crate) fn narrowed_by(&self, predicate: &Expr) -> Result<Self, PropagationError> {

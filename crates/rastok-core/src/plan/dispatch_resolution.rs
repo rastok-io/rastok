@@ -39,7 +39,10 @@ pub(super) fn resolve(dispatch: &mut Dispatch, signature: expr::Signature) {
                     resolve_tree(value, &scope);
                     scope = scope.with(name.as_str(), value.ty.clone());
                 }
-                DispatchStep::SetVar { value, .. } => resolve_tree(value, &scope),
+                DispatchStep::SetVar { name, value } => {
+                    resolve_tree(value, &scope);
+                    scope.invalidate_narrowing(name);
+                }
                 DispatchStep::Emit { value, .. }
                 | DispatchStep::LoopCommand(LoopCommand::Next(value)) => {
                     resolve_emission(value, &scope)
