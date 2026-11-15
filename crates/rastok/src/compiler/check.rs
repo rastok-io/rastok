@@ -1053,6 +1053,14 @@ impl Checker<'_, '_> {
                 self.deferred("a mock of an operator", name.span);
                 continue;
             };
+            if matches!(
+                contract.as_str(),
+                crate::connector::stdlib::WEBSOCKET_CLIENT_CONNECTOR_ID
+                    | crate::connector::stdlib::WEBSOCKET_SERVER_CONNECTOR_ID
+            ) {
+                self.deferred("a WebSocket Session mock", decl.span);
+                continue;
+            }
             let mode = attributes
                 .iter()
                 .find(|attribute| attribute.name == "mode")

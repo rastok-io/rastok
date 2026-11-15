@@ -93,8 +93,10 @@ responses.
 Injection targets are not arbitrary intermediate ports. Source injection
 models a decoded request, not malformed wire bytes or failed bearer
 authentication. Those refusals need Driver tests. WebSocket and Process
-Session fixtures use their declared Session model and correlation metadata;
-they do not fabricate a Call per frame. See the capability distinctions in
+Session test fixtures use their declared Session model and correlation
+metadata; they do not fabricate a Call per frame. Authored WebSocket Session
+mocks are not executable and refuse at check with `E-CHECK-DEFERRED`.
+See the capability distinctions in
 [Standard contracts](contracts.md).
 
 ## Expectations and windows
@@ -162,6 +164,7 @@ is distinct from the diagnostic recording produced by `run --record`:
 | Delayed mock `after` actions | `docs/spec/simulation-semantics.md` §§3, 5.1; `docs/spec/grammar.md`, mock grammar |
 | Scenario `crash node` and `restart node` | `docs/spec/simulation-semantics.md` §5.4 |
 | HttpServer `respond` source scripting; delayed/unsolicited Process service scripts | `docs/spec/simulation-semantics.md` §§2, 5.1 |
+| Mocks for WebSocket Sessions (refused at check with `E-CHECK-DEFERRED`) | `docs/spec/simulation-semantics.md` §2 |
 | Positive `expect fault` and assertions on private state | `docs/spec/simulation-semantics.md` §5.2 |
 | Automatic outcome coverage, generated scenarios and tags | `docs/spec/simulation-semantics.md` §§7–8 |
 | Production-to-scenario extraction | `docs/spec/simulation-semantics.md` §9 |

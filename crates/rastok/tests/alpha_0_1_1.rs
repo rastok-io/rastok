@@ -252,7 +252,6 @@ fn r088_a_retry_mock_observes_the_opening_time_of_its_attempt() {
 }
 
 #[test]
-#[ignore = "R-166, gate P2"]
 fn r166_a_websocket_client_mock_is_a_named_deferral() {
     assert_check_refuses(
         "R-166-fake-websocket-client.rkg",
@@ -262,7 +261,6 @@ fn r166_a_websocket_client_mock_is_a_named_deferral() {
 }
 
 #[test]
-#[ignore = "R-166, gate P2"]
 fn r166_a_websocket_server_mock_is_a_named_deferral() {
     assert_check_refuses(
         "R-166-fake-websocket-server.rkg",

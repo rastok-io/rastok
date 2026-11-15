@@ -79,7 +79,12 @@ unencodable message ends the Session with `DecodeFailed` before it is sent.
 | all | `versions` | `array<http/1.1 \| http/2 \| http/3>` | `["http/3", "http/2", "http/1.1"]` | plan |
 | all | `zero_rtt` | `disabled` | `disabled` | plan |
 
-The Lab scripts Session opening, frames, writes and terminal outcomes through the Session model. This is protocol evidence without a socket, not physical handshake qualification. Input after a terminal may open a successor Session; old writes are not resent automatically.
+The Lab has an effectless Session binding, but authored WebSocket Session
+mocks are not executable. `rastok check` refuses a `mock` on this Connector
+with `E-CHECK-DEFERRED`; a declaration without a mock still checks. Driver
+tests cover Session opening, frames, writes and terminal outcomes separately.
+Input after a terminal may open a successor Session; old writes are not resent
+automatically.
 
 ## Qualification inventory
 
