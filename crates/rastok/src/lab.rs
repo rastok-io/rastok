@@ -1755,6 +1755,66 @@ mod tests {
     }
 
     #[test]
+    fn a_retry_mock_observes_its_attempt_time_relative_to_the_scenario_origin() {
+        let source = r#"
+graph app : App {
+  input in: text
+  output out: ProcessExit
+  connector job : Process + Retry {
+    command = "cat"; codec = lines; behavior = deterministic; idempotent = true
+    timeout = duration("5s")
+    Retry.attempts = 2
+    Retry.on = [TimeoutExpired]
+    Retry.delay = { kind = fixed; after = duration("10s") }
+  }
+  in -> job
+  job.out -> nothing
+  job.err -> nothing
+  job.exit -> out
+}
+lab attempts {
+  mock job {
+    on in where now() == timestamp("2026-01-01T12:00:00Z") { out = nothing }
+    on in where now() == timestamp("2026-01-01T12:00:15Z") {
+      exit = Exited { exit_code = 15, signal = null }
+    }
+    on in { exit = Exited { exit_code = 99, signal = null } }
+  }
+  scenario one_advance {
+    origin = timestamp("2026-01-01T12:00:00Z")
+    app.in = "request"
+    advance duration("20s")
+    expect app.out == Exited { exit_code = 15, signal = null }
+  }
+  scenario two_advances {
+    origin = timestamp("2026-01-01T12:00:00Z")
+    app.in = "request"
+    advance duration("5s")
+    advance duration("10s")
+    expect app.out == Exited { exit_code = 15, signal = null }
+  }
+}
+"#;
+        let compilation = compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
+        let runs = run_program(
+            &compilation.plan,
+            compilation.hash,
+            GraphVersion(1),
+            &compilation.labs[0],
+            None,
+        );
+        assert_eq!(runs.len(), 2);
+        for run in &runs {
+            assert!(run.report.passed(), "{:?}", run.report);
+        }
+        assert_eq!(
+            crate::golden::project(&runs[0].records),
+            crate::golden::project(&runs[1].records),
+            "stopping the advance at a timeout cannot change the causal result"
+        );
+    }
+
+    #[test]
     fn a_mock_carry_is_as_lazy_as_the_name_too() {
         // The mocks speak the handlers' language: `out = data` and
         // `val copy = data; out = copy` both ship the opaque

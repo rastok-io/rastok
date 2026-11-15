@@ -324,6 +324,9 @@ is `.` (`out = .`).
   its Call opens: it is delivered before virtual time moves to the next
   dated event of the same `advance`. One `advance duration("20s")` and
   four `advance duration("5s")` therefore give the same deliveries.
+  `now()` in a Call mock observes the civil timestamp `origin + logical
+  instant` at that opening. For a Retry attempt it is the timestamp of that
+  attempt, wherever the scenario's `advance` steps stop.
 
 `Process(service)` uses the same retained Session open/write/terminal fold as
 the real child. The initial input evaluates once and later inputs keep the

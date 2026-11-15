@@ -65,6 +65,9 @@ An uncovered request or mock evaluation fault fails the scenario.
 Mocks are request-driven and stateless. Call mocks can select responses from
 the request and `now()`: [Two tenants](../examples/03-two-tenants.md) selects
 silence for Alice at the epoch, then responds after the time advance.
+For each Call, including a Retry attempt, `now()` is the civil timestamp at
+that Call's opening: the scenario's origin plus its logical opening instant,
+not the target of the surrounding `advance` or the first attempt's time.
 There is no authored mock invocation counter.
 `now()` is unavailable in Session mock bodies. Mock metadata writes,
 multi-emission statements and Loop commands refuse.
