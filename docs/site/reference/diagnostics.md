@@ -120,7 +120,8 @@ Independent plan validation can also surface these semantic refusals.
 ## Plan
 
 `E-PLAN-DEPTH` also occurs at Check when an expression exceeds its
-128-level bound. Plan checks the combined serialized representation against
+128-level bound, measured on the resolved tree with compiler-added
+conversions included. Plan checks the combined serialized representation against
 the reader's separate 256-level bound, with the root at level zero.
 
 | Code | When it fires | What the author changes | Example message excerpt |
