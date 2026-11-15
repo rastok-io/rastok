@@ -230,7 +230,6 @@ fn r184_a_ternary_narrows_the_value_read_in_its_true_branch() {
 }
 
 #[test]
-#[ignore = "R-164, gate P2"]
 fn r164_one_advance_and_four_advances_deliver_the_same_mock_replies() {
     assert_scenarios_pass(
         "R-164-advance-and-fake.rkg",

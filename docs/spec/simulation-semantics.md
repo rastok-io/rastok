@@ -319,6 +319,11 @@ is `.` (`out = .`).
   `meta.sys` counter. A per-mock invocation counter remains an open point,
   admitted only if a real case demands it.
 - Sources need no mock (the fixture injects) ; only calling Connectors do.
+- **A mock reply belongs to the instant of its Call.** A mock answer
+  without `after` is part of the drain of the logical instant at which
+  its Call opens: it is delivered before virtual time moves to the next
+  dated event of the same `advance`. One `advance duration("20s")` and
+  four `advance duration("5s")` therefore give the same deliveries.
 
 `Process(service)` uses the same retained Session open/write/terminal fold as
 the real child. The initial input evaluates once and later inputs keep the

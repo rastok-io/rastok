@@ -80,6 +80,15 @@ impl TimeAdvance {
                     if execution.step_with_drivers(journal, drivers)? {
                         return Ok(true);
                     }
+                    // Calls opened by this instant's work can already have a
+                    // response. Settle it and drain its consequences before
+                    // moving to another deadline; never wait for external I/O.
+                    let report = execution.poll_outbound_driver(journal, drivers)?;
+                    let progressed = report.settled > 0;
+                    execution.buffered_poll.append(report);
+                    if progressed {
+                        return Ok(true);
+                    }
                     self.phase = Phase::Due;
                 }
                 Phase::Due => {

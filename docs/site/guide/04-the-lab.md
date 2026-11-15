@@ -117,9 +117,9 @@ flowchart LR
 ```
 
 Ready computations take no virtual time. The simulator processes due
-obligations in time order, including work they cause, then reaches the
-requested target. This tests a day-long timeline without sleeping for a
-day.
+obligations and their consequences in time order, then reaches the target.
+This includes settling ready mock replies before the next deadline, without
+another `advance` or real sleep.
 
 ## Inspect source
 

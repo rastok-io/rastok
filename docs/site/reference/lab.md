@@ -83,6 +83,9 @@ Time starts at logical zero; the default civil origin is the Unix epoch.
 The origin affects `now()` and conversion of epoch-aligned tumbling bounds,
 not the graph hash. An advance uses a constant duration and cannot move time
 backwards. Each action settles ready work before the next expectation.
+Ready mock replies settle at each Call's opening instant, before the next
+deadline, so one large advance and several smaller advances deliver the same
+responses.
 
 Injection targets are not arbitrary intermediate ports. Source injection
 models a decoded request, not malformed wire bytes or failed bearer

@@ -1477,6 +1477,10 @@ graph app : App {
             restored
                 .recover_with_drivers(&retained, &mut CallDriver(&mut resumed_world))
                 .unwrap();
+            assert!(
+                resumed_world.starts.is_empty(),
+                "recovery cannot repeat an effect"
+            );
             restored
                 .advance_to(
                     &mut retained,
@@ -1495,7 +1499,21 @@ graph app : App {
             }
             assert_eq!(restored.outputs(), execution.outputs());
             assert_eq!(resumed_world.preparations, 0);
-            assert!(resumed_world.starts.is_empty());
+            let new_calls: Vec<_> = retained.records()[cut..]
+                .iter()
+                .filter_map(|record| match record {
+                    Record::Egress(EgressRecord::Call(call))
+                        if call.status == rastok::journal::CallStatus::Open =>
+                    {
+                        Some(call.intent.clone())
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                resumed_world.starts, new_calls,
+                "only newly opened attempts start"
+            );
             assert_eq!(
                 resumed_world.cancellations.len(),
                 usize::from(!already_closed),
@@ -1658,6 +1676,10 @@ graph app : App {
                 restored
                     .recover_with_drivers(&retained, &mut CallDriver(&mut resumed_world))
                     .unwrap();
+                assert!(
+                    resumed_world.starts.is_empty(),
+                    "recovery cannot repeat an effect"
+                );
                 restored
                     .advance_to(
                         &mut retained,
@@ -1676,7 +1698,21 @@ graph app : App {
                 }
                 assert_eq!(restored.outputs(), execution.outputs());
                 assert_eq!(resumed_world.preparations, 0);
-                assert!(resumed_world.starts.is_empty());
+                let new_calls: Vec<_> = retained.records()[cut..]
+                    .iter()
+                    .filter_map(|record| match record {
+                        Record::Egress(EgressRecord::Call(call))
+                            if call.status == rastok::journal::CallStatus::Open =>
+                        {
+                            Some(call.intent.clone())
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(
+                    resumed_world.starts, new_calls,
+                    "only newly opened attempts start"
+                );
                 assert!(resumed_world.cancellations.is_empty());
             }
         }
@@ -1788,8 +1824,21 @@ graph app : App {{
             }
             assert_eq!(
                 world.starts.len(),
-                2,
-                "settlement does not start another effect"
+                3,
+                "the two initial calls and the new Retry attempt start"
+            );
+            assert_eq!(
+                world
+                    .starts
+                    .iter()
+                    .filter(|call| call.connector_path.to_string() == "stopped")
+                    .count(),
+                1,
+                "settlement cannot restart the closing Call"
+            );
+            assert_eq!(
+                world.starts.last().unwrap().logical_time,
+                rastok::time::LogicalTime::from_nanoseconds(due)
             );
 
             for (cut, resume_at) in std::iter::once((before, 0))
@@ -1818,6 +1867,10 @@ graph app : App {{
                     resumed_world.cancellations.is_empty(),
                     "reconstruction has no effects"
                 );
+                assert!(
+                    resumed_world.starts.is_empty(),
+                    "recovery cannot repeat an effect"
+                );
                 restored
                     .advance_to(
                         &mut retained,
@@ -1836,7 +1889,21 @@ graph app : App {{
                 }
                 assert_eq!(restored.outputs(), execution.outputs());
                 assert_eq!(resumed_world.preparations, 0);
-                assert!(resumed_world.starts.is_empty());
+                let new_calls: Vec<_> = retained.records()[cut..]
+                    .iter()
+                    .filter_map(|record| match record {
+                        Record::Egress(EgressRecord::Call(call))
+                            if call.status == rastok::journal::CallStatus::Open =>
+                        {
+                            Some(call.intent.clone())
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(
+                    resumed_world.starts, new_calls,
+                    "only newly opened attempts start"
+                );
             }
         }
     }
