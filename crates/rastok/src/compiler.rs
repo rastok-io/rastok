@@ -11,6 +11,7 @@
 pub mod check;
 mod constants;
 pub mod hir;
+mod join_warnings;
 mod json_requests;
 pub mod lexer;
 pub mod lower;
@@ -325,6 +326,7 @@ pub fn compile_with_assets(
     if bag.has_errors() {
         return Err(bag);
     }
+    join_warnings::check(&plan, &mut bag);
     match plan.loop_repeat_warnings() {
         Ok(warnings) => {
             for warning in warnings {

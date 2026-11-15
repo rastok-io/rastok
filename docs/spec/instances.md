@@ -697,6 +697,17 @@ quiescent for `drain`/Lab stability until another arrival, a `last` overflow,
 or its dated `within` event makes a transaction runnable. Retention never
 creates another address, generation, or shard key.
 
+When a presence join is fed by the frames and the terminal of one Call,
+pairing is not proven by arrival order alone. The checker compares, for
+every terminal case of the Contract, what each joined input receives:
+all exactly one delivery, or all none. Any other case leaves a lone
+delivery that can pair with another Call; check reports it with
+`W-JOIN-UNPAIRED`. A frame port declared zero-or-more never pairs. The
+warning is not raised when the joining Operator declares an instance key
+and the join is bounded by `within` or `last`: each Call then owns its
+instance, and a lone delivery leaves through `expired`. A bound without
+a key does not separate Calls.
+
 ## 9. Placement and shards
 
 Every keyed owner is a logical routing boundary. Its address is hierarchical,

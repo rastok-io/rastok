@@ -438,7 +438,6 @@ fn assert_unpaired_join_warning(file: &str, details: &[&str], simulation: &str) 
 }
 
 #[test]
-#[ignore = "R-169, gate P3"]
 fn r169_http_join_warns_when_a_frame_outlives_its_unrouted_terminal() {
     assert_unpaired_join_warning(
         "R-169-join-http.rkg",
@@ -454,7 +453,6 @@ fn r169_http_join_warns_when_a_frame_outlives_its_unrouted_terminal() {
 }
 
 #[test]
-#[ignore = "R-169, gate P3"]
 fn r169_process_join_warns_when_frames_do_not_pair_with_one_exit() {
     assert_unpaired_join_warning(
         "R-169-join-process.rkg",
@@ -470,7 +468,6 @@ fn r169_process_join_warns_when_frames_do_not_pair_with_one_exit() {
 }
 
 #[test]
-#[ignore = "R-169, gate P3"]
 fn r169_a_join_bound_without_an_instance_key_does_not_prove_pairing() {
     assert_unpaired_join_warning(
         "R-169-join-bounded-no-key.rkg",
