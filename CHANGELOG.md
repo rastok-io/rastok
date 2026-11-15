@@ -9,7 +9,10 @@
   destination, never another port selected from its declarations.
 - Materialize values narrowed by positive `is` tests in conjunctions,
   conditionals, guarded handlers and guarded match arms, so execution yields
-  the value whose type was checked.
+  the value whose type was checked. Assigning a state cell ends its narrowing
+  facts for subsequent statements. The inserted conversion changes the semantic
+  hash of a program that reads a narrowed value; existing causal reference traces
+  remain comparable.
 - Refuse known producer types without a JSON form at JSON-encoding Connector
   inputs; `variant` payloads retain each Contract's runtime checks and refusals.
 - Detect tagged unions in resident Process JSON frames before execution;
