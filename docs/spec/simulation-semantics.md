@@ -337,6 +337,10 @@ the real child. The initial input evaluates once and later inputs keep the
 resource. A pending terminal cannot overtake earlier frames. `now()` is not
 available in Session mock bodies: the write intent has no exact retained
 firing time, and an epoch or wall-clock substitute would invent a fact.
+A ready Session mock reply is admitted and its consequences drained at the
+logical instant of the input it answers, before the next dated event. One
+large advance and smaller advances therefore handle those replies at the
+same instants, including downstream handlers that observe `now()`.
 Unsolicited/delayed service-world actions and system-close acknowledgement
 scripts remain named limits. An input such as `quit` can have an explicit
 mock `Exited` answer; otherwise a silent system close settles unknown under

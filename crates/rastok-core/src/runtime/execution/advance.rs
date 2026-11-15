@@ -3,9 +3,10 @@
 use super::{ClosingDeadline, Execution, ExecutionFault, Journal, Obligation, OutboundDrivers};
 
 /// An in-progress advance on one Execution. This is a caller-owned control cursor,
-/// not a journal fact or a second timer queue. Do not interleave other Execution
-/// commands until it completes. Batch and interactive execution use this same
-/// sweep, including the settlement poll and same-instant expiry ordering.
+/// not a journal fact or a second timer queue. Only [`Self::poll_ingress`] may
+/// admit input between its steps; do not interleave other Execution commands.
+/// Batch and interactive execution use this same sweep, including the settlement
+/// poll and same-instant expiry ordering.
 #[derive(Debug)]
 pub struct TimeAdvance {
     target: crate::time::LogicalTime,
@@ -18,6 +19,7 @@ pub struct TimeAdvance {
 #[derive(Debug)]
 enum Phase {
     Ready,
+    Ingress,
     Due,
     Settlement {
         key: (crate::time::LogicalTime, u64),
@@ -47,6 +49,32 @@ impl TimeAdvance {
     #[must_use]
     pub const fn is_complete(&self) -> bool {
         matches!(self.phase, Phase::Done)
+    }
+
+    /// Whether the last step yielded for an optional ingress poll. This yield
+    /// alone is not an observable execution transition.
+    #[must_use]
+    pub const fn can_poll_ingress(&self) -> bool {
+        matches!(self.phase, Phase::Ingress)
+    }
+
+    /// Polls host-owned ingress after ready work and outbound acknowledgements
+    /// have drained, before moving to the next dated frontier. Call between
+    /// [`Self::advance_once`] steps; at every other phase the closure is unused.
+    ///
+    /// The poll must not wait for external I/O. Return true only for progress,
+    /// not a pending proposal, so its consequences drain at the current instant.
+    /// Callers without an ingress source can omit this poll.
+    ///
+    /// # Errors
+    /// A poll refusal leaves this admission point available for retry.
+    pub fn poll_ingress<E>(&mut self, poll: impl FnOnce() -> Result<bool, E>) -> Result<bool, E> {
+        if !self.can_poll_ingress() {
+            return Ok(false);
+        }
+        let progressed = poll()?;
+        self.phase = if progressed { Phase::Ready } else { Phase::Due };
+        Ok(progressed)
     }
 
     /// Executes one ready transaction, one expiry, or one boundary poll.
@@ -89,6 +117,14 @@ impl TimeAdvance {
                     if progressed {
                         return Ok(true);
                     }
+                    // Session frames enter through the host's inbound role,
+                    // not the outbound poll above. Yield only after the whole
+                    // instant drains, never between same-instant expiries.
+                    self.phase = Phase::Ingress;
+                    return Ok(true);
+                }
+                Phase::Ingress => {
+                    // An outbound-only caller has no ingress poll to supply.
                     self.phase = Phase::Due;
                 }
                 Phase::Due => {

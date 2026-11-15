@@ -1,0 +1,98 @@
+// R-164 — A Session mock still answers at the end of an advance
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-164-session-mock-in-one-advance.rkg
+//   rastok simulate R-164-session-mock-in-one-advance.rkg
+//
+// Today:
+//   $ rastok check R-164-session-mock-in-one-advance.rkg
+//   ok: 5 node(s), semantic hash 62908872021da3305c1221a924e99d8774b1ce16e35674a8c0bdc627b4970a4d
+//   $ rastok simulate R-164-session-mock-in-one-advance.rkg
+//   FAIL session.one_advance
+//        observed app.seen: {"at":{"kind":"timestamp","nanoseconds":0,"seconds_since_epoch":"20"},"tick":1}
+//        observed app.seen: {"at":{"kind":"timestamp","nanoseconds":0,"seconds_since_epoch":"20"},"tick":2}
+//        observed app.seen: {"at":{"kind":"timestamp","nanoseconds":0,"seconds_since_epoch":"20"},"tick":3}
+//        observed app.seen: {"at":{"kind":"timestamp","nanoseconds":0,"seconds_since_epoch":"20"},"tick":4}
+//   PASS session.four_advances
+//   2 scenario(s), 1 failed
+//
+// Expected after the fix:
+//   Both scenarios pass. The reply of a resident Process mock is handled at the
+//   logical instant of the frame it answers (5s, 10s, 15s, 20s), in one advance
+//   of 20 seconds as in four advances of 5 seconds.
+
+type Clock = struct { tick: int }
+type Ask = struct { tick: int }
+type Line = struct { tick: int }
+type Seen = struct { tick: int, at: timestamp }
+graph app : App {
+  input start: Clock
+  output seen: Seen
+  operator clock : Loop {
+    input in: Clock
+    output tick: Clock
+    output err: union { LoopExpired { last_state: Clock } }
+    Loop.fuel = 10
+    Loop.delay = { kind = fixed; after = duration("5s") }
+    on in match {
+      data.tick == 0 => Loop.next = { tick = 1 }
+      _ => {
+        tick = data
+        Loop.next = { tick = data.tick + 1 }
+      }
+    }
+  }
+  operator ask {
+    input in: Clock
+    output out: Ask
+    on in { out = { tick = data.tick } }
+  }
+  connector agent : Process {
+    mode = service
+    command = "cat"
+    args = []
+    codec = jsonl
+    max_frame = "1MiB"
+    behavior = probabilistic
+  }
+  operator stamp {
+    input in: variant
+    output out: Seen
+    on in match {
+      data is Line => out = { tick = data.tick; at = now() }
+      _ => out = { tick = -1; at = now() }
+    }
+  }
+  start -> clock
+  clock.tick -> ask -> agent
+  clock.err -> nothing
+  agent.out -> stamp -> seen
+  agent.err -> nothing
+  agent.exit -> nothing
+}
+lab session {
+  mock agent {
+    on in where data is Ask { out = { tick = data.tick } }
+    on in { out = { tick = -1 } }
+  }
+  scenario one_advance {
+    app.start = { tick = 0 }
+    advance duration("20s")
+    expect app.seen where data.tick == 1 && data.at == timestamp("1970-01-01T00:00:05Z")
+    expect app.seen where data.tick == 2 && data.at == timestamp("1970-01-01T00:00:10Z")
+    expect app.seen where data.tick == 3 && data.at == timestamp("1970-01-01T00:00:15Z")
+    expect app.seen where data.tick == 4 && data.at == timestamp("1970-01-01T00:00:20Z")
+  }
+  scenario four_advances {
+    app.start = { tick = 0 }
+    advance duration("5s")
+    expect app.seen where data.tick == 1 && data.at == timestamp("1970-01-01T00:00:05Z")
+    advance duration("5s")
+    expect app.seen where data.tick == 2 && data.at == timestamp("1970-01-01T00:00:10Z")
+    advance duration("5s")
+    expect app.seen where data.tick == 3 && data.at == timestamp("1970-01-01T00:00:15Z")
+    advance duration("5s")
+    expect app.seen where data.tick == 4 && data.at == timestamp("1970-01-01T00:00:20Z")
+  }
+}

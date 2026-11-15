@@ -117,9 +117,9 @@ flowchart LR
 ```
 
 Ready computations take no virtual time. The simulator processes due
-obligations and their consequences in time order, then reaches the target.
-This includes settling ready mock replies before the next deadline, without
-another `advance` or real sleep.
+obligations in order, settling Call and resident Process Session mock
+replies and their consequences before the next deadline, without another
+`advance` or real sleep.
 
 ## Inspect source
 

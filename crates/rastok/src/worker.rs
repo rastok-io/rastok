@@ -247,11 +247,20 @@ impl<'plan> Worker<'plan> {
     }
 
     /// Advances one transition of the Lab's suspended logical-time action.
-    pub(crate) fn advance_once(
-        &mut self,
-        advance: &mut TimeAdvance,
-    ) -> Result<bool, ExecutionFault> {
-        advance.advance_once(&mut self.execution, &mut self.journal, &mut self.drivers)
+    pub(crate) fn advance_once(&mut self, advance: &mut TimeAdvance) -> Result<bool, Error> {
+        loop {
+            if advance.poll_ingress(|| self.poll_inbound())? {
+                return Ok(true);
+            }
+            let progressed = advance
+                .advance_once(&mut self.execution, &mut self.journal, &mut self.drivers)
+                .map_err(Error::Step)?;
+            // The debugger counts returned transitions. An empty ingress
+            // poll must not create a step with no visible change.
+            if !advance.can_poll_ingress() {
+                return Ok(progressed);
+            }
+        }
     }
 
     /// Performs at most one ready execution step, without polling the world.
