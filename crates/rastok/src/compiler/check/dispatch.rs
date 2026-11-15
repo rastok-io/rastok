@@ -1463,15 +1463,12 @@ pub(super) fn closed_arm_signature(
     scrutinee: &expr::Tree,
     cases: &[String],
 ) -> expr::Signature {
-    let is_data =
-        matches!(&scrutinee.root, expr::Expr::Path(path) if path.len() == 1 && path[0] == "data");
-    if !is_data {
-        return signature.clone();
-    }
     let Ok(narrowed) = super::routing::narrowed_route_type(&scrutinee.ty, cases) else {
         return signature.clone();
     };
-    signature.clone().with("data", narrowed)
+    signature
+        .clone()
+        .with_selected_cases(&scrutinee.root, narrowed)
 }
 
 pub(super) fn dispatch_depth(dispatch: &Dispatch) -> usize {

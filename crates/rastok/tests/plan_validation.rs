@@ -2298,6 +2298,40 @@ lab tests {{ scenario counts_only_ok {{
 }
 
 #[test]
+fn a_precise_result_claim_cannot_replace_a_missing_narrowing_fact() {
+    let source = r#"
+graph app : App {
+  input in: variant
+  output out: variant
+  operator emit {
+    input in: variant
+    output out: variant
+    on in { out = "fixed" }
+  }
+  in -> emit -> out
+}
+"#;
+    let mut raw = compile(&[source], &ContractCatalog::try_m0().unwrap())
+        .unwrap()
+        .plan
+        .into_inner();
+    let DispatchStep::Emit { value, .. } =
+        &mut linear_statements(&mut operator_handlers(&mut raw, 1)[0])[0]
+    else {
+        panic!("one emission")
+    };
+    *value = plan::EmitValue::Data(expr::Tree {
+        root: expr::Expr::Path(vec!["data".into()]),
+        ty: DataType::Text,
+    });
+    let result = ValidatedExecutionPlan::try_new(raw);
+    assert!(
+        matches!(result, Err(PlanValidationError::InvalidDispatch { .. })),
+        "{result:?}"
+    );
+}
+
+#[test]
 fn an_unsorted_map_literal_is_not_canonical() {
     // The parser construction-sorts map literals; a raw plan carrying
     // an unsorted one is a second byte form of the same expression —

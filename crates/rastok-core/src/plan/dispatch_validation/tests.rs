@@ -172,6 +172,71 @@ fn closed_arms_preserve_the_selected_union_instead_of_unwrapping_data() {
 }
 
 #[test]
+fn closed_match_members_require_the_selected_case() {
+    let signature = Signature::new().with("data", outcome());
+    let mut dispatch = closed(tree("data", &signature), &["Failed", "Ready"]);
+    let Dispatch::ClosedMatch { arms, .. } = &mut dispatch else {
+        unreachable!()
+    };
+    *arms[0].dispatch = Dispatch::Linear(vec![emit(Tree {
+        root: Expr::Path(vec!["data".into(), "reason".into()]),
+        ty: DataType::Text,
+    })]);
+    *arms[1].dispatch = Dispatch::Linear(vec![emit(Tree {
+        root: Expr::Path(vec!["data".into(), "count".into()]),
+        ty: DataType::INT,
+    })]);
+    assert_eq!(validate_dispatch(&dispatch, &signature), Ok(()));
+    let Dispatch::ClosedMatch { arms, .. } = &mut dispatch else {
+        unreachable!()
+    };
+    arms[0].dispatch = arms[1].dispatch.clone();
+    assert_refusal(
+        &dispatch,
+        &signature,
+        "dispatch.arms[0].linear[0].value",
+        DispatchErrorKind::Expression,
+    );
+}
+
+#[test]
+fn a_state_write_ends_a_closed_match_selection_in_a_transported_plan() {
+    let signature = Signature::new()
+        .with("previous", outcome())
+        .with("replacement", outcome());
+    let mut dispatch = closed(tree("previous", &signature), &["Failed", "Ready"]);
+    let member = Tree {
+        root: Expr::Path(vec!["previous".into(), "reason".into()]),
+        ty: DataType::Text,
+    };
+    let Dispatch::ClosedMatch { arms, .. } = &mut dispatch else {
+        unreachable!()
+    };
+    *arms[0].dispatch = Dispatch::Linear(vec![
+        emit(member.clone()),
+        DispatchStep::SetVar {
+            name: "previous".into(),
+            value: tree("replacement", &signature),
+        },
+        emit(tree("previous", &signature)),
+    ]);
+    assert_eq!(validate_dispatch(&dispatch, &signature), Ok(()));
+    let Dispatch::ClosedMatch { arms, .. } = &mut dispatch else {
+        unreachable!()
+    };
+    let Dispatch::Linear(steps) = arms[0].dispatch.as_mut() else {
+        unreachable!()
+    };
+    steps[2] = emit(member);
+    assert_refusal(
+        &dispatch,
+        &signature,
+        "dispatch.arms[0].linear[2].value",
+        DispatchErrorKind::Expression,
+    );
+}
+
+#[test]
 fn true_facts_narrow_only_the_selected_open_arm() {
     let signature = Signature::new().with("data", outcome());
     let predicate = tree("data is Ready", &signature);

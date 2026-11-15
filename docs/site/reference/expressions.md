@@ -79,7 +79,7 @@ number or another narrower type. The receiver still has to be evaluable.
 |---|---|---|
 | `value is T` | Tests a type or tagged case | A positive fact narrows the right side of `&&`, a conditional's true branch, a guarded handler or a guarded match arm; the narrowed value can be used directly, without repeating `as T`. Assigning its state cell or the cell containing its path ends the fact for subsequent statements, which see the declared type again |
 | `value as T` | Checked conversion | Exactly one structural-union branch must match; decimals rescale only exactly |
-| `match value { Case => ... }` | Closed match | Tagged union, enum or bool; exhaustive, disjoint case sets |
+| `match value { Case => ... }` | Closed match | Tagged union, enum or bool; exhaustive, disjoint case sets. A single-case arm exposes the matched path's payload fields; the whole value keeps its case |
 | `match { predicate => ...; _ => ... }` | Ordered predicates | First true predicate wins; fallback is mandatory |
 | `on in where predicate { ... }` | Single-input filter | False consumes the input and emits nothing |
 | `on (a, b) where predicate ...` | Join candidate selection | False consumes nothing; bounded waiting is covered in [Instances, state and time](../guide/06-instances-state-and-time.md) |
@@ -89,6 +89,11 @@ declarations precede it. Dispatch permits at most 32 nested decisions,
 including a single-port `where`. A `variant` must be narrowed before member
 or index access. A negative test or disjunction supplies no inferred positive
 type fact.
+
+Inside `Stored => { ... }`, a match on `data` permits `data.name` when
+`Stored` declares that field. `out = data` and `out = .` still emit the
+complete `Stored { ... }` value. Several cases in one arm do not expose
+case-specific fields. Assigning the matched state cell ends the selection.
 
 Route selection is separate: `source -> match { Case -> target }` chooses
 among declared destinations using a tag, enum or bool. Its arms contain

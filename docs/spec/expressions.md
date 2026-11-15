@@ -282,6 +282,14 @@ starts with, ends the fact for the statements that follow, whatever
 value is assigned. A later read sees the declared type again. Check and
 execution cannot disagree on a narrowed read.
 
+A closed `match` over a tagged union keeps the selected value tagged. In an
+arm selecting one case, member reads on the matched path expose that case's
+payload fields, while reading the whole path or emitting `.` preserves the
+case and its payload. An arm selecting several cases exposes no case-specific
+fields, and a computed scrutinee has no path to select. A matched `val` follows
+the same rule. Writing the matched state cell, or the cell containing that
+path, ends the selection for subsequent statements.
+
 Named aliases are expanded before entering the tree, so alias spelling is
 not identity. The plan serializes the resolved target and any explicit external
 discriminator; it never serializes an alias name or a compiler inference
