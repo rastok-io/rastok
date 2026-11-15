@@ -329,7 +329,6 @@ fn r139_mock_secrets_require_a_profile_and_name_missing_environment_values() {
 }
 
 #[test]
-#[ignore = "R-002, gate P3"]
 fn r002_bare_enum_symbols_use_the_expected_type() {
     assert_scenarios_pass("R-002-enum-value.rkg", &["r002.an_enum_value_is_written"]);
 }

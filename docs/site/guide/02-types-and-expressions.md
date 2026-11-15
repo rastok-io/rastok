@@ -38,11 +38,11 @@ signed 32-bit type, not a machine-dependent integer. The annotation on
 `email` adds personal-data policy metadata; it does not change `text` into
 a second payload type. Running for real returns to that policy later.
 
-Named type declarations are structural aliases. The checked field shape
-matters, not the alias spelling. A tagged union is different: its case
-names, such as File's `Completed` and `NotFound`, select observable outcomes.
-Use the existing declarations as the starting point, not an assumption
-that every pair of JSON-looking objects is interchangeable.
+Named type declarations are structural aliases: their checked shape matters,
+not their name. Tagged-union case names remain part of the value. For
+`enum { Pending, Cancelled }`, write `out = Cancelled` where that enum is
+expected, or compare `data.status == Cancelled`. A conflicting variable name
+is refused.
 
 Types such as `FileExit` and `ProcessExit` come from the standard library;
 use them without copying their declarations or importing them. The

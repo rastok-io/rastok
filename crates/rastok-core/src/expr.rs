@@ -985,6 +985,28 @@ pub enum Function {
 /// Returns every diagnostic found; an erroneous expression never
 /// produces a tree.
 pub fn compile(text: &str, signature: &Signature) -> Result<Tree, Vec<Diagnostic>> {
+    compile_contextual(text, signature, None)
+}
+
+/// Compiles an expression in a position with a declared expected type.
+/// Enum symbols are values only in this context or opposite an enum operand
+/// of `==` / `!=`; they never become visible bindings.
+///
+/// # Errors
+/// Returns expression diagnostics, including ambiguous enum symbols.
+pub fn compile_with_expected_type(
+    text: &str,
+    signature: &Signature,
+    expected: &DataType,
+) -> Result<Tree, Vec<Diagnostic>> {
+    compile_contextual(text, signature, Some(expected))
+}
+
+fn compile_contextual(
+    text: &str,
+    signature: &Signature,
+    expected: Option<&DataType>,
+) -> Result<Tree, Vec<Diagnostic>> {
     let tokens = lex(text)?;
     let mut parser = ExprParser {
         tokens: &tokens,
@@ -1019,6 +1041,8 @@ pub fn compile(text: &str, signature: &Signature) -> Result<Tree, Vec<Diagnostic
             range: token.range.clone(),
         }]);
     }
+    resolve_enum_symbols(&mut root, signature, expected, text)
+        .map_err(|diagnostic| vec![diagnostic])?;
     let ty = check(&root, signature, text).map_err(|diagnostic| vec![diagnostic])?;
     resolve_narrowed_reads(&mut root, signature);
     // Resolved conversions also spend the transported expression budget.
@@ -1034,6 +1058,86 @@ pub fn compile(text: &str, signature: &Signature) -> Result<Tree, Vec<Diagnostic
         }]);
     }
     Ok(Tree { root, ty })
+}
+
+// Resolve source symbols before ordinary type checking. The existing literal
+// and conversion nodes carry the enum type through independent plan validation.
+fn resolve_enum_symbols(
+    expr: &mut Expr,
+    signature: &Signature,
+    expected: Option<&DataType>,
+    text: &str,
+) -> Result<(), Diagnostic> {
+    match expr {
+        Expr::Path(path) => {
+            if let [symbol] = path.as_slice()
+                && let Some(DataType::Enum(enumeration)) = expected
+                && enumeration.symbols().contains(symbol)
+            {
+                if signature.get(symbol).is_some() {
+                    return Err(Diagnostic {
+                        kind: DiagnosticKind::General,
+                        message: format!(
+                            "`{symbol}` is both a visible binding and a symbol of the expected enum; rename the binding"
+                        ),
+                        range: 0..text.len(),
+                    });
+                }
+                *expr = Expr::As {
+                    expr: Box::new(Expr::Literal(Value::Enum(symbol.clone()))),
+                    target: Box::new(NarrowTarget::Type(Box::new(NarrowType::new(
+                        DataType::Enum(enumeration.clone()),
+                    )))),
+                };
+            }
+        }
+        Expr::Binary { op, left, right } => {
+            let comparison = matches!(op, BinaryOp::Eq | BinaryOp::Ne);
+            let right_type = comparison
+                .then(|| check(right, signature, text).ok())
+                .flatten();
+            resolve_enum_symbols(left, signature, right_type.as_ref(), text)?;
+            let narrowed;
+            let right_signature = if *op == BinaryOp::And {
+                narrowed = signature.narrowed_by(left);
+                &narrowed
+            } else {
+                signature
+            };
+            let left_type = comparison
+                .then(|| check(left, signature, text).ok())
+                .flatten();
+            resolve_enum_symbols(right, right_signature, left_type.as_ref(), text)?;
+        }
+        Expr::Ternary {
+            cond,
+            then,
+            otherwise,
+        } => {
+            resolve_enum_symbols(cond, signature, None, text)?;
+            resolve_enum_symbols(then, &signature.narrowed_by(cond), expected, text)?;
+            resolve_enum_symbols(otherwise, signature, expected, text)?;
+        }
+        Expr::Unary { expr, .. } | Expr::Is { expr, .. } | Expr::As { expr, .. } => {
+            resolve_enum_symbols(expr, signature, None, text)?;
+        }
+        Expr::Index { base, index } => {
+            resolve_enum_symbols(base, signature, None, text)?;
+            resolve_enum_symbols(index, signature, None, text)?;
+        }
+        Expr::Call { args, .. } | Expr::List(args) => {
+            for arg in args {
+                resolve_enum_symbols(arg, signature, None, text)?;
+            }
+        }
+        Expr::MapLit(fields) | Expr::Struct(fields) | Expr::Tagged { fields, .. } => {
+            for (_, value) in fields {
+                resolve_enum_symbols(value, signature, None, text)?;
+            }
+        }
+        Expr::Literal(_) | Expr::Asset(_) => {}
+    }
+    Ok(())
 }
 
 /// Member access already exposes a selected payload's fields. Whole-path

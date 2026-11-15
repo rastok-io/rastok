@@ -163,6 +163,13 @@ it does not make unrelated fields dynamically typed.
   must have a total canonical representation.
 - `array<T>` is an ordered homogeneous sequence.
 - `enum` is a closed set of named unit cases.
+  An enum value is written as its bare symbol, in a position whose expected
+  type is that enum: a struct field, a port, a state cell, or the other
+  operand of `==` / `!=` against an enum value. Lab injections,
+  expectation values and mock outputs follow the same rule. The symbol
+  introduces no binding and is not an expression name elsewhere. If a
+  visible binding has the same spelling as a symbol of the expected enum,
+  the program refuses at check; it never chooses silently.
 - A **structural union** (`A | B`) selects one pairwise-disjoint logical
   branch from the value's type. `T?` is the optional spelling built from
   `T` and `null`.

@@ -601,7 +601,7 @@ impl Checker<'_, '_> {
     /// Compiles one Rastok expression span, adapting native diagnostics onto the
     /// source with offset-mapped spans.
     fn expr(&mut self, expr: &ExprSource, signature: &expr::Signature) -> Option<expr::Tree> {
-        self.expr_with_asset_policy(expr, signature, false)
+        self.expr_with_asset_policy(expr, signature, false, None)
             .and_then(|(tree, _)| self.inline_unit_constants(tree, signature, expr.span))
     }
 
@@ -612,8 +612,9 @@ impl Checker<'_, '_> {
         &mut self,
         expr: &ExprSource,
         signature: &expr::Signature,
+        expected: Option<&DataType>,
     ) -> Option<(expr::Tree, Option<String>)> {
-        self.expr_with_asset_policy(expr, signature, true)
+        self.expr_with_asset_policy(expr, signature, true, expected)
             .and_then(|(tree, content_type)| {
                 self.inline_unit_constants(tree, signature, expr.span)
                     .map(|tree| (tree, content_type))
@@ -638,6 +639,7 @@ impl Checker<'_, '_> {
         source: &ExprSource,
         signature: &expr::Signature,
         allow_root_content_type: bool,
+        expected: Option<&DataType>,
     ) -> Option<(expr::Tree, Option<String>)> {
         let signature = self.unit_signature(signature);
         let signature = self
@@ -647,7 +649,11 @@ impl Checker<'_, '_> {
             .fold(signature, |signature, (name, ty)| {
                 signature.with_type(name.clone(), ty.clone())
             });
-        match expr::compile(&source.text, &signature) {
+        let compiled = match expected {
+            Some(expected) => expr::compile_with_expected_type(&source.text, &signature, expected),
+            None => expr::compile(&source.text, &signature),
+        };
+        match compiled {
             Ok(mut tree) => {
                 let (root, content_type) =
                     self.bind_asset_calls(tree.root, source.span, allow_root_content_type)?;
@@ -6263,7 +6269,7 @@ impl Checker<'_, '_> {
 
     /// Compiles one host value under an optional logical expectation. This is
     /// the single contextual-construction entry point used by ports, state
-    /// and case fields; ordinary expression parsing remains context-free.
+    /// and case fields, including context-dependent enum symbols.
     fn typed_value_tree(
         &mut self,
         value: &SynValue,
@@ -6273,6 +6279,9 @@ impl Checker<'_, '_> {
         place: &str,
     ) -> Option<expr::Tree> {
         let tree = match value {
+            SynValue::Expr(source) => self
+                .expr_with_asset_policy(source, signature, false, expected)
+                .and_then(|(tree, _)| self.inline_unit_constants(tree, signature, source.span))?,
             SynValue::Tagged { case, body } => {
                 return self.tagged_value_tree(case, body, signature, expected, span, place);
             }
@@ -6995,7 +7004,7 @@ impl Checker<'_, '_> {
                 .typed_value_tree(value, signature, expected, at, port_name)
                 .map(EmitValue::Data),
             SynValue::Expr(expr) => {
-                let (tree, content_type) = self.payload_expr(expr, signature)?;
+                let (tree, content_type) = self.payload_expr(expr, signature, expected)?;
                 let tree = match expected {
                     Some(expected) => {
                         self.contextualize_tree(tree, expected, expr.span, port_name)?
@@ -7276,7 +7285,7 @@ impl Checker<'_, '_> {
                         SynValue::Expr(expr) => {
                             let whole_data = matches!(&target, crate::envelope::WriteTarget::Data(path) if path.is_empty());
                             let compiled = if whole_data {
-                                self.payload_expr(expr, signature)
+                                self.payload_expr(expr, signature, None)
                             } else {
                                 self.expr(expr, signature).map(|tree| (tree, None))
                             };
