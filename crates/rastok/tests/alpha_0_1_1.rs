@@ -241,7 +241,6 @@ fn r164_one_advance_and_four_advances_deliver_the_same_mock_replies() {
 }
 
 #[test]
-#[ignore = "R-088, gate P2"]
 fn r088_a_retry_mock_observes_the_opening_time_of_its_attempt() {
     assert_scenarios_pass(
         "R-088-stale-now-in-a-fake.rkg",
