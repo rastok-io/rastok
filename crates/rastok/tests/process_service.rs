@@ -91,6 +91,62 @@ fn resident_mock_keeps_one_session_across_writes() {
 }
 
 #[test]
+fn resident_mock_time_and_history_do_not_depend_on_advance_or_step_controls() {
+    use rastok::{golden, lab::Simulator, plan::GraphVersion};
+
+    let source = include_str!("fixtures/alpha_0_1_1/R-164-session-mock-in-one-advance.rkg");
+    let compilation = compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
+    let lab = &compilation.labs[0];
+    let batched = rastok::lab::run(&compilation.plan, GraphVersion(1), lab);
+    assert_eq!(batched.len(), 2);
+    for run in &batched {
+        assert!(run.report.passed(), "{:?}", run.report);
+    }
+    assert_eq!(
+        golden::project(&batched[0].records),
+        golden::project(&batched[1].records),
+        "one advance and four advances retain the same causal history"
+    );
+
+    let simulation = &lab.simulations[0];
+    for (scenario, expected) in simulation.scenarios.iter().zip(batched) {
+        let mut interactive = Simulator::try_new(
+            &compilation.plan,
+            GraphVersion(1),
+            &simulation.name,
+            &simulation.mocks,
+            scenario,
+            None,
+        )
+        .unwrap();
+        let mut steps = 0;
+        while !interactive.is_complete() {
+            if interactive.is_quiescent() {
+                interactive.next_action().unwrap();
+            } else {
+                let records = interactive.journal().records().len();
+                let now = interactive.execution().logical_time();
+                let progressed = interactive.step_transaction().unwrap();
+                assert!(
+                    !progressed
+                        || interactive.journal().records().len() != records
+                        || interactive.execution().logical_time() != now,
+                    "an internal polling pause is not a debugger transition"
+                );
+            }
+            steps += 1;
+            assert!(steps < 512, "a finite script must finish");
+        }
+        assert_eq!(
+            interactive.finish(),
+            expected,
+            "stepping preserves every record of {}",
+            scenario.name
+        );
+    }
+}
+
+#[test]
 fn gallery_keeps_alice_and_bob_resources_separate_and_reopens_only_on_input() {
     use rastok::journal::{EgressRecord, Record, SessionStatus};
     let compilation = compile(

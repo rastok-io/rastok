@@ -230,6 +230,14 @@ fn r184_a_ternary_narrows_the_value_read_in_its_true_branch() {
 }
 
 #[test]
+fn r164_one_advance_and_four_advances_deliver_session_replies_at_the_same_instants() {
+    assert_scenarios_pass(
+        "R-164-session-mock-in-one-advance.rkg",
+        &["session.one_advance", "session.four_advances"],
+    );
+}
+
+#[test]
 fn r164_one_advance_and_four_advances_deliver_the_same_mock_replies() {
     assert_scenarios_pass(
         "R-164-advance-and-fake.rkg",
