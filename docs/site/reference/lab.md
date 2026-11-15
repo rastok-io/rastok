@@ -128,6 +128,12 @@ excluded. An emission appears once at its source, even if routed to
 `nothing`. `app.<output>` observes an actual App-boundary crossing.
 Expectations do not inspect private Operator state or a mailbox.
 
+With Retry, an expectation on the Connector's own `exit` observes the
+terminal of every attempt, because each attempt is a journal fact. The
+graph downstream receives only the last one: assert the delivered
+outcome on the consumer's port. A repeated attempt does not appear on
+`<connector>.in`; the request is admitted once.
+
 ## Golden traces
 
 ```sh
