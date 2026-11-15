@@ -465,12 +465,12 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// How a VALUE opens: with a builder form (`{`, `.`, a word), or
+    /// How a VALUE opens: with a builder form (`{`, `[`, `.`, a word), or
     /// as a Rastok expression — same contract as
     /// [`Self::statement_head`].
     pub fn value_head(&mut self) -> ValueHead {
         match self.shape() {
-            Some(b'{' | b'.' | b'a'..=b'z' | b'A'..=b'Z' | b'_') => ValueHead::Structural,
+            Some(b'{' | b'[' | b'.' | b'a'..=b'z' | b'A'..=b'Z' | b'_') => ValueHead::Structural,
             _ => ValueHead::Expr,
         }
     }
@@ -540,6 +540,17 @@ impl<'a> Lexer<'a> {
             b':' => Some(AssignmentHead::Typed),
             _ => None,
         }
+    }
+
+    /// A new-line `name =` cannot be an array element. Error recovery may
+    /// leave that buffered name for the following statement, rather than
+    /// absorbing it into an array whose closing bracket is missing.
+    #[must_use]
+    pub fn new_line_assignment(&self) -> bool {
+        matches!(&self.lookahead, Some(token) if token.kind == TokenKind::Ident && token.newline_before)
+            && self.significant_on_line().is_some_and(|(offset, byte)| {
+                byte == b'=' && self.source.as_bytes().get(offset + 1) != Some(&b'=')
+            })
     }
 
     /// Whether the just-consumed identifier is followed immediately by a

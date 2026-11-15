@@ -262,6 +262,101 @@ fn hash_of(body: &str) -> String {
 }
 
 #[test]
+fn inline_structs_in_arrays_are_host_values_at_every_boundary() {
+    let grammar = include_str!("../../../docs/spec/grammar.md");
+    let rows_from_grammar = grammar
+        .split_once("// Rows : an array of structs (the relational 'table' view)\n")
+        .unwrap()
+        .1
+        .split_once("\n\n// Rows with an explicit element schema")
+        .unwrap()
+        .0;
+    for rows in [
+        rows_from_grammar,
+        "[\n { name = \"Alice\"; age = 30; city = \"Paris\" }\n { name = \"Bob\"; age = 42; city = \"Rome\" }\n]",
+        "[{ name = text! {one's name}; age = 30; city = \"Paris\" }]",
+    ] {
+        let source = format!(
+            r#"
+type Row = struct {{ name: text, age: int, city: text }}
+type Rows = struct {{ rows: array<Row> }}
+graph app : App {{
+  input in: array<Row>
+  output out: Rows
+  operator make {{
+    input in: array<Row>
+    output out: Rows
+    on in {{ out = {{ rows = {rows} }} }}
+  }}
+  connector partner : HttpClient {{
+    url = "https://partner.example.test/rows"
+    method = "POST"
+    codec = json
+    json_profile = projected
+    output out: Rows
+    timeout = duration("1s")
+    behavior = deterministic
+  }}
+  in -> make -> partner -> out
+  partner.exit -> nothing
+}}
+lab test {{
+  mock partner {{ on in {{ out = {{ rows = {rows} }}; exit = Completed {{ status = 200 }} }} }}
+  scenario rows {{
+    app.in = {rows}
+    expect app.out == {{ rows = {rows} }}
+  }}
+}}
+"#
+        );
+        let compiled = compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap();
+        let (plan, hash) =
+            rastok::plan::decode(&rastok::plan::encode(&compiled.plan, &compiled.hash)).unwrap();
+        assert_eq!(hash, compiled.hash);
+        let runs = rastok::lab::run(&plan, rastok::plan::GraphVersion(1), &compiled.labs[0]);
+        assert_eq!(runs.len(), 1);
+        assert!(runs[0].report.passed(), "{:?}", runs[0].report);
+    }
+}
+
+#[test]
+fn intrinsic_arrays_keep_their_continuations_and_identity() {
+    for value in [
+        "[1, 2][0]",
+        "[[1], [2]][0]",
+        "[1 +\n 2, 3][0]",
+        r#"[{"count": 1}][0]"#,
+        r#"[{"nested": {"count": 1}}][0]"#,
+        "[{}]",
+    ] {
+        assert_eq!(hash_of(value), hash_of(&format!("({value})")), "{value}");
+    }
+}
+
+#[test]
+fn a_struct_ternary_stays_outside_the_intrinsic_expression_grammar() {
+    let source = r#"
+graph app : App {
+  input in: bool
+  output out: struct { name: text }
+  operator choose {
+    input in: bool
+    output out: struct { name: text }
+    on in { out = data ? { name = "left" } : { name = "right" } }
+  }
+  in -> choose -> out
+}
+"#;
+    let bag = compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap_err();
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.code().as_str() == "E-EXPR"),
+        "{bag:?}"
+    );
+}
+
+#[test]
 fn verbatim_text_strips_the_closing_margin() {
     use rastok::envelope::{Data, Value};
     // The closing brace sits at column 4; the margin stripped from

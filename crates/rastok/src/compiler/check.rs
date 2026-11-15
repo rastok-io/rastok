@@ -6290,12 +6290,52 @@ impl Checker<'_, '_> {
             SynValue::Braced(body) => {
                 self.struct_value_tree(body, signature, expected, span, place)?
             }
+            SynValue::List { items, span } => {
+                self.list_value_tree(items, signature, expected, *span, place)?
+            }
             _ => self.nested_value_tree(value, signature, span)?,
         };
         match expected {
             Some(expected) => self.contextualize_tree(tree, expected, span, place),
             None => self.checked_expression_depth(tree, span),
         }
+    }
+
+    fn list_value_tree(
+        &mut self,
+        items: &[SynValue],
+        signature: &expr::Signature,
+        expected: Option<&DataType>,
+        span: Span,
+        place: &str,
+    ) -> Option<expr::Tree> {
+        let element = match expected {
+            Some(DataType::Array(array)) => Some(array.element()),
+            _ => None,
+        };
+        let mut roots = Vec::with_capacity(items.len());
+        let mut inferred = None;
+        for item in items {
+            let tree = self.typed_value_tree(item, signature, element, span, place)?;
+            inferred = Some(match inferred {
+                Some(ty) => match inferred_join(&ty, &tree.ty) {
+                    Ok(ty) => ty,
+                    Err(error) => {
+                        self.type_constructor_refusal(span, error);
+                        return None;
+                    }
+                },
+                None => tree.ty,
+            });
+            roots.push(tree.root);
+        }
+        self.checked_expression_depth(
+            expr::Tree {
+                root: expr::Expr::List(roots),
+                ty: DataType::array(inferred.unwrap_or(DataType::Variant)),
+            },
+            span,
+        )
     }
 
     fn tagged_value_tree(
@@ -6612,6 +6652,9 @@ impl Checker<'_, '_> {
             SynValue::Error(_) => None,
             SynValue::Expr(expr) => self.expr(expr, signature),
             SynValue::BracedMap(entries) => self.map_value_tree(entries, signature, at),
+            SynValue::List { items, span } => {
+                self.list_value_tree(items, signature, None, *span, "array element")
+            }
             SynValue::Braced(body) if body.entries.is_empty() => Some(literal_tree(
                 crate::value::Value::Struct(Vec::new()),
                 DataType::Variant,
@@ -7002,7 +7045,7 @@ impl Checker<'_, '_> {
             }
             SynValue::Braced(body) => self.braced(body, signature, at, None),
             SynValue::Nothing(_) => Some(EmitValue::Nothing),
-            SynValue::Tagged { .. } => self
+            SynValue::Tagged { .. } | SynValue::List { .. } => self
                 .typed_value_tree(value, signature, expected, at, port_name)
                 .map(EmitValue::Data),
             SynValue::Expr(expr) => {
@@ -7422,7 +7465,7 @@ impl Checker<'_, '_> {
                                 });
                             }
                         }
-                        SynValue::Tagged { .. }
+                        SynValue::Tagged { .. } | SynValue::List { .. }
                             if matches!(&target, crate::envelope::WriteTarget::Data(_)) =>
                         {
                             if let Some(tree) = self.typed_value_tree(
@@ -7544,7 +7587,7 @@ impl Checker<'_, '_> {
                                 });
                             }
                         }
-                        SynValue::Tagged { .. } => {
+                        SynValue::Tagged { .. } | SynValue::List { .. } => {
                             if let Some(tree) = self.typed_value_tree(
                                 value,
                                 signature,

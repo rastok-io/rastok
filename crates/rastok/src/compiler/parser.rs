@@ -65,6 +65,16 @@ const PAREN_POSITION: TerminatorSet = TerminatorSet {
     keywords: &[],
 };
 
+/// Within an array, an intrinsic element expression can continue across
+/// lines. A host constructor ends at its own closing delimiter.
+const LIST_POSITION: TerminatorSet = TerminatorSet {
+    bytes: b",]",
+    newline: false,
+    arrow: false,
+    fat_arrow: false,
+    keywords: &[],
+};
+
 /// Terminators for the `window` duration, closed by its mode word.
 const WINDOW_POSITION: TerminatorSet = TerminatorSet {
     bytes: b";}",
@@ -164,6 +174,7 @@ pub fn parse(
         source_id,
         last_end: 0,
         dispatch_depth: 0,
+        list_depth: 0,
         bag,
     }
     .file()
@@ -175,6 +186,7 @@ struct Parser<'src, 'bag> {
     source_id: SourceId,
     last_end: usize,
     dispatch_depth: usize,
+    list_depth: usize,
     bag: &'bag mut Bag,
 }
 
@@ -2024,6 +2036,7 @@ impl<'src> Parser<'src, '_> {
         let token = self.peek();
         match (token.kind, token.text) {
             (TokenKind::LBrace, _) => self.braced_value(token.span),
+            (TokenKind::LBrack, _) => self.list_value(position),
             (TokenKind::Dot, _) => {
                 // `.` — the exact re-emission of the current
                 // envelope; grammar forbids leading dots in Rastok expression, so
@@ -2039,6 +2052,82 @@ impl<'src> Parser<'src, '_> {
                 self.ident_tail(ident, position)
             }
             _ => Value::Expr(self.expr(position)),
+        }
+    }
+
+    fn list_value(&mut self, position: &TerminatorSet) -> Value {
+        fn intrinsic(item: &Value) -> bool {
+            match item {
+                Value::Expr(_) => true,
+                Value::BracedMap(entries) => entries.iter().all(|entry| intrinsic(&entry.value)),
+                Value::Braced(body) => body.entries.is_empty(),
+                _ => false,
+            }
+        }
+        let start = self.peek().span.range().start;
+        if self.list_depth == crate::expr::MAX_EXPRESSION_DEPTH {
+            let depth = self.list_depth + 1;
+            let source = self.expr(position);
+            self.bag.push(
+                Diagnostic::new(
+                    super::E_PLAN_DEPTH,
+                    Phase::Check,
+                    "an array value exceeds the expression depth budget",
+                )
+                .with_span(source.span)
+                .with_field("depth", depth.to_string()),
+            );
+            return Value::Error(source.span);
+        }
+        self.bump();
+        self.list_depth += 1;
+        let mut items = Vec::new();
+        while !matches!(self.peek().kind, TokenKind::RBrack | TokenKind::Eof) {
+            if self.lexer.new_line_assignment()
+                || matches!(self.peek().kind, TokenKind::RBrace | TokenKind::RParen)
+            {
+                break;
+            }
+            items.push(self.present_value(&LIST_POSITION));
+            if self.eat(TokenKind::Comma).is_some() {
+                continue;
+            }
+            let next = self.peek();
+            if next.kind != TokenKind::RBrack && !next.newline_before {
+                self.error_expected("`,` or a newline between array elements, or `]`");
+                break;
+            }
+        }
+        if self.peek().kind != TokenKind::RBrack && items.iter().all(intrinsic) {
+            // An incomplete intrinsic array still belongs to the expression
+            // diagnostic. Its following statement or outer closer stays in
+            // the lookahead buffer, just as for an incomplete call.
+            let recovery = TerminatorSet {
+                bytes: b",;)}]",
+                newline: true,
+                arrow: false,
+                fat_arrow: false,
+                keywords: &[],
+            };
+            self.list_depth -= 1;
+            return Value::Expr(self.expr_from(start, &recovery));
+        }
+        let closed = self.expect(TokenKind::RBrack, "`]`").is_some();
+        self.list_depth -= 1;
+        if !closed {
+            return Value::Error(self.span_from(start));
+        }
+        if items.iter().all(intrinsic) {
+            // Keep established intrinsic arrays and any following index or
+            // operator in their original source region, including intrinsic
+            // map literals. Only the immutable prefix is reread; the lexer
+            // cursor never moves backward.
+            Value::Expr(self.expr_from(start, position))
+        } else {
+            Value::List {
+                items,
+                span: self.span_from(start),
+            }
         }
     }
 
@@ -3007,6 +3096,65 @@ mod tests {
             panic!("a handler");
         };
         (linear_handler(handler).to_vec(), bag)
+    }
+
+    #[test]
+    fn host_array_values_keep_their_elements_and_the_next_statement() {
+        for (value, count) in [
+            ("[{ name = \"one\" }, { name = \"two\" }]", 2),
+            ("[\n { name = \"one\" } // first\n { name = \"two\" }\n]", 2),
+            ("[[{ name = \"nested\" }]]", 1),
+        ] {
+            let source = format!(
+                "graph g : App {{ operator o {{ on in {{ out = {value}\n out = data }} }} }}"
+            );
+            let (statements, bag) = handler_statements(&source);
+            assert!(bag.diagnostics().is_empty(), "{bag:?}");
+            assert_eq!(statements.len(), 2);
+            let Statement::Assign {
+                value: Value::List { items, span },
+                ..
+            } = &statements[0]
+            else {
+                panic!("host array: {:?}", statements[0]);
+            };
+            assert_eq!(items.len(), count);
+            assert_eq!(&source[span.range()], value);
+            assert!(
+                matches!(&statements[1], Statement::Assign { value: Value::Expr(expr), .. } if expr.text == "data")
+            );
+        }
+    }
+
+    #[test]
+    fn host_array_refusals_are_located_and_depth_bounded() {
+        let source = "graph g : App { operator o { on in { out = [{ a = 1 } { b = 2 }] } } }";
+        let (_, bag) = handler_statements(source);
+        let diagnostic = &bag.diagnostics()[0];
+        assert_eq!(diagnostic.code(), E_PARSE_EXPECTED);
+        assert_eq!(
+            diagnostic.spans()[0].range().start,
+            source.find("{ b").unwrap()
+        );
+
+        let depth = crate::expr::MAX_EXPRESSION_DEPTH + 1;
+        let source = format!(
+            "graph g : App {{ operator o {{ on in {{ out = {}{{ a = 1 }}{} }} }} }}",
+            "[".repeat(depth),
+            "]".repeat(depth)
+        );
+        let (_, bag) = handler_statements(&source);
+        assert!(
+            bag.diagnostics().iter().any(|diagnostic| {
+                diagnostic.code() == crate::compiler::E_PLAN_DEPTH
+                    && diagnostic.phase() == Phase::Check
+                    && diagnostic
+                        .fields()
+                        .iter()
+                        .any(|(name, value)| *name == "depth" && value == &depth.to_string())
+            }),
+            "{bag:?}"
+        );
     }
 
     #[test]

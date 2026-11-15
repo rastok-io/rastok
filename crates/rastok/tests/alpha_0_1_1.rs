@@ -395,7 +395,6 @@ fn r086_an_integer_converts_exactly_to_a_declared_decimal() {
 }
 
 #[test]
-#[ignore = "R-137, gate P3"]
 fn r137_inline_records_are_list_elements_in_outputs_and_expectations() {
     assert_scenarios_pass(
         "R-137-record-inside-a-list.rkg",
