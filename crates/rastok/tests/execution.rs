@@ -116,7 +116,7 @@ struct EchoWorld {
 }
 
 struct ProjectionRefusal {
-    inner: EchoWorld,
+    inner: ScriptedWorld,
     refuse_scheduler_completion: bool,
     refuse_cancel: bool,
 }
@@ -311,6 +311,80 @@ impl OutboundCall for EchoWorld {
             })
             .collect()
     }
+}
+
+#[test]
+fn an_advance_settles_a_ready_response_before_the_next_deadline() {
+    let compilation = compile(
+        &[r#"
+graph app : App {
+  input in: int
+  output out: variant
+  output exit: ProcessExit
+  operator delay : Loop {
+    input in: int
+    output out: text
+    output err: union { LoopExpired { last_state: int } }
+    Loop.fuel = 2
+    Loop.delay = { kind = fixed; after = duration("5s") }
+    on in match {
+      data == 0 => Loop.next = 1
+      _ => out = "request"
+    }
+  }
+  connector call : Process {
+    command = "cat"; codec = lines; behavior = deterministic
+    timeout = duration("2s")
+  }
+  in -> delay -> call -> out
+  delay.err -> nothing
+  call.err -> nothing
+  call.exit -> exit
+}
+"#],
+        &ContractCatalog::try_m0().unwrap(),
+    )
+    .unwrap();
+    let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
+    let mut journal = MemJournal::new(GraphVersion(1));
+    let mut world = EchoWorld::default();
+    execution
+        .accept_input(&mut journal, int_submission(0))
+        .unwrap();
+    execution
+        .advance_to(
+            &mut journal,
+            &mut CallDriver(&mut world),
+            rastok::time::LogicalTime::from_nanoseconds(10_000_000_000),
+        )
+        .unwrap();
+    let closed: Vec<_> = journal
+        .records()
+        .iter()
+        .filter_map(|record| match record {
+            Record::Egress(EgressRecord::Call(closed))
+                if matches!(closed.status, CallStatus::Closed(_)) =>
+            {
+                Some(closed)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(closed.len(), 1);
+    assert_eq!(
+        closed[0].closed_at,
+        Some(rastok::time::LogicalTime::from_nanoseconds(5_000_000_000)),
+        "a ready response settles at opening, before the timeout at seven seconds"
+    );
+    assert_eq!(execution.outputs().len(), 2);
+    let terminal = execution
+        .outputs()
+        .iter()
+        .find(|output| output.port.name() == "exit")
+        .unwrap();
+    assert!(
+        matches!(terminal.envelope.data().materialized_value(), Some(Value::TaggedUnion(value)) if value.case == "Exited")
+    );
 }
 
 #[derive(Default)]
@@ -2042,7 +2116,9 @@ graph nested_lifetimes : App {
     let cause = execution
         .accept_input(&mut journal, text_submission("salut"))
         .unwrap();
-    let mut world = EchoWorld::default();
+    let mut world = ScriptedWorld {
+        answers: Vec::new(),
+    };
     execution
         .run_ready_with_drivers(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
@@ -2065,6 +2141,17 @@ graph nested_lifetimes : App {
         "instance expiry cannot replace an open call's terminal fact"
     );
 
+    world.answers.push(CallResponse {
+        call_id: journal.open_calls()[0].call_id,
+        completion: Completion::process(
+            vec![Data::encoded(Encoding::Raw, *b"salut")],
+            vec![],
+            ProcessExit::Exited {
+                exit_code: 0,
+                signal: None,
+            },
+        ),
+    });
     execution
         .poll_drivers(&mut journal, &mut CallDriver(&mut world))
         .unwrap();
@@ -6521,7 +6608,9 @@ fn a_silent_driver_expires_into_a_typed_timeout() {
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
-    let mut world = EchoWorld::default();
+    let mut world = ScriptedWorld {
+        answers: Vec::new(),
+    };
     execution
         .accept_input(&mut journal, submission("salut"))
         .unwrap();
@@ -6580,7 +6669,9 @@ fn a_scheduler_projection_refusal_precedes_the_timeout_close() {
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
     let mut drivers = ProjectionRefusal {
-        inner: EchoWorld::default(),
+        inner: ScriptedWorld {
+            answers: Vec::new(),
+        },
         refuse_scheduler_completion: false,
         refuse_cancel: false,
     };
@@ -6630,7 +6721,9 @@ fn a_cancel_refusal_cannot_strand_an_expiring_call() {
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
     let mut drivers = ProjectionRefusal {
-        inner: EchoWorld::default(),
+        inner: ScriptedWorld {
+            answers: Vec::new(),
+        },
         refuse_scheduler_completion: false,
         refuse_cancel: true,
     };
@@ -6689,7 +6782,9 @@ fn a_budget_runs_from_delivery_and_covers_queue_time() {
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
-    let mut world = EchoWorld::default();
+    let mut world = ScriptedWorld {
+        answers: Vec::new(),
+    };
     execution
         .accept_input(&mut journal, submission("un"))
         .unwrap();
@@ -6811,7 +6906,9 @@ on in { out = data.text }
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
-    let mut world = EchoWorld::default();
+    let mut world = ScriptedWorld {
+        answers: Vec::new(),
+    };
     execution
         .accept_input(&mut journal, submission("salut"))
         .unwrap();
@@ -6899,7 +6996,9 @@ fn a_late_answer_is_a_reported_observation_not_a_silence() {
     .expect("a valid plan");
     let mut journal = MemJournal::new(GraphVersion(1));
     let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
-    let mut world = EchoWorld::default();
+    let mut world = ScriptedWorld {
+        answers: Vec::new(),
+    };
     execution
         .accept_input(&mut journal, submission("salut"))
         .unwrap();
@@ -6953,7 +7052,9 @@ fn a_refused_expiry_stays_scheduled_and_replays() {
         ..FlakyJournal::healthy(GraphVersion(1))
     };
     let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
-    let mut world = EchoWorld::default();
+    let mut world = ScriptedWorld {
+        answers: Vec::new(),
+    };
     execution
         .accept_input(&mut journal, submission("salut"))
         .unwrap();
@@ -6993,7 +7094,9 @@ fn a_refused_open_on_a_queued_expiry_replays_without_duplicates() {
     .expect("a valid plan");
     let mut journal = FlakyJournal::healthy(GraphVersion(1));
     let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
-    let mut world = EchoWorld::default();
+    let mut world = ScriptedWorld {
+        answers: Vec::new(),
+    };
     execution
         .accept_input(&mut journal, submission("un"))
         .unwrap();
@@ -7041,7 +7144,9 @@ fn a_refused_commit_on_a_queued_expiry_loses_nothing() {
     .expect("a valid plan");
     let mut journal = FlakyJournal::healthy(GraphVersion(1));
     let mut execution = Execution::new(&compilation.plan, GraphVersion(1));
-    let mut world = EchoWorld::default();
+    let mut world = ScriptedWorld {
+        answers: Vec::new(),
+    };
     execution
         .accept_input(&mut journal, text_submission("salut"))
         .unwrap();
