@@ -192,6 +192,46 @@ fn true_facts_narrow_only_the_selected_open_arm() {
 }
 
 #[test]
+fn a_state_write_restores_the_declared_type_during_independent_validation() {
+    let optional = DataType::Text.optional().unwrap();
+    let signature = Signature::new()
+        .with("prev", optional.clone())
+        .with_type("OptionalText", optional);
+    let predicate = tree("prev is text", &signature);
+    let narrowed = signature.narrowed_by(&predicate.root);
+    let mut dispatch = open(
+        predicate,
+        Dispatch::Linear(vec![
+            emit(tree("prev", &narrowed)),
+            DispatchStep::SetVar {
+                name: "prev".into(),
+                value: tree("null as OptionalText", &signature),
+            },
+            emit(tree("prev", &signature)),
+        ]),
+        empty(),
+    );
+    assert_eq!(validate_dispatch(&dispatch, &signature), Ok(()));
+    let Dispatch::OpenMatch { arms, .. } = &mut dispatch else {
+        unreachable!()
+    };
+    let Dispatch::Linear(steps) = arms[0].dispatch.as_mut() else {
+        unreachable!()
+    };
+    // A foreign plan cannot keep claiming the pre-write payload type.
+    steps[2] = emit(Tree {
+        root: Expr::Path(vec!["prev".into()]),
+        ty: narrowed.get("prev").unwrap().clone(),
+    });
+    assert_refusal(
+        &dispatch,
+        &signature,
+        "dispatch.arms[0].linear[2].value",
+        DispatchErrorKind::Expression,
+    );
+}
+
+#[test]
 fn neither_a_local_nor_a_positive_fact_can_escape_into_the_next_predicate() {
     let signature = Signature::new().with("data", outcome());
     let first = tree("data is Ready", &signature);

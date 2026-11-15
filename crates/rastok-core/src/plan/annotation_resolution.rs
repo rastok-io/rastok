@@ -432,6 +432,13 @@ impl<'a> Solver<'a> {
                                     reason,
                                 }
                             })?;
+                            if let Some(state) = self.vars.get(&key) {
+                                environment.assign_state(
+                                    name,
+                                    state.ty.clone(),
+                                    state.current.clone(),
+                                );
+                            }
                             vars.entry(key).or_default().push(derived);
                         }
                         DispatchStep::Emit { .. } | DispatchStep::MultiEmit { .. } => {

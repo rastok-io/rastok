@@ -113,6 +113,208 @@ fn a_positive_is_converts_a_whole_value_in_a_match_arm() {
     assert_narrowed_values("match");
 }
 
+fn state_narrowing_source(
+    context: &str,
+    state: &str,
+    predicate: &str,
+    body: &str,
+    output: &str,
+    expectations: &str,
+) -> String {
+    let handler = match context {
+        "handler" => format!("on in where {predicate} {{ {body} }}"),
+        "match" => format!("on in match {{ {predicate} => {{ {body} }}; _ => nothing }}"),
+        _ => panic!("unknown test context"),
+    };
+    format!(
+        r#"
+type State = union {{ Ready {{ note: text }}, Empty {{}} }}
+graph app : App {{
+  input in: text?
+  output out: {output}
+  operator change {{
+    input in: text?
+    output out: {output}
+    {state}
+    {handler}
+  }}
+  in -> change -> out
+}}
+lab state {{
+  scenario write_then_read {{
+    app.in = "input"
+    {expectations}
+  }}
+}}
+"#
+    )
+}
+
+fn assert_state_narrowing_runs(
+    state: &str,
+    predicate: &str,
+    body: &str,
+    output: &str,
+    expectations: &str,
+) {
+    for context in ["handler", "match"] {
+        let source = state_narrowing_source(context, state, predicate, body, output, expectations);
+        let compiled = compile(&[&source], &ContractCatalog::try_m0().unwrap())
+            .unwrap_or_else(|error| panic!("{context}: {error:?}"));
+        let bytes = plan::encode(&compiled.plan, &compiled.hash);
+        let (decoded, hash) = plan::decode(&bytes).expect("state reads validate after transport");
+        assert_eq!(hash, compiled.hash);
+        let runs = rastok::lab::run(&decoded, GraphVersion(1), &compiled.labs[0]);
+        assert_eq!(runs.len(), 1);
+        assert!(runs[0].report.passed(), "{context}: {:?}", runs[0].report);
+    }
+}
+
+#[test]
+fn a_state_write_ends_narrowing_even_when_the_new_value_has_the_tested_type() {
+    for context in ["handler", "match"] {
+        for (state, path, writes) in [
+            ("var prev: text? = \"seed\"", "prev", ["null", "\"new\""]),
+            (
+                "var prev: struct { field: text? } = { field = \"seed\" }",
+                "prev.field",
+                ["{ field = null }", "{ field = \"new\" }"],
+            ),
+        ] {
+            for write in writes {
+                let source = state_narrowing_source(
+                    context,
+                    state,
+                    &format!("{path} is text"),
+                    &format!("prev = {write}; out = {path}"),
+                    "text",
+                    "",
+                );
+                let error = compile(&[&source], &ContractCatalog::try_m0().unwrap())
+                    .expect_err("the write ends the fact, regardless of its new value");
+                assert!(
+                    error.diagnostics().iter().any(|diagnostic| {
+                        diagnostic.code().as_str() == "E-PORT-TYPE"
+                            && diagnostic.phase() == rastok::diagnostics::Phase::Check
+                    }),
+                    "{context}, {path}, {write}: {error:?}",
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_state_write_restores_the_optional_type_for_later_reads() {
+    assert_state_narrowing_runs(
+        "var prev: text? = \"seed\"",
+        "prev is text",
+        "prev = null; out = prev",
+        "text?",
+        "expect app.out == null",
+    );
+}
+
+#[test]
+fn a_state_write_restores_null_comparisons() {
+    assert_state_narrowing_runs(
+        "var prev: text? = \"seed\"",
+        "prev is text",
+        "prev = null; out = prev == null",
+        "bool",
+        "expect app.out == true",
+    );
+}
+
+#[test]
+fn a_state_write_ends_facts_on_its_member_paths() {
+    assert_state_narrowing_runs(
+        "var prev: struct { field: text? } = { field = \"seed\" }",
+        "prev.field is text",
+        "prev = { field = null }; out = prev.field",
+        "text?",
+        "expect app.out == null",
+    );
+}
+
+#[test]
+fn a_narrowed_read_before_a_state_write_keeps_its_fact() {
+    assert_state_narrowing_runs(
+        "var prev: text? = \"seed\"",
+        "prev is text",
+        "val saved = prev; out = prev; prev = null; out = saved",
+        "text",
+        "expect 2 app.out == \"seed\"",
+    );
+}
+
+#[test]
+fn a_state_assignment_reads_its_right_hand_side_before_ending_the_fact() {
+    assert_state_narrowing_runs(
+        "var prev: text? = \"seed\"",
+        "prev is text",
+        "prev = prev + \"!\"; out = prev",
+        "text?",
+        "expect app.out == \"seed!\"",
+    );
+}
+
+#[test]
+fn writing_another_cell_does_not_end_a_narrowing_fact() {
+    assert_state_narrowing_runs(
+        "var prev: text? = \"seed\"; var previous: text? = \"other\"",
+        "previous is text",
+        "prev = null; out = previous",
+        "text",
+        "expect app.out == \"other\"",
+    );
+}
+
+#[test]
+fn a_state_write_does_not_end_an_input_narrowing_fact() {
+    assert_state_narrowing_runs(
+        "var prev: text? = \"seed\"",
+        "data is text && prev is text",
+        "prev = null; out = data",
+        "text",
+        "expect app.out == \"input\"",
+    );
+}
+
+#[test]
+fn a_state_write_can_change_a_tagged_case_before_emitting_the_state() {
+    assert_state_narrowing_runs(
+        "var prev: State = Ready { note = \"seed\" }",
+        "prev is Ready",
+        "prev = Empty {}; out = prev",
+        "State",
+        "expect app.out == Empty {}",
+    );
+}
+
+#[test]
+fn a_state_write_restores_the_policy_shape_of_the_declared_union() {
+    for context in ["handler", "match"] {
+        let source = state_narrowing_source(
+            context,
+            "var prev: State = Ready { note = 1 }",
+            "prev is Ready",
+            "prev = Empty {}; out = prev",
+            "State",
+            "expect app.out == Empty {}",
+        )
+        .replace(
+            "note: text",
+            "note: int @measure(id = items, unit = \"item\")",
+        );
+        let compiled = compile(&[&source], &ContractCatalog::try_m0().unwrap())
+            .unwrap_or_else(|error| panic!("{context}: {error:?}"));
+        let (decoded, _) = plan::decode(&plan::encode(&compiled.plan, &compiled.hash)).unwrap();
+        let runs = rastok::lab::run(&decoded, GraphVersion(1), &compiled.labs[0]);
+        assert!(runs[0].report.passed(), "{context}: {:?}", runs[0].report);
+    }
+}
+
 #[test]
 fn an_explicit_conversion_still_returns_the_selected_value() {
     // A tagged case is already narrowed to its payload in a guarded body;

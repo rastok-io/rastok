@@ -542,6 +542,18 @@ impl Signature {
         narrowed
     }
 
+    /// Ends positive facts about a state cell and its members after an
+    /// assignment. The right-hand side still uses the pre-write facts;
+    /// subsequent statements read the declared types kept in `names`.
+    pub fn invalidate_narrowing(&mut self, root: &str) {
+        self.narrowed.retain(|path, _| {
+            path != root
+                && !path
+                    .strip_prefix(root)
+                    .is_some_and(|suffix| suffix.starts_with('.'))
+        });
+    }
+
     fn apply_true_facts(&mut self, predicate: &Expr) {
         match predicate {
             Expr::Is { expr, target } => {

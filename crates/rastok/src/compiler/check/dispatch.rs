@@ -682,6 +682,7 @@ impl Checker<'_, '_> {
                                         name: name.text.clone(),
                                         value: tree,
                                     });
+                                    signature.invalidate_narrowing(&name.text);
                                 }
                             }
                         }

@@ -222,7 +222,10 @@ fn steps_at(
                 }
                 *scope = scope.clone().with(name, value.ty.clone());
             }
-            DispatchStep::SetVar { value, .. } => tree_at(value, scope, &format!("{path}.value"))?,
+            DispatchStep::SetVar { name, value } => {
+                tree_at(value, scope, &format!("{path}.value"))?;
+                scope.invalidate_narrowing(name);
+            }
             DispatchStep::Emit { value, .. }
             | DispatchStep::LoopCommand(LoopCommand::Next(value)) => {
                 emission_at(value, scope, &format!("{path}.value"))?;

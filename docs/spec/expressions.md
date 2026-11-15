@@ -276,8 +276,11 @@ The implemented minimum is deliberately small and deterministic:
 Narrowing is a value operation, not only a typing fact: where a narrowed
 path is read as a value, the checker stores the corresponding resolved
 `Expr::As`, so the evaluator yields the selected branch and never the
-enclosing structural union. Check and execution cannot disagree on a
-narrowed read.
+enclosing structural union. A fact holds until its path is written: an
+assignment to a narrowed state cell, or to a cell the narrowed path
+starts with, ends the fact for the statements that follow, whatever
+value is assigned. A later read sees the declared type again. Check and
+execution cannot disagree on a narrowed read.
 
 Named aliases are expanded before entering the tree, so alias spelling is
 not identity. The plan serializes the resolved target and any explicit external
