@@ -2242,6 +2242,62 @@ fn with_setvar_root(root: expr::Expr) -> ExecutionPlan {
 }
 
 #[test]
+fn state_updates_keep_the_typed_input_when_they_read_their_previous_value() {
+    for update in [
+        "n + (data.status is Ok ? 1 : 0)",
+        "data.status is Ok ? n + 1 : n",
+    ] {
+        let source = format!(
+            r#"
+type Status = union {{ Ok {{}}, Ko {{}} }}
+type Line = struct {{ status: Status }}
+graph app : App {{
+  input in: Line
+  output out: int
+  operator count {{
+    input in: Line
+    output out: int
+    var n: int = 0
+    on in {{ n = {update}; out = n }}
+  }}
+  in -> count -> out
+}}
+lab tests {{ scenario counts_only_ok {{
+  app.in = {{ status = Ok {{}} }}
+  expect app.out == 1
+  app.in = {{ status = Ko {{}} }}
+  expect app.out == 1
+}} }}
+"#
+        );
+        let compiled = compile(&[&source], &ContractCatalog::try_m0().unwrap())
+            .unwrap_or_else(|error| panic!("{update}: {error:?}"));
+        let (decoded, _) = plan::decode(&plan::encode(&compiled.plan, &compiled.hash)).unwrap();
+        let runs = rastok::lab::run(&decoded, plan::GraphVersion(1), &compiled.labs[0]);
+        assert_eq!(runs.len(), 1);
+        assert!(runs[0].report.passed(), "{update}: {:?}", runs[0].report);
+
+        let mut raw = compiled.plan.into_inner();
+        let DispatchStep::SetVar { value, .. } =
+            &mut linear_statements(&mut operator_handlers(&mut raw, 1)[0])[0]
+        else {
+            panic!("the fixture starts by updating its counter")
+        };
+        // Port inference cannot see local names. The independent expression
+        // verifier must still reject a forged name despite its claimed type.
+        value.root = expr::Expr::Binary {
+            op: expr::BinaryOp::Add,
+            left: Box::new(expr::Expr::Path(vec!["missing".into()])),
+            right: Box::new(value.root.clone()),
+        };
+        assert!(matches!(
+            ValidatedExecutionPlan::try_new(raw),
+            Err(PlanValidationError::InvalidDispatch { .. })
+        ));
+    }
+}
+
+#[test]
 fn an_unsorted_map_literal_is_not_canonical() {
     // The parser construction-sorts map literals; a raw plan carrying
     // an unsorted one is a second byte form of the same expression —
