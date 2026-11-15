@@ -1474,10 +1474,10 @@ impl<'src> Parser<'src, '_> {
                 },
                 TokenKind::Ident if token.text == "stop" => {
                     self.bump();
-                    let target = match self.peek().kind {
-                        TokenKind::Ident => self.name("a node name"),
-                        _ => None,
-                    };
+                    let next = self.peek();
+                    let target = (next.kind == TokenKind::Ident && !next.newline_before)
+                        .then(|| self.name("a node name"))
+                        .flatten();
                     statements.push(Statement::Stop(target));
                 }
                 TokenKind::Ident if token.text == "nothing" => {
@@ -1623,7 +1623,8 @@ impl<'src> Parser<'src, '_> {
             TokenKind::Ident if token.text == "val" => self.val_decl().map(Statement::Val),
             TokenKind::Ident if token.text == "stop" => {
                 self.bump();
-                let target = (self.peek().kind == TokenKind::Ident)
+                let next = self.peek();
+                let target = (next.kind == TokenKind::Ident && !next.newline_before)
                     .then(|| self.name("a node name"))
                     .flatten();
                 Some(Statement::Stop(target))
@@ -4067,6 +4068,55 @@ graph m0_probe : App {
             Trigger::ChildPort { child, port }
                 if child.text == "work" && port.text == "done"
         ));
+    }
+
+    #[test]
+    fn a_bare_stop_does_not_consume_the_next_arm_or_statement() {
+        for ending in [
+            "\n",
+            " // close this instance\n",
+            " /* comment\n continues */ ",
+        ] {
+            let source = format!(
+                "graph app : App {{ operator o {{ on in match {{ true => stop{ending}_ => out = data\n }} }} }}"
+            );
+            let tree = parse_clean(&source);
+            let TopDecl::Graph(graph) = &tree.decls[0] else {
+                panic!("graph")
+            };
+            let GraphItem::Operator(operator) = &graph.body[0] else {
+                panic!("operator")
+            };
+            let OperatorItem::Handler(handler) = &operator.body[0] else {
+                panic!("handler")
+            };
+            let Some(Dispatch::Match { arms, .. }) = &handler.dispatch else {
+                panic!("match")
+            };
+            assert_eq!(arms.len(), 2);
+            assert!(matches!(
+                arms[0].dispatch.as_linear().unwrap(),
+                [Statement::Stop(None)]
+            ));
+
+            let source = format!(
+                "graph app : App {{ operator o {{ on in {{ stop{ending}out = data\n }} }} }}"
+            );
+            let tree = parse_clean(&source);
+            let TopDecl::Graph(graph) = &tree.decls[0] else {
+                panic!("graph")
+            };
+            let GraphItem::Operator(operator) = &graph.body[0] else {
+                panic!("operator")
+            };
+            let OperatorItem::Handler(handler) = &operator.body[0] else {
+                panic!("handler")
+            };
+            assert!(matches!(
+                linear_handler(handler),
+                [Statement::Stop(None), Statement::Assign { .. }]
+            ));
+        }
     }
 
     #[test]
