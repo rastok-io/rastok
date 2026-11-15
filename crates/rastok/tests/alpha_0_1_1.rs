@@ -380,7 +380,6 @@ fn r152_lab_predicates_use_the_same_narrowing_rule() {
 }
 
 #[test]
-#[ignore = "R-087, gate P3"]
 fn r087_a_state_assignment_can_contain_an_is_ternary() {
     assert_scenarios_pass(
         "R-087-is-in-a-var-assignment.rkg",
