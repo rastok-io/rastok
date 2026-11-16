@@ -324,7 +324,8 @@ impl<'src> Parser<'src, '_> {
                 E_PARSE_EXPECTED,
                 Phase::Parse,
                 "a bare expression is not a statement; write `out = <value>` \
-                 (or `err = Kind { … }`)",
+                 (or `err = Kind { … }`); a value ends with its line; \
+                 open a parenthesis on the same line to continue it",
             )
             .with_span(span)
             .with_field("expected", "a statement")
@@ -1462,6 +1463,14 @@ impl<'src> Parser<'src, '_> {
         loop {
             if self.at_word("match") {
                 let dispatch = self.match_dispatch(statements, start)?;
+                if self.at_word("match") {
+                    let span = self.peek().span;
+                    self.bag.push(Diagnostic::new(
+                        E_PARSE_EXPECTED, Phase::Parse,
+                        "a `match` is the last form of its block; put the second decision in another Operator, or nest it in an arm",
+                    ).with_span(span).with_field("expected", "`}`").with_field("found", "`match`"));
+                    return None;
+                }
                 self.expect(TokenKind::RBrace, "`}`")?;
                 return Some(dispatch);
             }
@@ -2826,6 +2835,33 @@ fn simple_scalar(word: &str) -> Option<ScalarType> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refused_dispatch_forms_explain_block_and_line_boundaries() {
+        let source = "graph app : App { operator o { on in { match { true => nothing; _ => nothing }\n match { true => nothing; _ => nothing } } } }";
+        let mut bag = Bag::new();
+        parse(SourceId::new(0), source, &mut bag);
+        let diagnostic = &bag.diagnostics()[0];
+        assert_eq!(diagnostic.code(), E_PARSE_EXPECTED);
+        assert!(diagnostic.message().contains("a `match` is the last form"));
+        assert_eq!(
+            diagnostic.spans()[0].range().start,
+            source.rfind("match").unwrap()
+        );
+        let (_, bag) = handler_statements(
+            "graph app : App { operator o { on in { val both = data.ok &&\n data.n > 0\n out = both } } }",
+        );
+        assert!(
+            bag.diagnostics()
+                .iter()
+                .any(|d| d.code() == E_PARSE_EXPECTED
+                    && d.message().contains("a value ends with its line"))
+        );
+        let (_, bag) = handler_statements(
+            "graph app : App { operator o { on in { val both = (data.ok &&\n data.n > 0)\n out = both } } }",
+        );
+        assert!(bag.diagnostics().is_empty(), "{bag:?}");
+    }
 
     fn parse(source_id: SourceId, source: &str, bag: &mut Bag) -> SyntaxTree {
         let registry = crate::connector::contract::ContractCatalog::try_m0()

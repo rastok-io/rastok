@@ -1068,7 +1068,9 @@ fn compile_contextual(
     if let Some(token) = parser.tokens.get(parser.pos) {
         return Err(vec![Diagnostic {
             kind: DiagnosticKind::General,
-            message: String::from("unexpected trailing input"),
+            message: parser
+                .case_comparison_hint(&root)
+                .unwrap_or_else(|| String::from("unexpected trailing input")),
             range: token.range.clone(),
         }]);
     }
@@ -1790,6 +1792,54 @@ struct ExprParser<'t, 'a> {
 }
 
 impl<'a> ExprParser<'_, 'a> {
+    fn case_comparison_hint(&self, root: &Expr) -> Option<String> {
+        if self.peek() != Some(&Tok::LBrace) || self.tokens.get(self.pos + 1)?.tok != Tok::RBrace {
+            return None;
+        }
+        let mut comparison = root;
+        while let Expr::Binary {
+            op: BinaryOp::And | BinaryOp::Or,
+            right,
+            ..
+        } = comparison
+        {
+            comparison = right;
+        }
+        let Expr::Binary {
+            op: op @ (BinaryOp::Eq | BinaryOp::Ne),
+            left,
+            right,
+        } = comparison
+        else {
+            return None;
+        };
+        let (Expr::Path(path), Expr::Path(case)) = (left.as_ref(), right.as_ref()) else {
+            return None;
+        };
+        let [case] = case.as_slice() else {
+            return None;
+        };
+        let DataType::TaggedUnion(union) = check(left, self.signature, None).ok()? else {
+            return None;
+        };
+        if !union
+            .cases()
+            .iter()
+            .any(|candidate| candidate.name() == case)
+        {
+            return None;
+        }
+        let test = format!("{} is {case}", path.join("."));
+        let suggestion = if *op == BinaryOp::Ne {
+            format!("!({test})")
+        } else {
+            test
+        };
+        Some(format!(
+            "a tagged case is tested with `is`: write `{suggestion}`"
+        ))
+    }
+
     fn peek(&self) -> Option<&Tok<'a>> {
         self.tokens.get(self.pos).map(|spanned| &spanned.tok)
     }
@@ -3667,6 +3717,43 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_case_comparisons_suggest_a_case_test_without_changing_equality() {
+        let union = DataType::TaggedUnion(
+            TaggedUnionType::new(vec![
+                crate::datatype::TaggedCase::new("Editor", StructType::new(vec![]).unwrap())
+                    .unwrap(),
+                crate::datatype::TaggedCase::new("Writer", StructType::new(vec![]).unwrap())
+                    .unwrap(),
+            ])
+            .unwrap(),
+        );
+        let signature = Signature::new()
+            .with(
+                "data",
+                DataType::Struct(
+                    StructType::new(vec![TypeField::new("by", union.clone())]).unwrap(),
+                ),
+            )
+            .with("other", union);
+        for (source, suggestion) in [
+            ("data.by != Editor {}", "!(data.by is Editor)"),
+            ("data.by == Editor {}", "data.by is Editor"),
+            ("true && data.by != Editor {}", "!(data.by is Editor)"),
+        ] {
+            let errors = compile(source, &signature).unwrap_err();
+            assert_eq!(
+                errors[0].message,
+                format!("a tagged case is tested with `is`: write `{suggestion}`")
+            );
+            assert!(compile(suggestion, &signature).is_ok());
+            assert_eq!(&source[errors[0].range.clone()], "{");
+        }
+        assert!(compile("data.by != other", &signature).is_ok());
+        let errors = compile("data.by != Missing {}", &signature).unwrap_err();
+        assert_eq!(errors[0].message, "unexpected trailing input");
+    }
 
     #[test]
     fn member_refusals_distinguish_absence_cases_and_missing_fields() {
