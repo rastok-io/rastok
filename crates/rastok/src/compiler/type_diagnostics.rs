@@ -61,6 +61,9 @@ fn render(ty: &DataType, names: &[(&str, &DataType)], depth: usize) -> String {
             format!("enum {{ {} }}", symbols.join(", "))
         }
         DataType::StructuralUnion(union) => {
+            if let [DataType::Null, ty] | [ty, DataType::Null] = union.branches() {
+                return format!("{}?", render(ty, names, depth - 1));
+            }
             let mut branches: Vec<_> = union
                 .branches()
                 .iter()

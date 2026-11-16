@@ -952,6 +952,15 @@ pub enum UnaryOp {
     Neg,
 }
 
+impl fmt::Display for UnaryOp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Not => "!",
+            Self::Neg => "-",
+        })
+    }
+}
+
 /// Binary operators.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryOp {
@@ -983,6 +992,26 @@ pub enum BinaryOp {
     Or,
 }
 
+impl fmt::Display for BinaryOp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Mul => "*",
+            Self::Div => "/",
+            Self::Rem => "%",
+            Self::Add => "+",
+            Self::Sub => "-",
+            Self::Eq => "==",
+            Self::Ne => "!=",
+            Self::Lt => "<",
+            Self::Le => "<=",
+            Self::Gt => ">",
+            Self::Ge => ">=",
+            Self::And => "&&",
+            Self::Or => "||",
+        })
+    }
+}
+
 /// The registered function vocabulary of the subset.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Function {
@@ -1006,6 +1035,20 @@ pub enum Function {
     /// Final-member presence. The parser lowers `has(object.member)` to
     /// `[object, literal-member-name]`, never a potentially failing read.
     Has,
+}
+
+impl fmt::Display for Function {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Asset => "asset",
+            Self::Duration => "duration",
+            Self::Timestamp => "timestamp",
+            Self::Size => "size",
+            Self::Decimal => "decimal",
+            Self::MediaType => "media_type",
+            Self::Has => "has",
+        })
+    }
 }
 
 /// Compiles expression text against a signature into a typed tree.
@@ -2592,7 +2635,7 @@ fn check(expr: &Expr, signature: &Signature, text: Option<&str>) -> Result<DataT
                 {
                     Ok(inner)
                 }
-                _ => Err(fail(format!("operator does not accept a {inner:?}"))),
+                _ => Err(fail(format!("`{op}` does not accept {inner}"))),
             }
         }
         Expr::Binary { op, left, right } => {
@@ -2605,11 +2648,8 @@ fn check(expr: &Expr, signature: &Signature, text: Option<&str>) -> Result<DataT
                 signature
             };
             let rhs = check(right, rhs_signature, text)?;
-            binary_type(*op, &lhs, &rhs).ok_or_else(|| {
-                fail(format!(
-                    "operator {op:?} does not accept {lhs:?} and {rhs:?}"
-                ))
-            })
+            binary_type(*op, &lhs, &rhs)
+                .ok_or_else(|| fail(format!("`{op}` does not accept {lhs} and {rhs}")))
         }
         Expr::Ternary {
             cond,
@@ -2659,7 +2699,7 @@ fn check(expr: &Expr, signature: &Signature, text: Option<&str>) -> Result<DataT
                         .map(|field| field.ty().clone())
                         .ok_or_else(|| fail(format!("the struct has no declared member `{name}`")))
                 }
-                other => Err(fail(format!("a {other:?} cannot be indexed"))),
+                other => Err(fail(format!("a {other} cannot be indexed"))),
             }
         }
         Expr::Call { function, args } => match function {
@@ -2722,7 +2762,7 @@ fn check(expr: &Expr, signature: &Signature, text: Option<&str>) -> Result<DataT
                     | DataType::Array(_)
                     | DataType::Map(_)
                     | DataType::Variant => Ok(DataType::INT),
-                    other => Err(fail(format!("`size` does not accept a {other:?}"))),
+                    other => Err(fail(format!("`size` does not accept a {other}"))),
                 }
             }
         },
@@ -3258,7 +3298,7 @@ fn eval_expr(expr: &Expr, bindings: &dyn Bindings) -> Result<EvalValue, Error> {
                     Ok(EvalValue::Int(fields.len() as i64))
                 }
                 (function, values) => Err(fault(format!(
-                    "{function:?} does not accept [{}]",
+                    "`{function}` does not accept [{}]",
                     values
                         .iter()
                         .map(EvalValue::kind_name)
@@ -3571,7 +3611,7 @@ fn arithmetic(op: BinaryOp, lhs: EvalValue, rhs: EvalValue) -> Result<EvalValue,
             .map(|duration| EvalValue::Duration(duration.as_nanoseconds()))
             .ok_or_else(time_overflow),
         (op, lhs, rhs) => Err(fault(format!(
-            "{op:?} does not accept {} and {}",
+            "`{op}` does not accept {} and {}",
             lhs.kind_name(),
             rhs.kind_name()
         ))),
@@ -3718,6 +3758,45 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn refusals_display_source_operators_and_types() {
+        let signature = Signature::new().with("xs", DataType::array(DataType::Text));
+        for operator in ["+", "-", "*", "/", "%", "<", "<=", ">", ">=", "&&", "||"] {
+            let errors = compile(&format!("xs {operator} xs"), &signature).unwrap_err();
+            assert_eq!(
+                errors[0].message,
+                format!("`{operator}` does not accept array<text> and array<text>")
+            );
+        }
+        for operator in ["!", "-"] {
+            let errors = compile(&format!("{operator}xs"), &signature).unwrap_err();
+            assert_eq!(
+                errors[0].message,
+                format!("`{operator}` does not accept array<text>")
+            );
+        }
+        assert_eq!(BinaryOp::Eq.to_string(), "==");
+        assert_eq!(BinaryOp::Ne.to_string(), "!=");
+        for (source, expected) in [
+            ("size(true)", "`size` does not accept a bool"),
+            ("true[0]", "a bool cannot be indexed"),
+        ] {
+            assert_eq!(
+                compile(source, &signature).unwrap_err()[0].message,
+                expected
+            );
+        }
+        let dynamic = Signature::new().with("data", DataType::Variant);
+        let bindings = BTreeMap::from([(String::from("data"), EvalValue::Bool(true))]);
+        for (source, expected) in [
+            ("data + data", "`+` does not accept bool and bool"),
+            ("size(data)", "`size` does not accept [bool]"),
+        ] {
+            let tree = compile(source, &dynamic).unwrap();
+            assert_eq!(eval(&tree, &bindings).unwrap_err().message, expected);
+        }
+    }
 
     #[test]
     fn empty_case_comparisons_suggest_a_case_test_without_changing_equality() {

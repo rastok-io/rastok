@@ -361,6 +361,15 @@ fn r009_untyped_empty_bindings_keep_their_original_type_and_identity() {
 }
 
 #[test]
+fn r223_operator_refusals_use_source_spellings() {
+    assert_check_refuses(
+        "N-types-printed-in-debug-form.rkg",
+        "E-EXPR",
+        &["`+` does not accept array<text> and array<text>"],
+    );
+}
+
+#[test]
 fn r009_an_empty_struct_is_not_a_map_and_the_refusal_names_the_map_syntax() {
     assert_check_refuses(
         "R-009-empty-struct-in-a-map-place.rkg",

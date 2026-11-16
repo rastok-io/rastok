@@ -2173,6 +2173,11 @@ impl fmt::Display for DataType {
         match self {
             Self::Null => f.write_str("null"),
             Self::Bool => f.write_str("bool"),
+            &Self::INT => f.write_str("int"),
+            &Self::LONG => f.write_str("long"),
+            &Self::UINT => f.write_str("uint"),
+            &Self::FLOAT => f.write_str("float"),
+            &Self::DOUBLE => f.write_str("double"),
             Self::Integer(IntegerType::Signed(width)) => write!(f, "int{}", width.bits()),
             Self::Integer(IntegerType::Unsigned(width)) => write!(f, "uint{}", width.bits()),
             Self::Float(width) => write!(f, "float{}", width.bits()),
@@ -2184,7 +2189,33 @@ impl fmt::Display for DataType {
             Self::MediaType => f.write_str("media_type"),
             Self::Bytes(BinaryType::Variable) => f.write_str("bytes"),
             Self::Bytes(BinaryType::Fixed(length)) => write!(f, "bytes({})", length.get()),
-            Self::Temporal(temporal) => write!(f, "{temporal:?}"),
+            &Self::DURATION => f.write_str("duration"),
+            &Self::TIMESTAMP => f.write_str("timestamp"),
+            Self::Temporal(TemporalType::Date(DateUnit::Day)) => f.write_str("date"),
+            Self::Temporal(TemporalType::Time(TimeUnit::Nanosecond)) => f.write_str("time"),
+            Self::Temporal(TemporalType::TimestampNtz(TimeUnit::Nanosecond)) => {
+                f.write_str("timestamp_ntz")
+            }
+            Self::Temporal(temporal) => match temporal {
+                TemporalType::Date(unit) => write!(f, "date({})", date_unit_name(*unit)),
+                TemporalType::Time(unit) => write!(f, "time({})", time_unit_name(*unit)),
+                TemporalType::Timestamp { unit, zone } => write!(
+                    f,
+                    "timestamp({}, {:?})",
+                    time_unit_name(*unit),
+                    match zone {
+                        TimeZone::Utc => "UTC",
+                        TimeZone::Named(name) => name.as_str(),
+                    }
+                ),
+                TemporalType::TimestampNtz(unit) => {
+                    write!(f, "timestamp_ntz({})", time_unit_name(*unit))
+                }
+                TemporalType::Duration(unit) => write!(f, "duration({})", time_unit_name(*unit)),
+                TemporalType::Interval(unit) => {
+                    write!(f, "interval({})", interval_unit_name(*unit))
+                }
+            },
             Self::Uuid => f.write_str("uuid"),
             Self::Struct(_) => f.write_str("struct"),
             Self::Map(map) => write!(f, "map<{},{}>", map.key(), map.value()),
@@ -2193,7 +2224,19 @@ impl fmt::Display for DataType {
                 None => write!(f, "array<{}>", array.element()),
             },
             Self::Enum(_) => f.write_str("enum"),
-            Self::StructuralUnion(_) => f.write_str("structural union"),
+            Self::StructuralUnion(union) => {
+                let branches = union.branches();
+                if let [Self::Null, ty] | [ty, Self::Null] = branches {
+                    return write!(f, "{ty}?");
+                }
+                for (index, ty) in branches.iter().enumerate() {
+                    if index != 0 {
+                        f.write_str(" | ")?;
+                    }
+                    write!(f, "{ty}")?;
+                }
+                Ok(())
+            }
             Self::TaggedUnion(_) => f.write_str("tagged union"),
             Self::Variant => f.write_str("variant"),
         }
@@ -2389,6 +2432,49 @@ mod tests {
     use alloc::collections::BTreeMap;
 
     #[test]
+    fn type_display_uses_source_names_and_preserves_logical_parameters() {
+        for (ty, text) in [
+            (DataType::INT, "int"),
+            (DataType::LONG, "long"),
+            (DataType::UINT, "uint"),
+            (DataType::FLOAT, "float"),
+            (DataType::DOUBLE, "double"),
+            (DataType::DURATION, "duration"),
+            (DataType::TIMESTAMP, "timestamp"),
+            (
+                DataType::array(DataType::Text.optional().unwrap()),
+                "array<text?>",
+            ),
+            (
+                DataType::text_map(DataType::INT.optional().unwrap()),
+                "map<text,int?>",
+            ),
+            (
+                DataType::structural_union(alloc::vec![DataType::Text, DataType::Bool]).unwrap(),
+                "bool | text",
+            ),
+            (
+                DataType::Temporal(TemporalType::Date(DateUnit::Millisecond)),
+                "date(millisecond)",
+            ),
+            (
+                DataType::Temporal(TemporalType::Time(TimeUnit::Second)),
+                "time(second)",
+            ),
+            (
+                DataType::Temporal(TemporalType::Duration(TimeUnit::Second)),
+                "duration(second)",
+            ),
+            (
+                DataType::Temporal(TemporalType::Interval(IntervalUnit::DayTime)),
+                "interval(day_time)",
+            ),
+        ] {
+            assert_eq!(ty.to_string(), text);
+        }
+    }
+
+    #[test]
     fn instance_keys_add_closed_structs_without_widening_map_keys() {
         let scope = StructType::new(alloc::vec![
             TypeField::new("region", DataType::Text),
@@ -2498,7 +2584,7 @@ mod tests {
         assert_eq!(violation.found, ValueKind::Text);
         assert_eq!(
             violation.to_string(),
-            "`payload[*][1]` is declared int32; a text cannot enter it"
+            "`payload[*][1]` is declared int; a text cannot enter it"
         );
     }
 
@@ -2516,7 +2602,7 @@ mod tests {
             .to_string();
         assert_eq!(
             rendered,
-            "`payload[*]` is declared int32; a text cannot enter it"
+            "`payload[*]` is declared int; a text cannot enter it"
         );
         assert!(!rendered.contains(&sentinel));
 

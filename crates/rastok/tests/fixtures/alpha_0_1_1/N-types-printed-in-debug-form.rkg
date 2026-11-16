@@ -1,0 +1,41 @@
+// A message prints types in the Rust debug form
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+// and on the 0.1.1-alpha candidate.
+//
+// Commands, run from this directory:
+//   rastok check N-types-printed-in-debug-form.rkg
+//
+// Today (both versions):
+//   $ rastok check N-types-printed-in-debug-form.rkg
+//   error[E-EXPR]: operator Add does not accept Array(ArrayType { element: Text, length: None }) and Array(ArrayType { element: Text, length: None })
+//     --> N-types-printed-in-debug-form.rkg:36:19
+//      |
+//   36 |       val names = ["x"] + [data]
+//      |                   ^^^^^^^^^^^^^^
+//     = detail: operator Add does not accept Array(ArrayType { element: Text, length: None }) and Array(ArrayType { element: Text, length: None })
+//
+//   error[E-EXPR]: `names` is not a visible name
+//     --> N-types-printed-in-debug-form.rkg:37:13
+//      |
+//   37 |       out = size(names)
+//      |             ^^^^^^^^^^^
+//     = detail: `names` is not a visible name
+//
+// Expected after the fix:
+//   The message writes the types as the source does, for example
+//   `+` does not accept array<text> and array<text>.
+//   Joining two lists with `+` is a separate need: this version has no list concatenation.
+
+graph app : App {
+  input in: text
+  output out: int
+  operator o {
+    input in: text
+    output out: int
+    on in {
+      val names = ["x"] + [data]
+      out = size(names)
+    }
+  }
+  in -> o -> out
+}

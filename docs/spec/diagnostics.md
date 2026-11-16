@@ -39,6 +39,12 @@ cover the refusal, nested boundaries and actual expiry observations.
    **when its check is implemented**, in the same change as its negative
    test. Until then, the prose rule remains normative. The deferred names below describe design intent, not allocated package tags.
 
+Expression and port-type refusals render operators and types in source
+notation (`+`, `array<text?>`, `int`), not Rust debug notation. Parameters
+available only in the logical type model remain explicit when present;
+printing them does not make them accepted source syntax. This changes
+presentation, not diagnostic codes or structured field names.
+
 ## Registry
 
 | Code | Severity | Phase | Home spec | Meaning (informative) |
