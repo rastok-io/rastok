@@ -162,6 +162,66 @@ fn a_ui_port_without_the_ui_is_a_usage_error() {
 }
 
 #[test]
+fn check_without_a_source_reports_its_own_usage() {
+    let output = rastok().arg("check").output().expect("the binary runs");
+    assert_eq!(output.status.code(), Some(2), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "error: `rastok check` needs at least one source file\nusage: rastok check <file.rkg>...\n"
+    );
+}
+
+#[test]
+fn run_without_a_source_refuses_before_loading_options() {
+    for options in [
+        vec![],
+        vec!["--json-logs"],
+        vec!["--deployment", "missing.json"],
+    ] {
+        let output = rastok()
+            .arg("run")
+            .args(options)
+            .output()
+            .expect("the binary runs");
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
+        assert!(output.stdout.is_empty(), "{output:?}");
+        assert_eq!(
+            String::from_utf8(output.stderr).unwrap(),
+            concat!(
+                "error: `rastok run` needs at least one source file\n",
+                "usage: rastok run <file.rkg>... [--file-root <dir>] [--deployment <profile.json>] [--json-logs] [--record <file.rkr>]\n",
+            )
+        );
+    }
+}
+
+#[test]
+fn simulate_without_a_source_refuses_before_loading_options() {
+    for options in [
+        vec![],
+        vec!["--ui"],
+        vec!["--ui", "--ui-port", "8123"],
+        vec!["--deployment", "missing.json"],
+    ] {
+        let output = rastok()
+            .arg("simulate")
+            .args(options)
+            .output()
+            .expect("the binary runs");
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
+        assert!(output.stdout.is_empty(), "{output:?}");
+        assert_eq!(
+            String::from_utf8(output.stderr).unwrap(),
+            concat!(
+                "error: `rastok simulate` needs at least one source file\n",
+                "usage: rastok simulate <file.rkg>... [--deployment <profile.json>] [--compare <dir> | --save <dir>] [--ui [--ui-port <port>]]\n",
+            )
+        );
+    }
+}
+
+#[test]
 fn cli_information_help_uses_stdout_and_succeeds_for_every_alias() {
     let mut help = None;
     for argument in ["--help", "-h", "help"] {

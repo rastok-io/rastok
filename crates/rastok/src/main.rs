@@ -91,7 +91,13 @@ fn main() -> ExitCode {
             println!("rastok {}", env!("CARGO_PKG_VERSION"));
             return ExitCode::SUCCESS;
         }
-        Some((command, paths)) if !paths.is_empty() || command == "connectors" => {
+        Some((command, paths))
+            if !paths.is_empty()
+                || matches!(
+                    command.as_str(),
+                    "connectors" | "check" | "run" | "simulate"
+                ) =>
+        {
             (command.as_str(), paths)
         }
         _ => {
@@ -105,6 +111,12 @@ fn main() -> ExitCode {
         "replay" => replay(paths),
         "--resolve-open-api" => resolve_open_api(paths),
         "check" => {
+            if paths.is_empty() {
+                eprintln!(
+                    "error: `rastok check` needs at least one source file\nusage: rastok check <file.rkg>..."
+                );
+                return ExitCode::from(2);
+            }
             if paths
                 .iter()
                 .any(|argument| matches!(argument.as_str(), "--ui" | "--ui-port"))
@@ -163,7 +175,9 @@ fn main() -> ExitCode {
                 }
             }
             if files.is_empty() {
-                eprintln!("{USAGE}");
+                eprintln!(
+                    "error: `rastok run` needs at least one source file\nusage: rastok run <file.rkg>... [--file-root <dir>] [--deployment <profile.json>] [--json-logs] [--record <file.rkr>]"
+                );
                 return ExitCode::from(2);
             }
             let boot = match deployment.as_deref().map(rastok::deployment_config::load) {
@@ -237,6 +251,12 @@ fn main() -> ExitCode {
                     }
                     _ => files.push(argument.clone()),
                 }
+            }
+            if files.is_empty() {
+                eprintln!(
+                    "error: `rastok simulate` needs at least one source file\nusage: rastok simulate <file.rkg>... [--deployment <profile.json>] [--compare <dir> | --save <dir>] [--ui [--ui-port <port>]]"
+                );
+                return ExitCode::from(2);
             }
             let boot = match deployment.as_deref().map(rastok::deployment_config::load) {
                 Some(Ok(boot)) => Some(boot),
