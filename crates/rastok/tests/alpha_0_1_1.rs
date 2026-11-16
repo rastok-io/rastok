@@ -378,6 +378,14 @@ fn r224_an_empty_map_is_an_expression_argument() {
 }
 
 #[test]
+fn r221_enum_symbols_are_values_inside_a_typed_list() {
+    assert_scenarios_pass(
+        "R-002-enum-symbol-in-a-list.rkg",
+        &["enums.symbols_inside_a_list"],
+    );
+}
+
+#[test]
 fn r009_an_empty_struct_is_not_a_map_and_the_refusal_names_the_map_syntax() {
     assert_check_refuses(
         "R-009-empty-struct-in-a-map-place.rkg",
