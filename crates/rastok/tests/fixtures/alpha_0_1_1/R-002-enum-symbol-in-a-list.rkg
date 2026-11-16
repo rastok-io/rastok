@@ -1,0 +1,38 @@
+// R-002 — An enum symbol is not yet a value inside a list
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check R-002-enum-symbol-in-a-list.rkg
+//
+// Today (candidate):
+//   $ rastok check R-002-enum-symbol-in-a-list.rkg
+//   error[E-EXPR]: `Pending` is not a visible name
+//     --> R-002-enum-symbol-in-a-list.rkg:27:14
+//   error[E-EXPR]: `Pending` is not a visible name
+//     --> R-002-enum-symbol-in-a-list.rkg:36:24
+//
+// Expected after the fix:
+//   The program passes check and its scenario passes: a bare symbol is a value
+//   where the expected element type of the list is that enum, in an Operator
+//   and in a Lab expectation.
+
+type Status = enum { Pending, Done }
+graph app : App {
+  input in: text
+  output many: array<Status>
+  operator o {
+    input in: text
+    output many: array<Status>
+    on in {
+      many = [Pending, Done]
+    }
+  }
+  in -> o
+  o.many -> many
+}
+lab enums {
+  scenario symbols_inside_a_list {
+    app.in = "go"
+    expect app.many == [Pending, Done]
+  }
+}

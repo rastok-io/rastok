@@ -85,7 +85,7 @@ logical instant.
 | `array<T>` | Ordered homogeneous sequence | Variable length |
 | `array<T,N>` | Fixed sequence | Exactly `N` elements, including `N = 0` |
 | `map<K,V>` | Homogeneous keyed collection | Canonical, non-null scalar or enum keys |
-| `enum { ready, done }` | Named unit cases | Write `ready` or `done` where this enum is expected, including opposite an enum operand of `==` or `!=`; a conflicting visible binding refuses |
+| `enum { ready, done }` | Named unit cases | Write `ready` or `done` where this enum is expected, including a typed list element or opposite an enum operand of `==` or `!=`; a conflicting visible binding refuses |
 | `T?` | `T` or null | Absence and null are distinct at a boundary |
 | `A \| B` | Structural union | Branches must be pairwise disjoint; exactly one branch matches |
 | `union { Ok { value: text }, Refused }` | Tagged union | Named cases with closed payloads; the case remains part of the value |

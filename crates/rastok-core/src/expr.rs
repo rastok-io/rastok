@@ -1267,7 +1267,16 @@ fn resolve_enum_symbols(
             resolve_enum_symbols(base, signature, None, text)?;
             resolve_enum_symbols(index, signature, None, text)?;
         }
-        Expr::Call { args, .. } | Expr::List(args) => {
+        Expr::List(items) => {
+            let element = match expected {
+                Some(DataType::Array(array)) => Some(array.element()),
+                _ => None,
+            };
+            for item in items {
+                resolve_enum_symbols(item, signature, element, text)?;
+            }
+        }
+        Expr::Call { args, .. } => {
             for arg in args {
                 resolve_enum_symbols(arg, signature, None, text)?;
             }
@@ -3762,6 +3771,42 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn list_symbols_follow_the_expected_element_type() {
+        let status = DataType::Enum(
+            crate::datatype::EnumType::new(vec!["Pending".into(), "Done".into()]).unwrap(),
+        );
+        for (source, expected) in [
+            ("[Pending, Done]", DataType::array(status.clone())),
+            (
+                "[[Pending], [Done]]",
+                DataType::array(DataType::array(status.clone())),
+            ),
+        ] {
+            let tree = compile_with_expected_type(source, &Signature::new(), &expected).unwrap();
+            assert_eq!(tree.ty, expected);
+            assert!(expected.accepts(&const_eval(&tree, &BTreeMap::new()).unwrap()));
+            assert_eq!(rederive_type(&tree.root, &Signature::new()), Some(expected));
+        }
+        assert!(
+            compile("[Pending]", &Signature::new()).unwrap_err()[0]
+                .message
+                .contains("not a visible name")
+        );
+        let signature = Signature::new().with("Pending", DataType::Text);
+        let expected = DataType::array(status);
+        assert!(
+            compile_with_expected_type("[Pending]", &signature, &expected).unwrap_err()[0]
+                .message
+                .contains("both a visible binding and a symbol")
+        );
+        assert!(
+            compile_with_expected_type("[Missing]", &Signature::new(), &expected).unwrap_err()[0]
+                .message
+                .contains("not a visible name")
+        );
+    }
 
     #[test]
     fn empty_maps_are_expression_atoms_in_every_map_position() {

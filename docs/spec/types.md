@@ -169,7 +169,8 @@ it does not make unrelated fields dynamically typed.
 - `array<T>` is an ordered homogeneous sequence.
 - `enum` is a closed set of named unit cases.
   An enum value is written as its bare symbol, in a position whose expected
-  type is that enum: a struct field, a port, a state cell, or the other
+  type is that enum: a struct field, a port, a state cell, a typed list
+  element (including nested lists), or the other
   operand of `==` / `!=` against an enum value. Lab injections,
   expectation values and mock outputs follow the same rule. The symbol
   introduces no binding and is not an expression name elsewhere. If a
