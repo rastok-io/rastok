@@ -290,7 +290,107 @@ documentation follow-up.
 
 ## Embedded code-size watch before Saga
 
-**Current measurement — 7 October:** both fixed Cortex-M33 workloads pass.
+### Embedded code-size correction, 16 November 2026
+
+The 0.1.1-alpha candidate exceeded the unchanged Retry/recovery code limit
+before this correction: `.text` 976,904 B plus `.rodata` 85,356 B was
+**1,062,260 B**, or **13,684 B above 1 MiB**. The same image completed its
+workload and recovery within the heap limit. Runtime success did not close
+the code-size gate.
+
+The correction changes only construction of temporary sets in independent
+plan validation. Graph Loop proof unions and transformed outcome sets use
+insertion into an ordered set instead of collecting through a temporary
+vector and sorting it. Join and multi-emission validation detect duplicate
+ports by insertion, without copying and sorting the port list. The element
+orders, deduplication, saturated counts, 1,024-outcome refusal and diagnostic
+priority are unchanged. No execution, recovery, codec, package, Contract,
+dependency, build-profile or workload change is included.
+
+| Fixed workload | `.text` | `.rodata` | Code total | Margin below 1 MiB | Peak heap | Margin below 128 KiB |
+|---|---:|---:|---:|---:|---:|---:|
+| Echo, 32 admissions | 898,744 B | 74,428 B | 973,172 B | 75,404 B | 111,684 B | 19,388 B |
+| Retry, complete recovery | 960,704 B | 85,356 B | 1,046,060 B | 2,516 B | 129,268 B | 1,804 B |
+
+Both images report `SPIKE_OK`. Retry retains one operation, three Calls,
+16 frames per channel, four bytes per frame, and 17 records. Its live heap
+is 93,332 B and recovered heap is 93,196 B, with the same 129,268 B peak
+before and after correction. Echo retains 67 records and the same heap
+measurements as P6. Retry saves **16,200 B of code** against the freshly
+rebuilt baseline. Neither limit was raised; the remaining Retry margins
+still require remeasurement before core growth.
+
+The package identities are unchanged:
+
+- Echo: `a062a5a89b3514eda407523eca54910ec81bdcbc613d93f1f7be36f903ba90a1`.
+- Retry: `8c00aa243cabc19a475d505cb2a5882a96055a03e89b5200a3f882cc9569ae54`.
+
+Measurements use Rust 1.97.1, `thumbv8m.main-none-eabihf`, the unchanged spike
+release profile (`opt-level = "z"`, LTO, one codegen unit), QEMU 11.1.3 and
+LLVM 18.1.8 `llvm-size -A`. The code total is `.text + .rodata`, as in the
+earlier qualification; the 1,984 B vector table is not included. Neither
+stack nor layout instrumentation is enabled. Package decode takes 19,953
+QEMU ticks for Retry versus 19,955 before; Echo takes 27,131 versus 27,136
+in P6. Echo's relay measurement remains 1,958 ticks on average. These are
+emulated measurements of the fixed workloads, not a hardware throughput
+claim. Maximum Graph Loop proof memory and decoder stack were not requalified
+by this code-size correction.
+
+Reproduce from the repository root, with the checkout path recorded because
+linked diagnostic paths can affect size:
+
+```sh
+qualification_dir=$(mktemp -d)
+cargo run --offline --locked -p rastok --example retry_spike_package -- "$qualification_dir/retry.rkp" 3
+(
+  cd spikes/rp2350-emu
+  env RASTOK_SPIKE_PACKAGE="$qualification_dir/retry.rkp" \
+    RASTOK_RETRY_OPERATIONS=1 RASTOK_RETRY_FRAMES=16 RASTOK_RETRY_FRAME_BYTES=4 \
+    RUSTFLAGS='-D warnings -C link-arg=-Tlink.x' \
+    cargo build --offline --locked --release --features retry-qualification
+  cp target/thumbv8m.main-none-eabihf/release/rastok-spike-rp2350 "$qualification_dir/retry.elf"
+  env -u RASTOK_SPIKE_PACKAGE -u RASTOK_RETRY_OPERATIONS \
+    -u RASTOK_RETRY_FRAMES -u RASTOK_RETRY_FRAME_BYTES \
+    RUSTFLAGS='-D warnings -C link-arg=-Tlink.x' \
+    cargo build --offline --locked --release
+  cp target/thumbv8m.main-none-eabihf/release/rastok-spike-rp2350 "$qualification_dir/echo.elf"
+)
+for image in "$qualification_dir/retry.elf" "$qualification_dir/echo.elf"; do
+  llvm-size -A "$image"
+  qemu-system-arm -M mps2-an505 -cpu cortex-m33 -kernel "$image" \
+    -nographic -monitor none -serial none \
+    -semihosting-config enable=on,target=native -icount shift=0
+done
+```
+
+Local build logs, ELF files, symbol inventories and QEMU output are retained
+under `/tmp/rastok-retry-size-20261116.9fksti`. The normal Retry build used
+the unchanged package retained from P6; the commands above regenerate that
+workload with the existing package generator. No reference witness is updated.
+
+Qualification of this correction:
+
+| Check | Result |
+|---|---|
+| `cargo fmt --all -- --check` | Exit 0 |
+| Clippy, workspace, all targets and features, `-D warnings` | Exit 0 |
+| Workspace tests, all features, `--no-fail-fast` | 64 groups; 1,898 passed, 0 failed, 0 ignored |
+| Workspace rustdoc, `--no-deps` | Exit 0 |
+| Hosted build, `hosted-ui,hosted-websocket` | Exit 0 |
+| `site_content` integration tests | 21 passed, 0 failed, 0 ignored |
+| Core without default features | Exit 0 on `thumbv8m.main-none-eabihf`, `thumbv7m-none-eabi` and `riscv32imac-unknown-none-elf` |
+| Reference witness checksums | All 39 unchanged: 31 traces, seven test goldens and the Echo spike package |
+| Eight gallery trace comparisons | 29 scenarios passed |
+| Seventeen published examples | Same diagnostics and semantic hashes as P7: 15 accepted, two refused |
+| Regenerated Retry package | Byte-identical to the P6 package used above |
+
+Cargo build, Clippy, tests, rustdoc and cross-target checks use
+`--offline --locked`. The focused Graph Loop proof tests cover ordered set unions,
+saturated counts and deduplication; the existing exact 1,024-outcome limit
+test still passes. Adjacent and non-adjacent duplicate ports retain their
+join and multi-emission refusals.
+
+**Dated measurement — 7 October:** both fixed Cortex-M33 workloads pass.
 Echo uses **112,656 B peak heap / 973,028 B code**, leaving **18,416 B /
 75,548 B** under 128 KiB / 1 MiB. Retry with full recovery uses **130,560 B /
 1,041,440 B**, leaving **512 B / 7,136 B**. The

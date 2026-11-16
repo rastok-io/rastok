@@ -229,8 +229,9 @@ fn steps_at(
                 emission_at(value, scope, &format!("{path}.value"))?;
             }
             DispatchStep::MultiEmit { ports, values } => {
+                let mut distinct = BTreeSet::new();
                 if ports.len() < 2
-                    || ports.iter().collect::<BTreeSet<_>>().len() != ports.len()
+                    || ports.iter().any(|port| !distinct.insert(port))
                     || matches!(values, MultiEmitValues::Tuple(values) if values.len() != ports.len())
                 {
                     return Err(DispatchValidationError::at(

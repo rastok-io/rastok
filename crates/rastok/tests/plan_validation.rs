@@ -2016,17 +2016,23 @@ graph session_echo : App {
 
 #[test]
 fn a_foreign_plan_cannot_smuggle_malformed_join_activation_or_bounds() {
-    let mut duplicate_port = raw_join(true);
-    let rastok::node::HandlerActivation::Join { ports, .. } =
-        &mut operator_handlers(&mut duplicate_port, 1)[0].activation
-    else {
-        panic!("the fixture carries a join")
-    };
-    ports[1] = ports[0].clone();
-    assert!(matches!(
-        ValidatedExecutionPlan::try_new(duplicate_port).unwrap_err(),
-        PlanValidationError::InvalidJoinActivation { node } if node.to_string() == "pair"
-    ));
+    for adjacent in [true, false] {
+        let mut duplicate_port = raw_join(true);
+        let rastok::node::HandlerActivation::Join { ports, .. } =
+            &mut operator_handlers(&mut duplicate_port, 1)[0].activation
+        else {
+            panic!("the fixture carries a join")
+        };
+        if adjacent {
+            ports[1] = ports[0].clone();
+        } else {
+            ports.push(ports[0].clone());
+        }
+        assert!(matches!(
+            ValidatedExecutionPlan::try_new(duplicate_port).unwrap_err(),
+            PlanValidationError::InvalidJoinActivation { node } if node.to_string() == "pair"
+        ));
+    }
 
     let mut zero_bound = raw_join(true);
     let rastok::node::HandlerActivation::Join { last, .. } =

@@ -682,6 +682,10 @@ fn multi_emission_keeps_authored_order_and_checks_every_value_and_target() {
             MultiEmitValues::Broadcast(one.clone()),
         ),
         (
+            vec![a.clone(), b.clone(), a.clone()],
+            MultiEmitValues::Broadcast(one.clone()),
+        ),
+        (
             vec![a.clone(), b.clone()],
             MultiEmitValues::Tuple(vec![one.clone()]),
         ),
