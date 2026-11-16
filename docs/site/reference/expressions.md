@@ -121,6 +121,11 @@ Later `is` tests can read paths narrowed by earlier tests, for example
 `data is Booked && data.receipt is Receipt && data.receipt.note is text`.
 Each test is evaluated only after the preceding tests succeed.
 
+After a type test, fields, indexes and `has` read the selected value of an
+input just as they read a state cell. This also applies after `val copy = data`.
+Copying or passing the value without reading its structure does not decode
+it; type tests and conversions still use its retained union branch.
+
 A struct assigned to a declared type also constructs any optional fields
 that the destination requires. You can bind an inferred struct first and
 then use it in a typed field or output; the original binding keeps its type.

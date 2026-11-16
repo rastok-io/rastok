@@ -409,6 +409,30 @@ fn r217_optional_input_null_tests_match_fields_and_state() {
 }
 
 #[test]
+fn tested_input_reads_match_state_without_changing_identity() {
+    let file = "N-read-inside-a-tested-input.rkg";
+    let output = cli(&["check", file]);
+    assert_status(&output, 0);
+    assert_eq!(
+        stdout(&output),
+        "ok: 5 node(s), semantic hash bb4df46632c5c4febfa022ac3fbbfb57fbab93d87df8416b6fa04075c6bf4f96\n"
+    );
+    assert_scenarios_pass(
+        file,
+        &[
+            "reads.a_field_of_a_present_struct",
+            "reads.a_field_of_an_absent_struct",
+            "reads.a_field_of_one_branch",
+            "reads.the_other_branch",
+            "reads.an_element_of_a_present_list",
+            "reads.an_element_of_an_absent_list",
+            "reads.a_key_of_a_present_map",
+            "reads.a_key_of_an_absent_map",
+        ],
+    );
+}
+
+#[test]
 fn r009_an_empty_struct_is_not_a_map_and_the_refusal_names_the_map_syntax() {
     assert_check_refuses(
         "R-009-empty-struct-in-a-map-place.rkg",

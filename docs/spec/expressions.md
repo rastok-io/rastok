@@ -304,6 +304,13 @@ starts with, ends the fact for the statements that follow, whatever
 value is assigned. A later read sees the declared type again. Check and
 execution cannot disagree on a narrowed read.
 
+Structural reads also apply this rule to a lazily loaded input or a local
+copy of it: member access, indexing and `has` consume its selected value,
+just as they do for a state cell. Loading the payload does not end that
+resolution early at a retained union branch. Carrying a value without
+reading its structure remains lazy; `is` and `as` retain the branch witness
+needed to test or convert its type.
+
 A closed `match` over a tagged union keeps the selected value tagged. In an
 arm selecting one case, member reads on the matched path expose that case's
 payload fields, while reading the whole path or emitting `.` preserves the
