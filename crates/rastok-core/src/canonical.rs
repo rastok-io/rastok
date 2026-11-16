@@ -901,6 +901,42 @@ mod tests {
     }
 
     #[test]
+    fn empty_maps_keep_one_value_and_encoding_without_a_key_witness() {
+        let text = Value::Map(BTreeMap::new());
+        let keyed = Value::KeyedMap(Vec::new());
+        let encoded = Cbor::Array(vec![Cbor::Uint(16), Cbor::Array(vec![])]);
+        assert_eq!(self::value(&text), encoded);
+        assert_eq!(self::value(&keyed), encoded);
+        assert_eq!(encode(&encoded), vec![0x82, 0x10, 0x80]);
+        assert_eq!(text, keyed);
+        let decoded = decode_value(&encoded).unwrap();
+        assert_eq!(decoded, text);
+        assert_eq!(decoded, keyed);
+        for key in [
+            DataType::Text,
+            DataType::INT,
+            DataType::Bool,
+            DataType::Uuid,
+        ] {
+            let ty = DataType::Map(MapType::new(key, DataType::Text).unwrap());
+            assert!(ty.accepts(&text));
+            assert!(ty.accepts(&keyed));
+            assert!(ty.accepts(&decoded));
+            assert_eq!(ty.narrow(decoded.clone(), None).unwrap(), decoded);
+        }
+        assert_eq!(crate::json::write_value(&text).unwrap(), "{}");
+        assert_eq!(crate::json::write_value(&keyed).unwrap(), "{}");
+        assert!(
+            DataType::structural_union(vec![
+                DataType::text_map(DataType::INT),
+                DataType::Map(MapType::new(DataType::INT, DataType::Text).unwrap()),
+            ])
+            .is_err(),
+            "two map types still overlap on the empty value"
+        );
+    }
+
+    #[test]
     fn lossless_header_metadata_reuses_the_canonical_map_and_array_tags() {
         let headers = crate::envelope::MetaValue::Map(BTreeMap::from([
             (

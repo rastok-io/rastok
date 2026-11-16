@@ -334,7 +334,6 @@ fn r002_bare_enum_symbols_use_the_expected_type() {
 }
 
 #[test]
-#[ignore = "R-009, gate P3"]
 fn r009_empty_collections_use_the_expected_element_types() {
     assert_scenarios_pass(
         "R-009-typed-empty-list.rkg",
@@ -343,7 +342,6 @@ fn r009_empty_collections_use_the_expected_element_types() {
 }
 
 #[test]
-#[ignore = "R-009, gate P3"]
 fn r009_an_empty_struct_is_not_a_map_and_the_refusal_names_the_map_syntax() {
     assert_check_refuses(
         "R-009-empty-struct-in-a-map-place.rkg",

@@ -180,6 +180,9 @@ impl PartialEq for EvalValue {
             (Self::List(a), Self::List(b)) => a == b,
             (Self::Map(a), Self::Map(b)) => a == b,
             (Self::KeyedMap(a), Self::KeyedMap(b)) => keyed_map_eq(a, b),
+            (Self::Map(a), Self::KeyedMap(b)) | (Self::KeyedMap(b), Self::Map(a)) => {
+                a.is_empty() && b.is_empty()
+            }
             // Fields compare in SORTED order — by name, like the
             // canonical seal, so order is presentation. Sorting
             // (stable) instead of name-lookup keeps `Eq`'s contract
@@ -1018,6 +1021,7 @@ pub fn compile(text: &str, signature: &Signature) -> Result<Tree, Vec<Diagnostic
 /// Compiles an expression in a position with a declared expected type.
 /// Enum symbols are values only in this context or opposite an enum operand
 /// of `==` / `!=`; they never become visible bindings.
+/// Empty collection constructors use the declared element types.
 ///
 /// # Errors
 /// Returns expression diagnostics, including ambiguous enum symbols.
@@ -1070,6 +1074,9 @@ fn compile_contextual(
     }
     resolve_enum_symbols(&mut root, signature, expected, text)
         .map_err(|diagnostic| vec![diagnostic])?;
+    if let Some(expected) = expected {
+        resolve_empty_collections(&mut root, expected);
+    }
     let ty = check(&root, signature, Some(text)).map_err(|diagnostic| vec![diagnostic])?;
     resolve_narrowed_reads(&mut root, signature);
     // Resolved conversions also spend the transported expression budget.
@@ -1085,6 +1092,69 @@ fn compile_contextual(
         }]);
     }
     Ok(Tree { root, ty })
+}
+
+/// An empty constructor has no element constraint. Resolve only constructors,
+/// never a dynamic collection path, using existing checked conversion nodes.
+fn resolve_empty_collections(root: &mut Expr, expected: &DataType) {
+    if let DataType::StructuralUnion(union) = expected {
+        let mut matching = union
+            .branches()
+            .iter()
+            .filter(|branch| match (&*root, branch) {
+                (Expr::List(items), DataType::Array(array)) => array
+                    .length()
+                    .is_none_or(|n| n.get() as usize == items.len()),
+                (Expr::MapLit(_), DataType::Map(_)) => true,
+                _ => false,
+            });
+        if let Some(branch) = matching.next()
+            && matching.next().is_none()
+        {
+            resolve_empty_collections(root, branch);
+            return;
+        }
+    }
+    let empty = match (&mut *root, expected) {
+        (Expr::List(items), DataType::Array(array)) => {
+            for item in items.iter_mut() {
+                resolve_empty_collections(item, array.element());
+            }
+            items.is_empty()
+                && array.length().is_none_or(|n| n.get() == 0)
+                && expected != &DataType::array(DataType::Variant)
+        }
+        (Expr::MapLit(entries), DataType::Map(map)) => {
+            for (_, value) in entries.iter_mut() {
+                resolve_empty_collections(value, map.value());
+            }
+            entries.is_empty() && expected != &DataType::text_map(DataType::Variant)
+        }
+        (
+            Expr::Ternary {
+                then, otherwise, ..
+            },
+            _,
+        ) => {
+            resolve_empty_collections(then, expected);
+            resolve_empty_collections(otherwise, expected);
+            false
+        }
+        _ => false,
+    };
+    if empty {
+        let value = if matches!(expected, DataType::Map(map) if map.key() != &DataType::Text) {
+            Expr::Literal(Value::Map(BTreeMap::new()))
+        } else {
+            root.clone()
+        };
+        *root = Expr::As {
+            expr: Box::new(value),
+            target: Box::new(NarrowTarget::Type(Box::new(NarrowType::new(
+                expected.clone(),
+            )))),
+        };
+    }
 }
 
 // Resolve source symbols before ordinary type checking. The existing literal
@@ -2615,7 +2685,7 @@ fn check(expr: &Expr, signature: &Signature, text: Option<&str>) -> Result<DataT
         }
         Expr::Is { expr, target } => {
             let source = check(expr, signature, text)?;
-            check_narrowing_compatibility(&source, target).map_err(fail)?;
+            check_narrowing_compatibility(&source, target, expr).map_err(fail)?;
             Ok(DataType::Bool)
         }
         Expr::As { expr, target } => {
@@ -2633,7 +2703,7 @@ fn check(expr: &Expr, signature: &Signature, text: Option<&str>) -> Result<DataT
                 signature
             };
             let source = check(expr, scope, text)?;
-            check_narrowing_compatibility(&source, target).map_err(fail)?;
+            check_narrowing_compatibility(&source, target, expr).map_err(fail)?;
             Ok(match target.as_ref() {
                 NarrowTarget::Type(target) => target.ty().clone(),
                 NarrowTarget::Case { payload, .. } => (**payload).clone(),
@@ -2649,7 +2719,23 @@ pub(crate) fn rederive_type(expr: &Expr, signature: &Signature) -> Option<DataTy
     check(expr, signature, None).ok()
 }
 
-fn check_narrowing_compatibility(source: &DataType, target: &NarrowTarget) -> Result<(), String> {
+fn check_narrowing_compatibility(
+    source: &DataType,
+    target: &NarrowTarget,
+    operand: &Expr,
+) -> Result<(), String> {
+    // A known empty map has no key witness. Do not extend this constructor
+    // rule to a path or a nonempty map whose keys have a different type.
+    if matches!(target, NarrowTarget::Type(ty) if matches!(ty.ty(), DataType::Map(_)))
+        && match operand {
+            Expr::MapLit(entries) => entries.is_empty(),
+            Expr::Literal(Value::Map(entries)) => entries.is_empty(),
+            Expr::Literal(Value::KeyedMap(entries)) => entries.is_empty(),
+            _ => false,
+        }
+    {
+        return Ok(());
+    }
     match target {
         NarrowTarget::Case { name, payload } => match source {
             DataType::TaggedUnion(union)
@@ -2893,6 +2979,9 @@ fn eval_expr(expr: &Expr, bindings: &dyn Bindings) -> Result<EvalValue, Error> {
                 // A member access IS the structural demand.
                 value = concrete(value, bindings)?;
                 match value {
+                    EvalValue::KeyedMap(entries) if entries.is_empty() => {
+                        return Err(fault(format!("`{dotted}` has no member `{segment}`")));
+                    }
                     EvalValue::Map(mut map) => {
                         value = map.remove(segment.as_str()).ok_or_else(|| {
                             fault(format!("`{dotted}` has no member `{segment}`"))
@@ -2956,6 +3045,12 @@ fn eval_expr(expr: &Expr, bindings: &dyn Bindings) -> Result<EvalValue, Error> {
         Expr::Index { base, index } => {
             let base = concrete(eval_expr(base, bindings)?, bindings)?;
             let index = concrete(eval_expr(index, bindings)?, bindings)?;
+            // The empty map has no key witness, including after decoding.
+            if matches!(&base, EvalValue::Map(entries) if entries.is_empty())
+                || matches!(&base, EvalValue::KeyedMap(entries) if entries.is_empty())
+            {
+                return Err(fault(String::from("no such map key")));
+            }
             match (base, index) {
                 (EvalValue::List(items), EvalValue::Int(i)) => usize::try_from(i)
                     .ok()
@@ -3247,6 +3342,8 @@ fn values_equal(lhs: &EvalValue, rhs: &EvalValue) -> bool {
                     .all(|((ka, va), (kb, vb))| ka == kb && values_equal(va, vb))
         }
         (EvalValue::KeyedMap(a), EvalValue::KeyedMap(b)) => keyed_map_eq_by(a, b, values_equal),
+        (EvalValue::Map(a), EvalValue::KeyedMap(b))
+        | (EvalValue::KeyedMap(b), EvalValue::Map(a)) => a.is_empty() && b.is_empty(),
         (EvalValue::Enum(a), EvalValue::Enum(b)) => a == b,
         (
             EvalValue::StructuralUnion {
@@ -3506,6 +3603,159 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_collection_constructors_retain_their_contextual_type() {
+        let signature = Signature::new();
+        for (source, expected) in [
+            ("[]", DataType::array(DataType::Text)),
+            ("[[]]", DataType::array(DataType::array(DataType::Text))),
+            ("{}", DataType::text_map(DataType::INT)),
+            (
+                r#"{"first": []}"#,
+                DataType::text_map(DataType::array(DataType::Text)),
+            ),
+            (
+                "{}",
+                DataType::Map(
+                    crate::datatype::MapType::new(DataType::INT, DataType::Text).unwrap(),
+                ),
+            ),
+            (
+                "[]",
+                DataType::Array(crate::datatype::ArrayType::fixed(DataType::Text, 0).unwrap()),
+            ),
+            ("true ? [] : []", DataType::array(DataType::Text)),
+        ] {
+            let tree = compile_with_expected_type(source, &signature, &expected).unwrap();
+            assert_eq!(tree.ty, expected, "{source}");
+            assert_eq!(
+                rederive_type(&tree.root, &signature),
+                Some(expected.clone())
+            );
+            let value = const_eval(&tree, &BTreeMap::new()).unwrap();
+            assert!(expected.accepts(&value), "{source}: {value:?}");
+        }
+    }
+
+    #[test]
+    fn empty_collection_context_does_not_retype_nonempty_or_dynamic_values() {
+        let array = DataType::array(DataType::Text);
+        let signature = Signature::new().with("items", DataType::array(DataType::Variant));
+        for source in ["items", "[1]", r#"["known"]"#] {
+            assert_eq!(
+                compile_with_expected_type(source, &signature, &array).unwrap(),
+                compile(source, &signature).unwrap(),
+                "{source}"
+            );
+        }
+        let fixed = DataType::Array(crate::datatype::ArrayType::fixed(DataType::Text, 1).unwrap());
+        let tree = compile_with_expected_type("[]", &signature, &fixed).unwrap();
+        assert!(!tree.ty.is_assignable_to(&fixed));
+        let optional = DataType::structural_union(vec![array.clone(), DataType::Null]).unwrap();
+        let tree = compile_with_expected_type("[]", &signature, &optional).unwrap();
+        assert_eq!(tree.ty, array);
+        assert_eq!(rederive_type(&tree.root, &signature), Some(array));
+    }
+
+    #[test]
+    fn empty_collection_conversions_spend_the_resolved_depth_budget() {
+        let signature = Signature::new();
+        let expected = DataType::array(DataType::Text);
+        let accepted = format!("{}[]", "true ? [] : ".repeat(MAX_EXPRESSION_DEPTH - 2));
+        let tree = compile_with_expected_type(&accepted, &signature, &expected).unwrap();
+        assert_eq!(structural_depth(&tree.root), MAX_EXPRESSION_DEPTH);
+        let refused = format!("true ? [] : {accepted}");
+        assert_eq!(
+            structural_depth(&compile(&refused, &signature).unwrap().root),
+            MAX_EXPRESSION_DEPTH
+        );
+        let errors = compile_with_expected_type(&refused, &signature, &expected).unwrap_err();
+        assert_eq!(
+            errors[0].kind,
+            DiagnosticKind::TooDeep {
+                depth: MAX_EXPRESSION_DEPTH + 1
+            }
+        );
+        assert!(
+            errors[0]
+                .message
+                .contains("compiler-added conversions count")
+        );
+    }
+
+    #[test]
+    fn an_empty_map_keeps_equality_and_type_tests_after_decoding() {
+        let map =
+            DataType::Map(crate::datatype::MapType::new(DataType::INT, DataType::Text).unwrap());
+        let signature = Signature::new()
+            .with_type("Entries", map)
+            .with("left", DataType::Variant)
+            .with("right", DataType::Variant);
+        let bindings = BTreeMap::from([
+            ("left".into(), EvalValue::Map(BTreeMap::new())),
+            ("right".into(), EvalValue::KeyedMap(vec![])),
+        ]);
+        assert_eq!(bindings["left"], bindings["right"]);
+        for source in [
+            "left == right",
+            "left is Entries",
+            "right is Entries",
+            "{} is Entries",
+        ] {
+            let tree = compile(source, &signature).unwrap();
+            assert_eq!(
+                eval(&tree, &bindings).unwrap(),
+                EvalValue::Bool(true),
+                "{source}"
+            );
+        }
+        assert!(compile(r#"{"wrong": "key"} as Entries"#, &signature).is_err());
+        let invalid = BTreeMap::from([(
+            "left".into(),
+            EvalValue::Map(BTreeMap::from([(
+                "wrong".into(),
+                EvalValue::Text("key".into()),
+            )])),
+        )]);
+        assert!(eval(&compile("left as Entries", &signature).unwrap(), &invalid).is_err());
+    }
+
+    #[test]
+    fn an_empty_map_keeps_its_missing_key_fault_after_decoding() {
+        for (key, ty) in [
+            (EvalValue::Int(1), DataType::INT),
+            (EvalValue::Text("key".into()), DataType::Text),
+        ] {
+            let signature = Signature::new()
+                .with(
+                    "entries",
+                    DataType::Map(crate::datatype::MapType::new(ty, DataType::Text).unwrap()),
+                )
+                .with("key", DataType::Variant);
+            let tree = compile("entries[key]", &signature).unwrap();
+            let before = BTreeMap::from([
+                ("entries".into(), EvalValue::KeyedMap(vec![])),
+                ("key".into(), key.clone()),
+            ]);
+            let after = BTreeMap::from([
+                ("entries".into(), EvalValue::Map(BTreeMap::new())),
+                ("key".into(), key),
+            ]);
+            let expected = fault(String::from("no such map key"));
+            assert_eq!(eval(&tree, &before), Err(expected.clone()));
+            assert_eq!(eval(&tree, &after), Err(expected));
+        }
+        let signature = Signature::new().with("entries", DataType::text_map(DataType::Text));
+        let member = compile("entries.key", &signature).unwrap();
+        for value in [EvalValue::KeyedMap(vec![]), EvalValue::Map(BTreeMap::new())] {
+            let bindings = BTreeMap::from([("entries".into(), value)]);
+            assert_eq!(
+                eval(&member, &bindings),
+                Err(fault(String::from("`entries.key` has no member `key`")))
+            );
+        }
+    }
 
     #[test]
     fn a_narrowed_optional_read_stores_the_conversion_and_returns_its_branch() {

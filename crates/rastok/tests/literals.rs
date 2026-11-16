@@ -262,6 +262,154 @@ fn hash_of(body: &str) -> String {
 }
 
 #[test]
+fn empty_collections_use_the_declared_type_at_every_boundary() {
+    let source = r#"
+type Bag = struct { members: array<text>, counts: map<text, int> }
+graph app : App {
+  input in: Bag
+  output out: Bag
+  operator empty {
+    input in: Bag
+    output out: Bag
+    var members: array<text> = []
+    var counts: map<text, int> = {:}
+    on in {
+      val none: array<text> = []
+      members = none
+      counts = {:}
+      out = { members = members; counts = counts }
+    }
+  }
+  connector partner : HttpClient {
+    url = "https://partner.example.test/empty"
+    method = "POST"
+    codec = json
+    json_profile = projected
+    output out: Bag
+    timeout = duration("1s")
+    behavior = deterministic
+  }
+  in -> empty -> partner -> out
+  partner.exit -> nothing
+}
+lab test {
+  mock partner { on in { out = { members = []; counts = {:} }; exit = Completed { status = 200 } } }
+  scenario empty {
+    app.in = { members = []; counts = {:} }
+    expect app.out == { members = []; counts = {:} }
+  }
+}
+"#;
+    let compiled = compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
+    let (plan, hash) =
+        rastok::plan::decode(&rastok::plan::encode(&compiled.plan, &compiled.hash)).unwrap();
+    assert_eq!(hash, compiled.hash);
+    let runs = rastok::lab::run(&plan, rastok::plan::GraphVersion(1), &compiled.labs[0]);
+    assert!(runs[0].report.passed(), "{:?}", runs[0].report);
+}
+
+#[test]
+fn empty_collections_keep_nested_and_non_text_key_types() {
+    for (ty, value, predicate) in [
+        ("array<array<text>>", "[[]]", "size(data[0]) == 0"),
+        (
+            "map<text, array<text>>",
+            r#"{"first": []}"#,
+            r#"size(data["first"]) == 0"#,
+        ),
+        ("array<text>?", "[]", "data is Texts && size(data) == 0"),
+        (
+            "map<text, int>?",
+            "{:}",
+            "data is Counts && size(data) == 0",
+        ),
+        ("map<int, text>", "{:}", "size(data) == 0"),
+    ] {
+        let source = format!(
+            r#"
+type Items = {ty}
+type Texts = array<text>
+type Counts = map<text, int>
+graph app : App {{
+  input in: text
+  output out: Items
+  operator empty {{
+    input in: text
+    output out: Items
+    var saved: Items = {value}
+    on in {{ saved = {value}; out = saved }}
+  }}
+  in -> empty -> out
+}}
+lab test {{ scenario empty {{
+  app.in = "go"
+  expect app.out where {predicate}
+}} }}
+"#
+        );
+        let compiled = compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap();
+        let (plan, _) = rastok::plan::decode(&rastok::plan::encode(&compiled.plan, &compiled.hash))
+            .unwrap_or_else(|error| panic!("{ty}: {error:?}"));
+        assert_eq!(plan, compiled.plan, "{ty}");
+        let runs = rastok::lab::run(&plan, rastok::plan::GraphVersion(1), &compiled.labs[0]);
+        assert!(runs[0].report.passed(), "{ty}: {:?}", runs[0].report);
+        let mut decoder = rastok::journal::codec::Decoder::default();
+        let mut restored = Vec::new();
+        for record in &runs[0].records {
+            let encoded = rastok::journal::codec::encode(record);
+            let decoded = decoder.decode(&encoded).unwrap();
+            assert_eq!(&decoded, record, "{ty}");
+            assert_eq!(rastok::journal::codec::encode(&decoded), encoded, "{ty}");
+            restored.push(decoded);
+        }
+        let journal = rastok::journal::MemJournal::from_records(
+            rastok::plan::GraphVersion(1),
+            rastok::time::Timestamp::UNIX_EPOCH,
+            None,
+            &restored,
+        )
+        .unwrap();
+        let mut execution =
+            rastok::runtime::execution::Execution::new(&plan, rastok::plan::GraphVersion(1));
+        execution.recover_from_journal(&journal).unwrap();
+    }
+}
+
+#[test]
+fn empty_collection_inference_is_not_a_struct_or_a_value_prefix() {
+    for (declaration, code, detail) in [
+        ("val members = []", "E-TYPE-UNRESOLVED", "annotation"),
+        ("val counts = {:}", "E-TYPE-UNRESOLVED", "annotation"),
+        ("val counts: map<text, int> = {}", "E-PORT-TYPE", "{:}"),
+        ("val members = array<text> []", "E-EXPR", "array"),
+    ] {
+        let source = format!("{declaration}\ngraph app : App {{ input in: text; in -> out }}");
+        let bag = compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap_err();
+        assert!(
+            bag.diagnostics()
+                .iter()
+                .any(|d| d.code().as_str() == code && d.message().contains(detail)),
+            "{declaration}: {bag:?}"
+        );
+    }
+    let source = r#"
+graph app : App {
+  input in: text
+  output out: map<text, int>
+  operator empty { input in: text; output out: map<text, int>; on in { out = {} } }
+  in -> empty -> out
+}
+"#;
+    let bag = compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap_err();
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .any(|d| d.code().as_str() == "E-PORT-TYPE" && d.message().contains("{:}")),
+        "{bag:?}"
+    );
+}
+
+#[test]
 fn inline_structs_in_arrays_are_host_values_at_every_boundary() {
     let grammar = include_str!("../../../docs/spec/grammar.md");
     let rows_from_grammar = grammar

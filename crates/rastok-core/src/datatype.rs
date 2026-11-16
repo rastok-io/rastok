@@ -1600,6 +1600,10 @@ impl DataType {
                 }
                 None
             }
+            // The empty map inhabits every map type and has one wire value.
+            // Its key/value types come from the destination, not a missing key.
+            (Self::Map(_), Value::Map(entries)) if entries.is_empty() => None,
+            (Self::Map(_), Value::KeyedMap(entries)) if entries.is_empty() => None,
             (Self::Map(map), Value::Map(entries)) if map.key() == &Self::Text => {
                 for (key, item) in entries {
                     path.push(ValuePathSegment::MapValue(key.clone()));

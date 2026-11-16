@@ -2141,6 +2141,9 @@ pub fn apply_struct_write(data: &mut envelope::Value, path: &[String], leaf: env
         *data = leaf;
         return;
     };
+    if matches!(data, envelope::Value::KeyedMap(entries) if entries.is_empty()) {
+        *data = envelope::Value::Map(BTreeMap::new());
+    }
     match data {
         envelope::Value::Struct(fields) => {
             if let Some((_, existing)) = fields.iter_mut().find(|(name, _)| name == first) {
@@ -2896,6 +2899,7 @@ pub fn to_meta_value(value: &Value) -> Result<MetaValue, Fault> {
                 .collect::<Result<alloc::vec::Vec<_>, _>>()?;
             MetaValue::Array(scalars)
         }
+        Value::KeyedMap(entries) if entries.is_empty() => MetaValue::Map(BTreeMap::new()),
         Value::Map(entries) => {
             let mut mapped = BTreeMap::new();
             for (key, value) in entries {
@@ -2931,6 +2935,34 @@ mod emission_tests;
 #[cfg(test)]
 mod metadata_conformance_tests {
     use super::*;
+
+    #[test]
+    fn empty_map_carriers_keep_metadata_and_patch_behavior_after_decoding() {
+        let text = Value::Map(BTreeMap::new());
+        let keyed = Value::KeyedMap(vec![]);
+        assert_eq!(
+            to_meta_value(&text).unwrap(),
+            MetaValue::Map(BTreeMap::new())
+        );
+        assert_eq!(
+            to_meta_value(&text).unwrap(),
+            to_meta_value(&keyed).unwrap()
+        );
+        let mut before = keyed;
+        let mut after = text;
+        let path = [String::from("key")];
+        apply_struct_write(&mut before, &path, Value::Int(1));
+        apply_struct_write(&mut after, &path, Value::Int(1));
+        assert_eq!(before, after);
+        assert!(matches!(before, Value::Map(_)));
+        assert!(
+            to_meta_value(&Value::KeyedMap(vec![(
+                Value::Int(1),
+                Value::Array(vec![])
+            )]))
+            .is_err()
+        );
+    }
 
     #[test]
     fn metadata_map_conversion_preserves_keys_scalars_and_first_refusal() {

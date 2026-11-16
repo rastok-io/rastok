@@ -864,6 +864,7 @@ fn write_into(
             }
             out.push('}');
         }
+        Value::KeyedMap(entries) if entries.is_empty() => out.push_str("{}"),
         Value::KeyedMap(_) => {
             return Err(JsonError {
                 offset: 0,
