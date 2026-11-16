@@ -26,6 +26,27 @@ measured historical-editor test.
 
 ## VS Code
 
+Install the VSIX from the release assets. The 0.1.1-alpha release job produces
+`rastok-dsl-0.1.1.vsix`; once that release is published:
+
+```sh
+curl -fLO https://github.com/rastok-io/rastok/releases/download/v0.1.1-alpha/rastok-dsl-0.1.1.vsix
+code --install-extension rastok-dsl-0.1.1.vsix
+```
+
+For VSCodium, use `codium --install-extension rastok-dsl-0.1.1.vsix` instead.
+Confirm installation with `code --list-extensions` or
+`codium --list-extensions`: the identifier is `rastok.rastok-dsl`.
+No Marketplace publication is required.
+
+Before publication, or to test a checkout, build the same package locally with
+Node and the system `zip` tool. The output path must not already exist:
+
+```sh
+node tools/package-editor.mjs /tmp/rastok-editor
+code --install-extension /tmp/rastok-editor/rastok-dsl-0.1.1.vsix
+```
+
 From the repository root, open a development window with the extension loaded:
 
 ```sh
@@ -40,11 +61,9 @@ On macOS, if `code` is unavailable, run **Shell Command: Install 'code' command
 in PATH** from the command palette first. The development flag loads the local
 extension in that window; it does not publish or install it globally.
 
-For regular windows on macOS/Linux, copy this whole directory to
-`~/.vscode/extensions/rastok-dsl/`, then restart VS Code. The destination must
-contain `package.json`, not another nested `rastok-dsl` directory. Refresh that
-copy after grammar changes; the development-window method reads the checkout
-directly. No Marketplace publication or package download is needed.
+Install an updated VSIX after grammar changes; the development-window method
+instead reads the checkout directly. Do not copy files into the editor's managed
+extension directory.
 See the official [development-host flags](https://code.visualstudio.com/api/working-with-extensions/testing-extension#advanced-setup-your-own-runner)
 and [local extension loading](https://code.visualstudio.com/api/working-with-extensions/publishing-extension).
 
@@ -68,7 +87,7 @@ Use `rastok check` for semantic validation.
 The dependency-free lexical smoke tests also run in repository CI:
 
 ```sh
-node --test editors/vscode/rastok-dsl/grammar.test.cjs
+node --test editors/vscode/rastok-dsl/grammar.test.cjs tools/package-editor.test.mjs
 ```
 
 The full tokenizer test uses installed TextMate and Oniguruma modules through
