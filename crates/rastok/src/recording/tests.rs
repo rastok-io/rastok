@@ -190,6 +190,50 @@ fn boot_dependent_recording_refuses_instead_of_copying_resolved_values() {
 }
 
 #[test]
+fn the_published_approval_example_retires_each_request_instance() {
+    use crate::compiler::hir::ScenarioStep;
+    use crate::node::{Lifecycle, Trigger};
+
+    let mut compilation = compile(include_str!(
+        "../../../../docs/examples/expense-approval.rkg"
+    ));
+    let mut scenarios = 0;
+    for world in &mut compilation.labs {
+        for simulation in &mut world.simulations {
+            for scenario in &mut simulation.scenarios {
+                // Observe closure after both the join bound and the idle period.
+                scenario.steps.push(ScenarioStep::Advance {
+                    nanos: 96 * 60 * 60 * 1_000_000_000,
+                });
+            }
+        }
+        for run in lab::run_program(
+            &compilation.plan,
+            compilation.hash,
+            GraphVersion(1),
+            world,
+            None,
+        ) {
+            assert!(run.report.passed(), "{:?}", run.report);
+            let stops = run
+                .records
+                .iter()
+                .filter(|record| {
+                    matches!(record,
+                        Record::Transaction(record)
+                            if record.owner_path.to_string() == "decide"
+                                && record.trigger == Trigger::Lifecycle(Lifecycle::Stop)
+                    )
+                })
+                .count();
+            assert_eq!(stops, 1, "{} retires its request", run.report.scenario);
+            scenarios += 1;
+        }
+    }
+    assert_eq!(scenarios, 3);
+}
+
+#[test]
 fn keyed_retries_loops_and_bounded_joins_survive_recording_and_prefix_reconstruction() {
     for source in [
         include_str!("../../../../examples/keyed-retry.rkg"),
