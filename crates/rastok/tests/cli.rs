@@ -251,6 +251,128 @@ fn cli_information_help_uses_stdout_and_succeeds_for_every_alias() {
     }
 }
 
+#[track_caller]
+#[allow(clippy::expect_used)] // A subprocess failure must fail the test harness.
+fn assert_command_help(command: &str, expected: &str) {
+    for option in ["--help", "-h"] {
+        let output = rastok()
+            .args([command, option])
+            .output()
+            .expect("the binary runs");
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{command} {option}: {output:?}"
+        );
+        assert!(output.stderr.is_empty(), "{output:?}");
+        assert_eq!(output.stdout, expected.as_bytes());
+    }
+}
+
+#[test]
+fn command_help_for_new() {
+    assert_command_help(
+        "new",
+        concat!(
+            "usage: rastok new <name>\n\n",
+            "Creates <name>.rkg: an App, a typed Operator and a Lab scenario.\n",
+            "Use a bare name, without a path or extension. Existing files are never overwritten.\n\n",
+            "  -h, --help  print this help\n",
+        ),
+    );
+}
+
+#[test]
+fn command_help_for_check() {
+    assert_command_help(
+        "check",
+        concat!(
+            "usage: rastok check <file.rkg>...\n\n",
+            "Checks types, wiring and Contracts, then prints the Node count and semantic hash.\n",
+            "It neither executes the App nor writes a plan file.\n\n",
+            "  -h, --help  print this help\n",
+        ),
+    );
+}
+
+#[test]
+fn command_help_for_run() {
+    assert_command_help(
+        "run",
+        concat!(
+            "usage: rastok run <file.rkg>... [--file-root <dir>] [--deployment <profile.json>] [--json-logs] [--record <file.rkr>]\n\n",
+            "Executes the App with physical Drivers. Each line of standard input is one\n",
+            "text submission; App outputs go to standard output.\n\n",
+            "  --file-root <dir>            enable the File Driver inside this root\n",
+            "  --deployment <profile.json>  boot settings, secret coordinates and attestations\n",
+            "  --json-logs                  structured events on standard error\n",
+            "  --record <file.rkr>          write a diagnostic recording; refuses an existing path\n",
+            "  -h, --help                   print this help\n",
+        ),
+    );
+}
+
+#[test]
+fn command_help_for_simulate() {
+    assert_command_help(
+        "simulate",
+        concat!(
+            "usage: rastok simulate <file.rkg>... [--deployment <profile.json>] [--compare <dir> | --save <dir>] [--ui [--ui-port <port>]]\n\n",
+            "Simulation uses Lab mocks and virtual time, not physical Drivers.\n",
+            "Without --ui, it runs every scenario. A unit without a Lab refuses.\n\n",
+            "  --deployment <profile.json>  supply boot values and attestations needed by the graph\n",
+            "  --compare <dir>              compare with reviewed traces; exclusive with --save\n",
+            "  --save <dir>                 create or replace reference traces; exclusive with --compare\n",
+            "  --ui                        open a paused debugger; requires hosted-ui\n",
+            "  --ui-port <port>             select a nonzero TCP port; requires --ui\n",
+            "  -h, --help                   print this help\n",
+        ),
+    );
+}
+
+#[test]
+fn command_help_for_replay() {
+    assert_command_help(
+        "replay",
+        concat!(
+            "usage: rastok replay <file.rkr> [--ui [--ui-port <port>]]\n\n",
+            "Prints App outputs on stdout and a record-count/seal summary on stderr,\n",
+            "without Driver I/O. Replay needs no original source.\n\n",
+            "  --ui             open read-only recorded history; requires hosted-ui\n",
+            "  --ui-port <port>  select a nonzero TCP port; requires --ui\n",
+            "  -h, --help        print this help\n",
+        ),
+    );
+}
+
+#[test]
+fn command_help_for_connectors() {
+    assert_command_help(
+        "connectors",
+        concat!(
+            "usage: rastok connectors [--json]\n\n",
+            "Lists Contracts, modes, ports, settings, installed implementations,\n",
+            "Lab bindings and untested cases. Neither constructs a Driver nor probes a service.\n\n",
+            "  --json     produce the machine-readable catalogue on stdout\n",
+            "  -h, --help  print this help\n",
+        ),
+    );
+}
+
+#[test]
+fn command_help_for_openapi_resolution() {
+    assert_command_help(
+        "--resolve-open-api",
+        concat!(
+            "usage: rastok --resolve-open-api <project-dir> [--check]\n\n",
+            "Matches static HTTP endpoints to OpenAPI 3.0/3.1 documents and writes\n",
+            "openapi.generated.rkg types, leaving authored sources untouched.\n\n",
+            "  --check    write nothing and refuse missing or stale output\n",
+            "  -h, --help  print this help\n",
+        ),
+    );
+}
+
 #[test]
 fn cli_information_version_uses_the_package_version_on_stdout() {
     let output = rastok().arg("--version").output().expect("the binary runs");

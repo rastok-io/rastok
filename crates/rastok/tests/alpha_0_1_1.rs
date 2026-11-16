@@ -678,7 +678,6 @@ fn r078_simulate_alone_names_the_missing_source_and_its_own_usage() {
 }
 
 #[test]
-#[ignore = "R-080, gate P5"]
 fn r080_each_command_explains_its_own_usage_and_options() {
     for command in ["run", "check", "simulate", "new", "replay", "connectors"] {
         for flag in ["--help", "-h"] {

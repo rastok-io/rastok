@@ -30,6 +30,67 @@ mod connector_catalogue;
 
 const USAGE: &str = "usage: rastok new <name>\n       rastok connectors [--json]\n       rastok check <file.rkg>...\n       rastok run <file.rkg>... [--file-root <dir>] [--deployment <profile.json>] [--json-logs] [--record <file.rkr>]\n       rastok replay <file.rkr> [--ui [--ui-port <port>]]\n       rastok simulate <file.rkg>... [--deployment <profile.json>] [--compare <dir> | --save <dir>] [--ui [--ui-port <port>]]\n       rastok --resolve-open-api <project-dir> [--check]\n       rastok --help | -h | help\n       rastok --version";
 
+fn command_help(command: &str) -> Option<&'static str> {
+    Some(match command {
+        "new" => concat!(
+            "usage: rastok new <name>\n\n",
+            "Creates <name>.rkg: an App, a typed Operator and a Lab scenario.\n",
+            "Use a bare name, without a path or extension. Existing files are never overwritten.\n\n",
+            "  -h, --help  print this help",
+        ),
+        "check" => concat!(
+            "usage: rastok check <file.rkg>...\n\n",
+            "Checks types, wiring and Contracts, then prints the Node count and semantic hash.\n",
+            "It neither executes the App nor writes a plan file.\n\n",
+            "  -h, --help  print this help",
+        ),
+        "run" => concat!(
+            "usage: rastok run <file.rkg>... [--file-root <dir>] [--deployment <profile.json>] [--json-logs] [--record <file.rkr>]\n\n",
+            "Executes the App with physical Drivers. Each line of standard input is one\n",
+            "text submission; App outputs go to standard output.\n\n",
+            "  --file-root <dir>            enable the File Driver inside this root\n",
+            "  --deployment <profile.json>  boot settings, secret coordinates and attestations\n",
+            "  --json-logs                  structured events on standard error\n",
+            "  --record <file.rkr>          write a diagnostic recording; refuses an existing path\n",
+            "  -h, --help                   print this help",
+        ),
+        "simulate" => concat!(
+            "usage: rastok simulate <file.rkg>... [--deployment <profile.json>] [--compare <dir> | --save <dir>] [--ui [--ui-port <port>]]\n\n",
+            "Simulation uses Lab mocks and virtual time, not physical Drivers.\n",
+            "Without --ui, it runs every scenario. A unit without a Lab refuses.\n\n",
+            "  --deployment <profile.json>  supply boot values and attestations needed by the graph\n",
+            "  --compare <dir>              compare with reviewed traces; exclusive with --save\n",
+            "  --save <dir>                 create or replace reference traces; exclusive with --compare\n",
+            "  --ui                        open a paused debugger; requires hosted-ui\n",
+            "  --ui-port <port>             select a nonzero TCP port; requires --ui\n",
+            "  -h, --help                   print this help",
+        ),
+        "replay" => concat!(
+            "usage: rastok replay <file.rkr> [--ui [--ui-port <port>]]\n\n",
+            "Prints App outputs on stdout and a record-count/seal summary on stderr,\n",
+            "without Driver I/O. Replay needs no original source.\n\n",
+            "  --ui             open read-only recorded history; requires hosted-ui\n",
+            "  --ui-port <port>  select a nonzero TCP port; requires --ui\n",
+            "  -h, --help        print this help",
+        ),
+        "connectors" => concat!(
+            "usage: rastok connectors [--json]\n\n",
+            "Lists Contracts, modes, ports, settings, installed implementations,\n",
+            "Lab bindings and untested cases. Neither constructs a Driver nor probes a service.\n\n",
+            "  --json     produce the machine-readable catalogue on stdout\n",
+            "  -h, --help  print this help",
+        ),
+        "--resolve-open-api" => concat!(
+            "usage: rastok --resolve-open-api <project-dir> [--check]\n\n",
+            "Matches static HTTP endpoints to OpenAPI 3.0/3.1 documents and writes\n",
+            "openapi.generated.rkg types, leaving authored sources untouched.\n\n",
+            "  --check    write nothing and refuse missing or stale output\n",
+            "  -h, --help  print this help",
+        ),
+        _ => return None,
+    })
+}
+
 /// Comparing is read-only; saving explicitly creates or replaces reference traces.
 enum GoldenAction {
     Compare(std::path::PathBuf),
@@ -85,6 +146,7 @@ fn main() -> ExitCode {
     let (command, paths) = match args.split_first() {
         Some((command, [])) if matches!(command.as_str(), "--help" | "-h" | "help") => {
             println!("{USAGE}");
+            println!("\nRun `rastok <command> --help` for the options of one command.");
             return ExitCode::SUCCESS;
         }
         Some((command, [])) if command == "--version" => {
@@ -105,6 +167,12 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    if matches!(paths, [flag] if matches!(flag.as_str(), "--help" | "-h"))
+        && let Some(help) = command_help(command)
+    {
+        println!("{help}");
+        return ExitCode::SUCCESS;
+    }
     match command {
         "new" => new_graph(paths),
         "connectors" => connector_catalogue::run(paths),
