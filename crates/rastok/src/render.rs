@@ -21,6 +21,7 @@ use std::fmt::Write as _;
 mod scenario;
 pub(crate) mod value;
 pub use scenario::scenario_failures;
+pub use value::render_data;
 
 /// The compiled sources a rendering resolves spans against, in
 /// [`SourceId`] order — the same order they were handed to the

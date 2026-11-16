@@ -16,12 +16,12 @@ rastok --version
 
 Help prints to stdout and exits successfully.
 `--version` prints `rastok` and the package version. Neither accepts additional
-arguments. Each command also accepts `--help` or `-h`, with the same stream
-and exit status.
+arguments. `rastok <command> --help` prints that command's usage and options on
+stdout and exits successfully; `-h` is the same.
 Run `rastok <command> --help` for the options of one command.
 
-Syntax: brackets mean optional, `|` separates alternatives, and `...` means
-one or more files. Multiple source files form one compilation unit.
+Brackets mean optional, `|` separates alternatives, and `...` accepts multiple
+files in one compilation unit.
 
 ## Create a program: new
 
@@ -30,8 +30,8 @@ rastok new <name>
 ```
 
 `rastok new hello` creates `hello.rkg`: an App, a typed Operator and a Lab
-scenario. Use a bare name, without a path or extension. Existing files are
-never overwritten. Printed follow-up commands are not executed.
+scenario. Names exclude paths and extensions. Existing files are never
+overwritten; follow-up commands are printed, not executed.
 
 ## Check a program: check
 
@@ -87,10 +87,14 @@ printf 'hello\n' | rastok run examples/echo.rkg --record echo.rkr
 ```
 
 Executes the App with physical Drivers. Each line of standard input is one
-text submission; App outputs go to standard output. It can start processes,
-write files or contact services. With one App output, each envelope prints its value alone.
-With several output ports, each line keeps the `port: value` prefix, even if
-only one port emits. Lab scenarios are not executed.
+text submission; App outputs go to standard output. Stdin does not decode JSON.
+Processes, file writes and network effects are real;
+Lab scenarios are not executed.
+
+A text value prints bare. Any other value prints as one line of JSON, the
+same projection the Lab uses in its reports. Protected fields remain redacted.
+Raw payloads without a materialized value retain their byte-to-text rendering.
+With several declared output ports, every line keeps its `port: value` prefix.
 
 - `--file-root` enables the physical File Driver within an explicit root.
 - `--deployment` reads typed boot settings, secret coordinates, attestations
@@ -111,12 +115,11 @@ only one port emits. Lab scenarios are not executed.
 rastok replay <file.rkr> [--ui [--ui-port <port>]]
 ```
 
-`rastok replay echo.rkr` prints App outputs on stdout and a record-count/seal
-summary on stderr, without Driver I/O. It uses the same output format as `run`:
-values alone for a single App output, `port: value` for several outputs.
+`rastok replay echo.rkr` prints App outputs in `run`'s format on stdout and a
+record-count/seal summary on stderr, without Driver I/O.
 `--ui` uses simulation's port rules and opens read-only recorded history.
-Missing source lines are explicit. Replay needs no original source, ignores
-source files on disk, and cannot execute the program or create a Lab scenario.
+Missing source lines are explicit. Replay needs no original source and cannot
+execute the program or create a Lab scenario.
 
 ## Inspect capabilities: connectors
 
@@ -124,10 +127,9 @@ source files on disk, and cannot execute the program or create a Lab scenario.
 rastok connectors [--json]
 ```
 
-The human view lists Contracts, modes, ports, settings, installed
-implementations, Lab bindings and untested cases. `--json` produces the machine-readable
-catalogue on stdout. Neither constructs a Driver nor probes a service.
-Checker support does not prove deployment support.
+Lists Contracts, modes, ports, settings, implementations, Lab bindings and
+untested cases, as text or `--json` on stdout. It constructs no Driver and
+probes no service; checker support does not prove deployment support.
 
 ## Resolve project schemas: --resolve-open-api
 

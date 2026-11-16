@@ -109,7 +109,7 @@ rastok replay "$demo_root/copy.rkr"
 The run printed:
 
 ```text
-bytes_read: Materialized(Int(11))
+bytes_read: 11
 recorded: 12 causal records · seal bfa1df6bc5ab7eaeb42419aa0203af9b5350ee0e4252f96ed4fcb2c4159f7977
 ```
 
@@ -118,7 +118,7 @@ replay printed:
 
 ```text
 replay: 12 causal records · seal bfa1df6bc5ab7eaeb42419aa0203af9b5350ee0e4252f96ed4fcb2c4159f7977 · completed recording · no Driver I/O
-bytes_read: Materialized(Int(11))
+bytes_read: 11
 ```
 
 Replay prints the same recorded output and seal without reading or replacing

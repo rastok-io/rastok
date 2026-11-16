@@ -703,7 +703,6 @@ fn r080_each_command_explains_its_own_usage_and_options() {
 }
 
 #[test]
-#[ignore = "R-081, gate P5"]
 fn r081_struct_outputs_use_the_lab_json_projection() {
     let output = run_with_input("R-081-struct-output.rkg", "hello\nworld\n");
     assert_status(&output, 0);
@@ -715,7 +714,6 @@ fn r081_struct_outputs_use_the_lab_json_projection() {
 }
 
 #[test]
-#[ignore = "R-081, gate P5"]
 fn r081_multiple_outputs_keep_port_names_and_render_their_values() {
     let output = run_with_input("R-081-two-outputs.rkg", "hello\n");
     assert_status(&output, 0);
@@ -724,7 +722,6 @@ fn r081_multiple_outputs_keep_port_names_and_render_their_values() {
 }
 
 #[test]
-#[ignore = "R-081, gate P5"]
 fn r081_non_text_stdin_remains_refused_with_the_named_limit() {
     let output = run_with_input("R-081-typed-input.rkg", "{\"id\":\"A\",\"amount\":3}\n");
     assert_status(&output, 1);
