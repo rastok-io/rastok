@@ -66,6 +66,9 @@ elements refuses that binding with `E-PORT-TYPE`: declare
 Nonempty collections infer their type from their elements; disagreeing
 element types infer `variant`. `{}` is a struct, never an empty map.
 
+`{:}` also works inside expressions: `size({:})` is `0`, and map values
+and list elements may contain an empty map.
+
 | Signature | Result | Availability and constraints |
 |---|---|---|
 | `size(text \| bytes \| array<T> \| map<K,V> \| variant)` | `int` | Unicode character count for text, byte count for bytes, entry count otherwise |

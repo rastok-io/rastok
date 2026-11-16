@@ -38,6 +38,11 @@ Rastok-owned extensions include exact `decimal(...)`, canonical
 type/case tests through `is`, structs, tagged unions and the
 Arrow-anchored logical types.
 
+The empty map spelling `{:}` is an expression atom wherever a map literal
+is admitted, including function arguments and nested collections.
+`size({:})` evaluates to zero, just as `size([])` does. The host value
+spelling `{}` remains an empty struct, not an alternative empty map.
+
 Every divergence from the CEL-compatible core is named and tested. In
 particular, Rastok's comments, line-bounded strings, absence rules,
 narrowing and type domain are not described as upstream CEL behavior.

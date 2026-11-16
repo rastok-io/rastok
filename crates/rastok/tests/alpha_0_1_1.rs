@@ -370,6 +370,14 @@ fn r223_operator_refusals_use_source_spellings() {
 }
 
 #[test]
+fn r224_an_empty_map_is_an_expression_argument() {
+    assert_scenarios_pass(
+        "R-009-empty-map-as-an-argument.rkg",
+        &["empty_arguments.both_empty_forms_measure_zero"],
+    );
+}
+
+#[test]
 fn r009_an_empty_struct_is_not_a_map_and_the_refusal_names_the_map_syntax() {
     assert_check_refuses(
         "R-009-empty-struct-in-a-map-place.rkg",
