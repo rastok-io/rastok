@@ -2263,8 +2263,14 @@ fn recognized_data_annotations_reach_the_annotated_port_schema() {
     let (hir, bag) = check_source(source);
     assert!(!bag.has_errors(), "v15 carries valid policy metadata");
     let hir = hir.expect("the annotation reaches checked HIR");
-    assert_eq!(hir.named_schemas.len(), 1);
-    assert!(!hir.named_schemas[0].1.annotations().is_empty());
+    // Plain aliases also supply diagnostic names, without acquiring policy.
+    let annotated: Vec<_> = hir
+        .named_schemas
+        .iter()
+        .filter(|(_, schema)| !schema.annotations().is_empty())
+        .map(|(name, _)| name.as_str())
+        .collect();
+    assert_eq!(annotated, ["Prompt"]);
     assert!(
         !hir.app.nodes[0]
             .ports

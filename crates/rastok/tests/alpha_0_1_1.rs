@@ -490,7 +490,6 @@ fn r169_a_keyed_and_bounded_join_remains_accepted_without_a_warning() {
 }
 
 #[test]
-#[ignore = "R-090, gate P4"]
 fn r090_different_structs_are_reported_by_name_and_differing_fields() {
     assert_check_refuses(
         "R-090-two-structs.rkg",
@@ -500,7 +499,6 @@ fn r090_different_structs_are_reported_by_name_and_differing_fields() {
 }
 
 #[test]
-#[ignore = "R-090, gate P4"]
 fn r090_an_inferred_output_reports_its_actual_structural_difference() {
     assert_check_refuses(
         "R-090-untyped-output.rkg",
