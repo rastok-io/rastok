@@ -94,7 +94,7 @@ hosted-websocket = [
 
 [dependencies]
 blake3 = { workspace = true, features = ["std"] }
-rastok-core = { path = "../rastok-core", version = "=0.1.0-alpha" }
+rastok-core = { path = "../rastok-core", version = "=0.1.1-alpha" }
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.151"
 serde_yaml_ng = "=0.10.0"

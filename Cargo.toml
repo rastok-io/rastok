@@ -3,8 +3,8 @@ members = ["crates/rastok", "crates/rastok-core"]
 resolver = "3"
 
 [workspace.package]
-# Prepared release identity; publication stays disabled until the opening order.
-version = "0.1.0-alpha"
+# Prepared release identity; publication requires the maintainer's release order.
+version = "0.1.1-alpha"
 edition = "2024"
 rust-version = "1.97.1"
 authors = ["Yoann Pantic"]

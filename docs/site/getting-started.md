@@ -10,9 +10,11 @@ Rust to use it.
 ## Install and run Rastok
 
 <!-- quickstart:start -->
-Rastok is currently in alpha. Two prebuilt binaries are available:
-**macOS Apple silicon** and **Linux x86-64**, on the
-[release page](https://github.com/rastok-io/rastok/releases/tag/v0.1.0-alpha).
+Rastok is currently in alpha. The release job builds binaries for
+**macOS Apple silicon** and **Linux x86-64**. The commands below install
+`v0.1.1-alpha` once it is published on the
+[release page](https://github.com/rastok-io/rastok/releases/tag/v0.1.1-alpha).
+Before publication, use the source-checkout instructions below.
 Copy the command for your system below into a terminal.
 It downloads, verifies and installs Rastok.
 
@@ -21,7 +23,7 @@ It downloads, verifies and installs Rastok.
 For Macs with an Apple M-series chip, running macOS 11 or later:
 
 ```sh
-( cd "$(mktemp -d)" && curl -fLO https://github.com/rastok-io/rastok/releases/download/v0.1.0-alpha/rastok-0.1.0-alpha-aarch64-apple-darwin.tar.gz && curl -fLO https://github.com/rastok-io/rastok/releases/download/v0.1.0-alpha/rastok-0.1.0-alpha-aarch64-apple-darwin.tar.gz.sha256 && shasum -a 256 -c rastok-0.1.0-alpha-aarch64-apple-darwin.tar.gz.sha256 && tar -xzf rastok-0.1.0-alpha-aarch64-apple-darwin.tar.gz rastok && mkdir -p "$HOME/.local/bin" && install -m 755 rastok "$HOME/.local/bin/rastok" ) && export PATH="$HOME/.local/bin:$PATH" && rastok --version
+( cd "$(mktemp -d)" && curl -fLO https://github.com/rastok-io/rastok/releases/download/v0.1.1-alpha/rastok-0.1.1-alpha-aarch64-apple-darwin.tar.gz && curl -fLO https://github.com/rastok-io/rastok/releases/download/v0.1.1-alpha/rastok-0.1.1-alpha-aarch64-apple-darwin.tar.gz.sha256 && shasum -a 256 -c rastok-0.1.1-alpha-aarch64-apple-darwin.tar.gz.sha256 && tar -xzf rastok-0.1.1-alpha-aarch64-apple-darwin.tar.gz rastok && mkdir -p "$HOME/.local/bin" && install -m 755 rastok "$HOME/.local/bin/rastok" ) && export PATH="$HOME/.local/bin:$PATH" && rastok --version
 ```
 
 ### Linux x86-64
@@ -32,11 +34,11 @@ For Linux ARM64, older glibc or a system using musl, use the source installation
 below.
 
 ```sh
-( cd "$(mktemp -d)" && curl -fLO https://github.com/rastok-io/rastok/releases/download/v0.1.0-alpha/rastok-0.1.0-alpha-x86_64-unknown-linux-gnu.tar.gz && curl -fLO https://github.com/rastok-io/rastok/releases/download/v0.1.0-alpha/rastok-0.1.0-alpha-x86_64-unknown-linux-gnu.tar.gz.sha256 && sha256sum -c rastok-0.1.0-alpha-x86_64-unknown-linux-gnu.tar.gz.sha256 && tar -xzf rastok-0.1.0-alpha-x86_64-unknown-linux-gnu.tar.gz rastok && mkdir -p "$HOME/.local/bin" && install -m 755 rastok "$HOME/.local/bin/rastok" ) && export PATH="$HOME/.local/bin:$PATH" && rastok --version
+( cd "$(mktemp -d)" && curl -fLO https://github.com/rastok-io/rastok/releases/download/v0.1.1-alpha/rastok-0.1.1-alpha-x86_64-unknown-linux-gnu.tar.gz && curl -fLO https://github.com/rastok-io/rastok/releases/download/v0.1.1-alpha/rastok-0.1.1-alpha-x86_64-unknown-linux-gnu.tar.gz.sha256 && sha256sum -c rastok-0.1.1-alpha-x86_64-unknown-linux-gnu.tar.gz.sha256 && tar -xzf rastok-0.1.1-alpha-x86_64-unknown-linux-gnu.tar.gz rastok && mkdir -p "$HOME/.local/bin" && install -m 755 rastok "$HOME/.local/bin/rastok" ) && export PATH="$HOME/.local/bin:$PATH" && rastok --version
 ```
 
 Each command installs `rastok` in `~/.local/bin` for your user account and
-prints `rastok 0.1.0-alpha`. To use it in new terminals, add
+prints `rastok 0.1.1-alpha`. To use it in new terminals, add
 `export PATH="$HOME/.local/bin:$PATH"` to your shell configuration:
 `~/.zshrc` for zsh (the macOS default), or `~/.bashrc` for bash.
 
@@ -61,7 +63,7 @@ rustup toolchain install 1.97.1
 compiles them on your machine and installs the executable:
 
 ```sh
-cargo +1.97.1 install rastok --version 0.1.0-alpha --locked --features hosted-ui,hosted-websocket
+cargo +1.97.1 install rastok --version 0.1.1-alpha --locked --features hosted-ui,hosted-websocket
 rastok --version
 ```
 
@@ -107,7 +109,7 @@ creates a `rastok-examples` checkout; it does not build or reinstall Rastok.
 Run these commands from the directory where you want to keep it (Git is required):
 
 ```sh
-git clone --depth 1 --branch v0.1.0-alpha https://github.com/rastok-io/rastok.git rastok-examples
+git clone --depth 1 --branch v0.1.1-alpha https://github.com/rastok-io/rastok.git rastok-examples
 cd rastok-examples
 rastok simulate examples/echo.rkg
 ```
