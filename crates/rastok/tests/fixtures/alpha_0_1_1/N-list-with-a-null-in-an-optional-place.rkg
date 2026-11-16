@@ -1,0 +1,67 @@
+// A list literal that mixes null and a value does not fit array<T?>
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+// and on the 0.1.1-alpha candidate.
+//
+// Commands, run from this directory:
+//   rastok check N-list-with-a-null-in-an-optional-place.rkg
+//
+// Today (both versions):
+//   $ rastok check N-list-with-a-null-in-an-optional-place.rkg
+//   error[E-PORT-TYPE]: `names` requires array<structural union>; this value is array<variant>: the value is not assignable to the declared type
+//     --> N-list-with-a-null-in-an-optional-place.rkg:43:7
+//      |
+//   43 |       val names: array<text?> = [null, data]
+//      |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+//     = port: names
+//     = expected: array<structural union>
+//     = found: array<variant>
+//
+//   error[E-EXPR]: `names` is not a visible name
+//     --> N-list-with-a-null-in-an-optional-place.rkg:44:13
+//      |
+//   44 |       out = size(names)
+//      |             ^^^^^^^^^^^
+//     = detail: `names` is not a visible name
+//
+// Expected after the fix:
+//   Check accepts the program and both scenarios pass. A nonempty list written where a
+//   type is declared is checked against that type, element by element, as the empty
+//   list is. The message, when one remains, writes `array<text?>` as the source does,
+//   not `array<structural union>`.
+//   Witnesses that pass today: `[null]`, `[data]` and `[null, null]` in the same place,
+//   and the map of the second operator.
+
+graph app : App {
+  input in: text
+  input other: text
+  output listed: int
+  output mapped: int
+  operator as_list {
+    input in: text
+    output out: int
+    on in {
+      val names: array<text?> = [null, data]
+      out = size(names)
+    }
+  }
+  operator as_map {
+    input in: text
+    output out: int
+    on in {
+      val names: map<text,text?> = { "first": null, "second": data }
+      out = size(names)
+    }
+  }
+  in -> as_list -> listed
+  other -> as_map -> mapped
+}
+lab optional_elements {
+  scenario a_list_holds_a_null_and_a_text {
+    app.in = "a"
+    expect app.listed == 2
+  }
+  scenario a_map_holds_a_null_and_a_text {
+    app.other = "a"
+    expect app.mapped == 2
+  }
+}

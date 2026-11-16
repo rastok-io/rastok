@@ -579,6 +579,16 @@ fn contextual_enum_list_constructors_round_trip_the_plan() {
 }
 
 #[test]
+fn contextual_optional_list_constructors_round_trip_the_plan() {
+    let source = include_str!("fixtures/alpha_0_1_1/N-list-with-a-null-in-an-optional-place.rkg");
+    let compiled = compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
+    let (plan, hash) =
+        rastok::plan::decode(&rastok::plan::encode(&compiled.plan, &compiled.hash)).unwrap();
+    assert_eq!(plan, compiled.plan);
+    assert_eq!(hash, compiled.hash);
+}
+
+#[test]
 fn inline_structs_in_arrays_are_host_values_at_every_boundary() {
     let grammar = include_str!("../../../docs/spec/grammar.md");
     let rows_from_grammar = grammar

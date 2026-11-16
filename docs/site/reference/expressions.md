@@ -66,6 +66,10 @@ elements refuses that binding with `E-PORT-TYPE`: declare
 Nonempty collections infer their type from their elements; disagreeing
 element types infer `variant`. `{}` is a struct, never an empty map.
 
+At a typed position, nonempty lists check their elements individually:
+`[null, data]` fits `array<text?>` when `data` is `text`. Without an
+expected type, `[null, "a"]` remains `array<variant>`.
+
 `{:}` also works inside expressions: `size({:})` is `0`, and map values
 and list elements may contain an empty map.
 

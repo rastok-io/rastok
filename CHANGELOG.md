@@ -84,6 +84,9 @@ large `advance` may now fail. Reference traces changed: **none**.
   operand of an equality test; ambiguous symbols refuse with `E-EXPR`.
 - Propagate the expected enum element type into list literals, including
   nested lists and Lab expectations, without making symbols visible names.
+- Check nonempty list literals element by element in typed positions,
+  including mixed null and text elements for `array<text?>`. Unconstrained
+  mixed lists retain `variant` elements and their existing representation.
 - Type empty arrays and maps from their declared destination, including
   nested fields, state, mocks and Lab assertions. Without an expected type,
   empty collections retain `variant` elements, as in 0.1.0. A later typed
