@@ -261,6 +261,33 @@ fn readme_quickstart_is_a_verbatim_copy_of_the_site_source() {
 }
 
 #[test]
+fn quickstart_installs_the_package_release() {
+    let source = std::fs::read_to_string(root().join("docs/site/getting-started.md")).unwrap();
+    let quickstart = source
+        .split_once("<!-- quickstart:start -->")
+        .unwrap()
+        .1
+        .split_once("<!-- quickstart:end -->")
+        .unwrap()
+        .0;
+    let version = env!("CARGO_PKG_VERSION");
+    let releases = "https://github.com/rastok-io/rastok/releases";
+    assert!(quickstart.contains(&format!("{releases}/tag/v{version}")));
+    for target in ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu"] {
+        let archive = format!("rastok-{version}-{target}.tar.gz");
+        assert!(quickstart.contains(&format!(
+            "curl -fLO {releases}/download/v{version}/{archive} "
+        )));
+        assert!(quickstart.contains(&format!(
+            "curl -fLO {releases}/download/v{version}/{archive}.sha256 "
+        )));
+        assert!(quickstart.contains(&format!("tar -xzf {archive} rastok")));
+    }
+    assert!(quickstart.contains(&format!("prints `rastok {version}`")));
+    assert!(quickstart.contains(&format!("install rastok --version {version} --locked")));
+}
+
+#[test]
 fn quickstart_fetches_examples_at_the_installed_release() {
     let source = std::fs::read_to_string(root().join("docs/site/getting-started.md")).unwrap();
     let section = source
