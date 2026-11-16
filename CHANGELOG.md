@@ -81,8 +81,10 @@ large `advance` may now fail. Reference traces changed: **none**.
 - Resolve bare enum symbols from their expected type or the opposite enum
   operand of an equality test; ambiguous symbols refuse with `E-EXPR`.
 - Type empty arrays and maps from their declared destination, including
-  nested fields, state, mocks and Lab assertions. Bindings without an element
-  constraint now require an annotation, such as `val members: array<text> = []`.
+  nested fields, state, mocks and Lab assertions. Without an expected type,
+  empty collections retain `variant` elements, as in 0.1.0. A later typed
+  destination refuses a more precise requirement with `E-PORT-TYPE` and
+  suggests an annotation such as `val members: array<text> = []`.
   `{}` remains a struct; a map mismatch points to `{:}`. An empty map keeps
   its value and declared type through package and journal decoding regardless
   of its key type, using the unchanged encoding.

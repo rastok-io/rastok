@@ -1070,10 +1070,14 @@ the DSL an explicit data literal uses the tagged-block / list pattern :
 | `media_type` | `media_type("application/json")` | open canonical concrete Internet media type; wildcards/ranges refuse |
 | whole payload | `asset("path", "content_type")` ; `base64!("ct") { … }` | fresh bytes + canonical `meta.ext.content_type`, whole-data position ONLY (a nested field has no `meta.ext`) |
 
-An empty `[]` or `{:}` has no element to infer from: it takes its
-element, key and value types from the expected type of its position.
-Without an expected type, declare one, for example
-`val members: array<text> = []`. A nonempty collection can infer its type
+An empty `[]` or `{:}` has no element to infer from. Where its position
+expects a type, it takes its element, key and value types from that type.
+Where nothing is expected, as in `val members = []`, its elements are
+`variant`: `[]` is `array<variant>` and `{:}` is `map<text,variant>`, as
+a literal whose elements disagree already is. Check refuses such a value
+at the first position that requires a more precise type, and the message
+asks for an annotation on the binding, for example
+`val members: array<text> = []`. A nonempty collection infers its type
 from its elements. The type belongs on the declaration, not before the
 value: `array<T> []` is not a value form.
 `{}` is always the empty struct; in a position that expects a map,

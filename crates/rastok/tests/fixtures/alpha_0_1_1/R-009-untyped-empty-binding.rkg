@@ -1,0 +1,113 @@
+// R-009 — An untyped empty binding ran on 0.1.0-alpha and is refused by the candidate
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+// the candidate returns to the 0.1.0 behaviour.
+//
+// Commands, run from this directory:
+//   rastok check R-009-untyped-empty-binding.rkg
+//   rastok simulate R-009-untyped-empty-binding.rkg
+//
+// rastok 0.1.0-alpha:
+//   ok: 4 node(s), semantic hash 7b5094ade2ee706cb9fd7324914e5b716dc4f8e2fbdfe5bdca40a89dfcfcda49
+//   PASS empty.an_untyped_empty_list
+//   PASS empty.an_untyped_empty_map
+//   PASS empty.an_inferred_struct_with_an_empty_list
+//   3 scenario(s), 0 failed
+//
+// Candidate at db46005:
+//   error[E-TYPE-UNRESOLVED]: an empty collection needs a type annotation, for example `val members: array<text> = []`
+//     --> R-009-untyped-empty-binding.rkg:76:7
+//      |
+//   76 |       val members = []
+//      |       ^^^^^^^^^^^^^^^^
+//     = type: unsolved collection element
+//
+//   error[E-EXPR]: `members` is not a visible name
+//     --> R-009-untyped-empty-binding.rkg:77:13
+//      |
+//   77 |       out = size(members)
+//      |             ^^^^^^^^^^^^^
+//     = detail: `members` is not a visible name
+//
+//   error[E-TYPE-UNRESOLVED]: an empty collection needs a type annotation, for example `val members: array<text> = []`
+//     --> R-009-untyped-empty-binding.rkg:84:7
+//      |
+//   84 |       val counts = {:}
+//      |       ^^^^^^^^^^^^^^^^
+//     = type: unsolved collection element
+//
+//   error[E-EXPR]: `counts` is not a visible name
+//     --> R-009-untyped-empty-binding.rkg:85:13
+//      |
+//   85 |       out = size(counts)
+//      |             ^^^^^^^^^^^^
+//     = detail: `counts` is not a visible name
+//
+//   error[E-TYPE-UNRESOLVED]: an empty collection needs a type annotation, for example `val members: array<text> = []`
+//     --> R-009-untyped-empty-binding.rkg:92:20
+//      |
+//   92 |       val body = { items = [], total = 0 }
+//      |                    ^^^^^
+//     = type: unsolved collection element
+//
+//   error[E-EXPR]: `body` is not a visible name
+//     --> R-009-untyped-empty-binding.rkg:93:13
+//      |
+//   93 |       out = size(body.items) + body.total
+//      |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+//     = detail: `body` is not a visible name
+//
+// Expected after the rework:
+//   The same output as rastok 0.1.0-alpha, semantic hash included. Where nothing gives a
+//   type, `[]` is `array<variant>` and `{:}` is `map<text,variant>`, as on 0.1.0 and as a
+//   literal whose elements disagree already is. A typed destination still refuses such
+//   a value at check, and the message asks for an annotation on the binding.
+
+graph app : App {
+  input in: text
+  input second: text
+  input third: text
+  output listed: int
+  output mapped: int
+  output built: int
+  operator as_list {
+    input in: text
+    output out: int
+    on in {
+      val members = []
+      out = size(members)
+    }
+  }
+  operator as_map {
+    input in: text
+    output out: int
+    on in {
+      val counts = {:}
+      out = size(counts)
+    }
+  }
+  operator as_struct {
+    input in: text
+    output out: int
+    on in {
+      val body = { items = [], total = 0 }
+      out = size(body.items) + body.total
+    }
+  }
+  in -> as_list -> listed
+  second -> as_map -> mapped
+  third -> as_struct -> built
+}
+lab empty {
+  scenario an_untyped_empty_list {
+    app.in = "a"
+    expect app.listed == 0
+  }
+  scenario an_untyped_empty_map {
+    app.second = "a"
+    expect app.mapped == 0
+  }
+  scenario an_inferred_struct_with_an_empty_list {
+    app.third = "a"
+    expect app.built == 0
+  }
+}

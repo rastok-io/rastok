@@ -119,7 +119,7 @@ and import design still to be discussed.
 | `decimal("12.30")` | `number` carrying an exact decimal | A declared decimal target checks precision and rescales exactly |
 | `duration("2h30m")` | `duration` | Signed duration; units include `h`, `m`, `s`, `ms`, `us`, `ns` |
 | `{ room = "kitchen", celsius = 21 }` | Declared `struct` | Braced field assignments, `name = value`, checked against the struct type expected where the literal appears |
-| `[]`, `{:}` | Empty array, empty map | Element, key and value types come from the declared destination; `{}` is an empty struct, not a map |
+| `[]`, `{:}` | Empty array, empty map | Use the expected type; without one, `array<variant>` and `map<text,variant>`; `{}` is an empty struct, not a map |
 | `timestamp("2026-10-30T12:00:00Z")` | `timestamp` | Parsed civil instant |
 | `media_type("application/json")` | `media_type` | Parses and canonicalizes a concrete media type |
 | `json! { "count": 42 }` | `variant` | Also accepts scalar JSON; duplicate keys refuse; numbers stay exact |
@@ -130,10 +130,14 @@ and import design still to be discussed.
 Tagged frontends occupy a complete value position. Bind their result before
 using it inside a larger expression. See [Expressions and dispatch](expressions.md).
 
-Declare the type when an empty collection has no typed destination:
+Without an expected type, `val members = []` infers `array<variant>` and
+`val counts = {:}` infers `map<text,variant>`. The same rule applies to
+`{ items = [] }`. A destination requiring more precise elements refuses
+such a binding with `E-PORT-TYPE`; annotate the declaration instead:
 `val members: array<text> = []` or `var counts: map<text, int> = {:}`.
-With elements, `val members = ["alice"]` infers `array<text>`.
-There is no `array<text> []` value prefix.
+With elements, `val members = ["alice"]` infers `array<text>`; mixed
+elements such as `[1, "a"]` infer `array<variant>`. The type belongs on
+the declaration: there is no `array<text> []` value prefix.
 
 ## JSON request values
 

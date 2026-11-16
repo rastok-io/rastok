@@ -424,9 +424,36 @@ lab test {{ scenario empty {{
 
 #[test]
 fn empty_collection_inference_is_not_a_struct_or_a_value_prefix() {
+    for (declaration, name, ty) in [
+        (
+            "val members = []",
+            "members",
+            rastok::datatype::DataType::array(rastok::datatype::DataType::Variant),
+        ),
+        (
+            "val counts = {:}",
+            "counts",
+            rastok::datatype::DataType::text_map(rastok::datatype::DataType::Variant),
+        ),
+    ] {
+        let source = format!(
+            "{declaration}\ngraph app : App {{ input in: text; operator copy {{ input in: text; on in {{ out = {name} }} }} in -> copy -> out }}"
+        );
+        let compiled = compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap();
+        let output = compiled
+            .plan
+            .resolved_ports()
+            .boundary()
+            .iter()
+            .find(|port| port.port() == &rastok::node::Port::new("out").unwrap())
+            .unwrap();
+        assert_eq!(output.ty(), &ty);
+        let (decoded, hash) =
+            rastok::plan::decode(&rastok::plan::encode(&compiled.plan, &compiled.hash)).unwrap();
+        assert_eq!(decoded, compiled.plan);
+        assert_eq!(hash, compiled.hash);
+    }
     for (declaration, code, detail) in [
-        ("val members = []", "E-TYPE-UNRESOLVED", "annotation"),
-        ("val counts = {:}", "E-TYPE-UNRESOLVED", "annotation"),
         ("val counts: map<text, int> = {}", "E-PORT-TYPE", "{:}"),
         ("val members = array<text> []", "E-EXPR", "array"),
     ] {
@@ -454,6 +481,66 @@ graph app : App {
             .any(|d| d.code().as_str() == "E-PORT-TYPE" && d.message().contains("{:}")),
         "{bag:?}"
     );
+}
+
+#[test]
+fn untyped_empty_bindings_refuse_at_a_precise_destination_with_annotation_help() {
+    for (name, value, ty, annotation) in [
+        (
+            "members",
+            "[]",
+            "array<text>",
+            "val members: array<text> = []",
+        ),
+        (
+            "counts",
+            "{:}",
+            "map<text, int>",
+            "val counts: map<text, int> = {:}",
+        ),
+    ] {
+        let source = format!(
+            "graph app : App {{ input in: text; output out: {ty}; operator copy {{ input in: text; output out: {ty}; on in {{ val {name} = {value}; out = {name} }} }} in -> copy -> out }}"
+        );
+        let bag = compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap_err();
+        let diagnostic = bag
+            .diagnostics()
+            .iter()
+            .find(|d| d.code().as_str() == "E-PORT-TYPE")
+            .unwrap();
+        assert!(
+            diagnostic
+                .message()
+                .contains("declare the type on the binding"),
+            "{bag:?}"
+        );
+        assert!(diagnostic.message().contains(annotation), "{bag:?}");
+        assert!(
+            !bag.diagnostics()
+                .iter()
+                .any(|d| d.code().as_str() == "E-TYPE-UNRESOLVED"),
+            "{bag:?}"
+        );
+    }
+}
+
+#[test]
+fn empty_collection_expressions_keep_their_existing_inference() {
+    for expression in [
+        "size([])",
+        "xs == []",
+        r#"data ? ["x"] : []"#,
+        r#"[[], ["a"]]"#,
+    ] {
+        let source = format!(
+            "val xs: array<text> = []\ngraph app : App {{ input in: bool; output out: variant; operator copy {{ input in: bool; output out: variant; on in {{ out = {expression} }} }} in -> copy -> out }}"
+        );
+        let compiled = compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap();
+        let (plan, hash) =
+            rastok::plan::decode(&rastok::plan::encode(&compiled.plan, &compiled.hash)).unwrap();
+        assert_eq!(plan, compiled.plan);
+        assert_eq!(hash, compiled.hash);
+    }
 }
 
 #[test]
