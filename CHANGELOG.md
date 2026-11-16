@@ -60,6 +60,18 @@
   as its value.
 - Warn with `W-JOIN-UNPAIRED` when a join can strand Call frames or terminals;
   pairing by Call identity with an explicit bound avoids the warning.
+- Name conflicting declared types and their first structural difference in
+  route diagnostics; anonymous types use bounded descriptions with the same
+  text in the `expected` and `found` fields.
+- Locate invalid Loop verdicts at the authored arm and explain missing or
+  competing verdicts, including outputs routed to `nothing`.
+- Explain the tests needed before optional or tagged-union member access,
+  and suggest a local binding for a field read on a computed value.
+- Explain final-match placement, case tests and expression line boundaries
+  without accepting new syntax. Delayed mock actions now report the existing
+  `E-PARSE-DEFERRED` code; reserved route words name their deferred purpose.
+- Mark the unused `E-DUP-EDGE` diagnostic as superseded by the existing
+  `E-ROUTE-DUPLICATE` refusal.
 
 ## v0.1.0-alpha (5 November 2026)
 
