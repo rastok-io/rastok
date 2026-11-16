@@ -23,6 +23,8 @@ and the distinction between a Contract, a Lab model and an installed Driver.
 
 Selector: `mode` defaults to `ack`.
 
+See [inbound admission and backpressure](../execution.md#instances-own-state-not-threads): pending requests are retained within bounds, and the outbound Call queue rule does not apply to this Contract.
+
 | Mode | Driver direction | Exchange | Lab model | Installed in this binary |
 |---|---|---|---|---|
 | `ack` | inbound | call | `lab-http-server` | Not compiled |

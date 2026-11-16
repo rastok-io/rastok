@@ -23,6 +23,8 @@ connector network : WebSocketClient {
 The [contract index](../contracts.md) explains shared settings, build features
 and the distinction between a Contract, a Lab model and an installed Driver.
 
+See [instance ownership and bounded admission](../execution.md#instances-own-state-not-threads); this Contract uses Sessions, not the outbound Call queue rule.
+
 | Mode | Driver direction | Exchange | Lab model | Installed in this binary |
 |---|---|---|---|---|
 | No selector | inbound+outbound | session | `lab-websocket` | Not compiled |
