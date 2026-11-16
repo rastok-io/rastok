@@ -76,11 +76,21 @@ jobs:
         with:
           node-version: '22'
       - name: install native editor test tools
-        run: sudo apt-get update && sudo apt-get install -y vim neovim
+        run: sudo apt-get update && sudo apt-get install -y vim neovim emacs-nox
       - name: Vim syntax and file-type tests
         run: node --test editors/vim/test.mjs
       - name: Neovim syntax and file-type tests
         run: RASTOK_VIM=nvim node --test editors/vim/test.mjs
+      - name: compile the Emacs mode with warnings as errors
+        run: >-
+          emacs -Q --batch
+          --eval '(setq byte-compile-error-on-warn t byte-compile-dest-file-function
+          (lambda (_) (expand-file-name "rastok-mode.elc" (getenv "RUNNER_TEMP"))))'
+          -f batch-byte-compile editors/emacs/rastok-mode.el
+      - name: Emacs syntax, file-type and comment tests
+        run: |
+          emacs -Q --batch -L editors/emacs -l rastok-mode-test.el -f ert-run-tests-batch-and-exit
+          emacs -Q --batch -L editors/emacs -L "$RUNNER_TEMP" -l rastok-mode-test.el -f ert-run-tests-batch-and-exit
 
   gate:
     strategy:

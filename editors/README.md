@@ -10,8 +10,9 @@ a read-only viewer, not a source editor.
 | VS Code, VSCodium | [Data-only VSIX](vscode/rastok-dsl/README.md#vs-code) |
 | RustRover and other JetBrains IDEs | [TextMate bundle](vscode/rastok-dsl/README.md#rustrover--jetbrains) |
 | Vim, Neovim | [Native syntax and file-type runtime](vim/README.md) |
+| Emacs | [Native `rastok-mode`](emacs/README.md) |
 
-The native runtime can be loaded from the same checkout as the examples.
+The native modes can be loaded from the same checkout as the examples.
 It works whether Rastok itself was installed from an archive or with Cargo.
 Installation instructions are opt-in; no repository command edits personal
 editor configuration.
