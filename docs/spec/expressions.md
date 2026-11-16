@@ -83,8 +83,18 @@ the oracle detects accidental drift only in this named common subset.
 | `has(object.member)` | explicit final-member presence on a typed object | D-2026-09-14-3; no implicit optional access |
 | optional access, other macros/comprehensions and `in` | not admitted in this build | named compile-time refusals |
 | `variant`, structs, enums and structural/tagged unions | Rastok payload semantics, not CEL types | [`types.md`](types.md) |
+| `%` on binary floats | Rastok extension | floating remainder evaluation and transported-plan tests |
 
-This is a test-only dependency: it adds 38 package entries to the lockfile,
+Floating `%` evaluates the remainder with a quotient truncated toward zero.
+For finite operands and a nonzero divisor, its magnitude is smaller than the
+divisor's and its sign is the dividend's, including signed zero. A zero divisor,
+an infinite dividend or a NaN operand yields NaN; a finite dividend with an
+infinite divisor is unchanged. Evaluation uses the binary64 carrier, as for
+the other floating operations; declared narrower types keep their exact
+conformance checks. This does not admit decimal arithmetic or mixed numeric
+carrier families.
+
+`cel-interpreter` is a test-only dependency: it adds 38 package entries to the lockfile,
 none to runtime or no_std builds. The repository previously had no
 independent expression evaluator, so self-tests alone could not provide the
 differential capability. The crate is exact-pinned and MIT licensed; the

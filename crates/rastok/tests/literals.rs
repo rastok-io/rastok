@@ -8,6 +8,53 @@
 use rastok::compiler::compile;
 use rastok::connector::contract::ContractCatalog;
 
+#[test]
+fn floating_remainder_executes_after_package_validation() {
+    for ty in ["float", "double"] {
+        let source = format!(
+            r#"
+val divisor: {ty} = 2.0 as {ty}
+graph remainder : App {{
+  input in: {ty}
+  output out: {ty}
+  operator divide {{
+    input in: {ty}
+    output out: {ty}
+    on in {{ out = data % divisor }}
+  }}
+  in -> divide -> out
+}}
+lab remainder {{
+  scenario positive {{
+    app.in = 5.5 as {ty}
+    expect app.out == 1.5 as {ty}
+  }}
+  scenario negative {{
+    app.in = -5.5 as {ty}
+    expect app.out == -1.5 as {ty}
+  }}
+}}
+"#
+        );
+        let compilation = compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap();
+        let bytes = rastok::plan::encode(&compilation.plan, &compilation.hash);
+        let (plan, hash) = rastok::plan::decode(&bytes).unwrap();
+        assert_eq!(plan, compilation.plan);
+        assert_eq!(hash, compilation.hash);
+        let runs = rastok::lab::run_program(
+            &plan,
+            hash,
+            rastok::plan::GraphVersion(1),
+            &compilation.labs[0],
+            None,
+        );
+        assert_eq!(runs.len(), 2);
+        for run in runs {
+            assert!(run.report.passed(), "{ty}: {:?}", run.report);
+        }
+    }
+}
+
 mod enum_symbols {
     use super::*;
 
