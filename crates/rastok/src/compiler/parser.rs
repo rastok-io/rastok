@@ -2670,6 +2670,25 @@ impl<'src> Parser<'src, '_> {
         }
         if let Some(scalar) = simple_scalar(token.text) {
             self.bump();
+            if self.peek().kind == TokenKind::LParen {
+                let construct = match token.text {
+                    "date" => Some("parameterized date types (`date(unit)`)"),
+                    "time" => Some("parameterized time types (`time(unit)`)"),
+                    "timestamp" => {
+                        Some("parameterized timestamp types (`timestamp(unit, \"zone\")`)")
+                    }
+                    "timestamp_ntz" => {
+                        Some("parameterized zone-less timestamp types (`timestamp_ntz(unit)`)")
+                    }
+                    "duration" => Some("parameterized duration types (`duration(unit)`)"),
+                    "bytes" => Some("fixed-length bytes types (`bytes(n)`)"),
+                    _ => None,
+                };
+                if let Some(construct) = construct {
+                    self.deferred(construct, token.span);
+                    return None;
+                }
+            }
             return Some(BaseType::Scalar(scalar));
         }
         match token.text {
@@ -2704,6 +2723,10 @@ impl<'src> Parser<'src, '_> {
                 self.bump();
                 self.expect(TokenKind::Lt, "`<`")?;
                 let inner = Box::new(self.type_ref()?);
+                if !table && self.peek().kind == TokenKind::Comma {
+                    self.deferred("fixed-length array types (`array<T, N>`)", token.span);
+                    return None;
+                }
                 self.expect(TokenKind::Gt, "`>`")?;
                 Some(if table {
                     BaseType::Table(inner)
@@ -2767,6 +2790,10 @@ impl<'src> Parser<'src, '_> {
             }
             _ => {
                 self.bump();
+                if token.text == "interval" && self.peek().kind == TokenKind::LParen {
+                    self.deferred("calendar interval types (`interval(unit)`)", token.span);
+                    return None;
+                }
                 Some(BaseType::Named(Name {
                     text: String::from(token.text),
                     span: token.span,
@@ -2835,6 +2862,38 @@ fn simple_scalar(word: &str) -> Option<ScalarType> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn logical_only_type_parameters_refuse_by_name_and_recover() {
+        for (form, name) in [
+            ("date(day)", "date"),
+            ("time(second)", "time"),
+            ("timestamp(second, \"UTC\")", "timestamp"),
+            ("timestamp_ntz(second)", "timestamp_ntz"),
+            ("duration(second)", "duration"),
+            ("interval(day_time)", "interval"),
+            ("bytes(16)", "bytes"),
+            ("array<text, 3>", "array"),
+        ] {
+            let source = format!("type Item = {form}\ngraph app : App {{}}\n");
+            let mut bag = Bag::new();
+            let tree = parse(SourceId::new(0), &source, &mut bag);
+            let diagnostic = bag.diagnostics().first().expect("a deferred form");
+            assert_eq!(diagnostic.code(), E_PARSE_DEFERRED, "{form}: {bag:?}");
+            assert!(diagnostic.message().contains(name), "{bag:?}");
+            assert!(diagnostic.message().contains("not implemented"), "{bag:?}");
+            assert_eq!(&source[diagnostic.spans()[0].range()], name);
+            assert!(
+                tree.decls
+                    .iter()
+                    .any(|decl| matches!(decl, TopDecl::Graph(_))),
+                "the following declaration survives: {form}: {tree:?}"
+            );
+        }
+        parse_clean(
+            "type Times = struct { date: date, time: time, timestamp: timestamp, local: timestamp_ntz, elapsed: duration, bytes: bytes, rows: array<text>, values: map<int, text> }\ntype interval = text\ntype Alias = interval\n",
+        );
+    }
 
     #[test]
     fn refused_dispatch_forms_explain_block_and_line_boundaries() {

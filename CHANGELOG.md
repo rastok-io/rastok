@@ -118,6 +118,10 @@ large `advance` may now fail. Reference traces changed: **none**.
 
 ### Diagnostics
 
+- Name deferred temporal type parameters, calendar intervals, fixed-length
+  bytes and fixed-length arrays with `E-PARSE-DEFERRED`. The Reference
+  distinguishes logical model forms from source declarations, and text-key
+  map literals from the wider logical key domain; no syntax is added.
 - Render expression operators and types in source notation in refusals,
   including optional collection elements, instead of Rust debug structures.
   Codes and diagnostic field names are unchanged; list concatenation is
