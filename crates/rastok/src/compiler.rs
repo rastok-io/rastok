@@ -14,6 +14,7 @@ pub mod hir;
 mod join_warnings;
 mod json_requests;
 pub mod lexer;
+mod loop_diagnostics;
 pub mod lower;
 pub mod parser;
 mod routing;
@@ -315,7 +316,13 @@ pub fn compile_with_assets(
             | PlanValidationError::InvalidRetryPolicy { .. }
             | PlanValidationError::WiringCycle { .. }),
         ) => {
-            bag.push(type_resolution_diagnostic(&error, &hir));
+            let explanation = match &error {
+                PlanValidationError::InvalidLoopControl { owner, path, .. } => {
+                    loop_diagnostics::explain(owner, path, &hir, &unit)
+                }
+                _ => None,
+            };
+            bag.push(explanation.unwrap_or_else(|| type_resolution_diagnostic(&error, &hir)));
             return Err(bag);
         }
         Err(error) => {

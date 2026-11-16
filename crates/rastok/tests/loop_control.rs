@@ -79,15 +79,20 @@ fn refusal(source: &str, expected: &str) {
     let diagnostics = bag.diagnostics();
     assert_eq!(diagnostics.len(), 1, "{bag:#?}");
     assert_eq!(diagnostics[0].code().as_str(), "E-LOOP-CONTROL");
-    assert!(
-        diagnostics[0]
-            .message()
-            .starts_with("cannot prove that Loop `")
-            && diagnostics[0]
+    if diagnostics[0].message().starts_with("this arm of Loop `") {
+        assert_eq!(diagnostics[0].spans().len(), 1, "{bag:#?}");
+        assert!(!diagnostics[0].spans()[0].range().is_empty());
+    } else {
+        assert!(
+            diagnostics[0]
                 .message()
-                .contains("` always terminates at `"),
-        "the user-facing proof failure should use plain English: {bag:#?}"
-    );
+                .starts_with("cannot prove that Loop `")
+                && diagnostics[0]
+                    .message()
+                    .contains("` always terminates at `"),
+            "the user-facing proof failure should use plain English: {bag:#?}"
+        );
+    }
     assert!(
         diagnostics[0].message().contains(expected),
         "wanted {expected:?}, got {bag:#?}"
@@ -658,18 +663,18 @@ fn a_measure_uses_a_signed_well_founded_carrier_and_a_checked_invariant() {
 fn silence_repeated_next_and_mixed_verdicts_refuse_by_one_code() {
     refusal(
         &loop_source("", "  on in { val held = data }"),
-        "exactly one of Next, Again, Done, or stop",
+        "selects no verdict",
     );
     refusal(
         &loop_source("", "  on in { Loop.next = data; Loop.next = data }"),
-        "exactly one of Next, Again, Done, or stop",
+        "selects two verdicts: `Loop.next` and `Loop.next`",
     );
     refusal(
         &loop_source(
             "  output exit: int",
             "  on in { Loop.next = data; exit = data }",
         ),
-        "exactly one of Next, Again, Done, or stop",
+        "selects two verdicts: the terminal output `exit` and `Loop.next`",
     );
 }
 
@@ -680,7 +685,7 @@ fn a_filter_cannot_leave_a_loop_silent_and_duplicate_handlers_refuse() {
             "  output done: int",
             "  on in where data < 0 { done = data }",
         ),
-        "exactly one of Next, Again, Done, or stop",
+        "selects no verdict",
     );
     for handlers in [
         "on in { done = data }\non in where data >= 0 { Loop.next = data }",
