@@ -11,13 +11,41 @@ the notation.
 
 ## Scalars
 
+### Numeric types
+
+Use the names in the first column in `.rkg` declarations. Their widths are
+fixed, not chosen by the machine. Arithmetic and ordering require two operands
+from the same carrier family; signed integers, unsigned integers and binary
+floats are distinct families.
+
+| Source type | Representation and bounds | Computation in this alpha |
+|---|---|---|
+| `int`, `long` | Signed 32-bit and 64-bit integers, respectively; both use a signed 64-bit carrier | `+`, `-`, `*`, `/`, `%`, ordering and equality; division truncates toward zero; carrier overflow and division by zero fault, and a result must fit its destination type |
+| `uint` | Unsigned 64-bit integer | `+`, `-`, `*`, `/`, `%`, ordering and equality; underflow, overflow and division by zero fault |
+| `float`, `double` | Binary32 and binary64, respectively, carried as binary64; a `float` value must round-trip exactly | `+`, `-`, `*`, `/`, `%`, ordering and equality; floating results can include infinities and NaN, and ordering a NaN faults |
+| `number` | Exact integer or decimal, not binary floating point | Carrying, schema projection, equality and explicit narrowing; no arithmetic or ordering |
+| `decimal(p,s)` | Exact decimal128 coefficient and scale; precision `1..38`, scale `-38..38` | Carrying, schema projection and equality; exact conversion from integers or `number`; no arithmetic or ordering, and narrowing never rounds |
+
+The logical type system also represents signed and unsigned 8-, 16-, 32- and
+64-bit integers and binary16, binary32 and binary64 floats for schemas and
+transported plans. Those widths are not additional built-in source names:
+write `int`, not `int32`, and `float`, not `float32`. A floating literal uses
+`double`; an explicit conversion such as `2.5 as float` checks that the
+narrower value is exact. An `int` value is accepted where `long` is expected,
+and a `float` where `double` is expected. This widening does not allow mixed
+integer and floating operands in an arithmetic expression.
+
+The `%` result has the dividend's sign, including a negative zero. Floating
+remainder uses a quotient truncated toward zero. A zero divisor, infinite
+dividend or NaN operand yields NaN; a finite dividend modulo an infinite
+divisor is unchanged. Decimal equality compares the carried coefficient and
+scale, not rounded monetary amounts. See [numeric expressions](expressions.md#numeric-operands-in-this-alpha)
+for conversion examples and fault behavior.
+
+### Other scalars
+
 | Type | Parameters and aliases | Value rule |
 |---|---|---|
-| `int8`, `int16`, `int32`, `int64` | `int` = `int32`; `long` = `int64` | Signed integer within the declared width |
-| `uint8`, `uint16`, `uint32`, `uint64` | `uint` = `uint64` | Unsigned integer within the declared width |
-| `float16`, `float32`, `float64` | `float` = `float32`; `double` = `float64` | Binary floating point; a narrower value must round-trip exactly |
-| `decimal(p,s)` | Precision `1..38`, scale `-38..38` | Exact decimal128 coefficient and scale; narrowing never rounds |
-| `number` | No parameter | Exact integer or decimal, not binary floating point |
 | `bool` | No parameter | `true` or `false` |
 | `null` | No parameter | The null value |
 | `text` | No parameter | Unicode text |

@@ -1452,9 +1452,6 @@ DECL_KW    = { "graph", "operator", "connector",
 TYPE_KW    = { "variant",                                             // the value-type tree (types.md)
                "struct", "map", "array", "table", "enum", "union",   // composites (+ table view)
                "bool", "int", "long", "uint", "float", "double", "number", // friendly scalar aliases
-               "int8", "int16", "int32", "int64",
-               "uint8", "uint16", "uint32", "uint64",
-               "float16", "float32", "float64",                    // canonical explicit widths
                "bytes", "text", "media_type", "null",
                "decimal", "date", "timestamp", "timestamp_ntz",      // scalar logical
                "time", "interval", "uuid", "duration" }
@@ -1688,9 +1685,9 @@ scalar_type       ::= "bool" | signed_type | unsigned_type | float_type | "numbe
                     | "duration" ( "(" time_unit ")" )?
                     | "interval" "(" interval_unit ")"
                     | "uuid"
-signed_type       ::= "int" | "long" | "int8" | "int16" | "int32" | "int64"
-unsigned_type     ::= "uint" | "uint8" | "uint16" | "uint32" | "uint64"
-float_type        ::= "float" | "double" | "float16" | "float32" | "float64"
+signed_type       ::= "int" | "long"                                  // logical signed(32), signed(64)
+unsigned_type     ::= "uint"                                          // logical unsigned(64)
+float_type        ::= "float" | "double"                              // logical float(32), float(64)
 date_unit         ::= "day" | "millisecond"
 time_unit         ::= "second" | "millisecond" | "microsecond" | "nanosecond"
 timezone          ::= "utc" | STRING                                 // UTC aliases normalize during resolution

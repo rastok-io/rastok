@@ -75,9 +75,9 @@ The canonical scalar constructors and source aliases are exact:
 
 | Canonical constructor | Admitted parameters | Source spellings |
 |---|---|---|
-| `signed(bits)` | `bits ∈ {8,16,32,64}` | `int8`/`int16`/`int32`/`int64`; `int = int32`, `long = int64` |
-| `unsigned(bits)` | `bits ∈ {8,16,32,64}` | `uint8`/`uint16`/`uint32`/`uint64`; `uint = uint64` |
-| `float(bits)` | `bits ∈ {16,32,64}` | `float16`/`float32`/`float64`; `float = float32`, `double = float64` |
+| `signed(bits)` | `bits ∈ {8,16,32,64}` | `int` = `signed(32)`, `long` = `signed(64)` |
+| `unsigned(bits)` | `bits ∈ {8,16,32,64}` | `uint` = `unsigned(64)` |
+| `float(bits)` | `bits ∈ {16,32,64}` | `float` = `float(32)`, `double` = `float(64)` |
 | `decimal(precision, scale)` | decimal128 only: `1 ≤ precision ≤ 38`, `-38 ≤ scale ≤ 38` | `decimal(p,s)` |
 | `number` | exact integer-or-decimal, never binary floating point | `number` |
 | `bytes(length?)` | absent = variable; fixed `1 ≤ length ≤ 2³¹-1` | `bytes`, `bytes(n)` |
@@ -89,6 +89,11 @@ The canonical scalar constructors and source aliases are exact:
 | `timestamp_ntz(unit)` | the four time units; deliberately no zone | `timestamp_ntz`, `timestamp_ntz(unit)` |
 | `duration(unit)` | the four time units; default nanosecond | `duration`, `duration(unit)` |
 | `interval(unit)` | Arrow: `year_month | day_time | month_day_nano`; Avro: `month_day_millis_unsigned` | `interval(unit)` |
+
+The numeric source names are `int`, `long`, `uint`, `float`, `double`,
+`number` and `decimal(p,s)`. Widths remain parameters of the logical algebra
+and transported schemas; `int8` through `int64`, `uint8` through `uint64`
+and `float16` through `float64` are not additional built-in DSL names.
 
 `timestamp` with no arguments is `timestamp(nanosecond, utc)`. A named
 timezone is identity material; the spellings `UTC`, `Etc/UTC` and

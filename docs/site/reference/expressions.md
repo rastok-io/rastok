@@ -27,15 +27,13 @@ associate left to right; the conditional's false branch associates right.
 
 ### Numeric operands in this alpha
 
-Arithmetic (`*`, `/`, `%`, `+`, `-`) and ordering (`<`, `<=`, `>`, `>=`) are
-defined between two values of one carrier family: signed integers (`int`,
-`long`), unsigned integers (`uint`), or binary floats (`float`, `double`; a
-literal such as `2.5` is a `double`). Mixing families is refused at
-`rastok check` with `E-EXPR`, as is any arithmetic or ordering on `number`
-or `decimal(p,s)` values: those are carried, projected and compared for
-equality, not computed with, in this alpha. For money, compute in integer
-minor units (cents) and keep the exact decimal for carrying and projection.
-Exact decimal arithmetic is later work.
+The [numeric type table](types.md#numeric-types) lists source names,
+representations and the operations each family supports. A literal such as
+`2.5` is a `double`. Mixing carrier families in arithmetic or ordering is
+refused at `rastok check` with `E-EXPR`, as is arithmetic or ordering on
+`number` or `decimal(p,s)`. For money, compute in integer minor units (cents)
+and keep the exact decimal for carrying and projection. Exact decimal
+arithmetic is later work.
 
 `value as T` with `T` a declared `decimal(p,s)` (for example
 `type Price = decimal(18,2)`) accepts `int`, `long`, `uint` and `number`.
@@ -44,7 +42,7 @@ discarding non-zero digits is a narrowing fault, never rounding. A
 `decimal("…")` literal is itself a `number`, so a Lab expectation against
 a `Price` port can use `expect app.out == { b = decimal("2.50") as Price }`.
 
-Integer overflow, invalid indexing, division by zero and a failed explicit
+Integer overflow, invalid indexing, integer division by zero and a failed explicit
 narrowing are evaluation faults. A fault commits no input consumption,
 state change or emission from that transaction. Expected domain rejection
 must be represented by an authored branch and output.
