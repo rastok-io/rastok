@@ -95,6 +95,16 @@ The numeric source names are `int`, `long`, `uint`, `float`, `double`,
 and transported schemas; `int8` through `int64`, `uint8` through `uint64`
 and `float16` through `float64` are not additional built-in DSL names.
 
+Current source subset: temporal declarations accept the bare `date`,
+`time`, `timestamp`, `timestamp_ntz` and `duration` names with the defaults
+listed above. Parameterized temporal types, `interval(unit)`, `bytes(n)`
+and `array<T,N>` belong to the logical model and schema projections, but
+their source declarations are deferred explicitly with `E-PARSE-DEFERRED`.
+There is no built-in bare `interval` type in this subset. This restriction
+does not apply to value constructors such as `duration("2s")`.
+Source map literals have text keys only; a declared map with another key
+type admits the empty literal `{:}`, but no nonempty literal spelling yet.
+
 `timestamp` with no arguments is `timestamp(nanosecond, utc)`. A named
 timezone is identity material; the spellings `UTC`, `Etc/UTC` and
 `+00:00` normalize to the canonical `utc` case. A timezone-naive value is

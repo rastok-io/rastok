@@ -62,7 +62,7 @@ presentation, not diagnostic codes or structured field names.
 | E-LEX-UNTERMINATED-BLOCK | error | parse | [grammar.md](grammar.md) | a raw guest block whose braces never balance |
 | E-PARSE-EXPECTED | error | parse | [grammar.md](grammar.md) | a token breaking the expected production; fields `expected`, `found` |
 | E-JSON-VALUE | error | parse | [grammar.md](grammar.md) | a `json!` region the house reader refuses; field `detail` (JSON is not the Rastok expression grammar — its faults carry their own code) |
-| E-PARSE-DEFERRED | error | parse | [grammar.md](grammar.md) | syntax admitted by the grammar but outside the subset this build implements; field `construct` |
+| E-PARSE-DEFERRED | error | parse | [grammar.md](grammar.md) | syntax admitted by the grammar but outside the subset this build implements, including parameterized temporal types, calendar intervals, fixed-length bytes and fixed-length arrays; field `construct` |
 | E-APP-COUNT | error | resolve | [grammar.md](grammar.md) | a deployed unit without exactly one `: App` graph; field `count` |
 | E-DUP-NODE | error | resolve | [grammar.md](grammar.md) | a node name declared twice in one graph; field `name` |
 | E-RESOLVE-UNKNOWN | error | resolve | [grammar.md](grammar.md) | a name resolving to no declaration; field `name` |

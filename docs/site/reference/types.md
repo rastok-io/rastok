@@ -50,16 +50,25 @@ for conversion examples and fault behavior.
 | `null` | No parameter | The null value |
 | `text` | No parameter | Unicode text |
 | `bytes` | Variable length | Opaque bytes |
-| `bytes(n)` | `1 <= n <= 2147483647` | Exactly `n` bytes |
+| `bytes(n)` | Logical model only; not a source declaration in this version | Exactly `n` bytes, `1 <= n <= 2147483647` |
 | `uuid` | No parameter | Exactly 16 network-order bytes |
 | `media_type` | No parameter | One concrete media type; canonical names and parameter order, no wildcard |
 
 ## Dates, times and intervals
 
-For `time`, `timestamp`, `timestamp_ntz` and `duration`, the unit is
-`second`, `millisecond`, `microsecond` or `nanosecond`.
+Source declarations in this version accept only the bare names `date`,
+`time`, `timestamp`, `timestamp_ntz` and `duration`. They use the defaults
+below. Parameterized forms and calendar intervals belong to the logical
+model and transported schemas; they are not source type declarations.
+`interval` is not a built-in source type, either bare or parameterized.
 
-| Type | Default or parameters | Distinction preserved |
+For logical `time`, `timestamp`, `timestamp_ntz` and `duration`, the unit is
+`second`, `millisecond`, `microsecond` or `nanosecond`. These parameterized
+temporal declarations are refused with `E-PARSE-DEFERRED`, naming the form.
+This does not affect value constructors such as `duration("2s")` or
+`timestamp("2026-10-30T12:00:00Z")`.
+
+| Logical type | Source default or logical parameters | Distinction preserved |
 |---|---|---|
 | `date(unit)` | `day` or `millisecond`; bare `date` means `day` | Date, carried as whole days |
 | `time(unit)` | Bare `time` means nanoseconds | Time of day, without a date |
@@ -83,7 +92,7 @@ logical instant.
 |---|---|---|
 | `struct { name: text, count: int }` | Named fields | Closed, unique fields; declaration order is not type identity |
 | `array<T>` | Ordered homogeneous sequence | Variable length |
-| `array<T,N>` | Fixed sequence | Exactly `N` elements, including `N = 0` |
+| `array<T,N>` | Fixed sequence in the logical model only | Exactly `N` elements, including `N = 0`; source declarations refuse this form with `E-PARSE-DEFERRED` |
 | `map<K,V>` | Homogeneous keyed collection | Canonical, non-null scalar or enum keys |
 | `enum { ready, done }` | Named unit cases | Write `ready` or `done` where this enum is expected, including a typed list element or opposite an enum operand of `==` or `!=`; a conflicting visible binding refuses |
 | `T?` | `T` or null | Absence and null are distinct at a boundary |
@@ -91,10 +100,16 @@ logical instant.
 | `union { Ok { value: text }, Refused }` | Tagged union | Named cases with closed payloads; the case remains part of the value |
 | `variant` | Self-describing value tree | Narrow with `is` or `as` before typed member or index access |
 
-Map keys admit booleans, fixed-width integers, text, media types, bytes,
-decimals, dates, times, timestamps, durations, UUIDs and enum symbols.
+In the logical model, map keys admit booleans, fixed-width integers, text,
+media types, bytes, decimals, dates, times, timestamps, durations, UUIDs and enum symbols.
 Floats, `number`, null, intervals, dynamic values and composite keys refuse.
 Instance keys additionally admit closed structs of valid key leaves.
+
+Source map literals accept only text keys: `{ "id": "a" }` is a map,
+while `{ 1: "a" }` is refused. A non-text key type can still be declared,
+for example `map<int, text>`, but only its empty literal `{:}` can be
+written in this version. Fixed-length bytes and arrays are likewise
+represented by the logical model without a source type-parameter syntax.
 
 Named type declarations are structural aliases. Recursive aliases refuse.
 Type trees are bounded to 128 nesting levels, 4096 nodes and 256 members per
