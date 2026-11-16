@@ -7,6 +7,34 @@ use crate::plan::ValidatedExecutionPlan;
 use crate::schema_annotation::{AnnotationTable, SchemaPath, SchemaPathSegment};
 use serde_json::{Map, Value as JsonValue, json};
 
+/// Renders an App output with the Lab's policy-safe JSON projection, except
+/// text, which remains bare. Unmaterialized raw payloads keep their existing
+/// byte-to-text rendering; classified encoded data is never decoded for display.
+#[must_use]
+pub fn render_data(data: &Data, annotations: Option<&AnnotationTable>) -> String {
+    let empty = AnnotationTable::default();
+    let annotations = annotations.unwrap_or(&empty);
+    let redacted = crate::data_policy::requires_redaction(annotations);
+    match data {
+        Data::Materialized(Value::Text(text)) if !redacted => {
+            return text.trim_end_matches('\n').to_string();
+        }
+        Data::Encoded { .. } if redacted => return json!({ "redacted": true }).to_string(),
+        Data::Encoded {
+            encoding: crate::envelope::Encoding::Raw,
+            bytes,
+            ..
+        } if data.materialized_value().is_none() => {
+            return String::from_utf8_lossy(bytes)
+                .trim_end_matches('\n')
+                .to_string();
+        }
+        _ => {}
+    }
+    let projected = data_json(data, annotations);
+    projected.get("content").unwrap_or(&projected).to_string()
+}
+
 pub(crate) fn classified(plan: &ValidatedExecutionPlan) -> bool {
     let sensitive = |annotations: &AnnotationTable| {
         annotations
@@ -211,4 +239,71 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
         let _ = write!(value, "{byte:02x}");
     }
     value
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::envelope::Encoding;
+    use crate::schema_annotation::{AnnotationSet, DataAnnotation};
+
+    #[test]
+    fn terminal_values_share_the_lab_projection_without_debug_shapes() {
+        let annotations = AnnotationTable::default();
+        for value in [
+            Value::Int(5),
+            Value::Int(i64::MAX),
+            Value::Uint(u64::MAX),
+            Value::Bool(true),
+            Value::Null,
+            Value::Enum("Ready".into()),
+            Value::Decimal {
+                unscaled: 125,
+                scale: 2,
+            },
+            Value::Bytes(vec![0, 255]),
+            Value::Array(vec![Value::Text("hello".into())]),
+            Value::Map(std::collections::BTreeMap::from([(
+                "key".into(),
+                Value::Int(1),
+            )])),
+            Value::Struct(vec![("size".into(), Value::Int(5))]),
+        ] {
+            let data = Data::materialized(value);
+            let projected = data_json(&data, &annotations);
+            assert_eq!(
+                serde_json::from_str::<JsonValue>(&render_data(&data, None)).unwrap(),
+                projected["content"],
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_text_and_raw_payloads_keep_their_line_rendering() {
+        assert_eq!(
+            render_data(&Data::materialized(Value::Text("hello\n".into())), None),
+            "hello"
+        );
+        let raw = Data::encoded(Encoding::Raw, b"hello\n".to_vec());
+        assert_eq!(render_data(&raw, None), "hello");
+        assert!(raw.materialized_value().is_none());
+    }
+
+    #[test]
+    fn terminal_redaction_precedes_text_or_encoded_rendering() {
+        let annotations = AnnotationTable::new(vec![(
+            SchemaPath::root(),
+            AnnotationSet::new(vec![DataAnnotation::Secret]).unwrap(),
+        )])
+        .unwrap();
+        for data in [
+            Data::materialized(Value::Text("private fixture".into())),
+            Data::encoded(Encoding::Raw, b"private fixture".to_vec()),
+        ] {
+            assert_eq!(
+                render_data(&data, Some(&annotations)),
+                "{\"redacted\":true}"
+            );
+        }
+    }
 }

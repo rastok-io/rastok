@@ -1023,6 +1023,61 @@ fn ui_http(address: std::net::SocketAddr, request_line: &str, headers: &[(&str, 
 }
 
 #[test]
+fn run_and_replay_share_the_lab_json_projection_and_redaction() {
+    let root = std::env::temp_dir().join(format!("rastok-cli-output-json-{}", std::process::id()));
+    std::fs::create_dir(&root).unwrap();
+    let source = root.join("output.rkg");
+    let recording = root.join("output.rkr");
+    std::fs::write(
+        &source,
+        r#"type Output = struct {
+  line: text
+  size: int
+  private: text @sensitive(level = restricted)
+}
+graph output : App {
+  input in: text
+  output out: Output
+  operator wrap {
+    input in: text
+    output out: Output
+    on in { out = { line = data, size = size(data), private = "private fixture" } }
+  }
+  in -> wrap -> out
+}
+"#,
+    )
+    .unwrap();
+    let mut child = rastok()
+        .arg("run")
+        .arg(&source)
+        .arg("--record")
+        .arg(&recording)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(b"hello\n").unwrap();
+    let original = child.wait_with_output().unwrap();
+    assert!(original.status.success(), "{original:?}");
+    std::fs::remove_file(source).unwrap();
+    let replayed = rastok().arg("replay").arg(&recording).output().unwrap();
+    assert!(replayed.status.success(), "{replayed:?}");
+    assert_eq!(original.stdout, replayed.stdout);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&original.stdout).unwrap(),
+        serde_json::json!({ "line": "hello", "size": 5, "private": { "redacted": true } }),
+    );
+    for bytes in [&original.stdout, &original.stderr, &replayed.stderr] {
+        assert!(!String::from_utf8_lossy(bytes).contains("private fixture"));
+    }
+    assert!(String::from_utf8_lossy(&original.stderr).starts_with("recorded: "));
+    assert!(String::from_utf8_lossy(&replayed.stderr).starts_with("replay: "));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn run_echoes_a_line_through_a_real_child_process() {
     let mut child = rastok()
         .arg("run")
@@ -1342,7 +1397,7 @@ fn the_gallery_file_pipeline_replaces_once_and_replay_does_not_touch_the_world()
         .output()
         .unwrap();
     assert!(replayed.status.success(), "{replayed:?}");
-    assert_eq!(original.stdout, b"bytes_read: Materialized(Int(11))\n");
+    assert_eq!(original.stdout, b"bytes_read: 11\n");
     assert_eq!(original.stdout, replayed.stdout);
     assert_eq!(
         std::fs::read(root.join("input.txt")).unwrap(),

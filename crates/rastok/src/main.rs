@@ -20,7 +20,7 @@ use rastok::connector::exchange::IngressSequence;
 use rastok::envelope::{Data, Namespace, Value};
 use rastok::journal::MemJournal;
 use rastok::plan::GraphVersion;
-use rastok::render::{Sources, render_all};
+use rastok::render::{Sources, render_all, render_data};
 use rastok::runtime::execution::Execution;
 use rastok::{connector, lab, node};
 use std::io::{BufRead, Write as _};
@@ -735,6 +735,14 @@ fn run(
             eprintln!("error: {record_error}");
         }
         eprintln!("error: {error}");
+        if matches!(
+            error,
+            rastok::worker::RunError::Admission(
+                rastok::runtime::execution::ExecutionFault::IngressPinViolation { .. }
+            )
+        ) {
+            eprintln!("only a `text` App input can be fed from standard input in this build");
+        }
         return ExitCode::FAILURE;
     }
     let logical_time = worker.execution().logical_time();
@@ -1652,34 +1660,4 @@ fn parse_stored(rendered: &str) -> Option<rastok::golden::Trace> {
         records.push(bytes);
     }
     rastok::golden::Trace::from_stored(&records)
-}
-
-/// A boundary envelope for a terminal: text prints bare, raw bytes
-/// print lossily, anything else prints in its debug shape.
-fn render_data(
-    data: &Data,
-    annotations: Option<&rastok::schema_annotation::AnnotationTable>,
-) -> String {
-    if let Some(annotations) = annotations
-        && rastok::data_policy::requires_redaction(annotations)
-    {
-        return match data {
-            Data::Materialized(value) => format!(
-                "{:?}",
-                rastok::data_policy::RedactedValue::new(value, annotations)
-            ),
-            Data::Encoded { .. } => String::from("[REDACTED]"),
-        };
-    }
-    match data {
-        Data::Materialized(Value::Text(text)) => text.trim_end_matches('\n').to_string(),
-        Data::Encoded {
-            encoding: rastok::envelope::Encoding::Raw,
-            bytes,
-            ..
-        } => String::from_utf8_lossy(bytes)
-            .trim_end_matches('\n')
-            .to_string(),
-        other => format!("{other:?}"),
-    }
 }
