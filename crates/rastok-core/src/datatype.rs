@@ -1357,10 +1357,10 @@ impl DataType {
                     },
                 )))
             }
+            (target, Value::StructuralUnion { value, .. }) if target.accepts(&value) => Ok(*value),
             (Self::TaggedUnion(_), _) => Err(NarrowingFailure::NoMatch {
                 target: Box::new(self.clone()),
             }),
-            (target, Value::StructuralUnion { value, .. }) if target.accepts(&value) => Ok(*value),
             (target, value) => {
                 if target.accepts(&value) {
                     Ok(value)

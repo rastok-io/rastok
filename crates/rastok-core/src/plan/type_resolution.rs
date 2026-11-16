@@ -418,8 +418,7 @@ impl<'plan> Solver<'plan> {
                 if let Some(source) = self.producer_hint(flow.source) {
                     let source = match &flow.cases {
                         None => source,
-                        Some(cases) => super::routing::selected_case_type(&source, cases)
-                            .ok_or_else(|| self.unresolved(&self.states[flow.source]))?,
+                        Some(cases) => self.project_cases(flow.source, &source, Some(cases))?,
                     };
                     changed |= self.produce(flow.target, source)?;
                 }
@@ -567,8 +566,8 @@ impl<'plan> Solver<'plan> {
             let source = match &flow.cases {
                 None => &effective[flow.source],
                 Some(cases) => {
-                    narrowed = super::routing::selected_case_type(&effective[flow.source], cases)
-                        .ok_or_else(|| self.unresolved(&self.states[flow.source]))?;
+                    narrowed =
+                        self.project_cases(flow.source, &effective[flow.source], Some(cases))?;
                     &narrowed
                 }
             };
@@ -752,6 +751,20 @@ impl<'plan> Solver<'plan> {
     ) -> Result<DataType, PlanValidationError> {
         match cases {
             None => Ok(ty.clone()),
+            Some(cases)
+                if matches!(ty, DataType::StructuralUnion(_))
+                    && !cases.is_empty()
+                    && expr::tagged_union_for_narrowing(ty).is_some_and(|union| {
+                        cases
+                            .iter()
+                            .all(|name| union.cases().iter().any(|case| case.name() == name))
+                    }) =>
+            {
+                // A case guard does not rewrite a nullable input's carrier.
+                // Narrowed reads carry their own checked As; identity flows
+                // still need the declared structural-union representation.
+                Ok(ty.clone())
+            }
             Some(cases) => super::routing::selected_case_type(ty, cases)
                 .ok_or_else(|| self.unresolved(&self.states[input])),
         }

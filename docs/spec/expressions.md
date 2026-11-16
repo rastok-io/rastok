@@ -290,6 +290,10 @@ The implemented minimum is deliberately small and deterministic:
   `Value`, journal and identity and is never discarded at those boundaries;
 - tagged unions preserve their case name; an untagged variant needs an
   explicitly resolved discriminator before it can become one;
+- for an optional tagged union `Event?`, `value is Event` tests presence:
+  any present case matches and null does not. `value is Opened` tests that
+  case, also returning false for null; its payload is checked against the
+  declared case, including during independent plan validation;
 - a positive `is` fact narrows the right side of `&&`, the true branch of a
   ternary, and the body of a guarded handler. No negation/disjunction
   inference is invented. A narrowed path is usable wherever a path is

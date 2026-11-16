@@ -1,0 +1,67 @@
+// An optional tagged union has no working presence test
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check N-optional-union-presence.rkg
+//   rastok simulate N-optional-union-presence.rkg
+//
+// Today (both versions):
+//   $ rastok check N-optional-union-presence.rkg
+//   ok: 3 node(s), semantic hash 872a451dbe7d4446346807d6657d203ac892353dc9995b73777cf0201225fafc
+//   $ rastok simulate N-optional-union-presence.rkg
+//   FAIL presence.an_input_is_tested_against_its_union
+//        observed app.seen: "absent"
+//   FAIL presence.a_state_cell_is_tested_against_its_union
+//        observed app.opened: "opened"
+//   2 scenario(s), 2 failed
+//   A third form does not pass check: with `data is Opened` on the same input,
+//   error[E-EXPR]: `Opened` names neither a logical type nor a case of ...
+//
+// Expected after the fix:
+//   Both scenarios pass: `value is Event` is true when an `Event?` value holds any
+//   case, and false when it is null. A case test such as `value is Opened` is
+//   accepted on an optional union and is false when the value is null.
+
+type Event = union { Opened { title: text }, Closed {} }
+graph app : App {
+  input in: Event?
+  input text: text
+  output seen: text
+  output opened: text
+  operator on_input {
+    input in: Event?
+    output out: text
+    on in match {
+      data is Event => out = "present"
+      _ => out = "absent"
+    }
+  }
+  operator on_state {
+    input in: text
+    output out: text
+    var dossier: Event? = null
+    on in match {
+      dossier is Event => out = "already open"
+      _ => {
+        dossier = Opened { title = data }
+        out = "opened"
+      }
+    }
+  }
+  in -> on_input -> seen
+  text -> on_state -> opened
+}
+lab presence {
+  scenario an_input_is_tested_against_its_union {
+    app.in = Opened { title = "a" }
+    expect app.seen == "present"
+    app.in = null
+    expect app.seen == "absent"
+  }
+  scenario a_state_cell_is_tested_against_its_union {
+    app.text = "first"
+    expect app.opened == "opened"
+    app.text = "second"
+    expect app.opened == "already open"
+  }
+}
