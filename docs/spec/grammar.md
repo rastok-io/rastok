@@ -24,6 +24,19 @@
 > distributed multi-tenancy and cluster deployment remain future work. Keyed
 > instances, local execution and the bounded Loop proof are implemented.
 
+## Reading this grammar
+
+The [formal grammar](#formal-grammar) starts with lexer atoms and keyword sets.
+Its [productions](#productions) define declarations, handlers, values, routes and the Lab.
+For a handler's `match`, follow `handler_dispatch` to `closed_match` or `open_match`.
+For a route's `match`, follow `edge_decl` to `edge_match` instead.
+The [LL(1) decision table](#ll1-decision-table) explains how the parser chooses a form.
+The current productions and their normative rules define the source language.
+[Expression semantics](expressions.md) and the [type rules](types.md) complete that contract.
+Dated decisions and qualification reports record history, not a second grammar.
+The [example catalogue](../examples/README.md) contains complete programs to check and simulate.
+Inline fragments on this page illustrate productions; future forms still receive named refusals.
+
 ## File extension
 
 `.rkg` — short for "rastok graph". Complete checked programs are indexed in
