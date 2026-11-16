@@ -79,6 +79,9 @@ large `advance` may now fail. Reference traces changed: **none**.
   of a lazily loaded input, including a local copy, just as for a state cell.
   Carrying positions remain lazy, type tests keep their branch witnesses,
   and semantic program hashes and reference traces are unchanged.
+- Test optional tagged-union presence with its type name and select its
+  cases with `is`: present cases match their union, null does not, and
+  case payloads remain checked. Existing program hashes are unchanged.
 - Compare optional input payloads to `null` using the selected value, as
   for optional fields and state cells. Payloads loaded during a comparison
   also apply this rule recursively to nested values; retained branch

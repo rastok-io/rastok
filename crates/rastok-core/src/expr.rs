@@ -2230,7 +2230,7 @@ impl<'a> ExprParser<'_, 'a> {
         range: Range<usize>,
     ) -> Result<NarrowTarget, Diagnostic> {
         let source = check(expr, self.signature, Some(self.text))?;
-        if let DataType::TaggedUnion(union) = &source
+        if let Some(union) = tagged_union_for_narrowing(&source)
             && let Some(case) = union.cases().iter().find(|case| case.name() == name)
         {
             return Ok(NarrowTarget::Case {
@@ -2930,6 +2930,20 @@ pub(crate) fn rederive_type(expr: &Expr, signature: &Signature) -> Option<DataTy
     check(expr, signature, None).ok()
 }
 
+// A case name belongs to a tagged union, including its nullable form. Do not
+// choose a union by name from several unrelated structural branches.
+pub(crate) fn tagged_union_for_narrowing(source: &DataType) -> Option<&TaggedUnionType> {
+    match source {
+        DataType::TaggedUnion(union) => Some(union),
+        DataType::StructuralUnion(union) => match union.branches() {
+            [DataType::Null, DataType::TaggedUnion(union)]
+            | [DataType::TaggedUnion(union), DataType::Null] => Some(union),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 fn check_narrowing_compatibility(
     source: &DataType,
     target: &NarrowTarget,
@@ -2948,8 +2962,8 @@ fn check_narrowing_compatibility(
         return Ok(());
     }
     match target {
-        NarrowTarget::Case { name, payload } => match source {
-            DataType::TaggedUnion(union)
+        NarrowTarget::Case { name, payload } => match tagged_union_for_narrowing(source) {
+            Some(union)
                 if union.cases().iter().any(|case| {
                     case.name() == name
                         && matches!(payload.as_ref(), DataType::Struct(structure)
@@ -3437,6 +3451,10 @@ fn narrow_case(
     expected: &str,
     payload: &DataType,
 ) -> Result<Value, NarrowingFailure> {
+    let value = match value {
+        Value::StructuralUnion { value, .. } => *value,
+        value => value,
+    };
     match value {
         Value::TaggedUnion(tagged) if tagged.case == expected => {
             let case = tagged.case;
@@ -3972,6 +3990,80 @@ mod tests {
                     assert_eq!(selected_result.is_ok(), present);
                 }
             }
+        }
+    }
+
+    #[test]
+    fn optional_tagged_unions_test_presence_and_cases_without_losing_payload_checks() {
+        let event = DataType::TaggedUnion(
+            TaggedUnionType::new(vec![
+                crate::datatype::TaggedCase::new(
+                    "Opened",
+                    StructType::new(vec![TypeField::new("title", DataType::Text)]).unwrap(),
+                )
+                .unwrap(),
+                crate::datatype::TaggedCase::new("Closed", StructType::new(vec![]).unwrap())
+                    .unwrap(),
+            ])
+            .unwrap(),
+        );
+        let optional = event.clone().optional().unwrap();
+        let signature = Signature::new()
+            .with("data", optional.clone())
+            .with_type("Event", event);
+        for (value, present, opened, closed) in [
+            (Value::Null, false, false, false),
+            (
+                Value::TaggedUnion(Box::new(crate::value::TaggedUnionValue {
+                    case: "Opened".into(),
+                    payload: vec![("title".into(), Value::Text("a".into()))],
+                })),
+                true,
+                true,
+                false,
+            ),
+            (
+                Value::TaggedUnion(Box::new(crate::value::TaggedUnionValue {
+                    case: "Closed".into(),
+                    payload: vec![],
+                })),
+                true,
+                false,
+                true,
+            ),
+        ] {
+            let bindings = BTreeMap::from([(
+                "data".into(),
+                EvalValue::from(optional.narrow(value, None).unwrap()),
+            )]);
+            for (source, expected) in [
+                ("data is Event", present),
+                ("data is Opened", opened),
+                ("data is Closed", closed),
+                ("data is Opened && data.title == \"a\"", opened),
+            ] {
+                let tree = compile(source, &signature).unwrap();
+                assert_eq!(rederive_type(&tree.root, &signature), Some(tree.ty.clone()));
+                assert_eq!(eval(&tree, &bindings).unwrap(), EvalValue::Bool(expected));
+            }
+            for (source, matches) in [("data as Event", present), ("data as Opened", opened)] {
+                let tree = compile(source, &signature).unwrap();
+                assert_eq!(eval(&tree, &bindings).is_ok(), matches, "{source}");
+            }
+        }
+        assert!(compile("data is Unknown", &signature).is_err());
+        for operator in ["is", "as"] {
+            let mut tree = compile(&format!("data {operator} Opened"), &signature).unwrap();
+            let (Expr::Is { target, .. } | Expr::As { target, .. }) = &mut tree.root else {
+                panic!("a narrowing expression")
+            };
+            let NarrowTarget::Case { payload, .. } = target.as_mut() else {
+                panic!("a case target")
+            };
+            **payload = DataType::Struct(
+                StructType::new(vec![TypeField::new("title", DataType::INT)]).unwrap(),
+            );
+            assert_eq!(rederive_type(&tree.root, &signature), None, "{operator}");
         }
     }
 

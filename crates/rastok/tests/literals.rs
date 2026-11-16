@@ -569,6 +569,38 @@ fn optional_collection_refusals_name_the_source_type() {
 }
 
 #[test]
+fn optional_union_presence_and_case_tests_survive_package_validation() {
+    let source = include_str!("fixtures/alpha_0_1_1/N-optional-union-presence.rkg");
+    for source in [
+        source.to_string(),
+        source.replace("data is Event", "data is Opened"),
+        source
+            .replace(
+                "data is Event => out = \"present\"",
+                "data is Opened => out = data.title",
+            )
+            .replace("expect app.seen == \"present\"", "expect app.seen == \"a\""),
+    ] {
+        let compiled = compile(&[&source], &ContractCatalog::try_m0().unwrap()).unwrap();
+        let (plan, hash) =
+            rastok::plan::decode(&rastok::plan::encode(&compiled.plan, &compiled.hash)).unwrap();
+        assert_eq!(plan, compiled.plan);
+        assert_eq!(hash, compiled.hash);
+        let runs = rastok::lab::run_program(
+            &plan,
+            hash,
+            rastok::plan::GraphVersion(1),
+            &compiled.labs[0],
+            None,
+        );
+        assert_eq!(runs.len(), 2);
+        for run in runs {
+            assert!(run.report.passed(), "{:?}", run.report);
+        }
+    }
+}
+
+#[test]
 fn contextual_enum_list_constructors_round_trip_the_plan() {
     let source = include_str!("fixtures/alpha_0_1_1/R-002-enum-symbol-in-a-list.rkg");
     let compiled = compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();

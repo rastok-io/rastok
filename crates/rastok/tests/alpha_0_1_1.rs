@@ -433,6 +433,24 @@ fn tested_input_reads_match_state_without_changing_identity() {
 }
 
 #[test]
+fn r218_optional_union_presence_tests_keep_the_program_identity() {
+    let file = "N-optional-union-presence.rkg";
+    let output = cli(&["check", file]);
+    assert_status(&output, 0);
+    assert_eq!(
+        stdout(&output),
+        "ok: 3 node(s), semantic hash 872a451dbe7d4446346807d6657d203ac892353dc9995b73777cf0201225fafc\n"
+    );
+    assert_scenarios_pass(
+        file,
+        &[
+            "presence.an_input_is_tested_against_its_union",
+            "presence.a_state_cell_is_tested_against_its_union",
+        ],
+    );
+}
+
+#[test]
 fn r009_an_empty_struct_is_not_a_map_and_the_refusal_names_the_map_syntax() {
     assert_check_refuses(
         "R-009-empty-struct-in-a-map-place.rkg",

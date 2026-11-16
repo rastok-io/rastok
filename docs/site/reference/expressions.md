@@ -126,6 +126,11 @@ input just as they read a state cell. This also applies after `val copy = data`.
 Copying or passing the value without reading its structure does not decode
 it; type tests and conversions still use its retained union branch.
 
+For a tagged union `Event` with cases `Opened` and `Closed`, an `Event?`
+value satisfies `value is Event` whenever either case is present. It
+satisfies `value is Opened` only for that case. Both tests are false for
+null. After a successful case test, its payload fields can be read.
+
 A struct assigned to a declared type also constructs any optional fields
 that the destination requires. You can bind an inferred struct first and
 then use it in a typed field or output; the original binding keeps its type.
