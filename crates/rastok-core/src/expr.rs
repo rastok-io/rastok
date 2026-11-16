@@ -1120,7 +1120,7 @@ fn compile_contextual(
     resolve_enum_symbols(&mut root, signature, expected, text)
         .map_err(|diagnostic| vec![diagnostic])?;
     if let Some(expected) = expected {
-        resolve_empty_collections(&mut root, expected);
+        resolve_collection_literals(&mut root, expected, signature);
     }
     let ty = check(&root, signature, Some(text)).map_err(|diagnostic| vec![diagnostic])?;
     resolve_narrowed_reads(&mut root, signature);
@@ -1139,9 +1139,10 @@ fn compile_contextual(
     Ok(Tree { root, ty })
 }
 
-/// An empty constructor has no element constraint. Resolve only constructors,
-/// never a dynamic collection path, using existing checked conversion nodes.
-fn resolve_empty_collections(root: &mut Expr, expected: &DataType) {
+/// A literal checks its elements against the expected collection type.
+/// Only constructors gain contextual conversions, never an untyped collection
+/// read from a binding. Existing conversion nodes retain the resolved choice.
+fn resolve_collection_literals(root: &mut Expr, expected: &DataType, signature: &Signature) {
     if let DataType::StructuralUnion(union) = expected {
         let mut matching = union
             .branches()
@@ -1156,39 +1157,82 @@ fn resolve_empty_collections(root: &mut Expr, expected: &DataType) {
         if let Some(branch) = matching.next()
             && matching.next().is_none()
         {
-            resolve_empty_collections(root, branch);
+            resolve_collection_literals(root, branch, signature);
             return;
         }
     }
-    let empty = match (&mut *root, expected) {
+    let resolve_element = |item: &mut Expr, expected: &DataType| {
+        resolve_collection_literals(item, expected, signature);
+        let ty = check(item, signature, None).ok()?;
+        if ty != *expected
+            && matches!(expected, DataType::StructuralUnion(_))
+            && !matches!(ty, DataType::StructuralUnion(_))
+            && ty.is_assignable_to(expected)
+        {
+            *item = Expr::As {
+                expr: Box::new(item.clone()),
+                target: Box::new(NarrowTarget::Type(Box::new(NarrowType::new(
+                    expected.clone(),
+                )))),
+            };
+            Some(expected.clone())
+        } else {
+            Some(ty)
+        }
+    };
+    let needs_type = match (&mut *root, expected) {
         (Expr::List(items), DataType::Array(array)) => {
+            let mut fits = array
+                .length()
+                .is_none_or(|n| n.get() as usize == items.len());
+            let mut inferred = None;
             for item in items.iter_mut() {
-                resolve_empty_collections(item, array.element());
+                if let Some(ty) = resolve_element(item, array.element()) {
+                    fits &= ty.is_assignable_to(array.element());
+                    inferred = Some(
+                        inferred.map_or_else(|| ty.clone(), |current| join_types(&current, &ty)),
+                    );
+                } else {
+                    fits = false;
+                }
             }
-            items.is_empty()
-                && array.length().is_none_or(|n| n.get() == 0)
-                && expected != &DataType::array(DataType::Variant)
+            fits && !DataType::array(inferred.unwrap_or(DataType::Variant))
+                .is_assignable_to(expected)
         }
         (Expr::MapLit(entries), DataType::Map(map)) => {
+            let mut fits = entries.is_empty() || map.key() == &DataType::Text;
+            let mut inferred = None;
             for (_, value) in entries.iter_mut() {
-                resolve_empty_collections(value, map.value());
+                if let Some(ty) = resolve_element(value, map.value()) {
+                    fits &= ty.is_assignable_to(map.value());
+                    inferred = Some(
+                        inferred.map_or_else(|| ty.clone(), |current| join_types(&current, &ty)),
+                    );
+                } else {
+                    fits = false;
+                }
             }
-            entries.is_empty() && expected != &DataType::text_map(DataType::Variant)
+            fits && !DataType::text_map(inferred.unwrap_or(DataType::Variant))
+                .is_assignable_to(expected)
         }
         (
             Expr::Ternary {
-                then, otherwise, ..
+                cond,
+                then,
+                otherwise,
             },
             _,
         ) => {
-            resolve_empty_collections(then, expected);
-            resolve_empty_collections(otherwise, expected);
+            resolve_collection_literals(then, expected, &signature.narrowed_by(cond));
+            resolve_collection_literals(otherwise, expected, signature);
             false
         }
         _ => false,
     };
-    if empty {
-        let value = if matches!(expected, DataType::Map(map) if map.key() != &DataType::Text) {
+    if needs_type {
+        let value = if matches!(&*root, Expr::MapLit(entries) if entries.is_empty())
+            && matches!(expected, DataType::Map(map) if map.key() != &DataType::Text)
+        {
             Expr::Literal(Value::Map(BTreeMap::new()))
         } else {
             root.clone()
@@ -3771,6 +3815,43 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nonempty_collection_literals_check_elements_in_context() {
+        let optional = DataType::Text.optional().unwrap();
+        let signature = Signature::new().with("data", DataType::Text);
+        let bindings = BTreeMap::from([("data".into(), EvalValue::Text("a".into()))]);
+        for (source, expected) in [
+            ("[null, data]", DataType::array(optional.clone())),
+            ("[null]", DataType::array(optional.clone())),
+            ("[data]", DataType::array(optional.clone())),
+            ("[null, null]", DataType::array(optional.clone())),
+            (
+                "[[null, data]]",
+                DataType::array(DataType::array(optional.clone())),
+            ),
+            (
+                "[{\"first\": null, \"second\": data}]",
+                DataType::array(DataType::text_map(optional)),
+            ),
+            ("[1, 2147483648]", DataType::array(DataType::LONG)),
+        ] {
+            let tree = compile_with_expected_type(source, &signature, &expected).unwrap();
+            assert_eq!(tree.ty, expected, "{source}");
+            let value = eval(&tree, &bindings).unwrap().into_value().unwrap();
+            assert!(expected.accepts(&value), "{source}: {value:?}");
+            assert_eq!(rederive_type(&tree.root, &signature), Some(expected));
+        }
+        let untyped = compile("[null, \"a\"]", &signature).unwrap();
+        assert_eq!(untyped.ty, DataType::array(DataType::Variant));
+        assert_eq!(
+            untyped.root,
+            Expr::List(vec![
+                Expr::Literal(Value::Null),
+                Expr::Literal(Value::Text("a".into()))
+            ])
+        );
+    }
 
     #[test]
     fn list_symbols_follow_the_expected_element_type() {

@@ -386,6 +386,17 @@ fn r221_enum_symbols_are_values_inside_a_typed_list() {
 }
 
 #[test]
+fn r222_a_typed_list_checks_each_optional_element() {
+    assert_scenarios_pass(
+        "N-list-with-a-null-in-an-optional-place.rkg",
+        &[
+            "optional_elements.a_list_holds_a_null_and_a_text",
+            "optional_elements.a_map_holds_a_null_and_a_text",
+        ],
+    );
+}
+
+#[test]
 fn r009_an_empty_struct_is_not_a_map_and_the_refusal_names_the_map_syntax() {
     assert_check_refuses(
         "R-009-empty-struct-in-a-map-place.rkg",

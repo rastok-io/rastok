@@ -139,6 +139,11 @@ With elements, `val members = ["alice"]` infers `array<text>`; mixed
 elements such as `[1, "a"]` infer `array<variant>`. The type belongs on
 the declaration: there is no `array<text> []` value prefix.
 
+A typed list checks each element against its declared element type, as a
+typed map does for its values. With `data: text`, write
+`val names: array<text?> = [null, data]`. Without that expected type,
+`[null, "a"]` still infers `array<variant>`.
+
 ## JSON request values
 
 A JSON-encoding Connector input refuses a known producer type containing

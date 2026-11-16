@@ -1080,6 +1080,8 @@ asks for an annotation on the binding, for example
 `val members: array<text> = []`. A nonempty collection infers its type
 from its elements. The type belongs on the declaration, not before the
 value: `array<T> []` is not a value form.
+Where a type is expected, a nonempty list literal is checked against it
+element by element, as a map literal is: `[null, data]` fits `array<text?>`.
 `{}` is always the empty struct; in a position that expects a map,
 check refuses it and names `{:}`.
 
