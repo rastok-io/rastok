@@ -14,13 +14,14 @@ rastok --help | -h | help
 rastok --version
 ```
 
-The help aliases print usage on stdout and exit successfully.
+Help prints to stdout and exits successfully.
 `--version` prints `rastok` and the package version. Neither accepts additional
-arguments. Help is global, not command-specific.
+arguments. Each command also accepts `--help` or `-h`, with the same stream
+and exit status.
+Run `rastok <command> --help` for the options of one command.
 
-Below, square brackets mean optional, `|` separates alternatives, and `...`
-means one or more files. These markers are not literal arguments.
-Multiple source paths form one compilation unit.
+Syntax: brackets mean optional, `|` separates alternatives, and `...` means
+one or more files. Multiple source files form one compilation unit.
 
 ## Create a program: new
 
@@ -42,7 +43,7 @@ rastok check <file.rkg>...
 rastok check examples/echo.rkg
 ```
 
-This checks types, wiring and Contracts, then prints the Node count and
+Checks types, wiring and Contracts, then prints the Node count and
 semantic hash. It neither executes the App nor writes a plan file. Success
 does not prove partner availability or compatible physical Drivers.
 
@@ -85,9 +86,9 @@ rastok run <file.rkg>... [--file-root <dir>] [--deployment <profile.json>] [--js
 printf 'hello\n' | rastok run examples/echo.rkg --record echo.rkr
 ```
 
-This uses physical Drivers and can start processes, write files or contact
-services. Each stdin line is a text submission; public App outputs go to
-stdout. With one declared App output port, each envelope prints its value alone.
+Executes the App with physical Drivers. Each line of standard input is one
+text submission; App outputs go to standard output. It can start processes,
+write files or contact services. With one App output, each envelope prints its value alone.
 With several output ports, each line keeps the `port: value` prefix, even if
 only one port emits. Lab scenarios are not executed.
 
@@ -126,8 +127,7 @@ rastok connectors [--json]
 The human view lists Contracts, modes, ports, settings, installed
 implementations, Lab bindings and untested cases. `--json` produces the machine-readable
 catalogue on stdout. Neither constructs a Driver nor probes a service.
-Checker support, a compiled implementation and successful deployment remain
-different questions.
+Checker support does not prove deployment support.
 
 ## Resolve project schemas: --resolve-open-api
 
