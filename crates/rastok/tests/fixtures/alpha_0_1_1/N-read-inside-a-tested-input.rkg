@@ -1,0 +1,116 @@
+// Reading inside an input after its `is` test faults at execution
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+// 0.1.1-alpha candidate db46005 and on the rework tree after 71b4bd6. Same cause as
+// N-null-comparison-on-an-optional-input.rkg: a payload loaded on demand keeps its union envelope.
+//
+// Commands, run from this directory:
+//   rastok check N-read-inside-a-tested-input.rkg
+//   rastok simulate N-read-inside-a-tested-input.rkg
+//
+// Today (all three builds):
+//   $ rastok check N-read-inside-a-tested-input.rkg
+//   ok: 5 node(s), semantic hash bb4df46632c5c4febfa022ac3fbbfb57fbab93d87df8416b6fa04075c6bf4f96
+//   $ rastok simulate N-read-inside-a-tested-input.rkg
+//   FAIL reads.a_field_of_a_present_struct
+//        a step faulted: `data.id` is not a map
+//        nothing observed
+//   PASS reads.a_field_of_an_absent_struct
+//   FAIL reads.a_field_of_one_branch
+//        a step faulted: `data.id` is not a map
+//        nothing observed
+//   PASS reads.the_other_branch
+//   FAIL reads.an_element_of_a_present_list
+//        a step faulted: cannot index structural union with integer
+//        nothing observed
+//   PASS reads.an_element_of_an_absent_list
+//   FAIL reads.a_key_of_a_present_map
+//        a step faulted: cannot index structural union with text
+//        nothing observed
+//   PASS reads.a_key_of_an_absent_map
+//   8 scenario(s), 4 failed
+//   The same reads pass when the value sits in a state cell, or after `val row = data as Row`.
+//
+// Expected after the fix:
+//   The eight scenarios pass. After a successful `is` test, a field, an element or a key of the
+//   tested input reads the selected value, as it does for a state cell holding the same value.
+
+type Row = struct { id: text }
+type Cat = struct { name: text }
+type Tags = array<text>
+type Dict = map<text,text>
+graph app : App {
+  input row: Row?
+  input either: Row | Cat
+  input tags: Tags?
+  input dict: Dict?
+  output field: text
+  output branch: text
+  output element: text
+  output key: text
+  operator read_field {
+    input in: Row?
+    output out: text
+    on in {
+      out = data is Row ? data.id : "none"
+    }
+  }
+  operator read_branch {
+    input in: Row | Cat
+    output out: text
+    on in {
+      out = data is Row ? data.id : "cat"
+    }
+  }
+  operator read_element {
+    input in: Tags?
+    output out: text
+    on in {
+      out = data is Tags ? data[0] : "none"
+    }
+  }
+  operator read_key {
+    input in: Dict?
+    output out: text
+    on in {
+      out = data is Dict ? data["a"] : "none"
+    }
+  }
+  row -> read_field -> field
+  either -> read_branch -> branch
+  tags -> read_element -> element
+  dict -> read_key -> key
+}
+lab reads {
+  scenario a_field_of_a_present_struct {
+    app.row = { id = "a" }
+    expect app.field == "a"
+  }
+  scenario a_field_of_an_absent_struct {
+    app.row = null
+    expect app.field == "none"
+  }
+  scenario a_field_of_one_branch {
+    app.either = { id = "a" }
+    expect app.branch == "a"
+  }
+  scenario the_other_branch {
+    app.either = { name = "tom" }
+    expect app.branch == "cat"
+  }
+  scenario an_element_of_a_present_list {
+    app.tags = ["a"]
+    expect app.element == "a"
+  }
+  scenario an_element_of_an_absent_list {
+    app.tags = null
+    expect app.element == "none"
+  }
+  scenario a_key_of_a_present_map {
+    app.dict = { "a": "x" }
+    expect app.key == "x"
+  }
+  scenario a_key_of_an_absent_map {
+    app.dict = null
+    expect app.key == "none"
+  }
+}

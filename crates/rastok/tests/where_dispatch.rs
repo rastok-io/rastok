@@ -9,6 +9,193 @@ use rastok::connector::contract::ContractCatalog;
 use rastok::journal::Record;
 use rastok::plan::{self, GraphVersion};
 
+#[test]
+fn tested_input_reads_and_copies_agree_with_state_in_each_scope() {
+    for (definition, present, read, output_type, expected, fallback) in [
+        (
+            "struct { id: text }",
+            "{ id = \"a\" }",
+            "ROOT.id",
+            "text",
+            "\"a\"",
+            "\"none\"",
+        ),
+        (
+            "struct { id: text }",
+            "{ id = \"a\" }",
+            "has(ROOT.id)",
+            "bool",
+            "true",
+            "false",
+        ),
+        (
+            "struct { child: Child }",
+            "{ child = { id = \"a\" } }",
+            "ROOT.child.id",
+            "text",
+            "\"a\"",
+            "\"none\"",
+        ),
+        (
+            "struct { tags: array<text> }",
+            "{ tags = [\"a\"] }",
+            "ROOT.tags[0]",
+            "text",
+            "\"a\"",
+            "\"none\"",
+        ),
+        (
+            "array<text>",
+            "[\"a\"]",
+            "ROOT[0]",
+            "text",
+            "\"a\"",
+            "\"none\"",
+        ),
+        (
+            "map<text, text>",
+            "{ \"a\": \"a\" }",
+            "ROOT[\"a\"]",
+            "text",
+            "\"a\"",
+            "\"none\"",
+        ),
+        (
+            "map<text, text>",
+            "{ \"a\": \"a\" }",
+            "has(ROOT.a)",
+            "bool",
+            "true",
+            "false",
+        ),
+        (
+            "map<text, text>",
+            "{:}",
+            "has(ROOT.a)",
+            "bool",
+            "false",
+            "false",
+        ),
+    ] {
+        for (input_type, absent) in [
+            ("Selected?", "null"),
+            ("Selected | Cat", "{ name = \"cat\" }"),
+        ] {
+            for root in ["data", "copy"] {
+                let input_read = read.replace("ROOT", root);
+                let state_read = read.replace("ROOT", "saved");
+                for context in ["ternary", "and", "match", "join"] {
+                    let setup = if root == "copy" {
+                        "val copy = data"
+                    } else {
+                        ""
+                    };
+                    let (inputs, wiring, handler, result_type, yes, no) = match context {
+                        "ternary" => (
+                            format!("input in: {input_type}"),
+                            "in -> choose.in",
+                            format!(
+                                "on in {{\n{setup}\nsaved = data\nfrom_input = {root} is Selected ? {input_read} : {fallback}\nfrom_state = saved is Selected ? {state_read} : {fallback}\n}}"
+                            ),
+                            output_type,
+                            expected,
+                            fallback,
+                        ),
+                        "and" => (
+                            format!("input in: {input_type}"),
+                            "in -> choose.in",
+                            format!(
+                                "on in {{\n{setup}\nsaved = data\nfrom_input = {root} is Selected && {input_read} == {expected}\nfrom_state = saved is Selected && {state_read} == {expected}\n}}"
+                            ),
+                            "bool",
+                            "true",
+                            "false",
+                        ),
+                        "match" => (
+                            format!("input in: {input_type}"),
+                            "in -> choose.in",
+                            format!(
+                                "on in {{\n{setup}\nmatch {{\n{root} is Selected => {{ saved = data; from_input = {input_read}; from_state = saved is Selected ? {state_read} : {fallback} }}\n_ => {{ saved = data; from_input = {fallback}; from_state = {fallback} }}\n}}\n}}"
+                            ),
+                            output_type,
+                            expected,
+                            fallback,
+                        ),
+                        "join" => {
+                            let joined_read = read.replace("ROOT", "left.data");
+                            let (setup, emitted) = if root == "copy" {
+                                ("val copy = left.data", input_read.clone())
+                            } else {
+                                ("", joined_read.clone())
+                            };
+                            (
+                                format!(
+                                    "input left: {input_type}\ninput right: {input_type}\noutput expired: Expiry"
+                                ),
+                                "in -> choose.left\nin -> choose.right\nchoose.expired -> nothing",
+                                format!(
+                                    "on (left, right) where left.data is Selected && {joined_read} == {expected} last 2 {{\n{setup}\nsaved = left.data\nfrom_input = {emitted}\nfrom_state = saved is Selected ? {state_read} : {fallback}\n}}"
+                                ),
+                                output_type,
+                                expected,
+                                "nothing",
+                            )
+                        }
+                        _ => unreachable!(),
+                    };
+                    let source = format!(
+                        r#"
+type Child = struct {{ id: text }}
+type Selected = {definition}
+type Cat = struct {{ name: text }}
+type Expiry = union {{ JoinExpired {{}} }}
+graph app : App {{
+  input in: {input_type}
+  output from_input: {result_type}
+  output from_state: {result_type}
+  operator choose {{
+    {inputs}
+    output from_input: {result_type}
+    output from_state: {result_type}
+    var saved: {input_type} = {absent}
+    {handler}
+  }}
+  {wiring}
+  choose.from_input -> from_input
+  choose.from_state -> from_state
+}}
+lab reads {{
+  scenario present {{
+    app.in = {present}
+    expect app.from_input == {yes}
+    expect app.from_state == {yes}
+  }}
+  scenario absent {{
+    app.in = {absent}
+    expect app.from_input == {no}
+    expect app.from_state == {no}
+  }}
+}}
+"#
+                    );
+                    let label = format!("{input_type}, {read}, {root}, {context}");
+                    let compiled = compile(&[&source], &ContractCatalog::try_m0().unwrap())
+                        .unwrap_or_else(|error| panic!("{label}: {error:?}\n{source}"));
+                    let bytes = plan::encode(&compiled.plan, &compiled.hash);
+                    let (decoded, hash) = plan::decode(&bytes).unwrap();
+                    assert_eq!(hash, compiled.hash, "{label}");
+                    assert_eq!(decoded, compiled.plan, "{label}");
+                    let runs = rastok::lab::run(&decoded, GraphVersion(1), &compiled.labs[0]);
+                    assert_eq!(runs.len(), 2, "{label}");
+                    for run in runs {
+                        assert!(run.report.passed(), "{label}: {:?}", run.report);
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn assert_narrowed_values(context: &str) {
     for (input_type, target, output_type, present, absent, expected, fallback) in [
         (

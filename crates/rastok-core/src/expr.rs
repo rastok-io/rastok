@@ -3101,7 +3101,7 @@ fn numeric(lhs: &DataType, rhs: &DataType) -> Option<DataType> {
 /// is what keeps `val copy = data` as lazy as `data` itself.
 fn concrete(value: EvalValue, bindings: &dyn Bindings) -> Result<EvalValue, Error> {
     match value {
-        EvalValue::Payload(reference) => bindings.payload(&reference),
+        EvalValue::Payload(reference) => concrete(bindings.payload(&reference)?, bindings),
         // A structural-union branch is transparent once an expression
         // consumes it. Its branch index remains intact in the materialized
         // `Value` and journal; the expression sees the selected logical
@@ -3817,6 +3817,163 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lazy_structural_reads_agree_with_state_and_preserve_union_carriers() {
+        use core::cell::Cell;
+
+        struct LazyRead {
+            value: Value,
+            loads: Cell<usize>,
+        }
+        impl Bindings for LazyRead {
+            fn get(&self, name: &str) -> Result<Option<EvalValue>, Error> {
+                Ok(match name {
+                    "data" | "copy" => Some(EvalValue::Payload(PayloadSource::Input)),
+                    "saved" => Some(EvalValue::from(self.value.clone())),
+                    _ => None,
+                })
+            }
+            fn payload(&self, reference: &PayloadSource) -> Result<EvalValue, Error> {
+                assert_eq!(reference, &PayloadSource::Input);
+                self.loads.set(self.loads.get() + 1);
+                Ok(EvalValue::from(self.value.clone()))
+            }
+        }
+        let leaf =
+            DataType::Struct(StructType::new(vec![TypeField::new("id", DataType::Text)]).unwrap());
+        let row = DataType::Struct(
+            StructType::new(vec![
+                TypeField::new("id", DataType::Text),
+                TypeField::new("child", leaf),
+                TypeField::new("tags", DataType::array(DataType::Text)),
+            ])
+            .unwrap(),
+        );
+        let row_value = Value::Struct(vec![
+            ("id".into(), Value::Text("a".into())),
+            (
+                "child".into(),
+                Value::Struct(vec![("id".into(), Value::Text("a".into()))]),
+            ),
+            ("tags".into(), Value::Array(vec![Value::Text("a".into())])),
+        ]);
+        let cat = DataType::Struct(
+            StructType::new(vec![TypeField::new("name", DataType::Text)]).unwrap(),
+        );
+        for (selected, value, read, expected) in [
+            (
+                row.clone(),
+                row_value.clone(),
+                "ROOT.id",
+                EvalValue::Text("a".into()),
+            ),
+            (
+                row.clone(),
+                row_value.clone(),
+                "ROOT.child.id",
+                EvalValue::Text("a".into()),
+            ),
+            (
+                row.clone(),
+                row_value.clone(),
+                "has(ROOT.id)",
+                EvalValue::Bool(true),
+            ),
+            (row, row_value, "ROOT.tags[0]", EvalValue::Text("a".into())),
+            (
+                DataType::array(DataType::Text),
+                Value::Array(vec![Value::Text("a".into())]),
+                "ROOT[0]",
+                EvalValue::Text("a".into()),
+            ),
+            (
+                DataType::text_map(DataType::Text),
+                Value::Map(BTreeMap::from([("a".into(), Value::Text("a".into()))])),
+                "ROOT[\"a\"]",
+                EvalValue::Text("a".into()),
+            ),
+            (
+                DataType::text_map(DataType::Text),
+                Value::Map(BTreeMap::from([("a".into(), Value::Text("a".into()))])),
+                "has(ROOT.a)",
+                EvalValue::Bool(true),
+            ),
+            (
+                DataType::text_map(DataType::Text),
+                Value::Map(BTreeMap::new()),
+                "has(ROOT.a)",
+                EvalValue::Bool(false),
+            ),
+        ] {
+            for (other, absent) in [
+                (DataType::Null, Value::Null),
+                (
+                    cat.clone(),
+                    Value::Struct(vec![("name".into(), Value::Text("cat".into()))]),
+                ),
+            ] {
+                let input = DataType::structural_union(vec![selected.clone(), other]).unwrap();
+                let signature = Signature::new()
+                    .with("data", input.clone())
+                    .with("copy", input.clone())
+                    .with("saved", input.clone())
+                    .with_type("Selected", selected.clone())
+                    .with_type("Input", input.clone());
+                for (value, present) in [(value.clone(), true), (absent, false)] {
+                    let retained = input.narrow(value, None).unwrap();
+                    let bindings = LazyRead {
+                        value: retained.clone(),
+                        loads: Cell::new(0),
+                    };
+                    for source in ["data", "copy", "true ? data : copy", "[data]"] {
+                        let tree = compile(source, &signature).unwrap();
+                        let result = eval(&tree, &bindings).unwrap();
+                        assert_eq!(bindings.loads.get(), 0, "{source}");
+                        assert!(matches!(result, EvalValue::Payload(_) | EvalValue::List(_)));
+                    }
+                    for root in ["data", "copy", "saved"] {
+                        let read = read.replace("ROOT", root);
+                        let fallback = if matches!(expected, EvalValue::Bool(_)) {
+                            "false"
+                        } else {
+                            "\"none\""
+                        };
+                        let source = format!("{root} is Selected ? {read} : {fallback}");
+                        let tree = compile(&source, &signature).unwrap();
+                        let result = eval(&tree, &bindings).unwrap();
+                        let wanted = if present {
+                            expected.clone()
+                        } else if fallback == "false" {
+                            EvalValue::Bool(false)
+                        } else {
+                            EvalValue::Text("none".into())
+                        };
+                        assert_eq!(result, wanted, "{source}");
+                    }
+                    for (source, wanted) in [("data is Selected", present), ("data is Input", true)]
+                    {
+                        assert_eq!(
+                            eval(&compile(source, &signature).unwrap(), &bindings).unwrap(),
+                            EvalValue::Bool(wanted)
+                        );
+                    }
+                    let converted = eval(&compile("data as Input", &signature).unwrap(), &bindings)
+                        .unwrap()
+                        .into_value()
+                        .unwrap();
+                    assert_eq!(
+                        converted, retained,
+                        "a type test/conversion keeps the branch witness"
+                    );
+                    assert_eq!(bindings.value, retained);
+                    let selected_result =
+                        eval(&compile("data as Selected", &signature).unwrap(), &bindings);
+                    assert_eq!(selected_result.is_ok(), present);
+                }
+            }
+        }
+    }
 
     #[test]
     fn lazy_payload_comparisons_match_materialized_values() {
