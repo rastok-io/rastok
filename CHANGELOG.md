@@ -72,6 +72,23 @@
   `E-PARSE-DEFERRED` code; reserved route words name their deferred purpose.
 - Mark the unused `E-DUP-EDGE` diagnostic as superseded by the existing
   `E-ROUTE-DUPLICATE` refusal.
+- Report missing source files as command-specific usage errors before
+  compilation or deployment loading, and provide `--help` / `-h` for each
+  command on stdout with a successful exit status.
+- Render non-text App output values with the Lab's policy-safe JSON
+  projection in `run` and `replay`, preserving protected-field masking,
+  text output and port labels. Explain the existing text-only stdin
+  submission; input decoding and EOF behavior are unchanged.
+- Retrieve examples at the installed release tag in the quickstart, and
+  verify and extract downloaded archives in a system temporary directory
+  without adding files to the caller's working directory.
+- Package the data-only editor grammar as `rastok-dsl-0.1.1.vsix` for the
+  release artifacts; install through the editor rather than manual directory
+  copying. JetBrains still imports the TextMate bundle.
+- Add a non-blocking native Windows build and test job to gather evidence;
+  this does not qualify or publish a Windows binary.
+- Document when `run` exits after stdin ends, why a listening Connector keeps
+  it alive, and why bounded structured logs are not a complete journal.
 
 ## v0.1.0-alpha (5 November 2026)
 
