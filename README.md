@@ -186,6 +186,22 @@ Open the loopback URL printed by the last command, including its access token.
 The simulation starts paused. Choose **Next transition**, or **Finish** to
 reach `Hello, world`. The CLI reports `PASS hello.roundtrip_greeting` when the scenario
 finishes. Close the viewer from its toolbar when done.
+
+### Get the examples
+
+Whether you installed Rastok from an archive or with `cargo install`, fetch
+the example sources and reference traces at the tag of your binary. This
+creates a `rastok-examples` checkout; it does not build or reinstall Rastok.
+Run these commands from the directory where you want to keep it (Git is required):
+
+```sh
+git clone --depth 1 --branch v0.1.0-alpha https://github.com/rastok-io/rastok.git rastok-examples
+cd rastok-examples
+rastok simulate examples/echo.rkg
+```
+
+The simulation prints three `PASS` lines and `3 scenario(s), 0 failed`.
+If you already have a checkout at that tag, use it without cloning again.
 <!-- quickstart:end -->
 
 The [Getting Started page](docs/site/getting-started.md) owns this block. Continue with

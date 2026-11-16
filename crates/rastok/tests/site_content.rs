@@ -233,6 +233,22 @@ fn readme_quickstart_is_a_verbatim_copy_of_the_site_source() {
 }
 
 #[test]
+fn quickstart_fetches_examples_at_the_installed_release() {
+    let source = std::fs::read_to_string(root().join("docs/site/getting-started.md")).unwrap();
+    let section = source
+        .split_once("### Get the examples")
+        .expect("examples after installation")
+        .1;
+    let section = section.split_once("<!-- quickstart:end -->").unwrap().0;
+    assert!(section.contains(&format!(
+        "git clone --depth 1 --branch v{} https://github.com/rastok-io/rastok.git rastok-examples\ncd rastok-examples\nrastok simulate examples/echo.rkg",
+        env!("CARGO_PKG_VERSION")
+    )));
+    assert!(section.contains("at the tag of your binary"));
+    assert!(section.contains("archive or with `cargo install`"));
+}
+
+#[test]
 fn guide_chapters_have_a_checked_learning_path() {
     let mut chapters: Vec<_> = std::fs::read_dir(root().join("docs/site/guide"))
         .unwrap()
