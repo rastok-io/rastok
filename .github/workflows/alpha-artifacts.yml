@@ -6,6 +6,23 @@ permissions:
   contents: read
 
 jobs:
+  editor:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - run: node --test tools/package-editor.test.mjs editors/vscode/rastok-dsl/grammar.test.cjs
+      - name: package the data-only editor extension
+        run: node tools/package-editor.mjs "$RUNNER_TEMP/editor"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: rastok-editor
+          path: ${{ runner.temp }}/editor/*.vsix
+          if-no-files-found: error
+          retention-days: 30
+
   build:
     strategy:
       matrix:

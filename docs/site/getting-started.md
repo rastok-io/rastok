@@ -167,6 +167,21 @@ one output port. An App with several output ports prints `port: value` instead.
 Two unaided timed installation trials are still required before this
 quickstart is qualified. No elapsed-time claim is made yet.
 
+## Editor support
+
+The 0.1.1-alpha release job produces an installable syntax-highlighting package.
+Once the release is published, install it in VS Code with:
+
+```sh
+curl -fLO https://github.com/rastok-io/rastok/releases/download/v0.1.1-alpha/rastok-dsl-0.1.1.vsix
+code --install-extension rastok-dsl-0.1.1.vsix
+```
+
+For VSCodium, use `codium --install-extension rastok-dsl-0.1.1.vsix`.
+Before publication, the [editor instructions](https://github.com/rastok-io/rastok/blob/main/editors/vscode/rastok-dsl/README.md)
+explain how to package a local checkout; they also cover the JetBrains bundle.
+The grammar colors source; `rastok check` validates it.
+
 ## Three ways to learn
 
 Some people read the book first; others open an example and break it; others

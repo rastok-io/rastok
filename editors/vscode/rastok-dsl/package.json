@@ -2,7 +2,7 @@
   "name": "rastok-dsl",
   "displayName": "Rastok DSL",
   "description": "Syntax highlighting for Rastok graphs and Lab scenarios.",
-  "version": "0.0.1",
+  "version": "0.1.1",
   "publisher": "rastok",
   "license": "Apache-2.0",
   "engines": { "vscode": "^1.85.0" },
