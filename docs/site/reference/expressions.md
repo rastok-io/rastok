@@ -53,11 +53,13 @@ expression itself fits.
 
 ## Functions and contextual references
 
-Empty collections use the type expected at their position. For a binding,
-write `val members: array<text> = []` or
-`var counts: map<text, int> = {:}`. Nonempty collections infer their type
-from their elements. An untyped empty binding needs a type annotation;
-`{}` is a struct and cannot stand for an empty map.
+Empty collections use the type expected at their position. Without one,
+`[]` is `array<variant>` and `{:}` is `map<text,variant>`, including in a
+binding or an inferred struct field. A destination requiring more precise
+elements refuses that binding with `E-PORT-TYPE`: declare
+`val members: array<text> = []` or `var counts: map<text, int> = {:}`.
+Nonempty collections infer their type from their elements; disagreeing
+element types infer `variant`. `{}` is a struct, never an empty map.
 
 | Signature | Result | Availability and constraints |
 |---|---|---|

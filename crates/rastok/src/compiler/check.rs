@@ -4450,8 +4450,8 @@ impl Checker<'_, '_> {
                 let constant = self.reduce_constant(tree, decl.span, consts)?;
                 if !ty.accepts(&constant.value) {
                     let init_ty = match value_type(&constant.value) {
-                        Ok(Some(ty)) => ty.to_string(),
-                        Ok(None) | Err(_) => {
+                        Ok(ty) => ty.to_string(),
+                        Err(_) => {
                             format!("{:?}", crate::value::ValueKind::of(&constant.value))
                         }
                     };
@@ -4594,19 +4594,7 @@ impl Checker<'_, '_> {
 
     fn inferred_value_type(&mut self, value: &crate::value::Value, span: Span) -> Option<DataType> {
         match value_type(value) {
-            Ok(Some(ty)) => Some(ty),
-            Ok(None) => {
-                self.bag.push(
-                    Diagnostic::new(
-                        E_TYPE_UNRESOLVED,
-                        Phase::Check,
-                        "this value has no element constraint from which to infer a type; add a type annotation",
-                    )
-                    .with_span(span)
-                    .with_field("type", "unsolved collection element"),
-                );
-                None
-            }
+            Ok(ty) => Some(ty),
             Err(error) => {
                 self.type_constructor_refusal(span, error);
                 None
@@ -4616,7 +4604,7 @@ impl Checker<'_, '_> {
 
     /// Host constructors already carry the exact resolved composite type in
     /// their tree. Scalar and collection literals keep value-driven inference;
-    /// an empty collection still needs contextual type information.
+    /// an unconstrained empty collection has variant elements.
     fn constant_binding_type(&mut self, value: &Const, span: Span) -> Option<DataType> {
         if matches!(
             value.tree.ty,
@@ -6323,11 +6311,26 @@ impl Checker<'_, '_> {
         } else {
             detail
         };
+        let help = match (expected, found) {
+            (DataType::Array(expected), DataType::Array(found))
+                if found.element() == &DataType::Variant
+                    && expected.element() != &DataType::Variant =>
+            {
+                "; declare the type on the binding, for example `val members: array<text> = []`"
+            }
+            (DataType::Map(expected), DataType::Map(found))
+                if found.value() == &DataType::Variant
+                    && expected.value() != &DataType::Variant =>
+            {
+                "; declare the type on the binding, for example `val counts: map<text, int> = {:}`"
+            }
+            _ => "",
+        };
         self.bag.push(
             Diagnostic::new(
                 E_PORT_TYPE,
                 Phase::Check,
-                format!("`{place}` requires {expected}; this value is {found}: {detail}"),
+                format!("`{place}` requires {expected}; this value is {found}: {detail}{help}"),
             )
             .with_span(span)
             .with_field("port", place.to_string())
@@ -6367,24 +6370,7 @@ impl Checker<'_, '_> {
         };
         match expected {
             Some(expected) => self.contextualize_tree(tree, expected, span, place),
-            None => {
-                if matches!(&tree.root, expr::Expr::List(items) if items.is_empty())
-                    || matches!(&tree.root, expr::Expr::MapLit(entries) if entries.is_empty())
-                {
-                    self.bag.push(
-                        Diagnostic::new(
-                            E_TYPE_UNRESOLVED,
-                            Phase::Check,
-                            "an empty collection needs a type annotation, for example `val members: array<text> = []`",
-                        )
-                        .with_span(span)
-                        .with_field("type", "unsolved collection element"),
-                    );
-                    None
-                } else {
-                    self.checked_expression_depth(tree, span)
-                }
-            }
+            None => self.checked_expression_depth(tree, span),
         }
     }
 
@@ -8513,14 +8499,12 @@ fn expression_evaluation_site(expr: &expr::Expr) -> crate::plan::EvaluationSite 
     site
 }
 
-fn value_type(value: &crate::value::Value) -> Result<Option<DataType>, TypeError> {
-    Ok(Some(match value {
+fn value_type(value: &crate::value::Value) -> Result<DataType, TypeError> {
+    Ok(match value {
         crate::value::Value::Struct(fields) => {
             let mut resolved = Vec::with_capacity(fields.len());
             for (name, value) in fields {
-                let Some(ty) = value_type(value)? else {
-                    return Ok(None);
-                };
+                let ty = value_type(value)?;
                 resolved.push(TypeField::new(name.clone(), ty));
             }
             DataType::Struct(StructType::new(resolved)?)
@@ -8553,39 +8537,29 @@ fn value_type(value: &crate::value::Value) -> Result<Option<DataType>, TypeError
         crate::value::Value::Array(items) => {
             let mut element = None;
             for item in items {
-                let Some(item) = value_type(item)? else {
-                    return Ok(None);
-                };
+                let item = value_type(item)?;
                 element = Some(match element {
                     Some(current) => inferred_join(&current, &item)?,
                     None => item,
                 });
             }
-            let Some(element) = element else {
-                return Ok(None);
-            };
-            DataType::array(element)
+            DataType::array(element.unwrap_or(DataType::Variant))
         }
         crate::value::Value::Map(entries) => {
             let mut element = None;
             for item in entries.values() {
-                let Some(item) = value_type(item)? else {
-                    return Ok(None);
-                };
+                let item = value_type(item)?;
                 element = Some(match element {
                     Some(current) => inferred_join(&current, &item)?,
                     None => item,
                 });
             }
-            let Some(element) = element else {
-                return Ok(None);
-            };
-            DataType::text_map(element)
+            DataType::text_map(element.unwrap_or(DataType::Variant))
         }
         crate::value::Value::Enum(_)
         | crate::value::Value::StructuralUnion { .. }
         | crate::value::Value::TaggedUnion(_) => DataType::Variant,
-    }))
+    })
 }
 
 #[cfg(test)]

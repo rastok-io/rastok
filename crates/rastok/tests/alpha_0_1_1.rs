@@ -342,6 +342,25 @@ fn r009_empty_collections_use_the_expected_element_types() {
 }
 
 #[test]
+fn r009_untyped_empty_bindings_keep_their_original_type_and_identity() {
+    let file = "R-009-untyped-empty-binding.rkg";
+    let output = cli(&["check", file]);
+    assert_status(&output, 0);
+    assert_eq!(
+        stdout(&output),
+        "ok: 4 node(s), semantic hash 7b5094ade2ee706cb9fd7324914e5b716dc4f8e2fbdfe5bdca40a89dfcfcda49\n"
+    );
+    assert_scenarios_pass(
+        file,
+        &[
+            "empty.an_untyped_empty_list",
+            "empty.an_untyped_empty_map",
+            "empty.an_inferred_struct_with_an_empty_list",
+        ],
+    );
+}
+
+#[test]
 fn r009_an_empty_struct_is_not_a_map_and_the_refusal_names_the_map_syntax() {
     assert_check_refuses(
         "R-009-empty-struct-in-a-map-place.rkg",
