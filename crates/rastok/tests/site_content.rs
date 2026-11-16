@@ -74,6 +74,34 @@ fn reference(path: &str, extension: &str) {
 }
 
 #[test]
+fn lab_reference_programs_compile_and_pass_their_scenarios() {
+    let (_, body) = markdown(&root().join("docs/site/reference/lab.md"));
+    let catalog = rastok::connector::contract::ContractCatalog::try_m0().unwrap();
+    let mut programs = 0;
+    for block in body.split("```rkg\n").skip(1) {
+        let source = block.split_once("\n```").expect("closed program block").0;
+        let compilation = rastok::compiler::compile(&[source], &catalog)
+            .unwrap_or_else(|diagnostics| panic!("Lab reference: {diagnostics:?}"));
+        let mut scenarios = 0;
+        for lab in &compilation.labs {
+            for run in rastok::lab::run_program(
+                &compilation.plan,
+                compilation.hash,
+                rastok::plan::GraphVersion(1),
+                lab,
+                None,
+            ) {
+                assert!(run.report.passed(), "Lab reference: {:?}", run.report);
+                scenarios += 1;
+            }
+        }
+        assert!(scenarios > 0, "each program demonstrates an executable Lab");
+        programs += 1;
+    }
+    assert!(programs > 0, "the reference contains a complete program");
+}
+
+#[test]
 fn public_pages_have_the_site_contract_and_existing_artifacts() {
     for (name, order) in [
         ("index.md", 1),

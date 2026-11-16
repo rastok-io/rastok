@@ -10,16 +10,55 @@ same graph. Operators and Contract checks execute in both.
 
 ## Declarations
 
-The following notation describes syntax; angle brackets stand for authored
-names or values, not literal characters.
+Save this complete program as `lab-reference.rkg`, then run
+`rastok check lab-reference.rkg` and `rastok simulate lab-reference.rkg`.
+The mock replaces the HTTP partner; simulation makes no network request.
 
-```text
-lab <name> {
-  mock <connector-path> { <handlers> }
-  scenario <name> { <actions and expectations> }
-  simulation <name> {
-    mock <connector-path> { <handlers> }
-    scenario <name> { <actions and expectations> }
+```rkg
+graph lab_reference : App {
+  input in: text
+  output out: text
+  output exit: HttpClientExit
+
+  connector partner : HttpClient {
+    url = "https://partner.example.test/messages"
+    method = "POST"
+    codec = text
+    behavior = deterministic
+    timeout = duration("5s")
+  }
+
+  in -> partner
+  partner.out -> out
+  partner.exit -> exit
+}
+
+lab replies {
+  // Direct scenarios and simulations inherit this mock.
+  mock partner {
+    on in {
+      out = .
+      exit = Completed { status = 200 }
+    }
+  }
+
+  scenario echoes_the_request {
+    app.in = "hello"
+    expect app.out == "hello"
+    expect app.exit == Completed { status = 200 }
+  }
+
+  // An optional group can replace the inherited mock for all its scenarios.
+  simulation silent_partner {
+    mock partner {
+      on in { out = nothing }
+    }
+    scenario times_out_without_a_reply {
+      app.in = "hello"
+      expect app.out == nothing
+      advance duration("5s")
+      expect app.exit == TimeoutExpired {}
+    }
   }
 }
 ```
