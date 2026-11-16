@@ -225,6 +225,9 @@ Lab syntax and diagnostic codes while following any of them.
 | [8. Privacy, secrets and measurements](guide/08-privacy-secrets-and-measurements.md) | Data policy and original quantities |
 | [9. Command line](guide/09-command-line.md) | Commands, options and exit statuses |
 
+An Operator computes. A Connector is the only thing that touches the outside.
+[Echo](examples/01-echo.md) shows both in one program.
+
 | Example | Your question | What you learn to keep explicit |
 |---|---|---|
 | [1. Echo: one graph, two worlds](examples/01-echo.md) | Can I test a flow without starting its external program? | Computation, effects and the Lab |
