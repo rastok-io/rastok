@@ -4,22 +4,19 @@ description: Follow typed payloads through guards, narrowing and pure expression
 order: 2
 ---
 
-After this chapter you can read a declared payload type, follow a guarded
-transition, and distinguish a business rejection from a typed evaluation
-fault. You can also explain why decoding JSON is not proof that its
-contents satisfy your application.
+After this chapter you can read payload types and guarded transitions,
+distinguish business rejections from evaluation faults, and explain why
+decoded JSON still needs shape validation.
 
 ## Give the payload a shape
 
-A port carries an envelope. Its `data` is the payload the Operator works
-on; `meta` carries separate provenance and application metadata. The
-payload has one resolved logical type. When a port declaration omits its
-type, the compiler must infer it before execution.
+A port carries an envelope: `data` holds its payload; `meta` holds provenance
+and application metadata. The payload has one resolved logical type,
+inferred before execution if the port declaration omits it.
 
-A type describes which values are allowed. `type Name = ...` gives that
-description a name; it does not create a value. A port declaration such as
-`output out: Webhook` uses the named type to constrain its payload. See the
-[type reference](../reference/types.md) for the available forms.
+A type describes allowed values. `type Name = ...` names that description,
+not a value. `output out: Webhook` constrains a port's payload to the named
+type. The [type reference](../reference/types.md) lists the available forms.
 
 The webhook example names the shape it needs. This declaration is from
 `examples/webhook-to-partner.rkg`, lines 3–7:
@@ -83,6 +80,11 @@ ordinary emissions on `failed`, with a typed `Rejected` payload. A decoded
 object with a negative amount is not the same problem as malformed JSON
 that the boundary could not decode. The next chapter follows that distinction
 through the Connector.
+
+Optional state needs the same test. With `type Open = struct { title: text }`
+and `var dossier: Open? = null`, an unchecked `dossier.title` is refused.
+A match can use `dossier is Open => out = dossier.title` and the absence
+branch `_ => out = "No dossier is open"`.
 
 ## Keep bytes and text distinct
 
