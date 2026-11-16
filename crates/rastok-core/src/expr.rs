@@ -1997,6 +1997,7 @@ impl<'a> ExprParser<'_, 'a> {
     }
 
     fn postfix(&mut self) -> Result<Expr, Diagnostic> {
+        let start = self.pos;
         let mut expr = self.primary()?;
         loop {
             if self.eat(&Tok::Dot) {
@@ -2012,9 +2013,7 @@ impl<'a> ExprParser<'_, 'a> {
                 match &mut expr {
                     Expr::Path(segments) => segments.push(String::from(member)),
                     _ => {
-                        return Err(self.fail(
-                            "member access on a computed value is outside this build's subset",
-                        ));
+                        return Err(self.computed_member_refusal(start));
                     }
                 }
             } else if self.eat(&Tok::LBrack) {
@@ -2030,6 +2029,18 @@ impl<'a> ExprParser<'_, 'a> {
                 return Ok(expr);
             }
         }
+    }
+
+    // Failure-only formatting must not enlarge every recursive postfix frame:
+    // ordinary parenthesized expressions still fit the exact parser depth bound.
+    fn computed_member_refusal(&self, start: usize) -> Diagnostic {
+        // `postfix` has consumed the receiver, dot and member name.
+        let receiver =
+            self.text[self.tokens[start].range.start..self.tokens[self.pos - 2].range.start].trim();
+        self.fail(format!(
+            "member access on a computed value is outside this build's subset; \
+             name the value first: `val row = {receiver}`"
+        ))
     }
 
     // Keep narrowing's resolved `DataType` locals out of the recursive hot
@@ -3603,6 +3614,31 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn computed_member_refusals_suggest_binding_the_exact_receiver() {
+        for (source, receiver) in [
+            ("data.rows.value[0].customer", "data.rows.value[0]"),
+            ("(data.shape as Box).side", "(data.shape as Box)"),
+            ("1 + items[2].amount", "items[2]"),
+        ] {
+            let signature = Signature::new()
+                .with("data", DataType::text_map(DataType::Variant))
+                .with_type("Box", DataType::INT);
+            let errors = compile(source, &signature).unwrap_err();
+            assert_eq!(errors.len(), 1, "{source}: {errors:?}");
+            assert!(
+                errors[0].message.contains("outside this build's subset"),
+                "{source}: {errors:?}"
+            );
+            assert!(
+                errors[0]
+                    .message
+                    .contains(&format!("name the value first: `val row = {receiver}`")),
+                "{source}: {errors:?}"
+            );
+        }
+    }
 
     #[test]
     fn empty_collection_constructors_retain_their_contextual_type() {

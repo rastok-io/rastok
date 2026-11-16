@@ -633,7 +633,6 @@ fn r180_optional_state_access_explains_presence_and_narrowing() {
 }
 
 #[test]
-#[ignore = "R-136, gate P4"]
 fn r136_computed_member_access_suggests_a_local_value_without_admitting_it() {
     assert_check_refuses(
         "R-136-one-shot-member-access.rkg",
