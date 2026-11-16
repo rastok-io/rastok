@@ -154,9 +154,13 @@ metadata fields absent from the production graph.
 
 `val name = value` is immutable and lexical. Unit/App constants can be
 referenced by Lab declarations; instance-level values can use that owner's
-key and enclosing immutable values. `var name: Type = value` is mutable
-Operator state for one instance generation. Its writes become visible with
-the transaction commit; children do not inherit it.
+key and enclosing immutable values.
+
+`var name: Type = value` is mutable Operator state for one instance
+generation. Inside a handler an assignment takes effect at once: later
+statements read the new value. The change is committed with the
+transaction; a faulted transaction keeps the previous value. Children do
+not inherit it.
 
 ## Tagged frontends
 
