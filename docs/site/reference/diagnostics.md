@@ -178,4 +178,4 @@ Source registry: `docs/spec/diagnostics.md`, “Registry”.
 | `E-COMPENSATE-KEY` | Compensation-key checking is deferred with Saga. | `docs/spec/diagnostics.md`, Registry |
 | `E-REPLAY-VERSION-MISMATCH` | Replay checks compatibility, but does not emit this structured code. | `docs/spec/identity.md` |
 | `E-LOOP-CONTEXT` | The name occurs in an execution refusal, not a structured compiler diagnostic. | `docs/spec/loop.md` |
-| `E-DUP-EDGE` | Declared but not emitted; duplicate destinations use `E-ROUTE-DUPLICATE`. | `docs/spec/envelope.md` |
+| `E-DUP-EDGE` | Superseded by `E-ROUTE-DUPLICATE`; the route check reports duplicate destinations. This code is not emitted. | `docs/spec/envelope.md` |

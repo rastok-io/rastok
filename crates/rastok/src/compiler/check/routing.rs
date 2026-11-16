@@ -1384,8 +1384,7 @@ pub(super) fn route_conflict(
     Some((code, detail, case))
 }
 
-/// The canonical text of one checked edge — the human face of
-/// E-DUP-EDGE, mirroring the plan's rendering.
+/// The canonical text of one checked edge, mirroring the plan's rendering.
 pub(super) fn edge_display(edge: &Edge) -> String {
     let to = match &edge.to {
         EdgeTarget::Port(endpoint) => endpoint_display(endpoint),

@@ -242,11 +242,6 @@ pub const E_SIM_TARGET: Code = Code::new("E-SIM-TARGET");
 /// homonyms would shadow silently.
 pub const E_DUP_LAB_IDENTITY: Code = Code::new("E-DUP-LAB-IDENTITY");
 
-/// The same source endpoint wired twice to the same target — a
-/// compile error per `envelope.md`: the two deliveries would derive
-/// one call ref and collide in the journal.
-pub const E_DUP_EDGE: Code = Code::new("E-DUP-EDGE");
-
 /// Merged sources of one compilation: the application files. Lab
 /// fragments join at the scenario stage.
 #[derive(Debug, Clone, Default)]
