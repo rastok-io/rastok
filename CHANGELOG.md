@@ -1,6 +1,26 @@
 # Changelog
 
+## Versions
+
+While the version carries the `-alpha` suffix:
+
+- the third number changes for a corrective release. Every program the
+  previous release accepted is still accepted with the same meaning,
+  apart from the cases listed in the changelog, and no format changes
+  its number;
+- the second number changes when the language changes in a way that
+  breaks programs, when the package format, the recording format or a
+  standard Contract changes its number, or when a milestone opens a new
+  capability;
+- the first number stays at zero until stability is promised.
+
+The package format, the recording format and each standard Contract
+carry their own number. Every changelog entry states them.
+
 ## Unreleased
+
+The package format remains 1, the diagnostic recording format remains 1,
+and all six standard Connector Contracts remain at `@1`.
 
 - Check each statically known Call mock terminal against its Contract's frame
   requirements before simulation; runtime refusals still check computed terminals.
@@ -94,6 +114,29 @@
   tests. No language server or personal configuration changes are included.
 - Add an Emacs major mode for `.rkg` highlighting and comment commands,
   with native tests for source boundaries and edits to reader delimiters.
+- Retire the published approval example's keyed instances after 48 hours
+  of inactivity, including requests whose join expired. Its semantic hash
+  changes with that lifetime; no reference trace changes.
+- Correct the state reference: later statements in a handler read an
+  assignment immediately; the transaction commits its changes together,
+  and a fault retains the previous state.
+- Document the outbound Call timeout's queued time separately from inbound
+  HTTP backpressure and Sessions; serialization is per Connector instance,
+  not a limit of one Call across the execution.
+- Present the DSL's numeric names and their fixed representations in one
+  reference table, separate from the logical widths used by schemas. State
+  which operations and exact conversions each family supports.
+- Evaluate floating `%` expressions already accepted by the checker,
+  including signed zero, infinities and NaN; decimal arithmetic and mixed
+  numeric families remain unavailable.
+- Distinguish `.rkg` programs from the runtime's implementation language,
+  and Operators from Connectors before the example sequence.
+- Add a reading path to the normative grammar and replace the Lab reference's
+  placeholder block with a complete program checked and simulated by a test.
+- Update only `chacha20` from withdrawn version 0.10.1 to 0.10.2.
+- Reconcile the opening ledgers with published binaries and crates, hosted
+  CI, contribution settings and documentation reachability; keep unperformed
+  manual trials explicitly open.
 
 ## v0.1.0-alpha (5 November 2026)
 
