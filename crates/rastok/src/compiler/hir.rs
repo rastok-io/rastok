@@ -32,8 +32,8 @@ pub struct Hir {
     pub ext_schema: Vec<(String, DataType)>,
     /// The build-time assets the checker resolved (D-2026-08-10-5).
     pub assets: Vec<crate::plan::AssetBlob>,
-    /// Resolved annotated aliases, keyed by source name. Aliases remain
-    /// structural sugar for ordinary typing; this side table is the A1 proof
+    /// Resolved aliases and their annotations, keyed by source name. Aliases remain
+    /// structural sugar for ordinary typing and diagnostic names; this side table is the A1 proof
     /// that their policy metadata survived expansion into canonical paths.
     /// Uses of an alias lower their expanded table beside the concrete schema;
     /// the alias declaration itself never becomes a second runtime authority.

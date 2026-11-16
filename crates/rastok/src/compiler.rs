@@ -18,6 +18,7 @@ pub mod lower;
 pub mod parser;
 mod routing;
 pub mod syntax;
+mod type_diagnostics;
 
 pub use check::Unit;
 pub use hir::Hir;
@@ -314,7 +315,7 @@ pub fn compile_with_assets(
             | PlanValidationError::InvalidRetryPolicy { .. }
             | PlanValidationError::WiringCycle { .. }),
         ) => {
-            bag.push(type_resolution_diagnostic(&error));
+            bag.push(type_resolution_diagnostic(&error, &hir));
             return Err(bag);
         }
         Err(error) => {
@@ -685,7 +686,7 @@ fn resolved_expression_depth_diagnostic(depth: usize) -> Diagnostic {
     .with_field("depth", depth.to_string())
 }
 
-fn type_resolution_diagnostic(error: &PlanValidationError) -> Diagnostic {
+fn type_resolution_diagnostic(error: &PlanValidationError, hir: &Hir) -> Diagnostic {
     match error {
         PlanValidationError::UnwiredOutput { node, port } => Diagnostic::new(
             check::E_UNWIRED_OUTPUT,
@@ -714,35 +715,47 @@ fn type_resolution_diagnostic(error: &PlanValidationError) -> Diagnostic {
             port,
             expected,
             found,
-        } => Diagnostic::new(
+        } => {
+            let names: Vec<_> = hir.named_schemas.iter().map(|(name, schema)| (name.as_str(), schema.ty())).collect();
+            let difference = type_diagnostics::difference(found, expected, &names);
+            let expected = type_diagnostics::describe(expected, &names);
+            let found = type_diagnostics::describe(found, &names);
+            Diagnostic::new(
             check::E_PORT_TYPE,
             Phase::Check,
             match node {
                 Some(node) => format!(
-                    "`{node}.{port}` requires {expected}, but a producer supplies {found}"
+                    "`{node}.{port}` requires `{expected}`, but a producer supplies `{found}`{difference}"
                 ),
                 None => format!(
-                    "the boundary port `{port}` requires {expected}, but a producer supplies {found}"
+                    "the boundary port `{port}` requires `{expected}`, but a producer supplies `{found}`{difference}"
                 ),
             },
         )
         .with_field("port", port.name())
-        .with_field("expected", expected.to_string())
-        .with_field("found", found.to_string()),
+        .with_field("expected", expected)
+        .with_field("found", found)
+        },
         PlanValidationError::MismatchedEdgePins {
             port,
             expected,
             found,
-        } => Diagnostic::new(
+        } => {
+            let names: Vec<_> = hir.named_schemas.iter().map(|(name, schema)| (name.as_str(), schema.ty())).collect();
+            let difference = type_diagnostics::difference(found, expected, &names);
+            let expected = type_diagnostics::describe(expected, &names);
+            let found = type_diagnostics::describe(found, &names);
+            Diagnostic::new(
             check::E_PORT_TYPE,
             Phase::Check,
             format!(
-                "`{port}` requires {expected}, but its producer supplies {found}"
+                "`{port}` requires `{expected}`, but its producer supplies `{found}`{difference}"
             ),
         )
         .with_field("port", port.name())
-        .with_field("expected", expected.to_string())
-        .with_field("found", found.to_string()),
+        .with_field("expected", expected)
+        .with_field("found", found)
+        },
         PlanValidationError::InvalidInstanceKey { owner, ty } => Diagnostic::new(
             check::E_INSTANCE,
             Phase::Check,

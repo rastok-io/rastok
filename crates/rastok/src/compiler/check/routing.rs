@@ -891,12 +891,21 @@ impl Checker<'_, '_> {
             if let (Some(source_ty), Some(target_ty)) = (&selected_ty, target_ty)
                 && !source_ty.is_assignable_to(&target_ty)
             {
+                let names: Vec<_> = self
+                    .resolved_types
+                    .iter()
+                    .map(|(name, ty)| (name.as_str(), ty))
+                    .collect();
+                let difference =
+                    crate::compiler::type_diagnostics::difference(source_ty, &target_ty, &names);
+                let source_ty = crate::compiler::type_diagnostics::describe(source_ty, &names);
+                let target_ty = crate::compiler::type_diagnostics::describe(&target_ty, &names);
                 self.bag.push(
                     Diagnostic::new(
                         E_PORT_TYPE,
                         Phase::Check,
                         format!(
-                            "this route connects {source_ty} to {target_ty}; pinned ends must agree"
+                            "this route connects `{source_ty}` to `{target_ty}`; pinned ends must agree{difference}"
                         ),
                     )
                     .with_span(span)

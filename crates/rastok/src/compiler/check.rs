@@ -5780,9 +5780,9 @@ impl Checker<'_, '_> {
             if let Some(schema) = self.resolve_annotated_schema(&ty) {
                 self.resolved_types
                     .insert(name.clone(), schema.ty().clone());
-                if !schema.annotations().is_empty() {
-                    self.resolved_named_schemas.insert(name, schema);
-                }
+                // Keep plain aliases too: post-lowering diagnostics need
+                // their source names, but identity still reads only uses.
+                self.resolved_named_schemas.insert(name, schema);
             }
         }
     }
