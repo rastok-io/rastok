@@ -116,6 +116,9 @@ The simulation prints three `PASS` lines and `3 scenario(s), 0 failed`.
 If you already have a checkout at that tag, use it without cloning again.
 <!-- quickstart:end -->
 
+The [version policy](https://github.com/rastok-io/rastok/blob/main/README.md#versions)
+explains corrective releases, language changes and the independently numbered formats.
+
 ## The file `rastok new hello` writes
 
 The whole program, nineteen lines: one App graph with typed ports, one
