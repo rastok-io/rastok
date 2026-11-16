@@ -510,7 +510,6 @@ fn r090_an_inferred_output_reports_its_actual_structural_difference() {
 }
 
 #[test]
-#[ignore = "R-091, gate P4"]
 fn r091_a_second_match_names_the_final_control_form_rule() {
     assert_check_refuses(
         "R-091-two-matches.rkg",
@@ -524,7 +523,6 @@ fn r091_a_second_match_names_the_final_control_form_rule() {
 }
 
 #[test]
-#[ignore = "R-091, gate P4"]
 fn r091_a_case_comparison_suggests_the_is_test() {
     assert_check_refuses(
         "R-091-compare-with-a-case.rkg",
@@ -534,7 +532,6 @@ fn r091_a_case_comparison_suggests_the_is_test() {
 }
 
 #[test]
-#[ignore = "R-091, gate P4"]
 fn r091_a_split_value_names_the_same_line_parenthesis_rule() {
     assert_check_refuses(
         "R-091-value-on-two-lines.rkg",
