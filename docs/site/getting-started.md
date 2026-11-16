@@ -10,7 +10,7 @@ order: 2
 Rastok is currently in alpha. Two prebuilt binaries are available:
 **macOS Apple silicon** and **Linux x86-64**, on the
 [release page](https://github.com/rastok-io/rastok/releases/tag/v0.1.0-alpha).
-Copy the command for your system below into a terminal, in an empty directory.
+Copy the command for your system below into a terminal.
 It downloads, verifies and installs Rastok.
 
 ### macOS Apple silicon
@@ -18,7 +18,7 @@ It downloads, verifies and installs Rastok.
 For Macs with an Apple M-series chip, running macOS 11 or later:
 
 ```sh
-curl -fLO https://github.com/rastok-io/rastok/releases/download/v0.1.0-alpha/rastok-0.1.0-alpha-aarch64-apple-darwin.tar.gz && curl -fLO https://github.com/rastok-io/rastok/releases/download/v0.1.0-alpha/rastok-0.1.0-alpha-aarch64-apple-darwin.tar.gz.sha256 && shasum -a 256 -c rastok-0.1.0-alpha-aarch64-apple-darwin.tar.gz.sha256 && tar -xzf rastok-0.1.0-alpha-aarch64-apple-darwin.tar.gz rastok && mkdir -p "$HOME/.local/bin" && install -m 755 rastok "$HOME/.local/bin/rastok" && export PATH="$HOME/.local/bin:$PATH" && rastok --version
+( cd "$(mktemp -d)" && curl -fLO https://github.com/rastok-io/rastok/releases/download/v0.1.0-alpha/rastok-0.1.0-alpha-aarch64-apple-darwin.tar.gz && curl -fLO https://github.com/rastok-io/rastok/releases/download/v0.1.0-alpha/rastok-0.1.0-alpha-aarch64-apple-darwin.tar.gz.sha256 && shasum -a 256 -c rastok-0.1.0-alpha-aarch64-apple-darwin.tar.gz.sha256 && tar -xzf rastok-0.1.0-alpha-aarch64-apple-darwin.tar.gz rastok && mkdir -p "$HOME/.local/bin" && install -m 755 rastok "$HOME/.local/bin/rastok" ) && export PATH="$HOME/.local/bin:$PATH" && rastok --version
 ```
 
 ### Linux x86-64
@@ -29,7 +29,7 @@ For Linux ARM64, older glibc or a system using musl, use the source installation
 below.
 
 ```sh
-curl -fLO https://github.com/rastok-io/rastok/releases/download/v0.1.0-alpha/rastok-0.1.0-alpha-x86_64-unknown-linux-gnu.tar.gz && curl -fLO https://github.com/rastok-io/rastok/releases/download/v0.1.0-alpha/rastok-0.1.0-alpha-x86_64-unknown-linux-gnu.tar.gz.sha256 && sha256sum -c rastok-0.1.0-alpha-x86_64-unknown-linux-gnu.tar.gz.sha256 && tar -xzf rastok-0.1.0-alpha-x86_64-unknown-linux-gnu.tar.gz rastok && mkdir -p "$HOME/.local/bin" && install -m 755 rastok "$HOME/.local/bin/rastok" && export PATH="$HOME/.local/bin:$PATH" && rastok --version
+( cd "$(mktemp -d)" && curl -fLO https://github.com/rastok-io/rastok/releases/download/v0.1.0-alpha/rastok-0.1.0-alpha-x86_64-unknown-linux-gnu.tar.gz && curl -fLO https://github.com/rastok-io/rastok/releases/download/v0.1.0-alpha/rastok-0.1.0-alpha-x86_64-unknown-linux-gnu.tar.gz.sha256 && sha256sum -c rastok-0.1.0-alpha-x86_64-unknown-linux-gnu.tar.gz.sha256 && tar -xzf rastok-0.1.0-alpha-x86_64-unknown-linux-gnu.tar.gz rastok && mkdir -p "$HOME/.local/bin" && install -m 755 rastok "$HOME/.local/bin/rastok" ) && export PATH="$HOME/.local/bin:$PATH" && rastok --version
 ```
 
 Each command installs `rastok` in `~/.local/bin` for your user account and
