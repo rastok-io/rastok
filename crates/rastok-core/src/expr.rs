@@ -2251,6 +2251,10 @@ impl<'a> ExprParser<'_, 'a> {
 
     fn map(&mut self) -> Result<Expr, Diagnostic> {
         let mut entries: Vec<(String, Expr)> = Vec::new();
+        if self.eat(&Tok::Colon) {
+            self.expect(&Tok::RBrace, "`}`")?;
+            return Ok(Expr::MapLit(entries));
+        }
         while self.peek() != Some(&Tok::RBrace) {
             let (key, range) = match self.bump().cloned() {
                 Some(Spanned {
@@ -3758,6 +3762,24 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_maps_are_expression_atoms_in_every_map_position() {
+        for (source, value) in [
+            ("size({:})", Value::Int(0)),
+            ("size({\"nested\": {:}})", Value::Int(1)),
+            ("size([{:}])", Value::Int(1)),
+            ("({:}) == {:}", Value::Bool(true)),
+        ] {
+            let tree = compile(source, &Signature::new()).unwrap();
+            assert_eq!(const_eval(&tree, &BTreeMap::new()).unwrap(), value);
+        }
+        for (source, token) in [("size({:1})", "1"), ("size({:,})", ",")] {
+            let errors = compile(source, &Signature::new()).unwrap_err();
+            assert_eq!(errors[0].message, "expected `}`");
+            assert_eq!(&source[errors[0].range.clone()], token);
+        }
+    }
 
     #[test]
     fn refusals_display_source_operators_and_types() {

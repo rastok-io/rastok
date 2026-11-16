@@ -72,6 +72,8 @@ large `advance` may now fail. Reference traces changed: **none**.
 
 ### Language and expressions
 
+- Accept the existing empty map spelling `{:}` inside expression arguments
+  and nested collections; `size({:})` evaluates to zero.
 - Materialize values narrowed by positive `is` tests in conjunctions,
   conditionals, guarded handlers and guarded match arms, so execution yields
   the value whose type was checked. Assigning a state cell ends its narrowing

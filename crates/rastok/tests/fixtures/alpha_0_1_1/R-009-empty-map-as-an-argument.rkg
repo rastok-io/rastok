@@ -1,0 +1,39 @@
+// The empty map `{:}` is refused as a function argument
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+// and on the 0.1.1-alpha candidate.
+//
+// Commands, run from this directory:
+//   rastok check R-009-empty-map-as-an-argument.rkg
+//
+// Today (both versions):
+//   $ rastok check R-009-empty-map-as-an-argument.rkg
+//   error[E-EXPR]: map keys are string literals in this subset
+//     --> R-009-empty-map-as-an-argument.rkg:29:20
+//      |
+//   29 |       out = size({:}) + size([])
+//      |                    ^
+//     = detail: map keys are string literals in this subset
+//
+// Expected after the fix:
+//   Check accepts the program and the scenario passes: `size({:})` is 0, as `size([])`
+//   already is. `{:}` is accepted today in a declaration such as
+//   `val m: map<text,int> = {:}`.
+
+graph app : App {
+  input in: text
+  output out: int
+  operator o {
+    input in: text
+    output out: int
+    on in {
+      out = size({:}) + size([])
+    }
+  }
+  in -> o -> out
+}
+lab empty_arguments {
+  scenario both_empty_forms_measure_zero {
+    app.in = "a"
+    expect app.out == 0
+  }
+}
