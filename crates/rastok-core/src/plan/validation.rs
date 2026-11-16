@@ -3258,8 +3258,8 @@ fn validate(plan: &ExecutionPlan) -> Result<(), PlanValidationError> {
                 within_ns,
                 last,
             } => {
-                let distinct: BTreeSet<_> = ports.iter().cloned().collect();
-                if ports.len() < 2 || distinct.len() != ports.len() {
+                let mut distinct = BTreeSet::new();
+                if ports.len() < 2 || ports.iter().any(|port| !distinct.insert(port)) {
                     return Err(PlanValidationError::InvalidJoinActivation {
                         node: node.path.clone(),
                     });

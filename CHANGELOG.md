@@ -176,9 +176,12 @@ already refused by the previous release. The only published example with
 a changed semantic hash is `docs/examples/expense-approval.rkg`, because
 its keyed instances now have the idle lifetime described above.
 
-Publication is pending. The embedded Retry/recovery workload exceeds the
-existing 1 MiB code-size gate. Its runtime and heap checks pass; the
-code-size qualification remains open.
+Publication is pending. The embedded Retry/recovery workload now passes the
+unchanged 1 MiB code-size and 128 KiB heap gates. Temporary-set construction
+in plan validation saves 16,200 B of linked code, leaving 2,516 B of code
+and 1,804 B of heap margin. This reduction does not change execution, recovery,
+formats or reference traces; the [qualification](docs/architecture/release-qualification.md#embedded-code-size-correction-16-november-2026)
+records the fixed workloads and reproduction commands.
 
 ## v0.1.0-alpha (5 November 2026)
 

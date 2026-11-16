@@ -20,6 +20,9 @@ struct Outcome {
     retries: BTreeSet<node::OwnerPath>,
 }
 
+// Build variable-size proof sets by insertion: collect buffers a Vec and
+// links its sorting code for each element type on the embedded target.
+// Insertion preserves the same ordered, deduplicated proof without that code.
 type Outcomes = BTreeSet<Outcome>;
 
 // Independent joins and nested retries can otherwise multiply proof states
@@ -53,17 +56,19 @@ fn combine(left: &Outcomes, right: &Outcomes) -> Option<Outcomes> {
                 let total = joins.entry(input.clone()).or_default();
                 *total = total.saturating_add(*count).min(2);
             }
+            let mut again = BTreeSet::new();
+            again.extend(left.again.union(&right.again).cloned());
+            let mut visible_calls = BTreeSet::new();
+            visible_calls.extend(left.visible_calls.union(&right.visible_calls).cloned());
+            let mut retries = BTreeSet::new();
+            retries.extend(left.retries.union(&right.retries).cloned());
             combined.insert(Outcome {
                 terminal: left.terminal || right.terminal,
                 other: left.other.saturating_add(right.other).min(2),
-                again: left.again.union(&right.again).cloned().collect(),
-                visible_calls: left
-                    .visible_calls
-                    .union(&right.visible_calls)
-                    .cloned()
-                    .collect(),
+                again,
+                visible_calls,
                 joins,
-                retries: left.retries.union(&right.retries).cloned().collect(),
+                retries,
             });
             if combined.len() > MAX_GRAPH_LOOP_OUTCOMES {
                 return None;
@@ -333,10 +338,12 @@ pub(super) fn validate(
                                     if !target.segments().starts_with(owner.path.segments()) {
                                         return Err(error("command".into(), "a command escapes its active Loop context"));
                                     }
-                                    empty().into_iter().map(|mut outcome| {
+                                    let mut outcomes = Outcomes::new();
+                                    outcomes.extend(empty().into_iter().map(|mut outcome| {
                                         if command.kind != LoopCommandKind::Done { outcome.retries.insert(target.clone()); }
                                         outcome
-                                    }).collect()
+                                    }));
+                                    outcomes
                                 }
                                 Destination::Port(target)
                                     if target.node == owner_index =>
@@ -410,13 +417,12 @@ pub(super) fn validate(
                                         ));
                                     }
                                     if !matches!(command, LoopCommand::Done) {
-                                        total = total
-                                            .into_iter()
-                                            .map(|mut outcome| {
-                                                outcome.retries.insert(host.path.clone());
-                                                outcome
-                                            })
-                                            .collect();
+                                        let mut updated = Outcomes::new();
+                                        updated.extend(total.into_iter().map(|mut outcome| {
+                                            outcome.retries.insert(host.path.clone());
+                                            outcome
+                                        }));
+                                        total = updated;
                                     }
                                 }
                                 for (port, _) in step.emissions().filter(|(_, expression)| {
@@ -452,17 +458,16 @@ pub(super) fn validate(
                         }
                     }
                     if joined {
-                        alternatives = alternatives
-                            .into_iter()
-                            .map(|mut outcome| {
-                                outcome
-                                    .joins
-                                    .entry(input.clone())
-                                    .and_modify(|count| *count = count.saturating_add(1).min(2))
-                                    .or_insert(1);
-                                outcome
-                            })
-                            .collect();
+                        let mut updated = Outcomes::new();
+                        updated.extend(alternatives.into_iter().map(|mut outcome| {
+                            outcome
+                                .joins
+                                .entry(input.clone())
+                                .and_modify(|count| *count = count.saturating_add(1).min(2))
+                                .or_insert(1);
+                            outcome
+                        }));
+                        alternatives = updated;
                     }
                     alternatives
                 }
@@ -751,6 +756,58 @@ fn nested_outcomes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn combined_proofs_preserve_unions_and_saturated_counts() {
+        let endpoint = |index| Endpoint {
+            node: NodeIndex::new(index),
+            port: node::Port::new("in").unwrap(),
+        };
+        let path = |name| node::Path::new([name]).unwrap();
+        let owner = |name| node::OwnerPath::new([name]).unwrap();
+        let left = Outcome {
+            terminal: false,
+            other: 1,
+            again: BTreeSet::from([endpoint(1), endpoint(2)]),
+            visible_calls: BTreeSet::from([path("a"), path("b")]),
+            joins: BTreeMap::from([(endpoint(1), 1), (endpoint(2), 1)]),
+            retries: BTreeSet::from([owner("a"), owner("b")]),
+        };
+        let right = Outcome {
+            terminal: true,
+            other: 2,
+            again: BTreeSet::from([endpoint(2), endpoint(3)]),
+            visible_calls: BTreeSet::from([path("b"), path("c")]),
+            joins: BTreeMap::from([(endpoint(2), 2), (endpoint(3), 1)]),
+            retries: BTreeSet::from([owner("b"), owner("c")]),
+        };
+        let expected = Outcomes::from([Outcome {
+            terminal: true,
+            other: 2,
+            again: BTreeSet::from([endpoint(1), endpoint(2), endpoint(3)]),
+            visible_calls: BTreeSet::from([path("a"), path("b"), path("c")]),
+            joins: BTreeMap::from([(endpoint(1), 1), (endpoint(2), 2), (endpoint(3), 1)]),
+            retries: BTreeSet::from([owner("a"), owner("b"), owner("c")]),
+        }]);
+        let left = Outcomes::from([left]);
+        let right = Outcomes::from([right]);
+        assert!(combine(&left, &right).unwrap() == expected);
+        assert!(combine(&right, &left).unwrap() == expected);
+        assert!(combine(&left, &empty()).unwrap() == left);
+        assert!(combine(&Outcomes::new(), &right).unwrap().is_empty());
+    }
+
+    #[test]
+    fn combined_proofs_deduplicate_equal_results() {
+        let mut alternative = empty().pop_first().unwrap();
+        alternative
+            .retries
+            .insert(node::OwnerPath::new(["child"]).unwrap());
+        let right = Outcomes::from([alternative.clone()]);
+        let mut left = empty();
+        left.insert(alternative);
+        assert!(combine(&left, &right).unwrap() == right);
+    }
 
     #[test]
     fn independent_choices_refuse_before_the_proof_state_explodes() {
