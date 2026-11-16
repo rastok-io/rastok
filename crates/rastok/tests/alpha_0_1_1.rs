@@ -542,7 +542,6 @@ fn r091_a_split_value_names_the_same_line_parenthesis_rule() {
 }
 
 #[test]
-#[ignore = "R-138, gate P4"]
 fn r138_a_second_final_output_names_the_missing_terminal_and_its_arm() {
     assert_check_refuses(
         "R-138-second-final-output.rkg",
@@ -557,7 +556,6 @@ fn r138_a_second_final_output_names_the_missing_terminal_and_its_arm() {
 }
 
 #[test]
-#[ignore = "R-138, gate P4"]
 fn r138_disposal_is_not_a_loop_verdict_and_the_refusal_locates_the_arm() {
     assert_check_refuses(
         "R-138-output-to-nothing.rkg",
@@ -573,7 +571,6 @@ fn r138_disposal_is_not_a_loop_verdict_and_the_refusal_locates_the_arm() {
 }
 
 #[test]
-#[ignore = "R-138, gate P4"]
 fn r138_a_loop_arm_with_two_verdicts_names_both() {
     assert_check_refuses(
         "R-138-two-verdicts.rkg",
