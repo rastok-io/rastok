@@ -4,6 +4,9 @@ description: Install the current Rastok CLI, create a typed graph with a Lab sce
 order: 2
 ---
 
+You write `.rkg` programs. Rastok itself is written in Rust; you do not need
+Rust to use it.
+
 ## Install and run Rastok
 
 <!-- quickstart:start -->

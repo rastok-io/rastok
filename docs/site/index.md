@@ -20,6 +20,9 @@ that explains each run. Within the supported Contract and Lab profiles, the
 same checked program runs against scripted partners in the Lab or against
 real systems in the App, without rewriting the graph.
 
+You write `.rkg` programs. Rastok itself is written in Rust; you do not need
+Rust to use it.
+
 This page is the map. [Getting started](getting-started.md) installs the
 tool and opens the two paths: the user guide, or the
 [examples](examples/01-echo.md).
