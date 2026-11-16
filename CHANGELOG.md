@@ -37,6 +37,29 @@
 - Explain why mocked Connectors still need synthetic secret bindings, and
   name a missing deployment environment variable separately from a version
   mismatch, without exposing secret material.
+- Resolve bare enum symbols from their expected type or the opposite enum
+  operand of an equality test; ambiguous symbols refuse with `E-EXPR`.
+- Type empty arrays and maps from their declared destination, including
+  nested fields, state, mocks and Lab assertions. Bindings without an element
+  constraint now require an annotation, such as `val members: array<text> = []`.
+  `{}` remains a struct; a map mismatch points to `{:}`. An empty map keeps
+  its value and declared type through package and journal decoding regardless
+  of its key type, using the unchanged encoding.
+- Expose case payload fields inside a single-case closed match while keeping
+  the complete tagged value for direct and identity emissions.
+- Resolve successive positive type tests using the preceding facts. Reused
+  inferred structs also construct optional fields required at their typed
+  destination, instead of failing when execution checks the value.
+- Preserve typed handler inputs when an expression also reads mutable state,
+  without weakening the independent check of transported expressions.
+- Allow exact integer-to-decimal conversions, subject to the declared
+  precision and scale; decimal arithmetic remains unavailable.
+- Accept inline struct values inside arrays at emission, mock, injection
+  and expectation sites; a ternary between inline structs remains refused.
+- End a bare `stop` at its line boundary so the next match arm is not parsed
+  as its value.
+- Warn with `W-JOIN-UNPAIRED` when a join can strand Call frames or terminals;
+  pairing by Call identity with an explicit bound avoids the warning.
 
 ## v0.1.0-alpha (5 November 2026)
 
