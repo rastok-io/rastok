@@ -390,6 +390,7 @@ operator decide {
   output rejection: Rejection
   output expired: JoinExpiry
   instance = { key = data.request_id }
+  lifetime = { kind = idle; after = duration("48h") }
 
   on (request, decision) within duration("48h") match {
     decision.data.approved => approval = request.data
