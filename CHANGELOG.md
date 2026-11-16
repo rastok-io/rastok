@@ -89,6 +89,9 @@
   this does not qualify or publish a Windows binary.
 - Document when `run` exits after stdin ends, why a listening Connector keeps
   it alive, and why bounded structured logs are not a complete journal.
+- Add native Vim and Neovim file detection, syntax highlighting and
+  buffer-local comment settings, with installation instructions and native
+  tests. No language server or personal configuration changes are included.
 
 ## v0.1.0-alpha (5 November 2026)
 

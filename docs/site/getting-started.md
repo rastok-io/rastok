@@ -182,7 +182,10 @@ code --install-extension rastok-dsl-0.1.1.vsix
 For VSCodium, use `codium --install-extension rastok-dsl-0.1.1.vsix`.
 Before publication, the [editor instructions](https://github.com/rastok-io/rastok/blob/main/editors/vscode/rastok-dsl/README.md)
 explain how to package a local checkout; they also cover the JetBrains bundle.
-The grammar colors source; `rastok check` validates it.
+For Vim or Neovim, load the native runtime from the same checkout as the
+examples, following the [Vim and Neovim setup](https://github.com/rastok-io/rastok/blob/main/editors/vim/README.md).
+These integrations color source and detect `.rkg` files; they do not provide
+completion or type checking. `rastok check` validates the program.
 
 ## Three ways to learn
 

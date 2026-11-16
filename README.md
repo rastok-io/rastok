@@ -245,8 +245,8 @@ the recorded transitions and the visible limits.
   before presentation. Diagnostic recordings are not redacted exports.
 - **A small, portable core.** `rastok-core` holds the semantics, builds
   without the standard library and is checked on bare-metal targets in CI.
-- **Editor support.** A data-only VS Code and JetBrains TextMate grammar in
-  [`editors/vscode/rastok-dsl`](editors/vscode/rastok-dsl/README.md).
+- **Editor support.** Syntax highlighting for VS Code, VSCodium, JetBrains
+  IDEs, Vim and Neovim. See the [editor setup](editors/README.md).
 
 ## How it works
 
@@ -421,7 +421,7 @@ rastok/
 │   ├── examples/           example catalogue and historical sketches
 │   └── site/               learning path, quickstart and publication assets
 ├── examples/               executable graphs with their Labs
-├── editors/                VS Code and JetBrains TextMate grammar
+├── editors/                syntax highlighting and editor setup
 ├── spikes/                 interop and bare-metal spike crates, outside the workspace
 ├── tools/                  repository development tools
 ├── AGENTS.md               engineering rules for humans and agents

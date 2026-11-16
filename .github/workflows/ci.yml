@@ -68,6 +68,20 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  editors:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+      - name: install native editor test tools
+        run: sudo apt-get update && sudo apt-get install -y vim neovim
+      - name: Vim syntax and file-type tests
+        run: node --test editors/vim/test.mjs
+      - name: Neovim syntax and file-type tests
+        run: RASTOK_VIM=nvim node --test editors/vim/test.mjs
+
   gate:
     strategy:
       fail-fast: false
