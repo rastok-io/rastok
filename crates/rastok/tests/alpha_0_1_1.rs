@@ -593,7 +593,6 @@ fn r138_a_loop_arm_with_two_verdicts_names_both() {
 }
 
 #[test]
-#[ignore = "R-167, gate P4"]
 fn r167_after_in_a_mock_names_the_deferred_construct() {
     assert_check_refuses(
         "R-167-after-in-a-fake.rkg",
@@ -608,7 +607,6 @@ fn r167_after_in_a_mock_names_the_deferred_construct() {
 }
 
 #[test]
-#[ignore = "R-167, gate P4"]
 fn r167_foreach_refusal_explains_the_reserved_word() {
     assert_check_refuses(
         "R-167-foreach.rkg",

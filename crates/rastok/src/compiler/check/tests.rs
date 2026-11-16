@@ -30,6 +30,35 @@ fn check_clean(source: &str) -> Hir {
 }
 
 #[test]
+fn unresolved_reserved_routes_name_the_deferred_construct() {
+    for (word, purpose) in [
+        ("compose", "reuse-instantiation"),
+        ("foreach", "per-item fan-out"),
+        ("spawn", "keyed-instance spawn"),
+        ("watermark", "event-time watermark"),
+        ("replay", "replay directive"),
+    ] {
+        let source = format!("graph app : App {{ in -> {word} -> out }}");
+        let (_, bag) = check_source(&source);
+        let diagnostic = bag
+            .diagnostics()
+            .iter()
+            .find(|d| d.code() == E_RESOLVE_UNKNOWN)
+            .unwrap();
+        assert!(diagnostic.message().contains("reserved word"), "{bag:?}");
+        assert!(diagnostic.message().contains(purpose), "{bag:?}");
+        assert!(diagnostic.message().contains("not implemented"), "{bag:?}");
+        assert_eq!(&source[diagnostic.spans()[0].range()], word);
+    }
+    let (_, bag) = check_source("graph app : App { in -> missing -> out }");
+    assert!(
+        bag.diagnostics()
+            .iter()
+            .any(|d| d.message().contains("names neither a Graph port"))
+    );
+}
+
+#[test]
 fn mock_matches_validate_complete_replies_per_leaf() {
     let reply = "out = \"ok\"; exit = Exited { exit_code = 0, signal = null }";
     for (fallback, valid) in [

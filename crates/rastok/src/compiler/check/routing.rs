@@ -1025,17 +1025,28 @@ impl Checker<'_, '_> {
                 });
         }
         if target_node.is_none() && target_graph.is_none() {
+            let reserved = match node_name.text.as_str() {
+                "compose" => Some("a possible future reuse-instantiation form"),
+                "foreach" => Some("a later per-item fan-out node"),
+                "spawn" => Some("a future explicit keyed-instance spawn directive"),
+                "watermark" => Some("a future event-time watermark on an instance/window"),
+                "replay" => Some("a future replay directive"),
+                _ => None,
+            };
+            let message = match reserved {
+                Some(purpose) => format!(
+                    "`{}` is a reserved word for {purpose}; it is not implemented by this build",
+                    node_name.text
+                ),
+                None => format!(
+                    "`{}` names neither a Graph port nor a child Node in this Graph",
+                    node_name.text
+                ),
+            };
             self.bag.push(
-                Diagnostic::new(
-                    E_RESOLVE_UNKNOWN,
-                    Phase::Resolve,
-                    format!(
-                        "`{}` names neither a Graph port nor a child Node in this Graph",
-                        node_name.text
-                    ),
-                )
-                .with_span(node_name.span)
-                .with_field("name", node_name.text.clone()),
+                Diagnostic::new(E_RESOLVE_UNKNOWN, Phase::Resolve, message)
+                    .with_span(node_name.span)
+                    .with_field("name", node_name.text.clone()),
             );
             return None;
         }
