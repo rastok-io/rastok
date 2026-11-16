@@ -668,13 +668,11 @@ fn assert_missing_simulation_source(arguments: &[&str]) {
 }
 
 #[test]
-#[ignore = "R-078, gate P5"]
 fn r078_simulate_with_a_ui_option_but_no_source_is_a_usage_error() {
     assert_missing_simulation_source(&["simulate", "--ui"]);
 }
 
 #[test]
-#[ignore = "R-078, gate P5"]
 fn r078_simulate_alone_names_the_missing_source_and_its_own_usage() {
     assert_missing_simulation_source(&["simulate"]);
 }
