@@ -39,7 +39,10 @@ These programs are now refused at check instead of failing during execution:
   refusals; requests with a text-valued field retain their behavior;
 - an authored WebSocket Session mock that the Lab cannot execute
   (`E-CHECK-DEFERRED`). WebSocket declarations without mocks and resident
-  Process scripts remain admitted.
+  Process scripts remain admitted;
+- an emission to a precise type that still relies on a state cell's
+  earlier narrowing after assigning that cell (`E-PORT-TYPE`). Subsequent
+  reads use the cell's declared type, including when it remains optional.
 
 Two additional check-time refusals are explicit:
 
@@ -91,6 +94,10 @@ large `advance` may now fail. Reference traces changed: **none**.
 - Check nonempty list literals element by element in typed positions,
   including mixed null and text elements for `array<text?>`. Unconstrained
   mixed lists retain `variant` elements and their existing representation.
+  The added element conversions change hashes for typed optional-element
+  lists that previously compiled but faulted at execution, such as `[data]`
+  or `[null]` assigned to `array<text?>`. Published example hashes and
+  reference traces are unchanged.
 - Type empty arrays and maps from their declared destination, including
   nested fields, state, mocks and Lab assertions. Without an expected type,
   empty collections retain `variant` elements, as in 0.1.0. A later typed
