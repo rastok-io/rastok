@@ -1,0 +1,95 @@
+// Comparing the whole payload of an optional input with `null` is false when it is null
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+//
+// Commands, run from this directory:
+//   rastok check N-null-comparison-on-an-optional-input.rkg
+//   rastok simulate N-null-comparison-on-an-optional-input.rkg
+//
+// Today (both versions):
+//   $ rastok check N-null-comparison-on-an-optional-input.rkg
+//   ok: 6 node(s), semantic hash 29e6da436faef463bb5c681b8c34e47500eb980a86a74ba88f1ce07f1baaff7a
+//   $ rastok simulate N-null-comparison-on-an-optional-input.rkg
+//   FAIL nulls.an_absent_value
+//        observed app.ternary: "present"
+//        observed app.guard: "present"
+//   PASS nulls.a_present_value
+//   2 scenario(s), 1 failed
+//
+// Expected after the fix:
+//   Both scenarios pass. `data == null` is true, and `data != null` false, when the
+//   payload of an optional input is null, in a ternary and in a match guard, as
+//   they already are for an optional field and for a state cell.
+
+type Row = struct { id: text, note: text? }
+graph app : App {
+  input in: text
+  output ternary: text
+  output guard: text
+  output field: text
+  output cell: text
+  operator make {
+    input in: text
+    output out: text?
+    output row: Row
+    on in match {
+      data == "none" => {
+        out = null
+        row = { id = "r"; note = null }
+      }
+      _ => {
+        out = data
+        row = { id = "r"; note = data }
+      }
+    }
+  }
+  operator by_ternary {
+    input in: text?
+    output out: text
+    on in { out = data == null ? "absent" : "present" }
+  }
+  operator by_guard {
+    input in: text?
+    output out: text
+    on in match {
+      data == null => out = "absent"
+      _ => out = "present"
+    }
+  }
+  operator by_field {
+    input in: Row
+    output out: text
+    on in { out = data.note == null ? "absent" : "present" }
+  }
+  operator by_cell {
+    input in: text?
+    output out: text
+    var seen: text? = null
+    on in {
+      seen = data
+      out = seen == null ? "absent" : "present"
+    }
+  }
+  in -> make
+  make.out -> { by_ternary by_guard by_cell }
+  make.row -> by_field
+  by_ternary.out -> ternary
+  by_guard.out -> guard
+  by_field.out -> field
+  by_cell.out -> cell
+}
+lab nulls {
+  scenario an_absent_value {
+    app.in = "none"
+    expect app.ternary == "absent"
+    expect app.guard == "absent"
+    expect app.field == "absent"
+    expect app.cell == "absent"
+  }
+  scenario a_present_value {
+    app.in = "x"
+    expect app.ternary == "present"
+    expect app.guard == "present"
+    expect app.field == "present"
+    expect app.cell == "present"
+  }
+}

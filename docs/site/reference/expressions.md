@@ -30,6 +30,10 @@ for example `` `+` does not accept array<text> and array<text> ``. List
 concatenation with `+` is not available in this version. Optional element
 types appear as `array<text?>` in type refusals.
 
+For an optional input carrying null, `data == null` is true and
+`data != null` is false. Whole inputs, optional fields and state cells
+follow the same comparison rule, including in guards and conditionals.
+
 ### Numeric operands in this alpha
 
 The [numeric type table](types.md#numeric-types) lists source names,

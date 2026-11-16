@@ -397,6 +397,18 @@ fn r222_a_typed_list_checks_each_optional_element() {
 }
 
 #[test]
+fn r217_optional_input_null_tests_match_fields_and_state() {
+    let file = "N-null-comparison-on-an-optional-input.rkg";
+    let output = cli(&["check", file]);
+    assert_status(&output, 0);
+    assert_eq!(
+        stdout(&output),
+        "ok: 6 node(s), semantic hash 29e6da436faef463bb5c681b8c34e47500eb980a86a74ba88f1ce07f1baaff7a\n"
+    );
+    assert_scenarios_pass(file, &["nulls.an_absent_value", "nulls.a_present_value"]);
+}
+
+#[test]
 fn r009_an_empty_struct_is_not_a_map_and_the_refusal_names_the_map_syntax() {
     assert_check_refuses(
         "R-009-empty-struct-in-a-map-place.rkg",

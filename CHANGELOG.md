@@ -72,6 +72,10 @@ large `advance` may now fail. Reference traces changed: **none**.
 
 ### Language and expressions
 
+- Compare optional input payloads to `null` using the selected value, as
+  for optional fields and state cells. Payloads loaded during a comparison
+  also apply this rule recursively to nested values; retained branch
+  witnesses and semantic program hashes are unchanged.
 - Accept the existing empty map spelling `{:}` inside expression arguments
   and nested collections; `size({:})` evaluates to zero.
 - Materialize values narrowed by positive `is` tests in conjunctions,

@@ -38,6 +38,12 @@ Rastok-owned extensions include exact `decimal(...)`, canonical
 type/case tests through `is`, structs, tagged unions and the
 Arrow-anchored logical types.
 
+Comparisons consume the selected logical values, whether the operand was
+already materialized or loaded from an input payload. For a null optional
+input, `data == null` is true and `data != null` is false, just as for an
+optional struct field or state cell. This also applies inside collections;
+it does not remove retained union branches from stored values or type tests.
+
 The empty map spelling `{:}` is an expression atom wherever a map literal
 is admitted, including function arguments and nested collections.
 `size({:})` evaluates to zero, just as `size([])` does. The host value

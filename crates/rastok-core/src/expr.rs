@@ -3125,7 +3125,9 @@ fn materialize_deep(
 ) -> Result<EvalValue, Error> {
     let resolve = |value| materialize_deep(value, bindings, preserve_branches);
     Ok(match value {
-        EvalValue::Payload(reference) => bindings.payload(&reference)?,
+        // Loaded payloads can still contain retained union branches. Apply
+        // the same comparison/type-test rule as for an already bound value.
+        EvalValue::Payload(reference) => resolve(bindings.payload(&reference)?)?,
         EvalValue::List(items) => {
             EvalValue::List(items.into_iter().map(resolve).collect::<Result<_, _>>()?)
         }
@@ -3815,6 +3817,91 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lazy_payload_comparisons_match_materialized_values() {
+        struct LazyComparison {
+            value: EvalValue,
+            other: EvalValue,
+        }
+        impl Bindings for LazyComparison {
+            fn get(&self, name: &str) -> Result<Option<EvalValue>, Error> {
+                Ok(match name {
+                    "data" => Some(EvalValue::Payload(PayloadSource::Input)),
+                    "other" => Some(self.other.clone()),
+                    _ => None,
+                })
+            }
+            fn payload(&self, reference: &PayloadSource) -> Result<EvalValue, Error> {
+                assert_eq!(reference, &PayloadSource::Input);
+                Ok(self.value.clone())
+            }
+        }
+        let wrapped = |value| EvalValue::StructuralUnion {
+            branch: if matches!(value, EvalValue::Null) {
+                0
+            } else {
+                1
+            },
+            value: Box::new(value),
+        };
+        let signature = Signature::new()
+            .with("data", DataType::Variant)
+            .with("other", DataType::Variant);
+        for value in [
+            wrapped(EvalValue::Null),
+            wrapped(EvalValue::Text("present".into())),
+            EvalValue::List(vec![wrapped(EvalValue::Null)]),
+            EvalValue::Map(BTreeMap::from([(
+                "optional".into(),
+                wrapped(EvalValue::Null),
+            )])),
+            EvalValue::Struct(vec![("optional".into(), wrapped(EvalValue::Null))]),
+            EvalValue::TaggedUnion {
+                case: "Ready".into(),
+                payload: vec![("optional".into(), wrapped(EvalValue::Null))],
+            },
+        ] {
+            let lazy = LazyComparison {
+                value: value.clone(),
+                other: value.clone(),
+            };
+            let eager = BTreeMap::from([("data".into(), value.clone()), ("other".into(), value)]);
+            for source in [
+                "data == other",
+                "data != other",
+                "[data] == [other]",
+                "{\"value\": data} == {\"value\": other}",
+                "data == null",
+                "data != null",
+            ] {
+                let tree = compile(source, &signature).unwrap();
+                let expected = eval(&tree, &eager).unwrap();
+                assert_eq!(eval(&tree, &lazy).unwrap(), expected, "{source}");
+            }
+        }
+        let lazy = LazyComparison {
+            value: wrapped(EvalValue::Int(2)),
+            other: EvalValue::Int(3),
+        };
+        for (source, expected) in [
+            ("data < other", true),
+            ("data <= other", true),
+            ("data > other", false),
+            ("data >= other", false),
+        ] {
+            let tree = compile(source, &signature).unwrap();
+            assert_eq!(eval(&tree, &lazy).unwrap(), EvalValue::Bool(expected));
+        }
+        let lazy = LazyComparison {
+            value: wrapped(EvalValue::Null),
+            other: EvalValue::Null,
+        };
+        for (source, expected) in [("data == null", true), ("data != null", false)] {
+            let tree = compile(source, &signature).unwrap();
+            assert_eq!(eval(&tree, &lazy).unwrap(), EvalValue::Bool(expected));
+        }
+    }
 
     #[test]
     fn nonempty_collection_literals_check_elements_in_context() {
