@@ -1,19 +1,20 @@
 # Public-opening showcase — 10 September 2026 brief
 
-Opening: **5 November 2026**, freeze **24 October**, per the 5 October
-[human-review amendment](human-review-m1.md). This is the current M1 delivery
-checklist. **Release TODO:** relabel the first public package as format 1 before
-publication. No public operation is authorized by this update. The
-[current plan package](../spec/identity.md) and diagnostic recording **5**
-are tracked in the [time-carrier inventory](time-carriers-identity.md). Yoann
-approved witness regeneration on 24 October, preserving epoch-aligned tumbling.
+Current status checked on **16 November 2026**: the public alpha opened on
+**5 November**, with package format **1** ([current plan package](../spec/identity.md)),
+diagnostic recording **1** and standard Contracts at **@1**. The
+live delivery ledger below distinguishes verified completion from remaining
+manual trials. No public operation is authorized by this update.
+
+The **24 October** freeze in the 5 October
+[human-review amendment](human-review-m1.md) is a historical scheduling entry.
+The [time-carrier inventory](time-carriers-identity.md) records the former
+internal numbers. Yoann approved witness regeneration on 24 October,
+preserving epoch-aligned tumbling.
 The preceding movements remain documented in the
 [lifecycle identity inventory](lifecycle-registry-identity.md) and the
 [Connector identity inventory](connector-rework-identity.md).
-The opening-tree freeze date follows C's independent replay and Yoann's
-scheduling decision; the earlier freeze above is not a new scheduling decision.
-Exact-instance
-closure, resident Process, native Retry, flat annotation types and bounded
+Exact-instance closure, resident Process, native Retry, flat annotation types and bounded
 typed HTTP deserialization keep their execution semantics. The
 [C4 ledger](retry-c4-qualification.md) records the preceding native-Retry
 qualification; its 18 September counts and unchanged-witness claims below
@@ -29,18 +30,17 @@ and the [Budget draft](budget-governance-draft.md).
 The [release inventory](release-qualification.md) distinguishes the blocking
 debugger browser pass from three **open, non-blocking** measurements: HTTP/3
 server ngtcp2, Autobahn, and marginal Connector implementation cost. This is a
-priority decision, not a passing qualification. Public push, tag and crate
-publication require Yoann's order on or after 5 November. M2 durability is not
+priority decision, not a passing qualification. Further pushes, tags and crate
+publication still require Yoann's order. M2 durability is not
 an M1 gate. The separate site consumes this repository's ordinary Markdown,
 examples, goldens and editor grammar at one tag; it does not author them here.
 
-**Publication day, on Yoann's order.** Three items found on 24 and 25 October
-that no earlier checklist named: the workspace `Cargo.toml` still carries
-`publish = false` and must drop it before `cargo publish` (rastok-core, then
-rastok); the README's crates.io badge is written as an HTML comment and is
-enabled once the crate exists; the `rastok` and `rastok-core` names were free
-on crates.io on 24 October, and whether to reserve them before the opening is
-Yoann's decision.
+**Publication evidence.** The repository release API lists the public
+`v0.1.0-alpha` prerelease, published on 5 November, with both binary archives
+and their checksum files. The crate registry lists `rastok-core` and `rastok`
+at `0.1.0-alpha`, published that day and not yanked. These read-only checks
+do not publish the corrective release. The README's crates.io badge remains
+commented out; enabling that badge is separate from confirming publication.
 
 ## Accepted opening corrections
 
@@ -96,22 +96,22 @@ opening gates remain separate; the calendar stays with Yoann.
 | agent-gateway | Done for resident and limited HTTP examples; no live HTTP-provider certification | `examples/agent-http.rkg` targets Responses with explicit projected JSON. Six first-time goldens, local physical HTTP and LIVE/HISTORY/REPLAY tests qualify original samples, missing versus zero, schema refusal, job/session META and secret-free retention. Inference is not declared idempotent. The resident bridge keeps its existing real-Process evidence; no paid provider call or report is claimed. |
 | Rastok Codex Gateway browser continuation | Partial — client/native tests and user live smoke check; full visual pass open | `agent-chat.rkg` serves readable HTML/vanilla JS and isolates resident Processes by nickname. Three Lab scenarios, four Rust tests (including simultaneous HTTP/WebSocket listeners and exact Quit), ten client-script tests. Yoann reports three real conversations working. No runtime/format change or golden blessing; no automated paid model test. [Evidence](agent-gateway-showcase.md#readable-browser-continuation--17-september) distinguishes that smoke check from full browser qualification |
 | Explicit conversation / child closure | Implemented — core/CLI qualification complete | `instance.stop` / `child.instance.stop`, exact generation, bounded queue, repeat-safe Closing, journal/recovery and recording v2. Package v18 is explicit; nonparticipating bodies/hashes/traces remain unchanged. Two-budget Session handoff follow-up: 1,356 tests passed, zero failed/ignored; three no_std targets and embedded heap rechecked. Missing/ambiguous targets refuse; an external input cannot guess a nested command's scope and refuses at check. This dated closure evidence is complemented by physical supervision in the resident-service ledger and local gateway browser tests. See [evidence](instance-stop-command.md#9-two-budget-session-shutdown--10-september) |
-| Gallery learning path | Done for six published chapters | Book-style index, graph-reading guides, transferable ideas and previous/next navigation. Chapter 6 now references the resident gateway and links the primer; its usage/credential limits remain prominent. No front-matter schema expansion |
+| Gallery learning path | Done for eight published examples | The checked-in Getting Started sequence links eight example pages, with program-reading instructions and previous/next navigation. The content-contract tests check that sequence; installation trials and independent browser review remain separate |
 | Quickstart and README | Partial | One source block, exact-copy test, working `new` path and flagship/profile command; [two unaided trials](quickstart-trials.md) are prepared but not performed |
 | Debugger CI | Done — hosted automation passed; independent visual review remains separate | 35 isolated browser tests, 16 layout tests, 4 lexical editor tests and 10 chat-client tests pass locally. Three additional real-tokenizer tests pass locally using the site's installed engines. Rust projection tests are in the all-feature matrix. After the unsupported Ubuntu 26.04 browser setup in [40366152302](https://github.com/rastok-io/rastok/actions/runs/40366152302), the `ubuntu-24.04` debugger job passed in [40375545442](https://github.com/rastok-io/rastok/actions/runs/40375545442) (about four minutes). |
-| Hosted CI follow-up — 26 October | Partial — prior rerun green; workflow updates await their next hosted run | [40375545442](https://github.com/rastok-io/rastok/actions/runs/40375545442), attempt 1, lost the Ubuntu gate to matrix cancellation after the macOS refusal-close test failed; attempt 2 passed everything (Ubuntu about eight minutes, macOS three). Gate `fail-fast: false` now preserves both OS results. Both workflows use `actions/checkout`, `actions/upload-artifact` and, where present, `actions/setup-node` at v5 after the Node 20 warning in alpha run 40378495117. Action inputs, Rust checks and the Linux disk/debug-profile mitigation are unchanged. |
+| Hosted CI follow-up, 26 October | Done: hosted runs checked on 16 November | After [40375545442](https://github.com/rastok-io/rastok/actions/runs/40375545442), the matrix legs were made independent and action runtimes upgraded. [40476592275](https://github.com/rastok-io/rastok/actions/runs/40476592275) on 27 October and [42408228935](https://github.com/rastok-io/rastok/actions/runs/42408228935) on 7 November passed both OS gates, debugger, DCO, three no_std jobs, spike-emulated and bench-proofs. The Linux disk cleanup and debug-profile mitigation remain in place. No workflow was changed by this status check |
 | Browser opening gate | Partial | The six reported implementation/UX points now have focused regressions, including real intermediate advance states. An independent visual retest is still required; local automation does not certify it |
-| Three flagship captures and 30-second GIF | Done locally — native Retry assets; publication review remains separate | `docs/site/assets/` records the current Retry graph at transitions 0/20/34, 1352×760, 120 frames / 30.000 s. The backoff view shows the real held attempt and due time, with no Loop dial. All three stills were visually inspected; a regression keeps page captions aligned with the capture manifest. No causal golden is changed |
-| Two release binaries | Partial — hosted builds passed; distribution and unaided installation trials pending | [Alpha-artifacts run 40378495117](https://github.com/rastok-io/rastok/actions/runs/40378495117) built Linux x86-64 in about four minutes and macOS Apple silicon in about one and a half, with `hosted-ui,hosted-websocket`, without HTTP/3. The Intel job never acquired a runner (capacity notice). Yoann removed `x86_64-apple-darwin` from the alpha on 26 October evening; Intel Macs and other platforms use the quickstart's existing source-install command. The retained runners are `ubuntu-24.04` and `macos-latest`. No artifact publication is claimed. |
-| CHANGELOG, crate metadata and release tag | Partial | `0.1.0-alpha` manifests, exact core dependency, license/readmes and CHANGELOG prepared. Both crate archives build outside the workspace using the packaged local core. Confirmed public URLs are now in local metadata/readmes; prior archives predate this URL-only update. Publication stays disabled; authorized tag/publication remain pending |
-| Public documentation destination | Partial — URL confirmed, availability unverified | `https://docs.rastok.com` must resolve before the authorized 5 November publication: minimal Starlight quickstart/gallery preferred, 301 to the actual `www.rastok.com` gallery as fallback. [Site handoff](../site/README.md#public-destination-handoff--18-september-2026); no deployment or DNS change performed |
-| Contribution safeguards and private contact | Partial — files prepared, activation pending | Local DCO check and ten regressions, issue forms and PR template are present. Yoann selected strict DCO and rebase-only PR integration; hosted activation remains pending. Yoann is the designated recipient at `security@rastok.com` for security reports and `contact@rastok.com` for conduct reports; both channels still require activation/receipt verification. Labels, main protection, private vulnerability reporting and one historical unsigned commit remain in the [owner checklist](github-opening-checklist.md). No GitHub, mailbox or DNS change performed |
+| Three flagship captures and animated PNG | Done locally: native Retry assets; publication review remains separate | `docs/site/assets/webhook-capture.json` identifies the three stills and the APNG tour. The backoff view shows the held attempt and due time. Existing visual evidence and capture tests remain dated; this status check did not recapture the debugger or change a causal golden |
+| Two release binaries | Partial: published; unaided installation trials pending | The [public alpha release](https://github.com/rastok-io/rastok/releases/tag/v0.1.0-alpha), published on 5 November and checked through the API on 16 November, contains macOS Apple silicon and Linux x86-64 archives plus SHA-256 files. Hosted builds were established by [40378495117](https://github.com/rastok-io/rastok/actions/runs/40378495117). Intel Macs and other platforms build from source. The two unaided installation trials remain unperformed; listed assets alone do not qualify those trials |
+| CHANGELOG, crate metadata and release tag | Done for `0.1.0-alpha` | The [release and tag](https://github.com/rastok-io/rastok/releases/tag/v0.1.0-alpha) are public. Registry APIs checked on 16 November show [rastok-core](https://crates.io/crates/rastok-core/0.1.0-alpha) and [rastok](https://crates.io/crates/rastok/0.1.0-alpha) published on 5 November, neither yanked. The changelog records package 1, diagnostic recording 1 and all six standard Contracts at @1. The corrective release is not published by this check |
+| Public documentation destination | Done for reachability; checked on 16 November | `https://docs.rastok.com/` returns HTTP 200 at that URL. This confirms the documentation destination, not an independent visual review of every page. No deployment or DNS change was performed |
+| Contribution safeguards and private contact | Partial: hosted settings active; manual trials pending | The [owner checklist](github-opening-checklist.md) records the 16 November API verification of rebase-only merging, required checks, main protection, forms, labels and private reporting. The required approving-review count is zero. Mailboxes were configured on 3 November. External receipt, synthetic reporting, hosted form and signed/unsigned PR trials still lack results; no setting or mailbox was changed here |
 | Paid benchmark wave | Partial — dry harness requalified | All 20 references pass their referees; 4 runner tests and 3 canned attempts pass (17 deliberately unattempted). Prompt v4 uses executable idempotence/Retry, preserving frozen v1–v3. Exact three model IDs/adapters and spending authorization remain user choices; no paid run started. |
 | Optional concepts pages | Removed from this pass | No spare scope assumed; four short pages may follow the gallery |
 State vocabulary: Done = fait; Partial = partiel (including an explicitly
 unstarted or externally blocked item); Removed = retiré from this pass, not
-silently claimed complete. Six chapters are published in the checkout; the
-remaining independent visual, distribution and opening work stays explicit above.
+silently claimed complete. Eight examples are published in the checkout; the
+remaining independent visual and manual installation work stays explicit above.
 Every result section below is dated; the live table and the human-review
 identity ledger take precedence for the current format.
 
