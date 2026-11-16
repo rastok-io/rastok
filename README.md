@@ -246,7 +246,7 @@ the recorded transitions and the visible limits.
 - **A small, portable core.** `rastok-core` holds the semantics, builds
   without the standard library and is checked on bare-metal targets in CI.
 - **Editor support.** Syntax highlighting for VS Code, VSCodium, JetBrains
-  IDEs, Vim and Neovim. See the [editor setup](editors/README.md).
+  IDEs, Vim, Neovim and Emacs. See the [editor setup](editors/README.md).
 
 ## How it works
 

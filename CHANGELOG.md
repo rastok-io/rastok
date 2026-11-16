@@ -92,6 +92,8 @@
 - Add native Vim and Neovim file detection, syntax highlighting and
   buffer-local comment settings, with installation instructions and native
   tests. No language server or personal configuration changes are included.
+- Add an Emacs major mode for `.rkg` highlighting and comment commands,
+  with native tests for source boundaries and edits to reader delimiters.
 
 ## v0.1.0-alpha (5 November 2026)
 

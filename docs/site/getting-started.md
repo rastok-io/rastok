@@ -184,6 +184,8 @@ Before publication, the [editor instructions](https://github.com/rastok-io/rasto
 explain how to package a local checkout; they also cover the JetBrains bundle.
 For Vim or Neovim, load the native runtime from the same checkout as the
 examples, following the [Vim and Neovim setup](https://github.com/rastok-io/rastok/blob/main/editors/vim/README.md).
+Emacs has a [native Rastok mode](https://github.com/rastok-io/rastok/blob/main/editors/emacs/README.md)
+loaded from that checkout as well.
 These integrations color source and detect `.rkg` files; they do not provide
 completion or type checking. `rastok check` validates the program.
 
