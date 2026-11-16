@@ -1057,6 +1057,15 @@ the DSL an explicit data literal uses the tagged-block / list pattern :
 | `media_type` | `media_type("application/json")` | open canonical concrete Internet media type; wildcards/ranges refuse |
 | whole payload | `asset("path", "content_type")` ; `base64!("ct") { … }` | fresh bytes + canonical `meta.ext.content_type`, whole-data position ONLY (a nested field has no `meta.ext`) |
 
+An empty `[]` or `{:}` has no element to infer from: it takes its
+element, key and value types from the expected type of its position.
+Without an expected type, declare one, for example
+`val members: array<text> = []`. A nonempty collection can infer its type
+from its elements. The type belongs on the declaration, not before the
+value: `array<T> []` is not a value form.
+`{}` is always the empty struct; in a position that expects a map,
+check refuses it and names `{:}`.
+
 The `<type> file { … }` forms are DEAD — `asset` replaces them for
 build-time resources ; runtime files and URLs are Connectors'
 business.
@@ -1074,7 +1083,7 @@ Examples :
 ]
 
 // Rows with an explicit element schema
-array<struct { name: text, age: int, city: text }> [
+val rows: array<struct { name: text, age: int, city: text }> = [
   { name = "Alice", age = 30, city = "Paris" },
   { name = "Bob",   age = 42, city = "Rome"  }
 ]

@@ -233,8 +233,11 @@ The resolved tree admits no source-order aliases:
   integer, text, bytes/fixed bytes, decimal, date/time/timestamp/duration,
   uuid or enum. Float, `number`, null, interval, variant and every composite
   key refuse by path;
-- text-keyed maps and non-text keyed maps have one materialized spelling each;
-  the latter are order-insensitive and sort by canonical tagged key bytes;
+- nonempty text-keyed maps and non-text keyed maps have one materialized
+  spelling each; the latter are order-insensitive and sort by canonical
+  tagged key bytes. The empty map has no key witness and inhabits every map
+  type. It keeps the existing canonical form `[16, []]`; its key and value
+  types belong to its declared destination, not to the empty value;
 - structural-union branches are flattened, unique, pairwise disjoint and
   sorted by their canonical type bytes. Optional `T?` resolves to that same
   union with `null`; source branch order is not identity;

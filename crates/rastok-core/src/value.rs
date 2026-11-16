@@ -58,11 +58,13 @@ pub enum Value {
     Array(Vec<Value>),
     /// Text-keyed values. This is the canonical representation of
     /// `map<text, V>`, including JSON and Avro objects. The resolved map type,
-    /// when present, enforces one value type.
+    /// when present, enforces one value type. The decoder also uses this
+    /// carrier for every empty map: without keys, there is no key witness.
     Map(BTreeMap<String, Value>),
     /// Values keyed by a non-text canonical scalar or enum. The resolved map
     /// type enforces homogeneous key and value types. Entry order is
     /// presentation; equality and identity sort keys by canonical value bytes.
+    /// When empty, this has the same value and bytes as an empty [`Self::Map`].
     KeyedMap(Vec<(Value, Value)>),
     /// Named fields in declaration order. Field order is presentation.
     Struct(Vec<(String, Value)>),
@@ -140,6 +142,9 @@ impl PartialEq for Value {
             (Self::Array(a), Self::Array(b)) => a == b,
             (Self::Map(a), Self::Map(b)) => a == b,
             (Self::KeyedMap(a), Self::KeyedMap(b)) => map_entries_eq(a, b),
+            (Self::Map(a), Self::KeyedMap(b)) | (Self::KeyedMap(b), Self::Map(a)) => {
+                a.is_empty() && b.is_empty()
+            }
             (Self::Struct(a), Self::Struct(b)) => struct_fields_eq(a, b, Value::eq),
             (
                 Self::Decimal { unscaled, scale },

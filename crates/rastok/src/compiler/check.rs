@@ -4605,7 +4605,7 @@ impl Checker<'_, '_> {
                     Diagnostic::new(
                         E_TYPE_UNRESOLVED,
                         Phase::Check,
-                        "this value has no element constraint from which to infer a type",
+                        "this value has no element constraint from which to infer a type; add a type annotation",
                     )
                     .with_span(span)
                     .with_field("type", "unsolved collection element"),
@@ -5518,7 +5518,7 @@ impl Checker<'_, '_> {
             }
             SynValue::Expr(expr) => self.constant(expr, signature, consts).map(AttrValue::Const),
             SynValue::BracedMap(entries) => {
-                let tree = self.map_value_tree(entries, signature, span)?;
+                let tree = self.map_value_tree(entries, signature, span, None)?;
                 self.reduce_constant(tree, span, consts)
                     .map(AttrValue::Const)
             }
@@ -6161,11 +6161,10 @@ impl Checker<'_, '_> {
         )
     }
 
-    /// Applies the two contextual conversions allowed by typed construction:
-    /// a written text literal is sealed as a canonical `media_type`, and an
-    /// unwrapped value selects the unique branch of a destination structural
-    /// union. Dynamic media-type conversion remains explicit; union selection
-    /// is recorded in HIR as `As`, so the Execution never guesses or repairs either.
+    /// Resolves typed constructors: empty collections, media-type literals and
+    /// the unique branch of a structural union, including nested struct fields.
+    /// Runtime conversions are recorded in the expression; execution does not
+    /// infer the destination type or repair a value.
     fn contextualize_tree(
         &mut self,
         tree: expr::Tree,
@@ -6176,6 +6175,27 @@ impl Checker<'_, '_> {
         let tree = self.checked_expression_depth(tree, span)?;
         if tree.ty == *expected {
             return Some(tree);
+        }
+        if let (expr::Expr::MapLit(entries), DataType::Map(map)) = (&tree.root, expected)
+            && entries.is_empty()
+        {
+            let root = if map.key() == &DataType::Text {
+                tree.root
+            } else {
+                expr::Expr::Literal(crate::value::Value::Map(BTreeMap::new()))
+            };
+            return self.checked_expression_depth(
+                expr::Tree {
+                    root: expr::Expr::As {
+                        expr: Box::new(root),
+                        target: Box::new(expr::NarrowTarget::Type(Box::new(
+                            expr::NarrowType::new(expected.clone()),
+                        ))),
+                    },
+                    ty: expected.clone(),
+                },
+                span,
+            );
         }
         if expected == &DataType::MediaType
             && let expr::Expr::Literal(crate::value::Value::Text(written)) = &tree.root
@@ -6211,7 +6231,11 @@ impl Checker<'_, '_> {
             let matching: Vec<_> = target
                 .branches()
                 .iter()
-                .filter(|branch| tree.ty.is_assignable_to(branch))
+                .filter(|branch| {
+                    tree.ty.is_assignable_to(branch)
+                        || (matches!(&tree.root, expr::Expr::MapLit(entries) if entries.is_empty())
+                            && matches!(branch, DataType::Map(_)))
+                })
                 .collect();
             if let [branch] = matching.as_slice() {
                 let tree = self.contextualize_tree(tree, branch, span, place)?;
@@ -6299,6 +6323,11 @@ impl Checker<'_, '_> {
         found: &DataType,
         detail: &str,
     ) {
+        let detail = if matches!(expected, DataType::Map(_)) && found == &DataType::empty_struct() {
+            "`{}` is the empty struct; write `{:}` for an empty map"
+        } else {
+            detail
+        };
         self.bag.push(
             Diagnostic::new(
                 E_PORT_TYPE,
@@ -6336,11 +6365,31 @@ impl Checker<'_, '_> {
             SynValue::List { items, span } => {
                 self.list_value_tree(items, signature, expected, *span, place)?
             }
+            SynValue::BracedMap(entries) => {
+                self.map_value_tree(entries, signature, span, expected)?
+            }
             _ => self.nested_value_tree(value, signature, span)?,
         };
         match expected {
             Some(expected) => self.contextualize_tree(tree, expected, span, place),
-            None => self.checked_expression_depth(tree, span),
+            None => {
+                if matches!(&tree.root, expr::Expr::List(items) if items.is_empty())
+                    || matches!(&tree.root, expr::Expr::MapLit(entries) if entries.is_empty())
+                {
+                    self.bag.push(
+                        Diagnostic::new(
+                            E_TYPE_UNRESOLVED,
+                            Phase::Check,
+                            "an empty collection needs a type annotation, for example `val members: array<text> = []`",
+                        )
+                        .with_span(span)
+                        .with_field("type", "unsolved collection element"),
+                    );
+                    None
+                } else {
+                    self.checked_expression_depth(tree, span)
+                }
+            }
         }
     }
 
@@ -6694,7 +6743,7 @@ impl Checker<'_, '_> {
             // The parser already spoke for its recovery form.
             SynValue::Error(_) => None,
             SynValue::Expr(expr) => self.expr(expr, signature),
-            SynValue::BracedMap(entries) => self.map_value_tree(entries, signature, at),
+            SynValue::BracedMap(entries) => self.map_value_tree(entries, signature, at, None),
             SynValue::List { items, span } => {
                 self.list_value_tree(items, signature, None, *span, "array element")
             }
@@ -6741,14 +6790,19 @@ impl Checker<'_, '_> {
         }
     }
 
-    /// Compiles a braced-map body into the MapLit expression — every
-    /// entry goes through [`Self::nested_value_tree`].
+    /// Compiles a braced map with the expected value type, when declared.
+    /// Keys retain the expression language's text-literal semantics.
     fn map_value_tree(
         &mut self,
         entries: &[crate::compiler::syntax::MapEntry],
         signature: &expr::Signature,
         at: Span,
+        expected: Option<&DataType>,
     ) -> Option<expr::Tree> {
+        let element = match expected {
+            Some(DataType::Map(map)) => Some(map.value()),
+            _ => None,
+        };
         let mut pairs: Vec<(String, expr::Expr, DataType)> = Vec::new();
         for entry in entries {
             // ONE string semantics: the key decodes through Rastok expression —
@@ -6771,6 +6825,17 @@ impl Checker<'_, '_> {
                 return None;
             }
             let tree = match &entry.value {
+                SynValue::Expr(_) | SynValue::BracedMap(_) | SynValue::List { .. }
+                    if element.is_some() =>
+                {
+                    self.typed_value_tree(
+                        &entry.value,
+                        signature,
+                        element,
+                        entry.span,
+                        "map value",
+                    )?
+                }
                 // A named case is the B6 addition to an untyped map value.
                 // Other nested forms retain their established source rules;
                 // in particular a non-empty struct still names its deferral
@@ -7127,7 +7192,7 @@ impl Checker<'_, '_> {
                 // `{ "k": v }` and `{:}` are executable emissions:
                 // the entries compile into the existing MapLit form,
                 // nested maps and json literals included.
-                let tree = self.map_value_tree(entries, signature, at)?;
+                let tree = self.map_value_tree(entries, signature, at, expected)?;
                 let tree = match expected {
                     Some(expected) => self.contextualize_tree(tree, expected, at, port_name)?,
                     None => tree,
@@ -7501,7 +7566,9 @@ impl Checker<'_, '_> {
                         SynValue::BracedMap(entries)
                             if matches!(&target, crate::envelope::WriteTarget::Data(_)) =>
                         {
-                            if let Some(tree) = self.map_value_tree(entries, signature, key.span) {
+                            if let Some(tree) =
+                                self.map_value_tree(entries, signature, key.span, None)
+                            {
                                 writes.push(FieldWrite {
                                     target,
                                     value: tree,
@@ -7611,7 +7678,9 @@ impl Checker<'_, '_> {
                         SynValue::BracedMap(entries) => {
                             // A map is an ordinary field value —
                             // `{ nested = { "a": 1 } }` composes.
-                            if let Some(tree) = self.map_value_tree(entries, signature, key.span) {
+                            if let Some(tree) =
+                                self.map_value_tree(entries, signature, key.span, None)
+                            {
                                 writes.push(FieldWrite {
                                     target: crate::envelope::WriteTarget::Data(path),
                                     value: tree,
@@ -7746,11 +7815,18 @@ impl Checker<'_, '_> {
         let Some(found) = found else {
             return true;
         };
+        let map_hint = if matches!(pinned, DataType::Map(_))
+            && matches!(&shape, DataShape::Known(ty, _) if ty == &DataType::empty_struct())
+        {
+            "; `{}` is the empty struct; write `{:}` for an empty map"
+        } else {
+            ""
+        };
         self.bag.push(
             Diagnostic::new(
                 E_PORT_TYPE,
                 Phase::Check,
-                format!("`{port_name}` is pinned to {pinned:?}; this value is {found}"),
+                format!("`{port_name}` is pinned to {pinned:?}; this value is {found}{map_hint}"),
             )
             .with_span(span)
             .with_field("port", port_name.to_string())

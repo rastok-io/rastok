@@ -55,6 +55,12 @@ expression itself fits.
 
 ## Functions and contextual references
 
+Empty collections use the type expected at their position. For a binding,
+write `val members: array<text> = []` or
+`var counts: map<text, int> = {:}`. Nonempty collections infer their type
+from their elements. An untyped empty binding needs a type annotation;
+`{}` is a struct and cannot stand for an empty map.
+
 | Signature | Result | Availability and constraints |
 |---|---|---|
 | `size(text \| bytes \| array<T> \| map<K,V> \| variant)` | `int` | Unicode character count for text, byte count for bytes, entry count otherwise |
