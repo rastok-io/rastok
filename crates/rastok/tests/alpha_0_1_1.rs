@@ -621,7 +621,6 @@ fn r167_foreach_refusal_explains_the_reserved_word() {
 }
 
 #[test]
-#[ignore = "R-180, gate P4"]
 fn r180_optional_state_access_explains_presence_and_narrowing() {
     assert_check_refuses(
         "R-180-absent-state.rkg",

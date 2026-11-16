@@ -2406,6 +2406,53 @@ fn binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {
 
 // `None` checks a resolved tree, including compiler-generated closed-field
 // projections. Source expressions keep their narrower indexing surface.
+// Keep diagnostic-only values out of the recursive type-checking frame.
+// A valid expression at the depth limit does not need this formatting state.
+fn member_access_refusal(
+    current: &DataType,
+    receiver: &[String],
+    member: &str,
+    path: &str,
+    signature: &Signature,
+) -> String {
+    match current {
+        DataType::StructuralUnion(union) if union.branches().contains(&DataType::Null) => {
+            let receiver = receiver.join(".");
+            let non_null: Vec<_> = union
+                .branches()
+                .iter()
+                .filter(|ty| **ty != DataType::Null)
+                .collect();
+            let named = match non_null.as_slice() {
+                [ty] => signature
+                    .types
+                    .iter()
+                    .find(|(_, target)| target.ty() == *ty)
+                    .map(|(name, _)| name.as_str()),
+                _ => None,
+            };
+            match named {
+                Some(name) => format!(
+                    "`{receiver}` may be absent (`{name}?`); test it with \
+                     `{receiver} is {name}` before reading `{member}`"
+                ),
+                None => format!(
+                    "`{receiver}` may be absent; test its non-null type with `is` \
+                     before reading `{member}`"
+                ),
+            }
+        }
+        DataType::TaggedUnion(_) => {
+            let receiver = receiver.join(".");
+            format!(
+                "`{receiver}` is a tagged union; test its case with `is`, \
+                 or read it in a `match`, before reading `{member}`"
+            )
+        }
+        _ => format!("`{path}` does not resolve to a member"),
+    }
+}
+
 fn check(expr: &Expr, signature: &Signature, text: Option<&str>) -> Result<DataType, Diagnostic> {
     let whole = 0..text.map_or(0, str::len);
     let fail = |message: String| Diagnostic {
@@ -2439,7 +2486,7 @@ fn check(expr: &Expr, signature: &Signature, text: Option<&str>) -> Result<DataT
             {
                 current = DataType::Struct(case.payload().clone());
             }
-            for segment in &segments[consumed..] {
+            for (offset, segment) in segments[consumed..].iter().enumerate() {
                 current = match current {
                     // Metadata paths are checked against their own sealed
                     // sys/app/ext grid after expression collection. The
@@ -2464,8 +2511,14 @@ fn check(expr: &Expr, signature: &Signature, text: Option<&str>) -> Result<DataT
                         .ok_or_else(|| {
                             fail(format!("`{dotted}` has no declared member `{segment}`"))
                         })?,
-                    _ => {
-                        return Err(fail(format!("`{dotted}` does not resolve to a member")));
+                    ref other => {
+                        return Err(fail(member_access_refusal(
+                            other,
+                            &segments[..consumed + offset],
+                            segment,
+                            &dotted,
+                            signature,
+                        )));
                     }
                 };
             }
@@ -3614,6 +3667,47 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn member_refusals_distinguish_absence_cases_and_missing_fields() {
+        let payload = StructType::new(vec![TypeField::new("title", DataType::Text)]).unwrap();
+        let open = DataType::Struct(payload.clone());
+        let union = DataType::TaggedUnion(
+            TaggedUnionType::new(vec![
+                crate::datatype::TaggedCase::new("Open", payload).unwrap(),
+                crate::datatype::TaggedCase::new("Closed", StructType::new(vec![]).unwrap())
+                    .unwrap(),
+            ])
+            .unwrap(),
+        );
+        let signature = Signature::new()
+            .with_type("Open", open.clone())
+            .with("dossier", open.clone().optional().unwrap())
+            .with(
+                "data",
+                DataType::Struct(StructType::new(vec![TypeField::new("u", union)]).unwrap()),
+            )
+            .with("known", open)
+            .with("dynamic", DataType::Variant);
+        for (source, message) in [
+            (
+                "dossier.title",
+                "`dossier` may be absent (`Open?`); test it with `dossier is Open` before reading `title`",
+            ),
+            (
+                "data.u.title",
+                "`data.u` is a tagged union; test its case with `is`, or read it in a `match`, before reading `title`",
+            ),
+            ("known.missing", "has no declared member `missing`"),
+            ("dynamic.title", "reaches variant; narrow it"),
+        ] {
+            let errors = compile(source, &signature).unwrap_err();
+            assert!(errors[0].message.contains(message), "{source}: {errors:?}");
+            assert_eq!(errors[0].range, 0..source.len());
+        }
+        assert!(compile("dossier is Open ? dossier.title : \"absent\"", &signature).is_ok());
+        assert!(compile("data.u is Open ? data.u.title : \"closed\"", &signature).is_ok());
+    }
 
     #[test]
     fn computed_member_refusals_suggest_binding_the_exact_receiver() {
