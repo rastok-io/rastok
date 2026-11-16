@@ -35,11 +35,29 @@ instance key. A `var` is private to the Operator instance that declares it;
 other Operators communicate through ports rather than reading that cell.
 See [Instances, state and time](../guide/06-instances-state-and-time.md).
 
+An outbound Call Connector instance holds one open Call at a time. The next
+request waits in that instance's mailbox, and its `timeout` already runs:
+the budget starts when the request is delivered to the Connector, not when
+the Call opens. A request queued behind a slow Call can therefore expire
+without having been sent; the journal shows it opening and closing with a
+timeout. For independent Calls, give each request its own instance. This
+per-instance ordering does not prevent I/O on different instances from overlapping.
+
 Mailboxes and Call capacities have bounds. A source Connector's proposal
 remains pending when its target mailbox is full; direct App input admission
 instead reports a capacity error. Neither commits an ingress before room is
 available. Adding an instance does not remove capacity bounds. The number
 of pending Calls is not a count of parallel Operator transactions.
+
+HttpServer handles inbound Calls, not that outbound mailbox queue. Its Driver
+bounds physical connections, requests and retained bytes. When the graph
+cannot admit a proposal, the Driver keeps it pending; an `ack` response of
+202 follows admission, never precedes it. When its connection or request slots
+are full, the Driver waits for room rather than accepting unlimited work.
+A request exceeding a configured body or header size limit is refused before
+admission. Waiting does not guarantee that a client stays connected. Protocol
+refusals and failures remain distinct from admitted requests and their terminal outcomes.
+WebSocket Connectors and Process `service` use Sessions, not one Call per message.
 
 ## What the two-tenant example demonstrates
 

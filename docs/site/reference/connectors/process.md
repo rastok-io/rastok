@@ -25,6 +25,8 @@ and the distinction between a Contract, a Lab model and an installed Driver.
 
 Selector: `mode` defaults to `job`.
 
+In `job` mode, Calls on one instance are serialized and [queue time counts toward `timeout`](../execution.md#instances-own-state-not-threads); `service` uses a Session instead.
+
 | Mode | Driver direction | Exchange | Lab model | Installed in this binary |
 |---|---|---|---|---|
 | `job` | outbound | call | `lab-call` | `process-job` |

@@ -23,6 +23,8 @@ connector network : HttpClient {
 The [contract index](../contracts.md) explains shared settings, build features
 and the distinction between a Contract, a Lab model and an installed Driver.
 
+Calls on one instance are serialized; [queue time counts toward `timeout`](../execution.md#instances-own-state-not-threads).
+
 | Mode | Driver direction | Exchange | Lab model | Installed in this binary |
 |---|---|---|---|---|
 | No selector | outbound | call | `lab-call` | Not compiled |

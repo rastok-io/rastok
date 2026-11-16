@@ -25,6 +25,8 @@ and the distinction between a Contract, a Lab model and an installed Driver.
 
 Selector: `mode` is required.
 
+Calls on one instance are serialized; [queue time counts toward `timeout`](../execution.md#instances-own-state-not-threads).
+
 | Mode | Driver direction | Exchange | Lab model | Installed in this binary |
 |---|---|---|---|---|
 | `read` | outbound | call | `lab-call` | `file` |
