@@ -3547,6 +3547,7 @@ fn arithmetic(op: BinaryOp, lhs: EvalValue, rhs: EvalValue) -> Result<EvalValue,
         (Sub, EvalValue::Double(a), EvalValue::Double(b)) => Ok(EvalValue::Double(a - b)),
         (Mul, EvalValue::Double(a), EvalValue::Double(b)) => Ok(EvalValue::Double(a * b)),
         (Div, EvalValue::Double(a), EvalValue::Double(b)) => Ok(EvalValue::Double(a / b)),
+        (Rem, EvalValue::Double(a), EvalValue::Double(b)) => Ok(EvalValue::Double(a % b)),
         (Add, EvalValue::Text(a), EvalValue::Text(b)) => Ok(EvalValue::Text(a + &b)),
         (Add, EvalValue::Duration(a), EvalValue::Duration(b)) => a
             .checked_add(b)
@@ -4403,6 +4404,58 @@ mod tests {
         );
         assert_eq!(eval_const("-3"), EvalValue::Int(-3));
         assert_eq!(eval_const("3u + 4u"), EvalValue::Uint(7));
+    }
+
+    #[test]
+    fn floating_remainder_evaluates_for_each_admitted_width() {
+        use crate::datatype::FloatType;
+
+        for width in [
+            FloatType::Binary16,
+            FloatType::Binary32,
+            FloatType::Binary64,
+        ] {
+            let signature = Signature::new()
+                .with("left", DataType::Float(width))
+                .with("right", DataType::Float(width));
+            let tree = compile_ok("left % right", &signature);
+            assert_eq!(tree.ty, DataType::Float(width));
+            for (left, right, expected) in [
+                (5.5, 2.0, 1.5),
+                (-5.5, 2.0, -1.5),
+                (5.5, -2.0, 1.5),
+                (-5.5, -2.0, -1.5),
+                (1.5, 2.0, 1.5),
+                (4.0, 2.0, 0.0),
+                (-4.0, 2.0, -0.0),
+            ] {
+                let bindings = BTreeMap::from([
+                    (String::from("left"), EvalValue::Double(left)),
+                    (String::from("right"), EvalValue::Double(right)),
+                ]);
+                assert_eq!(
+                    eval(&tree, &bindings).unwrap(),
+                    EvalValue::Double(expected),
+                    "{width:?}: {left} % {right}"
+                );
+            }
+        }
+        assert_eq!(eval_const("5.5 % 2.0"), EvalValue::Double(1.5));
+    }
+
+    #[test]
+    fn floating_remainder_preserves_zero_and_nonfinite_rules() {
+        assert_eq!(eval_const("-0.0 % 2.0"), EvalValue::Double(-0.0));
+        assert_eq!(eval_const("5.5 % (1.0 / 0.0)"), EvalValue::Double(5.5));
+        for source in [
+            "5.5 % 0.0",
+            "5.5 % -0.0",
+            "(1.0 / 0.0) % 2.0",
+            "(0.0 / 0.0) % 2.0",
+            "2.0 % (0.0 / 0.0)",
+        ] {
+            assert!(matches!(eval_const(source), EvalValue::Double(value) if value.is_nan()));
+        }
     }
 
     #[test]
