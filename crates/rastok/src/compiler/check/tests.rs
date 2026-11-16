@@ -1729,7 +1729,7 @@ on request { Loop.next = "wrong entry type" }
             .iter()
             .find(|(name, _)| *name == "expected")
             .map(|(_, value)| value.as_str()),
-        Some("int32")
+        Some("int")
     );
 }
 
@@ -2803,7 +2803,7 @@ fn a_var_initializer_must_fit_its_declared_type() {
         .iter()
         .find(|diagnostic| diagnostic.code() == E_PORT_TYPE)
         .expect("the type mismatch");
-    assert!(diagnostic.message().contains("requires int32"));
+    assert!(diagnostic.message().contains("requires int;"));
 }
 
 #[test]
@@ -2886,7 +2886,7 @@ fn physical_integer_types_are_not_silently_merged() {
         bag.diagnostics()
             .iter()
             .any(|diagnostic| diagnostic.code() == E_PORT_TYPE
-                && diagnostic.message().contains("requires int32"))
+                && diagnostic.message().contains("requires int;"))
     );
 }
 

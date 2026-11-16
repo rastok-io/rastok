@@ -107,6 +107,10 @@ large `advance` may now fail. Reference traces changed: **none**.
 
 ### Diagnostics
 
+- Render expression operators and types in source notation in refusals,
+  including optional collection elements, instead of Rust debug structures.
+  Codes and diagnostic field names are unchanged; list concatenation is
+  still unavailable.
 - Warn with `W-JOIN-UNPAIRED` when a join can strand Call frames or terminals;
   pairing by Call identity with an explicit bound avoids the warning.
 - Name conflicting declared types and their first structural difference in

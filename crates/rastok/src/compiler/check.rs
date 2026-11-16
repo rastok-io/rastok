@@ -7002,7 +7002,7 @@ impl Checker<'_, '_> {
                                     E_META_TYPE,
                                     Phase::Check,
                                     format!(
-                                        "`meta.app.{field}` is written as {known:?} and as {ty:?} — one field, one type"
+                                        "`meta.app.{field}` is written as {known} and as {ty}: one field, one type"
                                     ),
                                 )
                                 .with_span(span)
@@ -7785,8 +7785,8 @@ impl Checker<'_, '_> {
             DataShape::Known(ty, tree) => {
                 if !ty.is_assignable_to(pinned) {
                     Some(match value {
-                        EmitValue::Identity => format!("{ty:?} (the input, unchanged)"),
-                        _ => format!("{ty:?}"),
+                        EmitValue::Identity => format!("{ty} (the input, unchanged)"),
+                        _ => ty.to_string(),
                     })
                 } else {
                     tree.and_then(|tree| Self::constant_breach(pinned, tree, consts))
@@ -7807,11 +7807,11 @@ impl Checker<'_, '_> {
             Diagnostic::new(
                 E_PORT_TYPE,
                 Phase::Check,
-                format!("`{port_name}` is pinned to {pinned:?}; this value is {found}{map_hint}"),
+                format!("`{port_name}` is pinned to {pinned}; this value is {found}{map_hint}"),
             )
             .with_span(span)
             .with_field("port", port_name.to_string())
-            .with_field("expected", format!("{pinned:?}"))
+            .with_field("expected", pinned.to_string())
             .with_field("found", found),
         );
         false

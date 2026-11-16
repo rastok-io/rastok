@@ -99,13 +99,8 @@ fn declared_annotations_retain_their_typed_binding() {
 fn declared_annotation_arguments_are_typed_by_path() {
     for (declaration, arguments, detail, location) in [
         ("text: text", "text = 1", "text", "text"),
-        (
-            "revision: int",
-            "revision = 2147483648",
-            "int32",
-            "revision",
-        ),
-        ("revision: uint", "revision = -1", "uint64", "revision"),
+        ("revision: int", "revision = 2147483648", "int", "revision"),
+        ("revision: uint", "revision = -1", "uint", "revision"),
         ("mode: Mode", "mode = last", "enum", "mode"),
         ("enabled: bool", "enabled = \"true\"", "bool", "enabled"),
         (

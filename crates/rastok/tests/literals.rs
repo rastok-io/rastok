@@ -544,6 +544,31 @@ fn empty_collection_expressions_keep_their_existing_inference() {
 }
 
 #[test]
+fn optional_collection_refusals_name_the_source_type() {
+    let source = r#"graph app : App {
+  input in: int
+  output out: array<text?>
+  operator copy {
+    input in: int
+    output out: array<text?>
+    on in { out = [data] }
+  }
+  in -> copy -> out
+}"#;
+    let bag = compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap_err();
+    let diagnostic = bag
+        .diagnostics()
+        .iter()
+        .find(|d| d.code().as_str() == "E-PORT-TYPE")
+        .unwrap();
+    assert!(diagnostic.message().contains("array<text?>"), "{bag:?}");
+    assert!(
+        !diagnostic.message().contains("structural union"),
+        "{bag:?}"
+    );
+}
+
+#[test]
 fn inline_structs_in_arrays_are_host_values_at_every_boundary() {
     let grammar = include_str!("../../../docs/spec/grammar.md");
     let rows_from_grammar = grammar

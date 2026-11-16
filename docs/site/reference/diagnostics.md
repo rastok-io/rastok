@@ -93,7 +93,7 @@ Independent plan validation can also surface these semantic refusals.
 | `E-MATCH-OVERLAP` | Two closed match arms cover the same case. | Assign each case to one arm. | “route case `true` appears in two arms” |
 | `E-META-PREFIX` | One application metadata key is a prefix of another. | Choose keys that are consistently leaves. | “`meta.app.audit` is a leaf and `meta.app.audit.origin` makes it a branch” |
 | `E-META-SYS-READONLY` | A write targets metadata owned by execution. | Write application metadata under meta.app instead. | “meta.sys is read-only and runtime-owned; it is never an lvalue” |
-| `E-META-TYPE` | Writes to one application metadata field disagree on its type. | Use one type or separate fields. | “`meta.app.x` is written as Integer(Signed(Bits32)) and as Text” |
+| `E-META-TYPE` | Writes to one application metadata field disagree on its type. | Use one type or separate fields. | “`meta.app.x` is written as int and as text: one field, one type” |
 | `E-META-ZONE` | Metadata access leaves the allowed zones or their field vocabulary. | Use a full permitted path under sys, app or ext. | “a metadata zone is not a value” |
 | `E-MULTI-EMIT-ARITY` | The output tuple and value tuple have different lengths. | Provide one value per output or use broadcast syntax. | “this atomic multi-emission has 3 targets but 2 tuple values” |
 | `E-MULTI-EMIT-DUPLICATE` | An atomic emission lists the same output twice. | Name each output once. | “output `left` appears twice in one atomic multi-emission” |
@@ -110,10 +110,10 @@ Independent plan validation can also surface these semantic refusals.
 | `E-ROUTE-MIXED` | One case is routed both to nothing and to a destination. | Choose discard or delivery for that case. | “`nothing` cannot coexist with a real destination for the same source case” |
 | `E-TYPE-BUDGET` | Type expansion exceeds a nesting, node, width or alias bound. | Reduce the dimension reported in the diagnostic. | “the type `Deep` nests 129 levels deep” |
 | `E-TYPE-DUP` | A field or symbol is repeated inside one type. | Remove or rename the duplicate member. | “the struct field `x` is declared twice” |
-| `E-TYPE-INVALID` | A type constructor violates its invariants, or a JSON input receives a known type without a JSON form. | Correct the type, or explicitly convert the named field before sending it. | “array&lt;int32&gt; is not a canonical map-key type” |
+| `E-TYPE-INVALID` | A type constructor violates its invariants, or a JSON input receives a known type without a JSON form. | Correct the type, or explicitly convert the named field before sending it. | “array&lt;int&gt; is not a canonical map-key type” |
 | `E-TYPE-RECURSIVE` | A named type expands back to itself. | Use a finite nonrecursive type. | “the type `Node` does not expand: `Node` reaches itself” |
 | `E-TYPE-UNRESOLVED` | An inference constraint reaches a position needing a closed type. | Supply a concrete type or enough contextual constraints. | “an open struct is an inference constraint, not an effective type” |
-| `E-UNION-OVERLAP` | Structural-union branches overlap in the values they accept. | Use disjoint branches or a tagged union. | “structural-union branches `int32` and `int64` overlap” |
+| `E-UNION-OVERLAP` | Structural-union branches overlap in the values they accept. | Use disjoint branches or a tagged union. | “structural-union branches `int` and `long` overlap” |
 | `E-UNWIRED-OUTPUT` | A possible output or case has no explicit disposition. | Wire it to a destination or deliberately discard it with nothing. | “`o.side` can be produced but has no destination; route it or write `o.side -> nothing`” |
 | `E-WIRING-MIGRATION` | Wiring uses a removed spelling or continues after a command. | Use current port paths, match routing and final command destinations. | “edge `when` was removed; route a closed value with `-> match { ... }` or decide in an Operator” |
 
