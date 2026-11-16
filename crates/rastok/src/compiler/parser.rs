@@ -175,6 +175,7 @@ pub fn parse(
         last_end: 0,
         dispatch_depth: 0,
         list_depth: 0,
+        in_mock: false,
         bag,
     }
     .file()
@@ -187,6 +188,7 @@ struct Parser<'src, 'bag> {
     last_end: usize,
     dispatch_depth: usize,
     list_depth: usize,
+    in_mock: bool,
     bag: &'bag mut Bag,
 }
 
@@ -687,7 +689,10 @@ impl<'src> Parser<'src, '_> {
                 }
                 (TokenKind::Ident, "on") => {
                     let handler_start = token.span.range().start;
-                    match self.handler_decl() {
+                    self.in_mock = true;
+                    let handler = self.handler_decl();
+                    self.in_mock = false;
+                    match handler {
                         Some(handler) => handlers.push(handler),
                         None => {
                             self.recover(handler_start);
@@ -1710,6 +1715,16 @@ impl<'src> Parser<'src, '_> {
                 }
             }
             None => {
+                if self.in_mock && segments.len() == 1 && first.text == "after" {
+                    let recovery = self.skip_bare_statement(true);
+                    let span = Span::new(self.source_id, start..self.last_end);
+                    if let Some(fault) = recovery.lexical_fault {
+                        self.bag.push(fault);
+                    } else {
+                        self.deferred("a delayed mock action (`after`)", span);
+                    }
+                    return Statement::Error(ErrorNode { span });
+                }
                 if segments.len() == 2 && segments[0].text == "Loop" {
                     return match segments[1].text.as_str() {
                         "again" => Statement::LoopAgain(target_span),
@@ -2824,6 +2839,41 @@ mod tests {
             .as_ref()
             .and_then(Dispatch::as_linear)
             .expect("a linear handler dispatch")
+    }
+
+    #[test]
+    fn delayed_mock_actions_refuse_without_changing_ordinary_after_bindings() {
+        let mut bag = Bag::new();
+        let source = "lab test { mock call { on in { after duration(\"12s\")\n out = data } } }";
+        let tree = parse(SourceId::new(0), source, &mut bag);
+        assert_eq!(bag.diagnostics().len(), 1, "{bag:?}");
+        let diagnostic = &bag.diagnostics()[0];
+        assert_eq!(diagnostic.code(), E_PARSE_DEFERRED);
+        assert!(
+            diagnostic
+                .message()
+                .contains("a delayed mock action (`after`)")
+        );
+        assert_eq!(
+            &source[diagnostic.spans()[0].range()],
+            "after duration(\"12s\")"
+        );
+        let TopDecl::Lab(lab) = &tree.decls[0] else {
+            panic!("a Lab");
+        };
+        assert_eq!(linear_handler(&lab.mocks[0].handlers[0]).len(), 2);
+
+        let mut bag = Bag::new();
+        parse(
+            SourceId::new(0),
+            "lab test { mock call { on in { after = data; out = after } } }",
+            &mut bag,
+        );
+        assert!(bag.diagnostics().is_empty(), "{bag:?}");
+        let (_, bag) = handler_statements(
+            "graph app : App { operator o { on in { after duration(\"12s\") } } }",
+        );
+        assert_eq!(bag.diagnostics()[0].code(), E_PARSE_EXPECTED);
     }
 
     #[test]
