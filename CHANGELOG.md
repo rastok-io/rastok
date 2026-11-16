@@ -17,29 +17,41 @@ While the version carries the `-alpha` suffix:
 The package format, the recording format and each standard Contract
 carry their own number. Every changelog entry states them.
 
-## Unreleased
+## v0.1.1-alpha (unreleased)
 
-The package format remains 1, the diagnostic recording format remains 1,
-and all six standard Connector Contracts remain at `@1`.
+Corrective release prepared for publication. The package format remains 1,
+the diagnostic recording format remains 1, and all six standard Connector
+Contracts remain at `@1`; no terminal case is added or renamed.
 
-- Check each statically known Call mock terminal against its Contract's frame
-  requirements before simulation; runtime refusals still check computed terminals.
-- Refuse routes to Operator inputs without a single-port or join handler with
-  `E-HANDLER-MISSING`. A bare Node name selects `out` as a source and `in` as a
-  destination, never another port selected from its declarations.
-- Materialize values narrowed by positive `is` tests in conjunctions,
-  conditionals, guarded handlers and guarded match arms, so execution yields
-  the value whose type was checked. Assigning a state cell ends its narrowing
-  facts for subsequent statements. The inserted conversion changes the semantic
-  hash of a program that reads a narrowed value; existing causal reference traces
-  remain comparable.
-- Refuse known producer types without a JSON form at JSON-encoding Connector
-  inputs; `variant` payloads retain each Contract's runtime checks and refusals.
-- Detect tagged unions in resident Process JSON frames before execution;
-  requests with a text-valued field retain their behavior.
-- Count compiler-added conversions in the unchanged expression depth budget.
-  An expression at the limit that reads a narrowed value can now be refused
-  with `E-PLAN-DEPTH`; excessive resolved depth never reports `E-INTERNAL-PLAN`.
+### Compatibility exceptions
+
+These programs are now refused at check instead of failing during execution:
+
+- a Call mock whose statically known terminal contradicts its Contract's
+  frame requirements (`E-CONTRACT-REQUIRED`); computed terminals retain
+  their runtime checks;
+- a route to an Operator input without a single-port or join handler
+  (`E-HANDLER-MISSING`). A bare Node name selects `out` as a source and
+  `in` as a destination, never another port selected from its declarations;
+- a typed request without a JSON form sent to a JSON codec
+  (`E-TYPE-INVALID`), including a tagged union inside a resident Process
+  frame. `variant` payloads retain each Contract's runtime checks and
+  refusals; requests with a text-valued field retain their behavior;
+- an authored WebSocket Session mock that the Lab cannot execute
+  (`E-CHECK-DEFERRED`). WebSocket declarations without mocks and resident
+  Process scripts remain admitted.
+
+Two additional check-time refusals are explicit:
+
+- a bare enum symbol that is also a visible binding is ambiguous
+  (`E-EXPR`), rather than silently selecting either meaning;
+- compiler-added conversions count in the unchanged expression depth
+  budget. An expression at the limit that reads a narrowed value can now
+  be refused with `E-PLAN-DEPTH`; excessive resolved depth never reports
+  `E-INTERNAL-PLAN`.
+
+### Lab and response timing
+
 - Settle ready Call responses before advancing to the next logical deadline,
   in both simulation and hosted execution. Immediate mock replies no longer
   time out when one advance crosses several deadlines.
@@ -49,14 +61,23 @@ and all six standard Connector Contracts remain at `@1`.
   in batch simulation and debugger stepping.
 - Keep `now()` in each Retry mock at that attempt's opening timestamp,
   including the scenario's civil origin, regardless of where advances stop.
-- Refuse authored WebSocket Session mocks with `E-CHECK-DEFERRED` instead of
-  accepting scripts the Lab cannot execute. WebSocket declarations without
-  mocks and resident Process scripts remain admitted.
 - Explain that Lab expectations on a Connector's `exit` see every Retry
   attempt terminal, while downstream ports receive only the final batch.
 - Explain why mocked Connectors still need synthetic secret bindings, and
   name a missing deployment environment variable separately from a version
   mismatch, without exposing secret material.
+
+A scenario that passed only because a mock reply arrived at the end of a
+large `advance` may now fail. Reference traces changed: **none**.
+
+### Language and expressions
+
+- Materialize values narrowed by positive `is` tests in conjunctions,
+  conditionals, guarded handlers and guarded match arms, so execution yields
+  the value whose type was checked. Assigning a state cell ends its narrowing
+  facts for subsequent statements. The inserted conversion changes the semantic
+  hash of a program that reads a narrowed value; existing causal reference traces
+  remain comparable.
 - Resolve bare enum symbols from their expected type or the opposite enum
   operand of an equality test; ambiguous symbols refuse with `E-EXPR`.
 - Type empty arrays and maps from their declared destination, including
@@ -78,6 +99,12 @@ and all six standard Connector Contracts remain at `@1`.
   and expectation sites; a ternary between inline structs remains refused.
 - End a bare `stop` at its line boundary so the next match arm is not parsed
   as its value.
+- Evaluate floating `%` expressions already accepted by the checker,
+  including signed zero, infinities and NaN; decimal arithmetic and mixed
+  numeric families remain unavailable.
+
+### Diagnostics
+
 - Warn with `W-JOIN-UNPAIRED` when a join can strand Call frames or terminals;
   pairing by Call identity with an explicit bound avoids the warning.
 - Name conflicting declared types and their first structural difference in
@@ -92,6 +119,9 @@ and all six standard Connector Contracts remain at `@1`.
   `E-PARSE-DEFERRED` code; reserved route words name their deferred purpose.
 - Mark the unused `E-DUP-EDGE` diagnostic as superseded by the existing
   `E-ROUTE-DUPLICATE` refusal.
+
+### Command line, installation and editors
+
 - Report missing source files as command-specific usage errors before
   compilation or deployment loading, and provide `--help` / `-h` for each
   command on stdout with a successful exit status.
@@ -114,6 +144,9 @@ and all six standard Connector Contracts remain at `@1`.
   tests. No language server or personal configuration changes are included.
 - Add an Emacs major mode for `.rkg` highlighting and comment commands,
   with native tests for source boundaries and edits to reader delimiters.
+
+### Documentation and dependencies
+
 - Retire the published approval example's keyed instances after 48 hours
   of inactivity, including requests whose join expired. Its semantic hash
   changes with that lifetime; no reference trace changes.
@@ -126,9 +159,6 @@ and all six standard Connector Contracts remain at `@1`.
 - Present the DSL's numeric names and their fixed representations in one
   reference table, separate from the logical widths used by schemas. State
   which operations and exact conversions each family supports.
-- Evaluate floating `%` expressions already accepted by the checker,
-  including signed zero, infinities and NaN; decimal arithmetic and mixed
-  numeric families remain unavailable.
 - Distinguish `.rkg` programs from the runtime's implementation language,
   and Operators from Connectors before the example sequence.
 - Add a reading path to the normative grammar and replace the Lab reference's
@@ -137,6 +167,18 @@ and all six standard Connector Contracts remain at `@1`.
 - Reconcile the opening ledgers with published binaries and crates, hosted
   CI, contribution settings and documentation reachability; keep unperformed
   manual trials explicitly open.
+
+### Compatibility evidence and remaining qualification
+
+All eight reference-trace comparisons pass without rewriting a trace.
+The published examples retain their check results: fifteen accepted, two
+already refused by the previous release. The only published example with
+a changed semantic hash is `docs/examples/expense-approval.rkg`, because
+its keyed instances now have the idle lifetime described above.
+
+Publication is pending. The embedded Retry/recovery workload exceeds the
+existing 1 MiB code-size gate. Its runtime and heap checks pass; the
+code-size qualification remains open.
 
 ## v0.1.0-alpha (5 November 2026)
 
