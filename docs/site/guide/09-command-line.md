@@ -15,7 +15,7 @@ rastok --version
 ```
 
 Help prints to stdout and exits successfully.
-`--version` prints `rastok` and the package version. Neither accepts additional
+`--version` prints the package version. Global help and version reject extra
 arguments. `rastok <command> --help` prints that command's usage and options on
 stdout and exits successfully; `-h` is the same.
 Run `rastok <command> --help` for the options of one command.
@@ -57,20 +57,19 @@ rastok simulate <file.rkg>... [--deployment <profile.json>] [--compare <dir> | -
 rastok simulate examples/echo.rkg --compare examples/traces/echo
 ```
 
-Simulation uses Lab mocks and virtual time, not physical Drivers. Without
-`--ui`, it runs every scenario, printing `PASS` or `FAIL` followed by
-`simulation.scenario` and a final count. Direct scenarios use their Lab's name.
+Simulation uses mocks and virtual time, not physical Drivers. Without `--ui`,
+it prints each scenario's `PASS` or `FAIL`, `simulation.scenario`, then totals.
+Direct scenarios use their Lab's name.
 A unit without a Lab refuses.
 
-- `--compare` reads reviewed traces and reports the first difference in
-  each differing scenario. A missing reference fails the comparison.
+- `--compare` reports each scenario's first difference from reviewed traces.
+  Missing references fail.
 - `--save` creates or replaces reference files named
   `<simulation>.<scenario>.rkc`. Review the semantic reason for the change;
   saving is not proof that expectations pass.
-- These two options are mutually exclusive. With neither, only scenario
-  expectations are checked; no reference trace is read or written.
-- `--deployment` supplies boot values and attestations needed by the graph,
-  even when the external responses are mocked.
+- These options are exclusive. Neither selected: check expectations without
+  reading or writing reference traces.
+- `--deployment` supplies the graph's boot values and attestations even with mocks.
 
 `--ui` requires `hosted-ui`, prints a token-bearing loopback URL and starts
 paused. `--ui-port` requires `--ui` and selects a nonzero TCP port;
@@ -96,16 +95,22 @@ same projection the Lab uses in its reports. Protected fields remain redacted.
 Raw payloads without a materialized value retain their byte-to-text rendering.
 With several declared output ports, every line keeps its `port: value` prefix.
 
+`run` prints no startup announcement. After stdin ends, it waits for open
+Calls and Sessions, not deadlines alone (lifetime, Loop delay). A listening
+`HttpServer` instead remains active after EOF: Ctrl-C stops it without a
+message. The bound address is not announced; read `listen` in the source.
+
 - `--file-root` enables the physical File Driver within an explicit root.
 - `--deployment` reads typed boot settings, secret coordinates, attestations
   and any Driver selection from a deployment JSON file. Secret material is
   supplied out of band, never as a CLI argument.
 - `--json-logs` exports structured events on stderr; outputs stay on stdout.
-  Other diagnostics may also use stderr, so it is not an exclusively JSON stream.
-- `--record` writes a new diagnostic recording and refuses an existing path.
-  The recorder also refuses personal-data plans, nonempty deployment
-  attestations and boot-dependent Connector settings. Treat recordings as
-  sensitive local evidence, not durable restart storage.
+  The bounded exporter can drop observations; these logs are not a complete
+  journal. Other diagnostics use stderr.
+- `--record` writes a diagnostic recording and refuses an existing path.
+  Personal-data plans, nonempty deployment attestations and boot-dependent
+  Connector settings refuse. Recordings are sensitive evidence, not durable
+  restart storage.
 
 `run --ui` is not supported. Inspect a supported recording afterward instead.
 
@@ -162,10 +167,9 @@ success solely by whether stderr is empty.
 
 ## Summary
 
-Check before executing, simulate before contacting partners, and save only
-an intentional new baseline. Success is not a deployment guarantee; read the
-[alpha limits](../index.md#what-is-available-today). Normative sources include
-`docs/spec/ui.md` and `docs/spec/schema-projections.md` §5.
+Check, then simulate before contacting partners; save only intentional baselines.
+Read the [alpha limits](../index.md#what-is-available-today), `docs/spec/ui.md`
+and `docs/spec/schema-projections.md` §5.
 
 ## Next
 

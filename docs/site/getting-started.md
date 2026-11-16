@@ -164,6 +164,8 @@ the synthetic deployment profile and can open the same graph with `--ui`.
 No real server, partner or credential is required for that simulation.
 `rastok run` prints each App output value on its own line when the App declares
 one output port. An App with several output ports prints `port: value` instead.
+Read [what `run` waits for](guide/09-command-line.md#execute-the-app-run)
+before using it with a listening Connector or a pending deadline.
 Two unaided timed installation trials are still required before this
 quickstart is qualified. No elapsed-time claim is made yet.
 
