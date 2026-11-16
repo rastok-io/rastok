@@ -438,6 +438,23 @@ Compiler and runtime crates stay together in this workspace. New crate
 boundaries are introduced only when the implementation justifies them;
 architecture documents do not pre-create empty subsystems.
 
+## Versions
+
+While the version carries the `-alpha` suffix:
+
+- the third number changes for a corrective release. Every program the
+  previous release accepted is still accepted with the same meaning,
+  apart from the cases listed in the changelog, and no format changes
+  its number;
+- the second number changes when the language changes in a way that
+  breaks programs, when the package format, the recording format or a
+  standard Contract changes its number, or when a milestone opens a new
+  capability;
+- the first number stays at zero until stability is promised.
+
+The package format, the recording format and each standard Contract
+carry their own number. Every changelog entry states them.
+
 ## Contributing
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) first: one problem per pull request,
