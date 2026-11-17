@@ -112,6 +112,70 @@ test("generated topologies route deterministically outside unrelated node bodies
   }
 });
 
+test("shared pins meet at their height without a staircase on arrival or departure", () => {
+  const ports = [{ name: "in", direction: "input" }, { name: "out", direction: "output" }];
+  for (const [count, outgoing] of [[2, false], [2, true], [3, false], [4, false]]) {
+    const nodes = [operator("shared", "owner:0", ports),
+      ...Array.from({ length: count }, (_, index) => operator(`peer${index}`, "owner:0", ports))];
+    const edges = nodes.slice(1).map((node, index) => outgoing
+      ? edge(index, "shared", "out", node.id, "in") : edge(index, node.id, "out", "shared", "in"));
+    const result = render({ owners: [owner("owner:0", null)], nodes, edges });
+    const tracks = [];
+    for (const route of result.routes.values()) {
+      const vertical = layoutEngine.orthogonalSegments(route.points).filter(segment => segment.a.x === segment.b.x);
+      assert.ok(vertical.length <= 1, "a link turns directly onto the pin height, without a second vertical step");
+      if (vertical.length) tracks.push(vertical[0].a.x);
+      const pin = outgoing ? route.start : route.end;
+      const approach = outgoing ? route.points[1] : route.points.at(-2);
+      assert.equal(approach.y, pin.y, "the shared horizontal span stays at the pin height");
+    }
+    assert.equal(new Set(tracks).size, tracks.length, "vertical tracks remain distinct");
+    assertNoBodyCrossings(result);
+  }
+});
+
+test("opposing links do not add a staircase at their shared receiving pins", () => {
+  const result = render(syntheticGraph());
+  for (const edge of result.graph.edges) {
+    if (result.layout.rank.get(edge.target.id) !== result.layout.rank.get(edge.source.id) + 1) continue;
+    const peers = result.graph.edges.filter(other => other.target.id === edge.target.id && other.target.port === edge.target.port);
+    if (peers.length < 2) continue;
+    const vertical = layoutEngine.orthogonalSegments(result.routes.get(edge.index).points)
+      .filter(segment => segment.a.x === segment.b.x);
+    assert.ok(vertical.length <= 1, `edge ${edge.index} turns onto the pin height without a receiving jog`);
+  }
+});
+
+test("boundary arrivals keep their vertical track separate from return links", () => {
+  const ports = (input, output) => [...input.map(name => ({ name, direction: "input" })),
+    ...output.map(name => ({ name, direction: "output" }))];
+  const topology = {
+    owners: [owner("owner:0", null, ports(["peer"], ["process_exit", "reply", "session_exit"])),
+      owner("owner:1", "owner:0", ports(["in"], ["exit", "out"]))],
+    nodes: [operator("source", "owner:1", ports(["in", "remember"], ["out"])),
+      operator("filter", "owner:0", ports(["in"], ["accepted", "rejected"])),
+      operator("receiver", "owner:0", ports(["in"], ["exit", "out"]))],
+    edges: [edge(0, "receiver", "out", "filter", "in"),
+      edge(1, "source", "out", "receiver", "in"),
+      { ...edge(2, "filter", "rejected", "boundary:output:reply", "reply"),
+        target: { id: "boundary:output:reply", kind: "output", port: "reply", owner: "owner:0" } },
+      edge(3, "filter", "rejected", "receiver", "in")],
+  };
+  const { routes } = render(topology);
+  const vertical = [...routes.values()].map(route => layoutEngine.orthogonalSegments(route.points)
+    .filter(({ a, b }) => a.x === b.x));
+  for (let left = 0; left < vertical.length; left++) {
+    for (let right = left + 1; right < vertical.length; right++) {
+      for (const a of vertical[left]) for (const b of vertical[right]) {
+        if (a.a.x !== b.a.x) continue;
+        const shared = Math.min(Math.max(a.a.y, a.b.y), Math.max(b.a.y, b.b.y))
+          - Math.max(Math.min(a.a.y, a.b.y), Math.min(b.a.y, b.b.y));
+        assert.ok(shared <= 0, "only horizontal pin approaches may be shared");
+      }
+    }
+  }
+});
+
 test("a long early exit joins a later exit without reversing the incoming pipes", () => {
   const ports = [{ name: "in", direction: "input" }, { name: "out", direction: "output" },
     { name: "exit", direction: "output" }];

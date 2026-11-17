@@ -1227,8 +1227,8 @@ test("chat route details preserve separate tracks and legible arrivals", { timeo
           const overlap = Math.min(Math.max(a.from.x, a.to.x), Math.max(b.from.x, b.to.x))
             - Math.max(Math.min(a.from.x, a.to.x), Math.min(b.from.x, b.to.x));
           const sharedArrival = left.endsWith('>clients.in') && right.endsWith('>clients.in')
-            && Math.max(Math.min(a.from.x, a.to.x), Math.min(b.from.x, b.to.x)) >= routes[left].end.x - 32
-            && a.from.y === routes[left].end.y;
+            && a.to.x === routes[left].end.x && b.to.x === routes[right].end.x
+            && a.from.y === routes[left].end.y && b.from.y === routes[right].end.y;
           if (!sharedArrival && overlap > 1) assert.ok(Math.abs(a.from.y - b.from.y) >= 10,
             `${left} and ${right} need distinct horizontal tracks`);
         }
