@@ -1248,7 +1248,9 @@ test("chat route details preserve separate tracks and legible arrivals", { timeo
     const route = routes['conversation.address_reply.out>.reply'];
     const portal = route.portals.at(-1);
     assert.ok(portal, 'the retained conversation.out portal exists');
-    const tail = route.segments.filter(segment => segment.from.x >= portal.x);
+    // Collinear tracks can cross the portal as one straight segment.
+    const tail = route.segments.filter(segment => segment.from.x >= portal.x
+      || (segment.line && segment.to.x > portal.x));
     assert.ok(tail.length);
     for (const segment of tail) {
       for (const point of [segment.from, segment.c1, segment.c2, segment.to]) {

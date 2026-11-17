@@ -55,6 +55,9 @@ Two additional check-time refusals are explicit:
 
 ### Lab and response timing
 
+- Draw every debugger link with horizontal and vertical tracks and rounded
+  corners. Clear spans and detours now share the same style, without changing
+  node placement, ports or semantic routes.
 - Place long links and return links with the port-constrained layered method,
   including nested Graphs, before allocating their routing tracks. The
   debugger keeps semantic endpoints, containment and mailbox identities while
