@@ -212,13 +212,18 @@ including nodes with no outgoing route in that channel. Track selection orders
 all links in each inter-layer channel together, with separate tracks and short jogs for conflicting
 horizontal runs. Node and label avoidance takes
 priority where space is constrained. Pipes at the same output share a short
-horizontal departure before separating onto their tracks. Arrivals at the same
-input share a short final approach; route identities, mailbox selection and causal links
+horizontal departure at the pin's height before separating onto their tracks.
+Arrivals at the same input turn directly onto that pin's height and share a short
+final horizontal approach, without staggered vertical steps next to the pin.
+Their vertical tracks, route identities, mailbox selection and causal links
 remain separate. Forward arrivals from a child output to the parent boundary
 stay between the vertical positions of those pins. Long pipes reserve a drawing
 vertex in each intermediate layer before ordering and placement. Node ports
 and fan-in approaches follow the adjacent drawing vertex, not a distant
-endpoint that may approach from another direction. Boundary positions preserve
+endpoint that may approach from another direction. A mobile pin may move as a
+whole to separate an accidental alignment with an unrelated opposite pin;
+existing straight links and fixed Graph pins retain their alignment.
+Boundary positions preserve
 the order chosen by the layer sweeps. An ambiguous
 composition seam does not acquire an invented Graph port. **Status: shipped.**
 

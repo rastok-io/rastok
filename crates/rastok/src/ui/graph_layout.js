@@ -28,6 +28,7 @@
   const ROOT_CONTENT_GUTTER = 144;
   const ROOT_OUTPUT_GUTTER = 112;
   const EDGE_COUNTER_WIDTH = 36;
+  const EDGE_COUNTER_HEIGHT = 18;
   const PORT_LABEL_CLEARANCE = 16;
   const CORNER_RADIUS = 12;
   const MINIMUM_READABLE_SCALE = 0.85;
@@ -578,6 +579,7 @@
       // Once public boundary endpoints have moved, align child scope pins with
       // the same final producer/consumer ports instead of their initial boxes.
       placeMovablePorts(nodes, edges, layout);
+      separateCoincidentPins(nodes, edges, layout);
       return layout;
     }
 
@@ -906,6 +908,66 @@
     allocateNodePorts(nodes, layout, nodePortSamples());
   }
 
+  // Opposing links between unrelated pins at identical heights cannot both
+  // use distinct horizontal runs. Move a whole mobile pin, never its individual
+  // links, after the final median pass and before measuring channel widths.
+  function separateCoincidentPins(nodes, edges, layout) {
+    const byId = new Map(nodes.map(node => [node.id, node]));
+    const pins = new Map(), channels = new Map();
+    const pin = (id, direction, name) => {
+      const key = portKey(id, direction, name);
+      if (pins.has(key)) return pins.get(key);
+      const node = byId.get(id), box = layout.positions.get(id);
+      const point = node.kind === "routing" ? { y: box.y }
+        : portAnchor(node, box, name, direction, layout);
+      const value = { key, node, direction, point, box };
+      pins.set(key, value);
+      return value;
+    };
+    for (const edge of edges) {
+      const chain = layout.edgeChains.get(edge.index);
+      for (let index = 1; index < chain.length; index += 1) {
+        const a = chain[index - 1], b = chain[index];
+        const first = layout.rank.get(a), last = layout.rank.get(b);
+        if (first === last) continue;
+        const from = pin(a, "output", index === 1 ? edge.source.port : null);
+        const to = pin(b, "input", index === chain.length - 1 ? edge.target.port : null);
+        const pair = first < last ? { left: from, right: to } : { left: to, right: from };
+        addSample(channels, `${from.node.owner}:${Math.min(first, last)}:${Math.max(first, last)}`, pair);
+      }
+    }
+    const move = (item, opposite, pairs) => {
+      if (item.node.kind === "boundary" || item.node.kind === "routing" || item.node.fixedPorts) return false;
+      if (pairs.some(pair => (pair.left === item || pair.right === item) && pair.left.point.y === pair.right.point.y)) return false;
+      const siblings = (item.node.ports || []).filter(port => port.direction === item.direction)
+        .map(port => layout.portAnchors.get(portKey(item.node.id, item.direction, port.name)))
+        .filter(point => point !== item.point);
+      const center = item.box.y + item.box.height / 2;
+      const inward = item.point.y <= center ? 1 : -1;
+      for (let distance = TRACK_SPACING / 2; distance < item.box.height; distance += TRACK_SPACING / 2) {
+        for (const direction of [inward, -inward]) {
+          const y = item.point.y + direction * distance;
+          if (y < item.box.y + 14 || y > item.box.y + item.box.height - 12) continue;
+          if (siblings.some(point => Math.abs(point.y - y) < PORT_SPACING)) continue;
+          if (opposite.some(other => Math.abs(other.point.y - y) < TRACK_SPACING / 2)) continue;
+          item.point.y = y;
+          return true;
+        }
+      }
+      return false;
+    };
+    for (const [, pairs] of [...channels].sort(([a], [b]) => a.localeCompare(b))) {
+      const left = [...new Set(pairs.map(pair => pair.left))];
+      const right = [...new Set(pairs.map(pair => pair.right))];
+      for (const a of left.sort((a, b) => a.point.y - b.point.y || a.key.localeCompare(b.key))) {
+        for (const b of right) {
+          if (a.point.y !== b.point.y || pairs.some(pair => pair.left === a && pair.right === b)) continue;
+          if (!move(b, left, pairs)) move(a, right, pairs);
+        }
+      }
+    }
+  }
+
   function allocateNodePorts(nodes, layout, samples) {
     layout.portAnchors.clear();
     for (const node of nodes) {
@@ -1015,10 +1077,8 @@
         end: { x: targetPort.x, y: targetPort.y },
       });
     }
-    const sourceFans = fanOffsets(candidates, true, layout);
-    const targetFans = fanOffsets(candidates, false, layout);
     const labelObstacles = graphLabelObstacles(graph, layout);
-    const planned = channelRoutes(candidates, sourceFans, targetFans, graph, layout, labelObstacles, channelSpace);
+    const planned = channelRoutes(candidates, graph, layout, labelObstacles, channelSpace);
     const routes = new Map();
     const ordered = [...candidates].sort((left, right) =>
       left.start.x - right.start.x
@@ -1041,35 +1101,15 @@
     return routes;
   }
 
-  function fanOffsets(candidates, source, layout) {
-    const groups = new Map();
-    for (const candidate of candidates) {
-      const endpoint = source ? candidate.edge.source : candidate.edge.target;
-      const key = `${endpoint.id}\u0000${endpoint.port || ""}`;
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(candidate);
-    }
-    const offsets = new Map();
-    const adjacentY = candidate => {
-      const chain = layout.edgeChains.get(candidate.edge.index) || [];
-      const dummy = chain.length > 2 ? layout.positions.get(source ? chain[1] : chain.at(-2)) : null;
-      return dummy?.y ?? (source ? candidate.end.y : candidate.start.y);
-    };
-    for (const group of groups.values()) {
-      group.sort((left, right) => {
-        return adjacentY(left) - adjacentY(right) || left.edge.index - right.edge.index;
-      });
-      group.forEach((candidate, index) => offsets.set(candidate.edge.index, {
-        offset: (index - (group.length - 1) / 2) * TRACK_SPACING,
-        count: group.length,
-        index,
-      }));
-    }
-    return offsets;
-  }
-
-  function channelRoutes(candidates, sourceFans, targetFans, graph, layout, labels, channelSpace) {
+  function channelRoutes(candidates, graph, layout, labels, channelSpace) {
     const channels = new Map(), sideChannels = new Map(), paths = new Map();
+    const pinCounts = new Map(), sharedApproaches = new Set(), pinApproaches = new Set();
+    for (const { edge } of candidates) {
+      for (const [direction, endpoint] of [["output", edge.source], ["input", edge.target]]) {
+        const key = portKey(endpoint.id, direction, endpoint.port);
+        pinCounts.set(key, (pinCounts.get(key) || 0) + 1);
+      }
+    }
     // A column's body clearance does not depend on which nodes emit into
     // this channel: receivers, drained outputs and unwired nodes still occupy it.
     const columnRight = new Map();
@@ -1094,19 +1134,17 @@
     };
     for (const candidate of candidates) {
       const { start, end, edge, source, target } = candidate;
-      const sourceFan = sourceFans.get(edge.index), targetFan = targetFans.get(edge.index);
       const labelKey = (node, direction, port) => node.kind === "boundary"
         ? scopePortKey(node.owner, node.direction, node.ports[0].name) : portKey(node.id, direction, port);
       const sourceLabel = labels.find(box => box.portKey === labelKey(source, "output", edge.source.port));
       const targetLabel = labels.find(box => box.portKey === labelKey(target, "input", edge.target.port));
-      const scopeExit = source.kind === "scope" && target.kind === "boundary"
-        && target.direction === "output" && start.x < end.x;
-      // A sibling pipe may fan out at this scope pin, but the final arrival
-      // at the parent output must not overshoot either endpoint vertically.
-      const fanY = y => scopeExit ? clamp(y, Math.min(start.y, end.y), Math.max(start.y, end.y)) : y;
+      // Shared endpoints share their horizontal approach, at the actual pin
+      // height. Only the channel's vertical tracks separate the links.
       const parts = [], first = { x: Math.max(start.x + FAN_STUB, (sourceLabel?.x ?? start.x)
-        + (sourceLabel?.width ?? 0) + BOX_EDGE_CLEARANCE) + sourceFan.index * 3, y: fanY(start.y + sourceFan.offset) };
-      parts.push([start, { x: first.x, y: start.y }, first]);
+        + (sourceLabel?.width ?? 0) + BOX_EDGE_CLEARANCE), y: start.y };
+      pinApproaches.add(first);
+      if (pinCounts.get(portKey(source.id, "output", edge.source.port)) > 1) sharedApproaches.add(first);
+      parts.push([start, first]);
       let current = first;
       const chain = layout.edgeChains.get(edge.index) || [];
       const forward = layout.rank.get(source.id) < layout.rank.get(target.id);
@@ -1123,8 +1161,9 @@
         parts.push([entry, leave]);
         current = leave;
       }
-      const last = { x: Math.min(end.x - FAN_STUB, (targetLabel?.x ?? end.x) - BOX_EDGE_CLEARANCE)
-        - targetFan.index * 3, y: fanY(end.y + targetFan.offset) };
+      const last = { x: Math.min(end.x - FAN_STUB, (targetLabel?.x ?? end.x) - BOX_EDGE_CLEARANCE), y: end.y };
+      pinApproaches.add(last);
+      if (pinCounts.get(portKey(target.id, "input", edge.target.port)) > 1) sharedApproaches.add(last);
       const a = layout.rank.get(chain.at(-2)), b = layout.rank.get(target.id);
       if (chain.length > 2 && a === b) {
         sideConnect(parts, current, last, `${target.owner}:${a}:west`, -1);
@@ -1134,7 +1173,7 @@
         source.owner === target.owner
           ? [`${source.owner}:${Math.min(a, b)}:east`, `${source.owner}:${Math.max(a, b)}:west`] : []);
       }
-      parts.push([last, { x: last.x, y: end.y }, end]);
+      parts.push([last, end]);
       paths.set(edge.index, parts);
     }
     for (const [key, spans] of sideChannels) {
@@ -1183,9 +1222,10 @@
       }
       // Inverted ports already occupy the sides of a compacted column gap.
       // Forward bends must stay beyond them when its columns move closer.
-      // Boundary gutters are not compacted and keep their existing routing.
+      // Boundary gutters must clear those return tracks too, even though
+      // they have no inter-column gap to compact.
       const gap = layout.columnGaps.get(key);
-      const sideKeys = gap === undefined ? [] : spans[0].sideKeys;
+      const sideKeys = spans[0].sideKeys;
       const minimum = Math.max(...normalized.map(item => item.left.x),
         columnRight.get(spans[0].sideKeys[0]) ?? -Infinity,
         ...(sideChannels.get(sideKeys[0]) || []).map(span => span.x));
@@ -1196,10 +1236,14 @@
       const ordinates = new Set(normalized.flatMap(item => [item.left.y, item.right.y]));
       for (let index = 0; index < ordered.length; index += 1) {
         const item = ordered[index];
+        if (sharedApproaches.has(item.right)) continue;
         if (!ordered.slice(index + 1).some(other => item.right.y === other.left.y)) continue;
+        // Stay inside the arrival's vertical interval: overshooting a shared
+        // pin would cross a straight link that already arrives at that pin.
+        const direction = Math.sign(item.left.y - item.right.y);
         let delta = TRACK_SPACING / 2;
-        while (ordinates.has(item.right.y + delta)) delta += TRACK_SPACING / 2;
-        item.jogY = item.right.y + delta;
+        while (ordinates.has(item.right.y + direction * delta)) delta += TRACK_SPACING / 2;
+        item.jogY = item.right.y + direction * delta;
         ordinates.add(item.jogY);
       }
       // Preserve the chosen precedence for overlapping intervals. Disjoint
@@ -1209,21 +1253,27 @@
         item.track = 0;
         for (const previous of ordered.slice(0, index)) {
           const separated = Math.max(item.left.y, item.right.y, item.jogY ?? item.right.y) + CORNER_RADIUS * 2
-            <= Math.min(previous.left.y, previous.right.y)
+            <= Math.min(previous.left.y, previous.right.y, previous.jogY ?? previous.right.y)
             || Math.max(previous.left.y, previous.right.y, previous.jogY ?? previous.right.y) + CORNER_RADIUS * 2
-              <= Math.min(item.left.y, item.right.y);
+              <= Math.min(item.left.y, item.right.y, item.jogY ?? item.right.y);
           if (!separated) item.track = Math.max(item.track, previous.track + 1);
         }
       }
       const trackCount = Math.max(...ordered.map(item => item.track)) + 1;
+      const badgeWidth = Math.max(EDGE_COUNTER_WIDTH, textWidth("≡ 0000") + 8);
+      // A short bend at a shared pin has no exclusive vertical span for its
+      // mailbox. Leave a horizontal slot before the receiving port label.
+      const badgeSpace = spans.some(span => pinApproaches.has(span.from) && pinApproaches.has(span.to)
+        && (sharedApproaches.has(span.from) || sharedApproaches.has(span.to))
+        && Math.abs(span.from.y - span.to.y) < EDGE_COUNTER_HEIGHT + CORNER_RADIUS * 2)
+        ? badgeWidth + PORT_LABEL_CLEARANCE : 0;
       // The track count alone omits fan-out stubs and inverted-port turns.
       // Keep their measured footprint when compacting this column gap.
       channelSpace?.set(key, { tracks: trackCount, gap: gap === undefined ? 0
-        : Math.ceil(gap - (right - minimum) + TRACK_SPACING * (trackCount + 1) - 1e-6) });
+        : Math.ceil(gap - (right - minimum) + TRACK_SPACING * (trackCount + 1) + badgeSpace - 1e-6) });
       // Keep a straight receiving span long enough for a mailbox badge when
       // the channel permits it, without squeezing its ordered tracks together.
-      const badgeWidth = Math.max(EDGE_COUNTER_WIDTH, textWidth("≡ 0000") + 8);
-      const maximum = Math.min(right, Math.max(minimum + TRACK_SPACING * (trackCount + 1), right - badgeWidth));
+      const maximum = Math.min(right, Math.max(minimum + TRACK_SPACING * (trackCount + 1), right - Math.max(badgeWidth, badgeSpace)));
       for (const { span, track } of ordered) {
         span.x = minimum + (maximum - minimum) * (track + 1) / (trackCount + 1);
       }
@@ -1343,7 +1393,7 @@
       }
       return values;
     };
-    const fixedObstacles = [...headerObstacles,
+    const fixedObstacles = [...nodeObstacles, ...headerObstacles,
       ...portLabelObstacles.map(obstacle => expandBox(obstacle, PORT_LABEL_CLEARANCE))];
     const placed = [];
     const ordered = [...routes.entries()].sort(([left], [right]) => left - right);
@@ -1351,7 +1401,7 @@
       const badge = {
         // Four digits fit before admission; queue growth cannot move a label.
         width: Math.max(EDGE_COUNTER_WIDTH, textWidth("≡ 0000") + 8),
-        height: 18,
+        height: EDGE_COUNTER_HEIGHT,
       };
       const samples = routeSamples.get(routeIndex) || [route.start, route.end];
       // A mailbox belongs to the receiving input, not the producer.
@@ -1385,7 +1435,6 @@
           score: curveLabelCollisionScore(
             box,
             layout,
-            nodeObstacles,
             fixedObstacles,
             nearby(box, routeIndex),
             placed,
@@ -1398,7 +1447,7 @@
         center: fallbackAnchor,
         box: centeredBox(fallbackAnchor, badge.width, badge.height),
       };
-      placed.push(selected.box);
+      placed.push(expandBox(selected.box, 6));
       route.label = {
         x: selected.center.x,
         y: selected.center.y,
@@ -1618,19 +1667,20 @@
   }
 
 
-  function curveLabelCollisionScore(box, layout, nodes, headers, otherRouteSamples, placed) {
+  function curveLabelCollisionScore(box, layout, obstacles, otherRouteSamples, placed) {
     let score = 0;
     if (box.x < 4 || box.y < 4 || box.x + box.width > layout.width - 4 || box.y + box.height > layout.height - 4) {
       score += 1_000_000;
     }
-    for (const obstacle of [...nodes, ...headers]) {
+    for (const obstacle of obstacles) {
       score += overlapArea(box, obstacle) * 10_000;
     }
     for (const other of placed) {
-      score += overlapArea(box, expandBox(other, 6)) * 20_000;
+      score += overlapArea(box, other) * 20_000;
     }
+    const clearance = expandBox(box, 5);
     for (const sample of otherRouteSamples) {
-      if (pointInsideBox(sample, expandBox(box, 5))) score += 100_000;
+      if (pointInsideBox(sample, clearance)) score += 100_000;
     }
     return score;
   }
