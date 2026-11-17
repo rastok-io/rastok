@@ -10,6 +10,7 @@ const { spawn } = require("node:child_process");
 const path = require("node:path");
 const fs = require("node:fs/promises");
 const os = require("node:os");
+const { syntheticGraph } = require('./graph_fixture.cjs');
 const { chromium } = require(process.env.RASTOK_PLAYWRIGHT || "playwright");
 const root = path.resolve(__dirname, "../../../..");
 const rastok = process.env.RASTOK_BIN || path.join(root, "target/debug/rastok");
@@ -246,7 +247,7 @@ test('an observer can fold source but cannot execute its scenario gutter actions
 
 // The two-simultaneous-retries fixture pins intermediate transition regressions;
 // the public asymmetric gallery example is also exercised in the example matrix.
-async function openTour(t, viewport = { width: 1352, height: 760 }, source = "crates/rastok/tests/fixtures/ui-two-retries.rkg", commandArgs, environment = {}) {
+async function openTour(t, viewport = { width: 1352, height: 760 }, source = "crates/rastok/tests/fixtures/ui-two-retries.rkg", commandArgs, environment = {}, initialize) {
   const child = spawn(rastok, commandArgs || ["simulate", source, "--ui"], { cwd: root, env: { ...process.env, ...environment } });
   let context;
   const errors = [];
@@ -270,6 +271,7 @@ async function openTour(t, viewport = { width: 1352, height: 760 }, source = "cr
     });
   });
   context = await browser.newContext({ viewport, colorScheme: "dark" });
+  if (initialize) await context.addInitScript(initialize);
   const page = await context.newPage();
   page.on("pageerror", error => errors.push(error.message));
   page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
@@ -279,6 +281,67 @@ async function openTour(t, viewport = { width: 1352, height: 760 }, source = "cr
   assert.equal(await page.locator("#graph").isVisible(), true, "graph remains visible beside the source");
   return page;
 }
+
+test('graph geometry is computed once per topology, not per transition or selection', { timeout: 90000 }, async t => {
+  const page = await openTour(t, undefined, undefined, undefined, {}, () => {
+    globalThis.geometryCalls = { materializeGraph: 0, layoutGraph: 0, routeGraphEdges: 0 };
+    Object.defineProperty(globalThis, 'RastokGraphLayout', { configurable: true, set(api) {
+      const counted = { ...api };
+      for (const name of Object.keys(geometryCalls)) counted[name] = (...args) => {
+        geometryCalls[name] += 1;
+        return api[name](...args);
+      };
+      Object.defineProperty(globalThis, 'RastokGraphLayout', { value: counted, configurable: true });
+    } });
+  });
+  await page.waitForFunction(() => currentSnapshot && !refreshPromise);
+  const once = { materializeGraph: 1, layoutGraph: 1, routeGraphEdges: 1 };
+  assert.deepEqual(await page.evaluate(() => geometryCalls), once, 'opening computes the drawing once');
+  const paths = await page.locator('.graph-edge-path').evaluateAll(paths => paths.map(path => path.getAttribute('d')));
+  for (let index = 0; index < 20; index += 1) {
+    const revision = await page.evaluate(() => currentSnapshot.revision);
+    await page.locator('#step').click();
+    await page.waitForFunction(previous => currentSnapshot.revision > previous && pendingCommandRevision === null, revision);
+  }
+  for (let index = 0; index < 10; index += 1) await page.locator('.graph-node[role="button"]').first().click();
+  assert.deepEqual(await page.evaluate(() => geometryCalls), once, 'twenty transitions and ten selections reuse geometry');
+  assert.deepEqual(await page.locator('.graph-edge-path').evaluateAll(paths => paths.map(path => path.getAttribute('d'))), paths);
+  const coordinates = [];
+  const snapshotBeforeCounters = await page.evaluate(() => JSON.stringify(currentSnapshot.topology));
+  for (const count of [9, 10, 1000]) {
+    coordinates.push(await page.evaluate(count => {
+      const topology = structuredClone(currentSnapshot.topology);
+      for (const edge of topology.edges) edge.queued_count = String(count);
+      renderTopology(topology);
+      return [...document.querySelectorAll('.graph-svg [x], .graph-svg [d], .graph-svg [transform]')]
+        .map(element => ['x', 'y', 'width', 'height', 'd', 'transform'].map(name => element.getAttribute(name)));
+    }, count));
+  }
+  assert.deepEqual(coordinates[1], coordinates[0]);
+  assert.deepEqual(coordinates[2], coordinates[0], 'four-digit counters cannot move any geometry');
+  assert.equal(await page.evaluate(() => JSON.stringify(currentSnapshot.topology)), snapshotBeforeCounters, 'decorating the cache cannot mutate a retained snapshot');
+  assert.deepEqual(await page.evaluate(() => geometryCalls), once);
+  const other = await openTour(t, undefined, 'examples/echo.rkg');
+  const topology = await other.evaluate(() => currentSnapshot.topology);
+  await page.evaluate(topology => { renderTopology(topology); renderTopology(topology); }, topology);
+  assert.deepEqual(await page.evaluate(() => geometryCalls), { materializeGraph: 2, layoutGraph: 2, routeGraphEdges: 2 }, 'another program in the same page computes exactly one new drawing');
+  const synthetic = syntheticGraph();
+  assert.equal(synthetic.nodes.length, 35);
+  assert.equal(synthetic.edges.length, 67);
+  await page.route('**/api/snapshot*', async route => {
+    const response = await route.fetch();
+    const snapshot = await response.json();
+    snapshot.topology = synthetic;
+    await route.fulfill({ response, json: snapshot });
+  });
+  await page.evaluate(topology => renderTopology(topology), synthetic);
+  for (let index = 0; index < 20; index += 1) {
+    const revision = await page.evaluate(() => currentSnapshot.revision);
+    await page.locator('#step').click();
+    await page.waitForFunction(previous => currentSnapshot.revision > previous && pendingCommandRevision === null, revision);
+  }
+  assert.deepEqual(await page.evaluate(() => geometryCalls), { materializeGraph: 3, layoutGraph: 3, routeGraphEdges: 3 }, 'the larger topology also reuses its drawing');
+});
 
 async function finish(page) {
   await page.locator('[data-command="run-to-completion"]').click();

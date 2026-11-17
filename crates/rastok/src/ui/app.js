@@ -36,6 +36,7 @@ let activeInspectorTab = "envelope";
 let scenarioDefinitionActive = false;
 let graphResizeObserver = null;
 let graphTextSync = null;
+let graphDrawing = null;
 let activeSourceView = sessionStorage.getItem("rastok-source-view") || null;
 let lastSourcePoint = null;
 let selectedSourceDefinition = null;
@@ -1263,6 +1264,7 @@ function renderTopology(topology, animateBoundary = false) {
   const focusKey = target.contains(document.activeElement)
     ? document.activeElement.dataset.focusKey : null;
   if (!topology || !(topology.nodes || []).length) {
+    graphDrawing = null;
     empty(target, "Waiting for a validated topology.");
     return;
   }
@@ -1311,9 +1313,30 @@ function renderTopology(topology, animateBoundary = false) {
     activityPanel.append(note);
   }
 
-  const graph = graphLayout.materializeGraph(topology);
-  const layout = graphLayout.layoutGraph(graph.nodes, graph.edges, topology.owners || []);
-  const edgeRoutes = graphLayout.routeGraphEdges(graph, layout);
+  // Geometry depends on the validated structure, including every label that
+  // reserves space. Mailboxes, instances and activity only decorate it.
+  const shape = ({ id, parent, owner, kind, label, path, type, profile, extensions, ports }) =>
+    ({ id, parent, owner, kind, label, path, type, profile, extensions, ports });
+  const key = JSON.stringify({
+    nodes: topology.nodes.map(shape),
+    owners: topology.owners.map(shape),
+    edges: (topology.edges || []).map(({ index, source, target, route, cases }) =>
+      ({ index, source, target, route, cases })),
+  });
+  if (graphDrawing?.key !== key) {
+    const graph = graphLayout.materializeGraph({ ...topology,
+      edges: (topology.edges || []).map(edge => ({ ...edge })),
+    });
+    const layout = graphLayout.layoutGraph(graph.nodes, graph.edges, topology.owners || []);
+    const edgeRoutes = graphLayout.routeGraphEdges(graph, layout);
+    graphDrawing = { key, graph, layout, edgeRoutes };
+  } else {
+    // Reuse geometry, not the old snapshot's observations or definitions.
+    for (const node of topology.nodes) Object.assign(graphDrawing.graph.byId.get(node.id), node);
+    const edges = new Map((topology.edges || []).map(edge => [edge.index, edge]));
+    for (const edge of graphDrawing.graph.edges) Object.assign(edge, edges.get(edge.index));
+  }
+  const { graph, layout, edgeRoutes } = graphDrawing;
   const canvas = document.createElement("div");
   canvas.className = "graph-canvas";
   const svg = svgElement("svg", {

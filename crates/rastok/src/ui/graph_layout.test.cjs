@@ -175,7 +175,7 @@ test("a four-digit mailbox count fits the routed badge without changing the edge
   const empty = render(topology);
   const full = render({ ...topology, edges: [{ ...topology.edges[0], queued_count: "1024" }] });
   assert.deepEqual(full.routes.get(0).presentationPoints, empty.routes.get(0).presentationPoints);
-  assert.ok(full.routes.get(0).label.box.width > empty.routes.get(0).label.box.width);
+  assert.deepEqual(full.routes.get(0).label, empty.routes.get(0).label, 'four digits are reserved before admission');
   assert.ok(full.routes.get(0).label.box.width * layoutEngine.minimumReadableScale >= 40);
 });
 

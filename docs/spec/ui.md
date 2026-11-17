@@ -335,6 +335,11 @@ instance-badge space before admission; opening an instance does not move the
 graph. The layout and SVG renderer use the same subtitle, so `HttpClient · + Retry`
 does not escape into a port label or pipe. Theme follows the system.
 
+The graph drawing is a function of the validated topology alone. A
+transition, a selection, a zoom or a pan never recomputes placement or
+routes: counters, badges and highlights change on the existing drawing.
+Mailbox badges reserve their four-digit width from the start.
+
 Ports slide and reorder to reduce crossings. Smooth cubic paths have horizontal
 port tangents; deterministic lane/label placement separates overlapping paths.
 Crossings may remain, but geometry must not invent topology. Layout tests cover
