@@ -66,6 +66,22 @@ function assertNoBodyCrossings({ graph, layout, routes }) {
   }
 }
 
+// A mailbox badge reserves four digits. Its box may graze a Node by less than
+// the padding around those digits; anything deeper hides part of the count.
+function assertBadgesClearBodies({ graph, layout, routes }, context = "") {
+  for (const edge of graph.edges) {
+    const badge = routes.get(edge.index).label.box;
+    for (const node of graph.nodes) {
+      if (node.kind === "boundary" || node.kind === "discard" || node.kind === "routing") continue;
+      const box = layout.positions.get(node.id);
+      const width = Math.min(badge.x + badge.width, box.x + box.width) - Math.max(badge.x, box.x);
+      const height = Math.min(badge.y + badge.height, box.y + box.height) - Math.max(badge.y, box.y);
+      assert.ok(Math.min(width, height) < 4,
+        `${context}the mailbox badge of ${edge.route} covers ${Math.round(width)}x${Math.round(height)} px of ${node.id}`);
+    }
+  }
+}
+
 test("channel tracks clear wider nodes even when those nodes do not emit into the channel", () => {
   const ports = [{ name: "in", direction: "input" }, { name: "out", direction: "output" }];
   for (const mode of ["unwired", "receiver", "drained", "emitter", "fan-in"]) {
@@ -108,7 +124,40 @@ test("generated topologies route deterministically outside unrelated node bodies
     const topology = { owners: [owner("owner:0", null)], nodes, edges };
     const result = render(topology);
     assertNoBodyCrossings(result);
+    assertBadgesClearBodies(result, `sample ${sample}: `);
     assert.equal(stableProjection(result), stableProjection(render(topology)), `sample ${sample}`);
+  }
+});
+
+test("a direct link keeps room for its mailbox badge between its two columns", () => {
+  const ports = (...outputs) => [{ name: "in", direction: "input" },
+    ...outputs.map(name => ({ name, direction: "output" }))];
+  const cases = {
+    // A bent link next to an unrelated wider column.
+    bent: {
+      nodes: [operator("unwired", "owner:0", ports("out", "exit", "err")),
+        operator("send", "owner:0", ports("out", "exit")), operator("receive", "owner:0", ports("out"))],
+      links: [["send", "exit", "receive"]],
+    },
+    // A straight link in a channel that also holds a bend.
+    straight: {
+      nodes: ["first", "second", "upper", "lower", "last"].map(id => operator(id, "owner:0", ports("out"))),
+      links: [["first", "out", "upper"], ["first", "out", "lower"], ["second", "out", "last"], ["lower", "out", "last"]],
+    },
+    // A straight link joined by three bends at its receiving pin.
+    joined: {
+      nodes: ["a", "b", "c", "d", "e", "f", "g", "h"].map(id => operator(id, "owner:0", ports("out"))),
+      links: [["a", "out", "g"], ["a", "out", "h"], ["b", "out", "c"], ["b", "out", "d"], ["b", "out", "h"],
+        ["c", "out", "h"], ["d", "out", "e"], ["e", "out", "f"], ["e", "out", "g"], ["f", "out", "h"]],
+    },
+  };
+  for (const [name, value] of Object.entries(cases)) {
+    const topology = { owners: [owner("owner:0", null)], nodes: value.nodes,
+      edges: value.links.map(([from, port, to], index) => edge(index, from, port, to, "in")) };
+    const result = render(topology);
+    assertBadgesClearBodies(result, `${name}: `);
+    assertNoBodyCrossings(result);
+    assert.equal(stableProjection(result), stableProjection(render(topology)), name);
   }
 });
 

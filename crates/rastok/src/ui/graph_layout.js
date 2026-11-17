@@ -1118,7 +1118,7 @@
   }
 
   function channelRoutes(candidates, graph, layout, labels, channelSpace) {
-    const channels = new Map(), sideChannels = new Map(), paths = new Map();
+    const channels = new Map(), sideChannels = new Map(), paths = new Map(), straightLinks = new Map();
     const pinCounts = new Map(), sharedApproaches = new Set(), pinApproaches = new Set();
     for (const { edge } of candidates) {
       for (const [direction, endpoint] of [["output", edge.source], ["input", edge.target]]) {
@@ -1142,7 +1142,13 @@
       addSample(sideChannels, key, span);
     };
     const connect = (parts, from, to, key, sideKeys = []) => {
-      if (from.y === to.y) { parts.push([from, to]); return; }
+      if (from.y === to.y) {
+        // A straight direct link has no bend to measure, but its mailbox
+        // still needs the span between its two pin approaches.
+        if (pinApproaches.has(from) && pinApproaches.has(to)) addSample(straightLinks, key, { from, to });
+        parts.push([from, to]);
+        return;
+      }
       const span = { from, to, order: parts.length, key, sideKeys };
       parts.push(span);
       if (!channels.has(key)) channels.set(key, []);
@@ -1285,18 +1291,32 @@
       const badgeSpace = spans.some(needsBadgeSpace) ? CORNER_RADIUS + badgeWidth + PORT_LABEL_CLEARANCE : 0;
       // A badge reserves space after its own track, not after every track in
       // the channel. Earlier bends can use the width already needed by later ones.
-      const requiredWidth = Math.max(TRACK_SPACING * (trackCount + 1),
+      // A direct link has no other column to carry its mailbox. The span
+      // between its pin approaches keeps the reserved badge width, so the
+      // badge stays between the two Nodes instead of covering one of them.
+      const direct = spans.some(span => pinApproaches.has(span.from) && pinApproaches.has(span.to));
+      const straight = straightLinks.get(key) || [];
+      // Bends joining a straight link at its receiving pin leave that width
+      // to the straight link before the first of them reaches it.
+      const lead = Math.max(0, ...straight.filter(({ from, to }) => from.x < to.x && sharedApproaches.has(to)
+        && spans.some(span => span.to.x === to.x && span.to.y === to.y))
+        .map(({ from }) => from.x + badgeWidth - minimum - TRACK_SPACING));
+      const requiredWidth = Math.max(TRACK_SPACING * (trackCount + 1), direct ? badgeWidth : 0,
         ...ordered.filter(item => needsBadgeSpace(item.span))
           .map(item => TRACK_SPACING * (item.track + 1) + badgeSpace));
       // The track count alone omits fan-out stubs and inverted-port turns.
       // Keep their measured footprint when compacting this column gap.
       channelSpace?.set(key, { tracks: trackCount, gap: gap === undefined ? 0
-        : Math.ceil(gap - (right - minimum) + requiredWidth - 1e-6) });
+        : Math.ceil(Math.max(gap - (right - minimum) + requiredWidth + lead,
+          ...straight.map(({ from, to }) => gap - Math.abs(to.x - from.x) + badgeWidth)) - 1e-6) });
       // Keep a straight receiving span long enough for a mailbox badge when
       // the channel permits it, without squeezing its ordered tracks together.
-      const maximum = Math.min(right, Math.max(minimum + TRACK_SPACING * (trackCount + 1), right - Math.max(badgeWidth, badgeSpace)));
+      // A gutter that cannot widen keeps its tracks in order: the lead only
+      // takes the room left once every track has its spacing.
+      const start = minimum + Math.min(lead, Math.max(0, right - minimum - TRACK_SPACING * (trackCount + 1)));
+      const maximum = Math.min(right, Math.max(start + TRACK_SPACING * (trackCount + 1), right - Math.max(badgeWidth, badgeSpace)));
       for (const { span, track } of ordered) {
-        span.x = minimum + (maximum - minimum) * (track + 1) / (trackCount + 1);
+        span.x = start + (maximum - start) * (track + 1) / (trackCount + 1);
       }
       for (const item of ordered) {
         if (item.jogY === undefined) continue;
