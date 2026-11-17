@@ -104,10 +104,10 @@ large `advance` may now fail. Reference traces changed: **none**.
 - Check nonempty list literals element by element in typed positions,
   including mixed null and text elements for `array<text?>`. Unconstrained
   mixed lists retain `variant` elements and their existing representation.
-  The added element conversions change hashes for typed optional-element
-  lists that previously compiled but faulted at execution, such as `[data]`
-  or `[null]` assigned to `array<text?>`. Published example hashes and
-  reference traces are unchanged.
+- Typed collection literals with optional elements or values change semantic
+  hashes, even when the program already passed: lists since element-by-element
+  checking, maps since typed construction in 0.1.1. Their meaning is unchanged;
+  published example hashes and reference traces are unchanged.
 - Type empty arrays and maps from their declared destination, including
   nested fields, state, mocks and Lab assertions. Without an expected type,
   empty collections retain `variant` elements, as in 0.1.0. A later typed

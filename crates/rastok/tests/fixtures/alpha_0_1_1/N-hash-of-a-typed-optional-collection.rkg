@@ -1,0 +1,53 @@
+// Typed optional collections keep their behavior across construction changes.
+// Release regression fixture; the executable program is unchanged.
+// Check and simulate this file: all three scenarios pass.
+// Lists and maps with optional contents gain explicit branch conversions.
+// Plain lists keep the same representation.
+
+graph app : App {
+  input in: text
+  output listed: int
+  output mapped: int
+  output plain: int
+  operator optional_list {
+    input in: text
+    output out: int
+    on in {
+      val xs: array<text?> = [data]
+      out = size(xs)
+    }
+  }
+  operator optional_map {
+    input in: text
+    output out: int
+    on in {
+      val m: map<text,int?> = { "a": 1 }
+      out = size(m)
+    }
+  }
+  operator plain_list {
+    input in: text
+    output out: int
+    on in {
+      val xs: array<text> = [data]
+      out = size(xs)
+    }
+  }
+  in -> optional_list -> listed
+  in -> optional_map -> mapped
+  in -> plain_list -> plain
+}
+lab sizes {
+  scenario a_typed_optional_list {
+    app.in = "a"
+    expect app.listed == 1
+  }
+  scenario a_typed_optional_map {
+    app.in = "a"
+    expect app.mapped == 1
+  }
+  scenario a_typed_plain_list {
+    app.in = "a"
+    expect app.plain == 1
+  }
+}

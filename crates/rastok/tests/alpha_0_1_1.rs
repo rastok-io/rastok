@@ -399,6 +399,25 @@ fn r221_enum_symbols_are_values_inside_a_typed_list() {
 }
 
 #[test]
+fn typed_optional_collections_record_identity_without_changing_behavior() {
+    let file = "N-hash-of-a-typed-optional-collection.rkg";
+    let output = cli(&["check", file]);
+    assert_status(&output, 0);
+    assert_eq!(
+        stdout(&output),
+        "ok: 4 node(s), semantic hash 3ab66f0b6ec201ecf34c8fb75f692fd7e51961e194580754c3ac3236f2a87f1b\n"
+    );
+    assert_scenarios_pass(
+        file,
+        &[
+            "sizes.a_typed_optional_list",
+            "sizes.a_typed_optional_map",
+            "sizes.a_typed_plain_list",
+        ],
+    );
+}
+
+#[test]
 fn r222_a_typed_list_checks_each_optional_element() {
     assert_scenarios_pass(
         "N-list-with-a-null-in-an-optional-place.rkg",
