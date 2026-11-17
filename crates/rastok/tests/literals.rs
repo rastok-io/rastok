@@ -535,19 +535,50 @@ graph app : App {
 }
 
 #[test]
+fn inline_collection_refusals_do_not_presume_an_empty_binding() {
+    let source = r#"
+graph app : App {
+  input in: text
+  output out: array<text>
+  operator collect {
+    input in: text
+    output out: array<text>
+    on in { out = [data, 1] }
+  }
+  in -> collect -> out
+}
+"#;
+    let bag = compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap_err();
+    let diagnostic = bag
+        .diagnostics()
+        .iter()
+        .find(|d| d.code().as_str() == "E-PORT-TYPE")
+        .unwrap();
+    assert!(diagnostic.message().contains("array<text>"), "{bag:?}");
+    assert!(diagnostic.message().contains("array<variant>"), "{bag:?}");
+    assert!(!diagnostic.message().contains(" = []"), "{bag:?}");
+    assert!(
+        diagnostic
+            .message()
+            .contains("use elements compatible with the required type"),
+        "{bag:?}"
+    );
+}
+
+#[test]
 fn untyped_empty_bindings_refuse_at_a_precise_destination_with_annotation_help() {
-    for (name, value, ty, annotation) in [
+    for (name, value, ty, advice) in [
         (
             "members",
             "[]",
             "array<text>",
-            "val members: array<text> = []",
+            "use elements compatible with the required type; for a binding, declare its element type explicitly",
         ),
         (
             "counts",
             "{:}",
             "map<text, int>",
-            "val counts: map<text, int> = {:}",
+            "use values compatible with the required type; for a binding, declare its value type explicitly",
         ),
     ] {
         let source = format!(
@@ -559,13 +590,7 @@ fn untyped_empty_bindings_refuse_at_a_precise_destination_with_annotation_help()
             .iter()
             .find(|d| d.code().as_str() == "E-PORT-TYPE")
             .unwrap();
-        assert!(
-            diagnostic
-                .message()
-                .contains("declare the type on the binding"),
-            "{bag:?}"
-        );
-        assert!(diagnostic.message().contains(annotation), "{bag:?}");
+        assert!(diagnostic.message().contains(advice), "{bag:?}");
         assert!(
             !bag.diagnostics()
                 .iter()

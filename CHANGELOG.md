@@ -135,6 +135,8 @@ large `advance` may now fail. Reference traces changed: **none**.
 
 ### Diagnostics
 
+- Keep collection type advice applicable to inline values and bindings,
+  without assuming an empty literal or an existing binding.
 - Name deferred temporal type parameters, calendar intervals, fixed-length
   bytes and fixed-length arrays with `E-PARSE-DEFERRED`. The Reference
   distinguishes logical model forms from source declarations, and text-key

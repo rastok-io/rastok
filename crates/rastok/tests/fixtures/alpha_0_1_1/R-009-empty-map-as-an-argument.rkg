@@ -1,6 +1,6 @@
 // The empty map `{:}` is refused as a function argument
 // Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
-// and on the 0.1.1-alpha candidate.
+// The same empty map syntax must work in a declaration and an argument.
 //
 // Commands, run from this directory:
 //   rastok check R-009-empty-map-as-an-argument.rkg

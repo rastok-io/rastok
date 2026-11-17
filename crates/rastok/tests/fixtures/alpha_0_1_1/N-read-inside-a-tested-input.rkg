@@ -1,13 +1,13 @@
 // Reading inside an input after its `is` test faults at execution
 // Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
-// 0.1.1-alpha candidate db46005 and on the rework tree after 71b4bd6. Same cause as
-// N-null-comparison-on-an-optional-input.rkg: a payload loaded on demand keeps its union envelope.
+// A payload loaded on demand retains its union envelope before the correction.
+// Structural reads must select its contained value, as for a state cell.
 //
 // Commands, run from this directory:
 //   rastok check N-read-inside-a-tested-input.rkg
 //   rastok simulate N-read-inside-a-tested-input.rkg
 //
-// Today (all three builds):
+// Before the correction:
 //   $ rastok check N-read-inside-a-tested-input.rkg
 //   ok: 5 node(s), semantic hash bb4df46632c5c4febfa022ac3fbbfb57fbab93d87df8416b6fa04075c6bf4f96
 //   $ rastok simulate N-read-inside-a-tested-input.rkg

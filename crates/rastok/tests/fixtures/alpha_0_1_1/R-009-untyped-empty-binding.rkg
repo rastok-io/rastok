@@ -1,6 +1,6 @@
-// R-009 — An untyped empty binding ran on 0.1.0-alpha and is refused by the candidate
+// R-009: an untyped empty binding retains variant elements
 // Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
-// the candidate returns to the 0.1.0 behaviour.
+// An unconstrained empty collection keeps variant elements, as in 0.1.0.
 //
 // Commands, run from this directory:
 //   rastok check R-009-untyped-empty-binding.rkg
@@ -13,7 +13,7 @@
 //   PASS empty.an_inferred_struct_with_an_empty_list
 //   3 scenario(s), 0 failed
 //
-// Candidate at db46005:
+// Before restoring unconstrained empty collection inference:
 //   error[E-TYPE-UNRESOLVED]: an empty collection needs a type annotation, for example `val members: array<text> = []`
 //     --> R-009-untyped-empty-binding.rkg:76:7
 //      |
@@ -56,7 +56,7 @@
 //      |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 //     = detail: `body` is not a visible name
 //
-// Expected after the rework:
+// Expected after the correction:
 //   The same output as rastok 0.1.0-alpha, semantic hash included. Where nothing gives a
 //   type, `[]` is `array<variant>` and `{:}` is `map<text,variant>`, as on 0.1.0 and as a
 //   literal whose elements disagree already is. A typed destination still refuses such

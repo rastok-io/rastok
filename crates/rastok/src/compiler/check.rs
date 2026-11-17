@@ -6316,13 +6316,13 @@ impl Checker<'_, '_> {
                 if found.element() == &DataType::Variant
                     && expected.element() != &DataType::Variant =>
             {
-                "; declare the type on the binding, for example `val members: array<text> = []`"
+                "; use elements compatible with the required type; for a binding, declare its element type explicitly"
             }
             (DataType::Map(expected), DataType::Map(found))
                 if found.value() == &DataType::Variant
                     && expected.value() != &DataType::Variant =>
             {
-                "; declare the type on the binding, for example `val counts: map<text, int> = {:}`"
+                "; use values compatible with the required type; for a binding, declare its value type explicitly"
             }
             _ => "",
         };
