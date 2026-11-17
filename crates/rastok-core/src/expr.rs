@@ -1256,8 +1256,17 @@ fn resolve_enum_symbols(
 ) -> Result<(), Diagnostic> {
     match expr {
         Expr::Path(path) => {
+            let enumeration = match expected {
+                Some(DataType::Enum(enumeration)) => Some(enumeration),
+                Some(DataType::StructuralUnion(union)) => match union.branches() {
+                    [DataType::Null, DataType::Enum(enumeration)]
+                    | [DataType::Enum(enumeration), DataType::Null] => Some(enumeration),
+                    _ => None,
+                },
+                _ => None,
+            };
             if let [symbol] = path.as_slice()
-                && let Some(DataType::Enum(enumeration)) = expected
+                && let Some(enumeration) = enumeration
                 && enumeration.symbols().contains(symbol)
             {
                 if signature.get(symbol).is_some() {
@@ -4223,6 +4232,58 @@ mod tests {
                 .message
                 .contains("not a visible name")
         );
+    }
+
+    #[test]
+    fn optional_enum_context_resolves_symbols_without_selecting_a_wider_union() {
+        let status = DataType::Enum(
+            crate::datatype::EnumType::new(vec!["Pending".into(), "Done".into()]).unwrap(),
+        );
+        let optional = status.clone().optional().unwrap();
+        let plain = compile_with_expected_type("Pending", &Signature::new(), &status).unwrap();
+        let present = compile_with_expected_type("Pending", &Signature::new(), &optional).unwrap();
+        assert_eq!(present, plain, "only the symbol context changes");
+        for (source, expected) in [
+            ("[Pending, null]", DataType::array(optional.clone())),
+            (
+                "[[Pending, null]]",
+                DataType::array(DataType::array(optional.clone())),
+            ),
+        ] {
+            let tree = compile_with_expected_type(source, &Signature::new(), &expected).unwrap();
+            assert_eq!(tree.ty, expected);
+            assert!(expected.accepts(&const_eval(&tree, &BTreeMap::new()).unwrap()));
+            assert_eq!(rederive_type(&tree.root, &Signature::new()), Some(expected));
+        }
+        for source in [
+            "data == Pending",
+            "Pending == data",
+            "data != Done",
+            "Done != data",
+        ] {
+            let signature = Signature::new().with("data", optional.clone());
+            let tree = compile(source, &signature).unwrap();
+            let pending = optional
+                .narrow(Value::Enum("Pending".into()), None)
+                .unwrap();
+            let bindings = BTreeMap::from([("data".into(), pending)]);
+            assert_eq!(const_eval(&tree, &bindings).unwrap(), Value::Bool(true));
+        }
+        let conflict = Signature::new().with("Pending", status.clone());
+        assert!(
+            compile_with_expected_type("Pending", &conflict, &optional).unwrap_err()[0]
+                .message
+                .contains("both a visible binding and a symbol")
+        );
+        let wider =
+            DataType::structural_union(vec![status, DataType::Null, DataType::INT]).unwrap();
+        for (source, expected) in [("Missing", optional), ("Pending", wider)] {
+            assert!(
+                compile_with_expected_type(source, &Signature::new(), &expected).unwrap_err()[0]
+                    .message
+                    .contains("not a visible name")
+            );
+        }
     }
 
     #[test]

@@ -1,0 +1,87 @@
+// R-002: an enum symbol is resolved where an optional enum is expected
+// Release regression fixture; the executable program is unchanged.
+// Reproduced on rastok 0.1.0-alpha and the 0.1.1-alpha candidate.
+//
+// Commands, run from this directory:
+//   rastok check R-002-enum-symbol-in-an-optional-place.rkg
+//   rastok simulate R-002-enum-symbol-in-an-optional-place.rkg
+//
+// Before the correction, seven diagnostics, codes, messages and places only:
+//   $ rastok check R-002-enum-symbol-in-an-optional-place.rkg
+//   error[E-EXPR]: `Done` is not a visible name          40:14  `last = Done`
+//   error[E-EXPR]: `Done` is not a visible name          41:13  `last == Done`
+//   error[E-EXPR]: `Pending` is not a visible name       48:13  `out = Pending`
+//   error[E-EXPR]: `Pending` is not a visible name       55:13  `out = [Pending, null]`
+//   error[E-EXPR]: `Done` is not a visible name          72:14  `app.in = Done`
+//   error[E-EXPR]: `Pending` is not a visible name       81:23  `expect app.one == Pending`
+//   error[E-EXPR]: `Pending` is not a visible name       85:24  `expect app.many == [Pending, null]`
+//   The same symbols resolve where the type is `Status` rather than `Status?`. Inside an Operator
+//   the detour is a typed binding, `val s: Status = Done`, then `last = s`. The Lab has no detour:
+//   a present value cannot be injected into a `Status?` input.
+//
+// Expected after the fix:
+//   check accepts the program and the four scenarios pass. A bare symbol is resolved where the
+//   expected type is `E?`, exactly as where it is `E`: a port, a struct field, a state cell, a map
+//   value, a list element, the other operand of `==` and `!=`, a Lab injection and a Lab expectation.
+
+type Status = enum { Pending, Done }
+graph app : App {
+  input in: Status?
+  input text: text
+  output seen: text
+  output state: text
+  output one: Status?
+  output many: array<Status?>
+  operator remember {
+    input in: text
+    output out: text
+    var last: Status? = null
+    on in {
+      last = Done
+      out = last == Done ? "done" : "other"
+    }
+  }
+  operator emit_one {
+    input in: text
+    output out: Status?
+    on in {
+      out = Pending
+    }
+  }
+  operator emit_many {
+    input in: text
+    output out: array<Status?>
+    on in {
+      out = [Pending, null]
+    }
+  }
+  operator presence {
+    input in: Status?
+    output out: text
+    on in {
+      out = data is Status ? "set" : "unset"
+    }
+  }
+  in -> presence -> seen
+  text -> remember -> state
+  text -> emit_one -> one
+  text -> emit_many -> many
+}
+lab optional_enum {
+  scenario a_symbol_is_injected {
+    app.in = Done
+    expect app.seen == "set"
+  }
+  scenario a_symbol_enters_a_state_cell {
+    app.text = "x"
+    expect app.state == "done"
+  }
+  scenario a_symbol_enters_a_port {
+    app.text = "x"
+    expect app.one == Pending
+  }
+  scenario a_symbol_enters_a_list {
+    app.text = "x"
+    expect app.many == [Pending, null]
+  }
+}

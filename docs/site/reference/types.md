@@ -100,6 +100,10 @@ logical instant.
 | `union { Ok { value: text }, Refused }` | Tagged union | Named cases with closed payloads; the case remains part of the value |
 | `variant` | Self-describing value tree | Narrow with `is` or `as` before typed member or index access |
 
+An optional enum `E?` resolves bare symbols wherever enum `E` does, including
+collection values and Lab assertions; a union with several non-null branches
+does not select an enum for a bare symbol.
+
 In the logical model, map keys admit booleans, fixed-width integers, text,
 media types, bytes, decimals, dates, times, timestamps, durations, UUIDs and enum symbols.
 Floats, `number`, null, intervals, dynamic values and composite keys refuse.

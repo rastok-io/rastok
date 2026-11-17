@@ -98,6 +98,9 @@ large `advance` may now fail. Reference traces changed: **none**.
   operand of an equality test; ambiguous symbols refuse with `E-EXPR`.
 - Propagate the expected enum element type into list literals, including
   nested lists and Lab expectations, without making symbols visible names.
+- Resolve bare enum symbols in optional enum positions, including state,
+  ports, collection values, comparisons and Lab values. Visible-name conflicts
+  and unknown symbols still refuse; wider unions do not choose an enum branch.
 - Check nonempty list literals element by element in typed positions,
   including mixed null and text elements for `array<text?>`. Unconstrained
   mixed lists retain `variant` elements and their existing representation.

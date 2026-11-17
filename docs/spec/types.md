@@ -182,7 +182,9 @@ it does not make unrelated fields dynamically typed.
   type is that enum: a struct field, a port, a state cell, a typed list
   element (including nested lists), or the other
   operand of `==` / `!=` against an enum value. Lab injections,
-  expectation values and mock outputs follow the same rule. The symbol
+  expectation values and mock outputs follow the same rule. An expected
+  `E?` resolves bare symbols exactly as enum `E` does; a union with several
+  non-null branches supplies no enum-symbol context. The symbol
   introduces no binding and is not an expression name elsewhere. If a
   visible binding has the same spelling as a symbol of the expected enum,
   the program refuses at check; it never chooses silently.

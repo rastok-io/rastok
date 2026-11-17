@@ -334,6 +334,19 @@ fn r002_bare_enum_symbols_use_the_expected_type() {
 }
 
 #[test]
+fn r002_optional_enum_positions_resolve_the_same_symbols() {
+    assert_scenarios_pass(
+        "R-002-enum-symbol-in-an-optional-place.rkg",
+        &[
+            "optional_enum.a_symbol_is_injected",
+            "optional_enum.a_symbol_enters_a_state_cell",
+            "optional_enum.a_symbol_enters_a_port",
+            "optional_enum.a_symbol_enters_a_list",
+        ],
+    );
+}
+
+#[test]
 fn r009_empty_collections_use_the_expected_element_types() {
     assert_scenarios_pass(
         "R-009-typed-empty-list.rkg",
