@@ -58,8 +58,9 @@ Two additional check-time refusals are explicit:
 - Compact debugger column gaps using measured track demand. Vertically disjoint
   bends reuse horizontal space without merging pipes, shrinking text or changing
   the topology. Nested frames no longer repeat the App's outer gutters, and
-  mailbox space is reserved after the track that needs it. The compact drawing
-  remains cached between transitions.
+  mailbox space is reserved after the track that needs it. A link between
+  adjacent columns keeps room for its mailbox badge between the two Nodes.
+  The compact drawing remains cached between transitions.
 - Draw every debugger link with horizontal and vertical tracks and rounded
   corners. Clear spans and detours now share the same style. Node placement
   differs from 0.1.0; port identities and semantic routes do not change.

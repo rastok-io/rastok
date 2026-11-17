@@ -229,7 +229,11 @@ composition seam does not acquire an invented Graph port. **Status: shipped.**
 
 Horizontal spacing follows the measured channel tracks and the labels and
 mailboxes they must clear. A mailbox reserves space after its own track, not
-after every track in the channel. Nested Graph frames keep local routing
+after every track in the channel. A link between two adjacent columns has no
+other column for its mailbox: the span between its two pin approaches keeps
+the reserved badge width, whether the link is straight or bent, so the badge
+stays between the two Nodes. A straight link joined by bends at its receiving
+pin keeps that width before the first bend reaches it. Nested Graph frames keep local routing
 padding instead of repeating the App's outer gutters. Compaction preserves
 Node dimensions, text size and the left-to-right sequence. Input gutters,
 including those inside nested scopes, retain room for both facing port labels
