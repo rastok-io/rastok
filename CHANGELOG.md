@@ -55,6 +55,9 @@ Two additional check-time refusals are explicit:
 
 ### Lab and response timing
 
+- Reuse debugger node placement and edge routes until the validated topology
+  changes. Mailbox badges reserve four digits before admission, so stepping
+  and selection do not recalculate or move the drawing.
 - Do not count responses already drained by a logical-time advance as new
   debugger progress. Step reaches the next inspectable change without an
   empty click; batch results and reference traces remain unchanged.

@@ -1149,9 +1149,9 @@
     const placed = [];
     const ordered = [...routes.entries()].sort(([left], [right]) => left - right);
     for (const [routeIndex, route] of ordered) {
-      const edge = graph.edges.find(candidate => candidate.index === routeIndex);
       const badge = {
-        width: Math.max(EDGE_COUNTER_WIDTH, textWidth(`≡ ${edge?.queued_count || "0"}`) + 8),
+        // Four digits fit before admission; queue growth cannot move a label.
+        width: Math.max(EDGE_COUNTER_WIDTH, textWidth("≡ 0000") + 8),
         height: 18,
       };
       const samples = routeSamples.get(routeIndex) || [route.start, route.end];
