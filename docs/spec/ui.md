@@ -366,6 +366,18 @@ separates coincident opposing runs. North and south ports, arbitrary fixed
 coordinates and hyperedge bundling are not part of Rastok's topology model.
 Temporary drawing vertices are not nodes, ports or deliveries in the snapshot.
 
+Column spacing uses the measured routing demand, not one full-width track per
+link. Vertically disjoint bends can share a track coordinate while retaining
+separate pipe identities. Overlapping intervals keep their chosen precedence
+and corner clearance; shared tracks leave two corner radii between vertical
+intervals, including receiving jogs. One bounded second placement compacts the
+conservative initial spacing after port heights are known. Layer assignment and
+crossing sweeps run once; none of these steps repeats during transitions or
+selection. Child-scope labels face inward and reserve space only inside their
+frame. A mailbox badge may touch the side of its vertical pipe when centering
+it would cover another track; it stays attached without a leader. Node bodies,
+text sizes and row heights do not shrink.
+
 An exact route at a recorded transition highlights its pipe; lifecycle highlights
 the owner. A transition without a spatial route pulses its label rather than
 inventing an envelope. Reduced-motion preference removes animation, not the
