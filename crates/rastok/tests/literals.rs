@@ -154,6 +154,57 @@ lab test { scenario values {
     }
 
     #[test]
+    fn optional_enum_values_follow_every_typed_position_through_the_package() {
+        checked(
+            r#"
+type Status = enum { Pending, Done }
+type Row = struct { status: Status? }
+graph app : App {
+  input in: Status?
+  output one: Status?
+  output many: array<Status?>
+  output mapped: map<text,Status?>
+  output row: Row
+  output equal: bool
+  operator values {
+    input in: Status?
+    output one: Status?
+    output many: array<Status?>
+    output mapped: map<text,Status?>
+    output row: Row
+    output equal: bool
+    var last: Status? = Pending
+    on in {
+      one = last
+      last = Done
+      many = [Pending, null]
+      mapped = { "x": Done, "missing": null }
+      row = { status = Pending }
+      equal = last == Done && Done == last && last != Pending && Pending != last
+    }
+  }
+  in -> values
+  values.one -> one
+  values.many -> many
+  values.mapped -> mapped
+  values.row -> row
+  values.equal -> equal
+}
+lab test { scenario values {
+  app.in = Done
+  expect app.one == Pending
+  expect app.many == [Pending, null]
+  expect app.mapped == { "x": Done, "missing": null }
+  expect app.row == { status = Pending }
+  expect app.equal == true
+  app.in = null
+  expect app.one == Done
+} }
+"#,
+        );
+    }
+
+    #[test]
     fn struct_fields_use_the_enum_without_a_symbol_binding() {
         checked(include_str!("fixtures/alpha_0_1_1/R-002-enum-value.rkg"));
     }
