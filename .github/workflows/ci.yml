@@ -60,6 +60,14 @@ jobs:
           RASTOK_PLAYWRIGHT: ${{ runner.temp }}/rastok-browser/node_modules/playwright
           RASTOK_UI_CAPTURES: ${{ runner.temp }}/rastok-ui-captures
         run: node --test crates/rastok/src/ui/browser.test.cjs
+      - name: build the optimized debugger
+        run: cargo build --release --locked -p rastok --features hosted-ui,hosted-websocket
+      - name: optimized debugger interaction and console probes
+        env:
+          RASTOK_BIN: target/release/rastok
+          RASTOK_PLAYWRIGHT: ${{ runner.temp }}/rastok-browser/node_modules/playwright
+          RASTOK_UI_CAPTURES: ${{ runner.temp }}/rastok-ui-captures/release
+        run: node --test crates/rastok/src/ui/browser.test.cjs
       - uses: actions/upload-artifact@v5
         if: always()
         with:
