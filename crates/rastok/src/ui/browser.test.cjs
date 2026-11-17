@@ -1548,6 +1548,48 @@ test('source positions, keyboard summaries and graph selection share the selecte
   assert.match(await page.locator('#source-status').innerText(), /before admission/);
 });
 
+test('duplicate source renders preserve current-line scrolling and later manual scrolling', { timeout: 60000 }, async t => {
+  const source = 'examples/webhook-to-partner.rkg';
+  const page = await openTour(t, { width: 1440, height: 760 }, source,
+    ['simulate', source, '--ui', '--deployment', 'examples/webhook-to-partner.deployment.json'], {
+      RASTOK_SHOWCASE_PARTNER_TOKEN: 'browser-fixture-not-a-real-credential',
+      RASTOK_SHOWCASE_PARTNER_TOKEN_VERSION: 'fixture-v1',
+    });
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.locator('#scenario-select').selectOption('webhook\u0000timeout_then_success');
+  await page.locator('#timeline-position').filter({ hasText: /^LIVE · Session 1 · transition 0$/ }).waitFor();
+  for (let step = 0; step < 60; step += 1) {
+    if (await page.evaluate(() => currentSnapshot.retry_operations.some(operation => operation.phase === 'AwaitingAdmission'))) break;
+    const revision = await page.evaluate(() => currentSnapshot.revision);
+    await page.locator('#step').click();
+    await page.waitForFunction(previous => currentSnapshot.revision > previous && pendingCommandRevision === null, revision);
+  }
+  assert.equal(await page.evaluate(() => currentSnapshot.retry_operations[0].phase), 'AwaitingAdmission');
+  await page.evaluate(async () => {
+    const pane = document.querySelector('#source-code');
+    pane.scrollTo({ top: 0, behavior: 'instant' });
+    lastSourcePoint = null;
+    renderSource(currentSnapshot);
+    // A snapshot and its command acknowledgement can render the same prefix
+    // before the browser finishes its first smooth scroll.
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    renderSource(currentSnapshot);
+  });
+  await page.waitForFunction(() => {
+    const pane = document.querySelector('#source-code').getBoundingClientRect();
+    const marker = document.querySelector('#source-code [aria-current="step"]')?.getBoundingClientRect();
+    return marker && marker.top >= pane.top && marker.bottom <= pane.bottom;
+  }, null, { timeout: 2000 });
+  await page.waitForTimeout(400);
+  assert.equal(await page.evaluate(() => {
+    const pane = document.querySelector('#source-code');
+    pane.scrollTo({ top: 0, behavior: 'instant' });
+    renderSource(currentSnapshot);
+    return pane.scrollTop;
+  }), 0, 'a duplicate prefix does not undo subsequent manual scrolling');
+  assert.equal(await page.evaluate(() => scrollY), 0, 'only the source pane scrolls');
+});
+
 test('source-first webhook qualification covers timeout, redaction, Retry, Reset and viewport preferences', { timeout: 90000 }, async t => {
   const instructions = await fs.readFile(path.join(root, 'docs/site/examples/04-webhook-to-partner.md'), 'utf8');
   const fixture = instructions.match(/RASTOK_SHOWCASE_PARTNER_TOKEN=([^\s]+)/)[1];

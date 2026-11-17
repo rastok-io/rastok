@@ -303,11 +303,12 @@ function renderSource(snapshot) {
     text("source-status", "Source unavailable in this snapshot.");
     return;
   }
-  const previousScroll = pane.dataset.sourceIndex === activeSourceView ? [pane.scrollLeft, pane.scrollTop] : sourceScroll.get(activeSourceView) || [0, 0];
+  const sameSource = pane.dataset.sourceIndex === activeSourceView;
+  const previousScroll = sourceScroll.get(activeSourceView) || [0, 0];
   pane.dataset.sourceIndex = activeSourceView;
   const focusKey = pane.contains(document.activeElement) ? document.activeElement.dataset.sourceFocus : null;
   hideSourceTooltip();
-  pane.replaceChildren();
+  const lines = document.createDocumentFragment();
   sourceValues.clear();
   const tokens = (snapshot.source_tokens || []).filter(token => token.source_index === source.index);
   const byLine = new Map();
@@ -449,10 +450,15 @@ function renderSource(snapshot) {
         line.addEventListener("keydown", event => { if (event.target === line && event.key === "Enter") { event.preventDefault(); open(); } });
       }
     }
-    pane.append(line);
+    lines.append(line);
   });
-  pane.scrollLeft = previousScroll[0];
-  pane.scrollTop = previousScroll[1];
+  // Replace the lines atomically without resetting the pane's scroll offset.
+  // A duplicate snapshot must not cancel an in-flight current-line scroll.
+  pane.replaceChildren(lines);
+  if (!sameSource) {
+    pane.scrollLeft = previousScroll[0];
+    pane.scrollTop = previousScroll[1];
+  }
   const policy = source.redacted ? " · Lab source withheld by data policy" : source.complete ? "" : " · recorded excerpts";
   text("source-status", (position?.status === "available"
     ? `Transition ${snapshot.timeline.boundary} · ${position.node_path || "App"}${position.port ? `.${position.port}` : ""} · line ${position.first_line}`
