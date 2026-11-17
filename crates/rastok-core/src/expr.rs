@@ -1323,6 +1323,11 @@ fn resolve_enum_symbols(
         Expr::List(items) => {
             let element = match expected {
                 Some(DataType::Array(array)) => Some(array.element()),
+                Some(DataType::StructuralUnion(union)) => match union.branches() {
+                    [DataType::Null, DataType::Array(array)]
+                    | [DataType::Array(array), DataType::Null] => Some(array.element()),
+                    _ => None,
+                },
                 _ => None,
             };
             for item in items {
@@ -4280,6 +4285,46 @@ mod tests {
         for (source, expected) in [("Missing", optional), ("Pending", wider)] {
             assert!(
                 compile_with_expected_type(source, &Signature::new(), &expected).unwrap_err()[0]
+                    .message
+                    .contains("not a visible name")
+            );
+        }
+    }
+
+    #[test]
+    fn optional_arrays_supply_only_their_enum_element_context() {
+        let status = DataType::Enum(
+            crate::datatype::EnumType::new(vec!["Pending".into(), "Done".into()]).unwrap(),
+        );
+        for (source, element) in [
+            ("[Pending]", status.clone()),
+            ("[Pending, null]", status.clone().optional().unwrap()),
+            (
+                "[[Pending, null], [Done]]",
+                DataType::array(status.clone().optional().unwrap()),
+            ),
+        ] {
+            let array = DataType::array(element);
+            let expected = array.clone().optional().unwrap();
+            let tree = compile_with_expected_type(source, &Signature::new(), &expected).unwrap();
+            assert_eq!(tree.ty, array);
+            assert_eq!(rederive_type(&tree.root, &Signature::new()), Some(array));
+            let value = const_eval(&tree, &BTreeMap::new()).unwrap();
+            assert!(expected.accepts(&expected.narrow(value, None).unwrap()));
+        }
+        let array = DataType::array(status.clone());
+        let expected = array.clone().optional().unwrap();
+        let conflict = Signature::new().with("Pending", status);
+        assert!(
+            compile_with_expected_type("[Pending]", &conflict, &expected).unwrap_err()[0]
+                .message
+                .contains("both a visible binding and a symbol")
+        );
+        let wider =
+            DataType::structural_union(vec![array, DataType::Null, DataType::Text]).unwrap();
+        for (source, ty) in [("[Missing]", expected), ("[Pending]", wider)] {
+            assert!(
+                compile_with_expected_type(source, &Signature::new(), &ty).unwrap_err()[0]
                     .message
                     .contains("not a visible name")
             );

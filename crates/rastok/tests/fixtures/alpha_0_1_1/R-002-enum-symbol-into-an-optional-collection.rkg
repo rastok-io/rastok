@@ -1,0 +1,110 @@
+// R-002 — an enum symbol is not resolved inside a literal written to an optional collection
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+// A symbol resolves where the expected type is E or E?, but the collection context
+// must also reach each element when the collection itself is optional.
+// Both optional lists and optional maps retain that element or value context.
+//
+// Commands, run from this directory:
+//   rastok check R-002-enum-symbol-into-an-optional-collection.rkg
+//   rastok simulate R-002-enum-symbol-into-an-optional-collection.rkg
+//
+// Before contextual enum construction, eleven diagnostics, codes, messages and places only:
+//   $ rastok check R-002-enum-symbol-into-an-optional-collection.rkg
+//   error[E-EXPR]: `Pending` is not a visible name  56:13  `out = [Pending]`
+//   error[E-EXPR]: `Done` is not a visible name     63:20  `out = { "x": Done }`
+//   error[E-EXPR]: `Pending` is not a visible name  70:13  `out = [[Pending, null], [Done]]`
+//   error[E-EXPR]: `Pending` is not a visible name  77:21  `out = { all = [Pending, Done] }`
+//   error[E-EXPR]: `Done` is not a visible name     85:14  `cell = [Done]`
+//   error[E-EXPR]: `Pending` is not a visible name  98:14  `app.in = [Pending]`
+//   error[E-EXPR]: `Pending` is not a visible name  103:24  `expect app.list == [Pending]`
+//   error[E-EXPR]: `Done` is not a visible name     104:31  `expect app.dict == { "x": Done }`
+//   error[E-EXPR]: `Pending` is not a visible name  105:26  `expect app.nested == [[Pending, null], [Done]]`
+//   error[E-EXPR]: `Pending` is not a visible name  106:33  `expect app.field == { all = [Pending, Done] }`
+//   error[E-EXPR]: `Done` is not a visible name     107:24  `expect app.kept == [Done]`
+//   The 0.1.1-alpha candidates accept the same literals where the collection is not optional,
+//   `array<Status>` or `map<text,Status>`. With `type Status = text` and text values in place of
+//   the symbols, this program is accepted and its two scenarios pass.
+//
+// Expected after the fix:
+//   check accepts the program and the two scenarios pass. A list or map literal written to an
+//   optional collection hands its element or value type to its items, as it does when the
+//   collection is not optional: a port, a struct field, a state cell, a Lab injection and a
+//   Lab expectation.
+
+type Status = enum { Pending, Done }
+type Row = struct { all: array<Status>? }
+graph app : App {
+  input in: array<Status>?
+  input text: text
+  output seen: text
+  output list: array<Status>?
+  output dict: map<text,Status>?
+  output nested: array<array<Status?>>?
+  output field: Row
+  output kept: array<Status>?
+  operator presence {
+    input in: array<Status>?
+    output out: text
+    on in {
+      out = data == null ? "unset" : "set"
+    }
+  }
+  operator to_list {
+    input in: text
+    output out: array<Status>?
+    on in {
+      out = [Pending]
+    }
+  }
+  operator to_map {
+    input in: text
+    output out: map<text,Status>?
+    on in {
+      out = { "x": Done }
+    }
+  }
+  operator to_nested {
+    input in: text
+    output out: array<array<Status?>>?
+    on in {
+      out = [[Pending, null], [Done]]
+    }
+  }
+  operator to_field {
+    input in: text
+    output out: Row
+    on in {
+      out = { all = [Pending, Done] }
+    }
+  }
+  operator to_cell {
+    input in: text
+    output out: array<Status>?
+    var cell: array<Status>? = null
+    on in {
+      cell = [Done]
+      out = cell
+    }
+  }
+  in -> presence -> seen
+  text -> to_list -> list
+  text -> to_map -> dict
+  text -> to_nested -> nested
+  text -> to_field -> field
+  text -> to_cell -> kept
+}
+lab optional_collection {
+  scenario a_list_is_injected {
+    app.in = [Pending]
+    expect app.seen == "set"
+  }
+  scenario symbols_enter_optional_collections {
+    app.text = "x"
+    expect app.list == [Pending]
+    expect app.dict == { "x": Done }
+    expect app.nested == [[Pending, null], [Done]]
+    expect app.field == { all = [Pending, Done] }
+    expect app.kept == [Done]
+  }
+}
+

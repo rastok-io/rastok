@@ -6384,6 +6384,11 @@ impl Checker<'_, '_> {
     ) -> Option<expr::Tree> {
         let element = match expected {
             Some(DataType::Array(array)) => Some(array.element()),
+            Some(DataType::StructuralUnion(union)) => match union.branches() {
+                [DataType::Null, DataType::Array(array)]
+                | [DataType::Array(array), DataType::Null] => Some(array.element()),
+                _ => None,
+            },
             _ => None,
         };
         let mut roots = Vec::with_capacity(items.len());
