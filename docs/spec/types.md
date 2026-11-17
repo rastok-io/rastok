@@ -184,7 +184,9 @@ it does not make unrelated fields dynamically typed.
   operand of `==` / `!=` against an enum value. Lab injections,
   expectation values and mock outputs follow the same rule. An expected
   `E?` resolves bare symbols exactly as enum `E` does; a union with several
-  non-null branches supplies no enum-symbol context. The symbol
+  non-null branches supplies no enum-symbol context. A literal written to
+  `array<E>?` or `map<text,E>?` retains the element or value context `E`,
+  including nested collections and optional elements. The symbol
   introduces no binding and is not an expression name elsewhere. If a
   visible binding has the same spelling as a symbol of the expected enum,
   the program refuses at check; it never chooses silently.

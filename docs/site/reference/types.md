@@ -165,6 +165,10 @@ typed map does for its values. With `data: text`, write
 
 An optional map keeps the same value context: for `map<text,int?>?`,
 `{ "a": null, "b": 1 }` constructs the optional values before the optional map.
+Likewise, an enum symbol resolves inside an optional collection: with
+`Status = enum { Pending, Done }`, write `[Pending]` for `array<Status>?`
+or `{ "x": Done }` for `map<text,Status>?`. A union with several non-null
+branches does not choose a collection branch for a bare symbol.
 
 ## JSON request values
 

@@ -151,6 +151,56 @@ mod enum_symbols {
     }
 
     #[test]
+    fn optional_collection_symbols_round_trip_in_literals_and_mocks() {
+        let source = r#"
+type Status = enum { Pending, Done }
+type Row = struct { status: Status }
+graph app : App {
+  input in: variant
+  output out: array<Row>?
+  connector remote : HttpClient {
+    url = "https://example.test/value"; codec = json; behavior = deterministic
+    timeout = duration("1s")
+    output out: array<Row>?
+  }
+  in -> remote -> out
+  remote.exit -> nothing
+}
+lab test {
+  mock remote { on in {
+    val rows: array<Row>? = [{ status = Pending }, { status = Done }]
+    out = rows
+    exit = Completed { status = 200 }
+  } }
+  scenario values {
+    app.in = json! {}
+    expect app.out == [{ status = Pending }, { status = Done }]
+  }
+}
+"#;
+        checked(source);
+        let fixture =
+            include_str!("fixtures/alpha_0_1_1/R-002-enum-symbol-into-an-optional-collection.rkg");
+        let compilation = compile(&[fixture], &ContractCatalog::try_m0().unwrap()).unwrap();
+        let (plan, hash) =
+            rastok::plan::decode(&rastok::plan::encode(&compilation.plan, &compilation.hash))
+                .unwrap();
+        assert_eq!(plan, compilation.plan);
+        assert_eq!(hash, compilation.hash);
+        let runs = rastok::lab::run_program(
+            &plan,
+            hash,
+            rastok::plan::GraphVersion(1),
+            &compilation.labs[0],
+            None,
+        );
+        assert_eq!(runs.len(), 2);
+        for run in runs {
+            assert!(run.report.passed(), "{:?}", run.report);
+        }
+    }
+
+    #[test]
     fn port_injection_and_expectation_use_the_declared_enum() {
         checked(
             r#"

@@ -102,6 +102,17 @@ fn r228_optional_maps_construct_their_optional_values() {
     );
 }
 
+#[test]
+fn r229_enum_symbols_use_the_optional_collection_context() {
+    assert_scenarios_pass(
+        "R-002-enum-symbol-into-an-optional-collection.rkg",
+        &[
+            "optional_collection.a_list_is_injected",
+            "optional_collection.symbols_enter_optional_collections",
+        ],
+    );
+}
+
 #[track_caller]
 fn assert_check_refuses(file: &str, code: &str, details: &[&str]) {
     let output = cli(&["check", file]);

@@ -78,6 +78,9 @@ large `advance` may now fail. Reference traces changed: **none**.
 
 ### Language and expressions
 
+- Resolve enum symbols inside optional list and map literals, including
+  nested collections, fields, state and Lab values. The optional collection
+  supplies its element context without selecting a branch of a wider union.
 - Construct optional map values using their declared type even when the map
   itself is optional. Ports, fields, bindings, state and Lab values no longer
   pass check only to fault on `map<text,int?>?` at execution.
