@@ -191,6 +191,8 @@ it does not make unrelated fields dynamically typed.
 - A **structural union** (`A | B`) selects one pairwise-disjoint logical
   branch from the value's type. `T?` is the optional spelling built from
   `T` and `null`.
+  A map literal written to `map<K,V>?` checks its entries against `V`
+  before constructing the optional map, including when `V` is optional.
 - A **tagged union** has named cases with optional payloads. The case name
   is semantic data and remains visible at runtime; it is the form used
   for protocol and lifecycle outcomes such as `ProcessExit`.

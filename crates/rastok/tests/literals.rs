@@ -9,6 +9,76 @@ use rastok::compiler::compile;
 use rastok::connector::contract::ContractCatalog;
 
 #[test]
+fn optional_map_values_keep_their_types_through_the_package() {
+    let source = include_str!("fixtures/alpha_0_1_1/N-map-into-an-optional-map.rkg");
+    let compilation = compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
+    let bytes = rastok::plan::encode(&compilation.plan, &compilation.hash);
+    let (plan, hash) = rastok::plan::decode(&bytes).unwrap();
+    assert_eq!(plan, compilation.plan);
+    assert_eq!(hash, compilation.hash);
+    let runs = rastok::lab::run_program(
+        &plan,
+        hash,
+        rastok::plan::GraphVersion(1),
+        &compilation.labs[0],
+        None,
+    );
+    assert_eq!(runs.len(), 7);
+    for run in runs {
+        assert!(run.report.passed(), "{:?}", run.report);
+    }
+}
+
+#[test]
+fn optional_map_lab_values_keep_their_entry_context() {
+    let source = r#"
+graph app : App {
+  input injected: map<text,int?>?
+  input request: variant
+  output direct: map<text,int?>?
+  output mocked: map<text,int?>?
+  connector remote : HttpClient {
+    url = "https://example.test/value"; codec = json; behavior = deterministic
+    timeout = duration("1s")
+    output out: map<text,int?>?
+  }
+  injected -> direct
+  request -> remote -> mocked
+  remote.exit -> nothing
+}
+lab test {
+  mock remote { on in { out = { "a": null, "b": 1 }; exit = Completed { status = 200 } } }
+  scenario present {
+    app.injected = { "a": null, "b": 1 }
+    expect app.direct == { "a": null, "b": 1 }
+    app.request = json! {}
+    expect app.mocked == { "a": null, "b": 1 }
+  }
+  scenario absent {
+    app.injected = null
+    expect app.direct == null
+  }
+}
+"#;
+    let compilation = compile(&[source], &ContractCatalog::try_m0().unwrap()).unwrap();
+    let (plan, hash) =
+        rastok::plan::decode(&rastok::plan::encode(&compilation.plan, &compilation.hash)).unwrap();
+    assert_eq!(plan, compilation.plan);
+    assert_eq!(hash, compilation.hash);
+    let runs = rastok::lab::run_program(
+        &plan,
+        hash,
+        rastok::plan::GraphVersion(1),
+        &compilation.labs[0],
+        None,
+    );
+    assert_eq!(runs.len(), 2);
+    for run in runs {
+        assert!(run.report.passed(), "{:?}", run.report);
+    }
+}
+
+#[test]
 fn floating_remainder_executes_after_package_validation() {
     for ty in ["float", "double"] {
         let source = format!(

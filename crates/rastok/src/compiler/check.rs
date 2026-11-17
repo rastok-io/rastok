@@ -6782,6 +6782,12 @@ impl Checker<'_, '_> {
     ) -> Option<expr::Tree> {
         let element = match expected {
             Some(DataType::Map(map)) => Some(map.value()),
+            Some(DataType::StructuralUnion(union)) => match union.branches() {
+                [DataType::Null, DataType::Map(map)] | [DataType::Map(map), DataType::Null] => {
+                    Some(map.value())
+                }
+                _ => None,
+            },
             _ => None,
         };
         let mut pairs: Vec<(String, expr::Expr, DataType)> = Vec::new();

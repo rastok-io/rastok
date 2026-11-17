@@ -86,6 +86,22 @@ fn assert_scenarios_pass(file: &str, scenarios: &[&str]) {
     assert_eq!(stdout(&output), expected);
 }
 
+#[test]
+fn r228_optional_maps_construct_their_optional_values() {
+    assert_scenarios_pass(
+        "N-map-into-an-optional-map.rkg",
+        &[
+            "optional_map.into_a_port",
+            "optional_map.without_a_null_value",
+            "optional_map.into_a_field",
+            "optional_map.into_a_typed_binding",
+            "optional_map.into_a_state_cell",
+            "optional_map.control_a_map_that_is_not_optional",
+            "optional_map.control_an_optional_list",
+        ],
+    );
+}
+
 #[track_caller]
 fn assert_check_refuses(file: &str, code: &str, details: &[&str]) {
     let output = cli(&["check", file]);
