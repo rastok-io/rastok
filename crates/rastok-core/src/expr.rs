@@ -2756,7 +2756,7 @@ fn check(expr: &Expr, signature: &Signature, text: Option<&str>) -> Result<DataT
                         .map(|field| field.ty().clone())
                         .ok_or_else(|| fail(format!("the struct has no declared member `{name}`")))
                 }
-                other => Err(fail(format!("a {other} cannot be indexed"))),
+                other => Err(fail(format!("`{other}` cannot be indexed"))),
             }
         }
         Expr::Call { function, args } => match function {
@@ -2819,7 +2819,7 @@ fn check(expr: &Expr, signature: &Signature, text: Option<&str>) -> Result<DataT
                     | DataType::Array(_)
                     | DataType::Map(_)
                     | DataType::Variant => Ok(DataType::INT),
-                    other => Err(fail(format!("`size` does not accept a {other}"))),
+                    other => Err(fail(format!("`size` does not accept `{other}`"))),
                 }
             }
         },
@@ -4244,6 +4244,21 @@ mod tests {
     }
 
     #[test]
+    fn optional_collection_access_refusals_quote_the_type_without_an_article() {
+        let signature =
+            Signature::new().with("data", DataType::array(DataType::Text).optional().unwrap());
+        for (source, expected) in [
+            ("data[0]", "`array<text>?` cannot be indexed"),
+            ("size(data)", "`size` does not accept `array<text>?`"),
+        ] {
+            let errors = compile(source, &signature).unwrap_err();
+            assert_eq!(errors.len(), 1);
+            assert_eq!(errors[0].kind, DiagnosticKind::General);
+            assert_eq!(errors[0].message, expected);
+        }
+    }
+
+    #[test]
     fn refusals_display_source_operators_and_types() {
         let signature = Signature::new().with("xs", DataType::array(DataType::Text));
         for operator in ["+", "-", "*", "/", "%", "<", "<=", ">", ">=", "&&", "||"] {
@@ -4263,8 +4278,8 @@ mod tests {
         assert_eq!(BinaryOp::Eq.to_string(), "==");
         assert_eq!(BinaryOp::Ne.to_string(), "!=");
         for (source, expected) in [
-            ("size(true)", "`size` does not accept a bool"),
-            ("true[0]", "a bool cannot be indexed"),
+            ("size(true)", "`size` does not accept `bool`"),
+            ("true[0]", "`bool` cannot be indexed"),
         ] {
             assert_eq!(
                 compile(source, &signature).unwrap_err()[0].message,
