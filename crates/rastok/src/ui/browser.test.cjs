@@ -1590,6 +1590,83 @@ test('duplicate source renders preserve current-line scrolling and later manual 
   assert.equal(await page.evaluate(() => scrollY), 0, 'only the source pane scrolls');
 });
 
+test('Readable size centers the current Node and follows the timeline', { timeout: 90000 }, async t => {
+  const source = 'examples/webhook-to-partner.rkg';
+  const page = await openTour(t, { width: 1352, height: 760 }, source,
+    ['simulate', source, '--ui', '--deployment', 'examples/webhook-to-partner.deployment.json'], {
+      RASTOK_SHOWCASE_PARTNER_TOKEN: 'browser-fixture-not-a-real-credential',
+      RASTOK_SHOWCASE_PARTNER_TOKEN_VERSION: 'fixture-v1',
+    });
+  await page.locator('#scenario-select').selectOption('webhook\u0000timeout_then_success');
+  await page.locator('#timeline-position').filter({ hasText: /^LIVE · Session 1 · transition 0$/ }).waitFor();
+  const rendered = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const step = async () => {
+    const revision = await page.evaluate(() => currentSnapshot.revision);
+    await page.locator('#step').click();
+    await page.waitForFunction(previous => currentSnapshot.revision > previous && pendingCommandRevision === null, revision);
+    await rendered();
+  };
+  // The active Node body and the whole drawing, against the visible canvas.
+  const view = () => page.evaluate(() => {
+    const box = element => { const { left, right, top, bottom } = element.getBoundingClientRect(); return { left, right, top, bottom }; };
+    const active = document.querySelector('.graph-node.active:not(.graph-node-scope) rect');
+    return { canvas: box(document.querySelector('.graph-canvas')), drawing: box(document.querySelector('.graph-svg')),
+      node: active ? box(active) : null, path: currentSnapshot.topology.activity?.node ?? null, pan: [graphViewport.x, graphViewport.y] };
+  });
+  const inside = ({ canvas, node }) => node.left >= canvas.left && node.right <= canvas.right
+    && node.top >= canvas.top && node.bottom <= canvas.bottom;
+  // Before admission no Node is current: Readable size shows the start of the drawing.
+  await page.getByRole('button', { name: 'Readable size', exact: true }).click();
+  await rendered();
+  const initial = await view();
+  assert.equal(initial.node, null);
+  assert.ok(initial.drawing.left >= initial.canvas.left && initial.drawing.left <= initial.canvas.left + 12.5,
+    'before admission the readable view starts at the left edge of the drawing');
+  await page.getByRole('button', { name: 'Fit graph', exact: true }).click();
+  for (let count = 0; count < 60; count += 1) {
+    if (await page.evaluate(() => currentSnapshot.topology.activity?.node === 'deliver.partner')) break;
+    await step();
+  }
+  const fitted = await view();
+  assert.equal(fitted.path, 'deliver.partner');
+  assert.ok(fitted.drawing.right - fitted.drawing.left <= fitted.canvas.right - fitted.canvas.left,
+    'Fit graph shows the complete drawing');
+  await page.getByRole('button', { name: 'Readable size', exact: true }).click();
+  await rendered();
+  const readable = await view();
+  assert.ok(readable.drawing.right - readable.drawing.left > readable.canvas.right - readable.canvas.left,
+    'at readable size this drawing is wider than its pane');
+  assert.ok(inside(readable), 'Readable size centers the Node of the current transition');
+  assert.ok(readable.drawing.left <= readable.canvas.left + 12.5 && readable.drawing.right >= readable.canvas.right - 12.5,
+    'the centered view leaves no empty canvas beside the drawing');
+  // A manual pan holds while the same transition is rendered again.
+  const canvas = readable.canvas;
+  await page.mouse.move(canvas.left + 24, canvas.bottom - 6);
+  await page.mouse.down();
+  await page.mouse.move(canvas.left + 624, canvas.bottom - 6, { steps: 4 });
+  await page.mouse.up();
+  const panned = await view();
+  assert.ok(!inside(panned), 'the manual pan moved the current Node out of view');
+  await page.evaluate(() => renderTopology(currentSnapshot.topology, false));
+  await rendered();
+  assert.deepEqual((await view()).pan, panned.pan, 'a duplicate render keeps the manual pan');
+  // The next transition, and a move along the timeline, center their own Node again.
+  await step();
+  const followed = await view();
+  assert.ok(followed.node && inside(followed), `the view follows the next transition at ${followed.path}`);
+  await seek(page, 5);
+  await rendered();
+  const earlier = await view();
+  assert.equal(earlier.path, 'listener');
+  assert.ok(inside(earlier), 'the view follows a move back along the timeline');
+  assert.notDeepEqual(earlier.pan, followed.pan);
+  // Fit graph shows everything again and does not follow.
+  await page.getByRole('button', { name: 'Fit graph', exact: true }).click();
+  await seek(page, 8);
+  await rendered();
+  assert.deepEqual((await view()).pan, [0, 0], 'Fit graph keeps the complete drawing in place');
+});
+
 test('source-first webhook qualification covers timeout, redaction, Retry, Reset and viewport preferences', { timeout: 90000 }, async t => {
   const instructions = await fs.readFile(path.join(root, 'docs/site/examples/04-webhook-to-partner.md'), 'utf8');
   const fixture = instructions.match(/RASTOK_SHOWCASE_PARTNER_TOKEN=([^\s]+)/)[1];
