@@ -24,9 +24,9 @@
   const TRACK_SPACING = 12;
   const BOX_EDGE_CLEARANCE = 6;
   const FAN_STUB = 16;
-  const ROOT_INPUT_GUTTER = 82;
-  const ROOT_CONTENT_GUTTER = 144;
-  const ROOT_OUTPUT_GUTTER = 112;
+  const ROOT_INPUT_GUTTER = 24;
+  const ROOT_CONTENT_GUTTER = 128;
+  const ROOT_OUTPUT_GUTTER = 96;
   const EDGE_COUNTER_WIDTH = 36;
   const EDGE_COUNTER_HEIGHT = 18;
   const PORT_LABEL_CLEARANCE = 16;
@@ -140,7 +140,7 @@
       const graph = materializeGraph({ nodes: direct, edges: localEdges.get(ownerId),
         owners: [{ ...owner, parent: null, ports: drawingPorts.get(ownerId) }] });
       const layout = layoutFlatGraph(graph.nodes, graph.edges,
-        [{ ...owner, parent: null, ports: drawingPorts.get(ownerId) }]);
+        [{ ...owner, parent: null, ports: drawingPorts.get(ownerId) }], ownerId !== root.id);
       local.set(ownerId, { graph, layout });
     }
     arrange(root.id);
@@ -170,7 +170,7 @@
     return result;
   }
 
-  function layoutFlatGraph(nodes, edges, owners) {
+  function layoutFlatGraph(nodes, edges, owners, nestedScope = false) {
     const originalNodes = nodes;
     const byId = new Map(nodes.map((node, index) => [node.id, { node, index }]));
     const incoming = new Map(nodes.map((node) => [node.id, 0]));
@@ -407,8 +407,10 @@
             : layered.edges.filter(edge => (rank.get(edge.source.id) === level
             && rank.get(edge.target.id) === nextLevel) || (rank.get(edge.source.id) === rank.get(edge.target.id)
               && [level, nextLevel].includes(rank.get(edge.source.id)))).length;
-          const gap = Math.max(columnGap, outputLabels + inputLabels + 48 + tracks * TRACK_SPACING,
-            channelSpace?.get(channelKey)?.gap || 0);
+          const measuredGap = channelSpace?.get(channelKey)?.gap;
+          const gap = measuredGap === undefined
+            ? Math.max(columnGap, outputLabels + inputLabels + 48 + tracks * TRACK_SPACING)
+            : Math.max(FAN_STUB * 4, outputLabels + inputLabels + BOX_EDGE_CLEARANCE * 2, measuredGap);
           columnGaps.set(channelKey, gap);
           x += width + gap;
         }
@@ -519,8 +521,22 @@
           .filter(port => port.direction === "input").map(port => textWidth(port.display_label || port.name))));
         const returnPadding = returnCount ? FAN_STUB + inputLabels
           + returnCount * (TRACK_SPACING + 3) + BOX_EDGE_CLEARANCE : 0;
+        const firstColumn = Math.min(...components.map(component => component.left));
+        const boundaryLabel = Math.max(0, ...(ownerMap.get(ownerId)?.ports || [])
+          // Unresolved seams have routing attachments, not visible labels.
+          .filter(port => port.direction === "input" && !port.name.startsWith("routing:"))
+          .map(port => textWidth(port.display_label || port.name)));
+        const firstInputLabel = Math.max(0, ...(directNodes.get(ownerId) || [])
+          .filter(node => node.kind !== "boundary" && node.kind !== "scope"
+            && positions.get(node.id)?.x === firstColumn)
+          .flatMap(node => (node.ports || []).filter(port => port.direction === "input")
+            .map(port => textWidth(port.display_label || port.name))));
+        // Each scope input has two facing labels as well as its mailbox.
+        // Compact only unused space: long labels cannot borrow the badge slot.
+        const inputPadding = 9 + boundaryLabel + Math.max(EDGE_COUNTER_WIDTH, textWidth("≡ 0000") + 8)
+          + PORT_LABEL_CLEARANCE * 2 + BOX_EDGE_CLEARANCE * 2 + firstInputLabel + 8;
         const leftPadding = Math.max(returnPadding, hasInput
-          ? ownerId === rootOwner.id ? ROOT_CONTENT_GUTTER : 64
+          ? Math.max(ownerId === rootOwner.id && !nestedScope ? ROOT_CONTENT_GUTTER : 64, inputPadding)
           : SCOPE_PADDING * 2);
         let left = components.length ? Math.min(...components.map((component) => component.left)) - leftPadding : 42;
         const rootResultLabelWidth = Math.max(
@@ -534,7 +550,7 @@
           + PORT_LABEL_CLEARANCE * 2
           + 28;
         const rightPadding = Math.max(returnPadding, ownerId === rootOwner.id
-          ? Math.max(ROOT_OUTPUT_GUTTER, resultLaneWidth)
+          ? nestedScope ? 64 : Math.max(ROOT_OUTPUT_GUTTER, resultLaneWidth)
           : 64);
         let right = components.length ? Math.max(...components.map((component) => component.right)) + rightPadding : left + 190;
         if (right - left < 190) {
@@ -1263,14 +1279,19 @@
       const badgeWidth = Math.max(EDGE_COUNTER_WIDTH, textWidth("≡ 0000") + 8);
       // A short bend at a shared pin has no exclusive vertical span for its
       // mailbox. Leave a horizontal slot before the receiving port label.
-      const badgeSpace = spans.some(span => pinApproaches.has(span.from) && pinApproaches.has(span.to)
+      const needsBadgeSpace = span => pinApproaches.has(span.from) && pinApproaches.has(span.to)
         && (sharedApproaches.has(span.from) || sharedApproaches.has(span.to))
-        && Math.abs(span.from.y - span.to.y) < EDGE_COUNTER_HEIGHT + CORNER_RADIUS * 2)
-        ? badgeWidth + PORT_LABEL_CLEARANCE : 0;
+        && Math.abs(span.from.y - span.to.y) < EDGE_COUNTER_HEIGHT + CORNER_RADIUS * 2;
+      const badgeSpace = spans.some(needsBadgeSpace) ? CORNER_RADIUS + badgeWidth + PORT_LABEL_CLEARANCE : 0;
+      // A badge reserves space after its own track, not after every track in
+      // the channel. Earlier bends can use the width already needed by later ones.
+      const requiredWidth = Math.max(TRACK_SPACING * (trackCount + 1),
+        ...ordered.filter(item => needsBadgeSpace(item.span))
+          .map(item => TRACK_SPACING * (item.track + 1) + badgeSpace));
       // The track count alone omits fan-out stubs and inverted-port turns.
       // Keep their measured footprint when compacting this column gap.
       channelSpace?.set(key, { tracks: trackCount, gap: gap === undefined ? 0
-        : Math.ceil(gap - (right - minimum) + TRACK_SPACING * (trackCount + 1) + badgeSpace - 1e-6) });
+        : Math.ceil(gap - (right - minimum) + requiredWidth - 1e-6) });
       // Keep a straight receiving span long enough for a mailbox badge when
       // the channel permits it, without squeezing its ordered tracks together.
       const maximum = Math.min(right, Math.max(minimum + TRACK_SPACING * (trackCount + 1), right - Math.max(badgeWidth, badgeSpace)));
@@ -1379,19 +1400,36 @@
     // A label only collides with samples in its immediate neighborhood.
     // Index once instead of rescanning every curve for each candidate label.
     const sampleCells = new Map();
-    const cellSize = 32;
+    const cellSize = 8;
     for (const [route, samples] of routeSamples) {
-      for (const point of samples) addSample(sampleCells,
-        `${Math.floor(point.x / cellSize)}:${Math.floor(point.y / cellSize)}`, { route, point });
+      for (const point of samples) {
+        const key = `${Math.floor(point.x / cellSize)}:${Math.floor(point.y / cellSize)}`;
+        if (!sampleCells.has(key)) sampleCells.set(key, { samples: [], counts: new Map() });
+        const cell = sampleCells.get(key);
+        cell.samples.push({ route, point });
+        cell.counts.set(route, (cell.counts.get(route) || 0) + 1);
+      }
     }
     const nearby = (box, route) => {
-      const values = [];
+      let count = 0;
+      const clearance = expandBox(box, 5);
       for (let x = Math.floor((box.x - 5) / cellSize); x <= Math.floor((box.x + box.width + 5) / cellSize); x += 1) {
         for (let y = Math.floor((box.y - 5) / cellSize); y <= Math.floor((box.y + box.height + 5) / cellSize); y += 1) {
-          for (const sample of sampleCells.get(`${x}:${y}`) || []) if (sample.route !== route) values.push(sample.point);
+          const cell = sampleCells.get(`${x}:${y}`);
+          if (!cell) continue;
+          // A covered cell contributes its count without revisiting every
+          // sample of parallel pipes. Boundary cells retain the exact test.
+          if (x * cellSize >= clearance.x && (x + 1) * cellSize <= clearance.x + clearance.width
+            && y * cellSize >= clearance.y && (y + 1) * cellSize <= clearance.y + clearance.height) {
+            count += cell.samples.length - (cell.counts.get(route) || 0);
+          } else {
+            for (const sample of cell.samples) {
+              if (sample.route !== route && pointInsideBox(sample.point, clearance)) count += 1;
+            }
+          }
         }
       }
-      return values;
+      return count;
     };
     const fixedObstacles = [...nodeObstacles, ...headerObstacles,
       ...portLabelObstacles.map(obstacle => expandBox(obstacle, PORT_LABEL_CLEARANCE))];
@@ -1408,10 +1446,9 @@
       const preferred = 0.82;
       const fractions = Array.from({ length: 61 }, (_, index) => 0.05 + index * 0.015)
         .sort((left, right) => Math.abs(left - preferred) - Math.abs(right - preferred) || left - right);
-      const candidates = fractions.map((fraction, order) => ({
-          center: pointAtPolylineFraction(samples, fraction),
-          order,
-        }));
+      const centers = pointsAtPolylineFractions(samples, [...fractions, 0.5]);
+      const fallbackAnchor = centers.pop();
+      const candidates = centers.map((center, order) => ({ center, order }));
       // In a compact channel a centered badge can cover a neighboring track.
       // It may touch either side of its own vertical run instead, without a
       // leader or a detached counter. Centered candidates win equal scores.
@@ -1442,11 +1479,27 @@
         };
       });
       evaluated.sort((left, right) => left.score - right.score || left.order - right.order);
-      const fallbackAnchor = pointAtPolylineFraction(samples, 0.5);
-      const selected = evaluated[0] || {
+      let selected = evaluated[0] || {
         center: fallbackAnchor,
         box: centeredBox(fallbackAnchor, badge.width, badge.height),
       };
+      // A compact receiving span may leave no centered position clear of
+      // another pipe. Its badge can touch its own horizontal run instead.
+      if (selected.score > 0) {
+        const horizontal = orthogonalSegments(route.points).filter(({ a, b }) => a.y === b.y);
+        for (const center of centers) {
+          if (!horizontal.some(({ a, b }) => center.y === a.y
+            && center.x >= Math.min(a.x, b.x) && center.x <= Math.max(a.x, b.x))) continue;
+          for (const direction of [-1, 1]) {
+            const beside = { x: center.x, y: center.y + direction * badge.height / 2 };
+            const box = centeredBox(beside, badge.width, badge.height);
+            const score = curveLabelCollisionScore(box, layout, fixedObstacles,
+              nearby(box, routeIndex), placed);
+            if (score < selected.score) selected = { center: beside, box, score };
+          }
+          if (selected.score === 0) break;
+        }
+      }
       placed.push(expandBox(selected.box, 6));
       route.label = {
         x: selected.center.x,
@@ -1667,7 +1720,7 @@
   }
 
 
-  function curveLabelCollisionScore(box, layout, obstacles, otherRouteSamples, placed) {
+  function curveLabelCollisionScore(box, layout, obstacles, otherRouteSampleCount, placed) {
     let score = 0;
     if (box.x < 4 || box.y < 4 || box.x + box.width > layout.width - 4 || box.y + box.height > layout.height - 4) {
       score += 1_000_000;
@@ -1678,11 +1731,7 @@
     for (const other of placed) {
       score += overlapArea(box, other) * 20_000;
     }
-    const clearance = expandBox(box, 5);
-    for (const sample of otherRouteSamples) {
-      if (pointInsideBox(sample, clearance)) score += 100_000;
-    }
-    return score;
+    return score + otherRouteSampleCount * 100_000;
   }
 
   function nearestPointOnBox(point, box) {
@@ -1794,9 +1843,8 @@
     return samples;
   }
 
-  function pointAtPolylineFraction(points, fraction) {
-    if (!points.length) return { x: 0, y: 0 };
-    if (points.length === 1) return points[0];
+  function pointsAtPolylineFractions(points, fractions) {
+    if (points.length < 2) return fractions.map(() => points[0] || { x: 0, y: 0 });
     const lengths = [];
     let total = 0;
     for (let index = 1; index < points.length; index += 1) {
@@ -1804,18 +1852,21 @@
       lengths.push(length);
       total += length;
     }
-    let remaining = total * clamp(fraction, 0, 1);
-    for (let index = 0; index < lengths.length; index += 1) {
-      if (remaining <= lengths[index] || index === lengths.length - 1) {
-        const amount = lengths[index] === 0 ? 0 : remaining / lengths[index];
-        return {
-          x: points[index].x + (points[index + 1].x - points[index].x) * amount,
-          y: points[index].y + (points[index + 1].y - points[index].y) * amount,
-        };
+    // Every candidate belongs to the same curve: measure its segments once.
+    return fractions.map(fraction => {
+      let remaining = total * clamp(fraction, 0, 1);
+      for (let index = 0; index < lengths.length; index += 1) {
+        if (remaining <= lengths[index] || index === lengths.length - 1) {
+          const amount = lengths[index] === 0 ? 0 : remaining / lengths[index];
+          return {
+            x: points[index].x + (points[index + 1].x - points[index].x) * amount,
+            y: points[index].y + (points[index + 1].y - points[index].y) * amount,
+          };
+        }
+        remaining -= lengths[index];
       }
-      remaining -= lengths[index];
-    }
-    return points.at(-1);
+      return points.at(-1);
+    });
   }
 
   function pointInsideBox(point, box) {

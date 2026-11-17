@@ -44,7 +44,6 @@ const rasterSize = { width: 1352, height: 760 };
     await page.goto(url);
     await page.locator("#step:enabled").waitFor();
     await page.locator("#scenario-select").selectOption("webhook\u0000timeout_then_success");
-    await page.locator("#select-scenario").click();
     await page.locator("#timeline-position").filter({ hasText: /^LIVE · Session 1 · transition 0$/ }).waitFor();
     await page.locator("#step:enabled").waitFor();
     const render = async () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));

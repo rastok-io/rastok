@@ -1,6 +1,12 @@
 {
-  "revision": "7d17dc76118b579acf313252eeee86d7c6c44a62",
-  "binary_sha256": "15d19891489e377cddd73a7cdc979c8129dc83cbd46673f7fcfd3a7287d90869",
+  "revision": "7c83d49be01aaccbadd0f07d9ce8fc835a05bca9",
+  "revision_note": "Base before the spacing change; checksums identify the exact captured UI sources.",
+  "working_tree_changes": ["crates/rastok/src/ui/graph_layout.js"],
+  "ui_sources_sha256": {
+    "crates/rastok/src/ui/graph_layout.js": "1c8f819163c8a16214eb6965a2854982a0f7a7fe69e55ed5d88a31cf1c45c3e9",
+    "crates/rastok/src/ui/app.js": "1b68769ed3b2673dae4f3f1e64f647805468d27ff3d3eef528771fdf0ddf75eb"
+  },
+  "binary_sha256": "6c8491d6f12c9cf0894916760e81958a107c4d21079794536c02b035c8addb46",
   "viewport": {
     "width": 1352,
     "height": 760
@@ -10,28 +16,28 @@
       "source": "examples/webhook-to-partner.rkg",
       "scenario": "webhook.timeout_then_success",
       "transition": 20,
-      "sha256": "e02690af17578f676c0e54fbe689e31676c028307470b48e19adb62aecca2a3a",
+      "sha256": "5bd9074b6843d8193fcb649b3e29824798dac6f57d246f27d18d418c1bbed389",
       "badges": 7
     },
     "debugger-selection": {
       "source": "rastok new hello",
       "scenario": "hello.roundtrip_greeting",
       "transition": 5,
-      "sha256": "aa44c4a6fceb3edd5a55d2ab4e48bf40d87986db7e5a22d52a827d8a494dcdb6",
+      "sha256": "e169e9381b6bc999ddb2a31f92374eba6bd2806bdf0642232ebe76ce591dfaa1",
       "selected": "greet"
     },
     "debugger-hover": {
       "source": "rastok new hello",
       "scenario": "hello.roundtrip_greeting",
       "transition": 5,
-      "sha256": "906d7e2c98d3e2310f6ca0de7ce83888cca3cd617c8b9b331a5acd981e12891c",
+      "sha256": "ce85a1cf12aef739ed48d439343af60d6204e460bb90302d0e42c68b19432209",
       "identifier": "greet"
     },
     "debugger-assertion": {
       "source": "rastok new hello; app.in changed to monde",
       "scenario": "hello.roundtrip_greeting",
       "transition": 5,
-      "sha256": "9efa460f4068e5d0fd2e01051e6d73873eac275cc2c2c3266f47c2f805ed43a8"
+      "sha256": "a90efc7a6b856fb5343bafe3e2e287ed9df0d3947d7a6dce8b14585dd0e85884"
     }
   },
   "capture": "RASTOK_UI_ASSETS=docs/site/assets node tools/debugger-guide-capture.cjs",

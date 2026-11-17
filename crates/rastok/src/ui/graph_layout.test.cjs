@@ -668,7 +668,8 @@ test("ambiguous flattened composition seams never invent a Graph port", () => {
   const { layout, routes } = render(topology);
   assert.deepEqual(routes.get(0).portals, []);
   const outside = layout.positions.get("outside"), scope = layout.scopes.get("owner:1");
-  assert.equal(scope.x - outside.x - outside.width, 128,
+  const gap = scope.x - outside.x - outside.width;
+  assert.ok(gap > 0 && gap <= 128,
     "internal routing names and inward-facing scope labels do not widen the parent gap");
 });
 
@@ -848,6 +849,43 @@ test("the root reserves a complete output gutter without stretching a nested sco
   assert.ok(fanLabel.x - rootLabelEnd >= 16, "the fan-out counter clears the App input label");
   assert.ok(nestedLabelStart - (fanLabel.x + fanLabel.width) >= 16
     || fanLabel.x - nestedLabelEnd >= 16, "the fan-out counter clears either side of the nested input label");
+});
+
+test("compact input gutters keep long facing labels and their mailbox apart", () => {
+  const ports = [{ name: "heartbeat", direction: "input" }];
+  for (const nested of [false, true]) {
+    const scope = nested ? "owner:1" : "owner:0";
+    const topology = {
+      owners: [owner("owner:0", null, ports), ...(nested ? [owner(scope, "owner:0", ports)] : [])],
+      nodes: [operator("watchdog", scope, ports)],
+      edges: [edge(0, "boundary:input:heartbeat", "heartbeat", "watchdog", "heartbeat")],
+    };
+    const { layout, routes } = render(topology);
+    const source = layout.scopes.get(scope).x;
+    const target = layout.positions.get("watchdog").x;
+    const labelWidth = ("heartbeat".length * 6 + 4) / layoutEngine.minimumReadableScale;
+    const badge = routes.get(0).label.box;
+    assert.ok(target - 8 - labelWidth > source + 9 + labelWidth, "the facing input labels do not overlap");
+    assert.ok(badge.x >= source + 9 + labelWidth + 16, "the mailbox clears the scope input label");
+    assert.ok(badge.x + badge.width <= target - 8 - labelWidth - 16, "the mailbox clears the node input label");
+  }
+});
+
+test("nested frames do not repeat the App's outer gutters or shrink their contents", () => {
+  const ports = [{ name: "in", direction: "input" }, { name: "out", direction: "output" }];
+  const topology = nested => ({
+    owners: [owner("owner:0", null, ports), ...(nested ? [owner("owner:1", "owner:0", ports)] : [])],
+    nodes: [operator("work", nested ? "owner:1" : "owner:0", ports)],
+    edges: [edge(0, "boundary:input:in", "in", "work", "in"),
+      edge(1, "work", "out", "boundary:output:out", "out")],
+  });
+  const standalone = render(topology(false)), nested = render(topology(true));
+  const a = standalone.layout.positions.get("work"), b = nested.layout.positions.get("work");
+  assert.equal(b.width, a.width);
+  assert.equal(b.height, a.height);
+  assert.ok(nested.layout.scopes.get("owner:1").width < standalone.layout.scopes.get("owner:0").width,
+    "the nested frame keeps local routing space without repeating the outer App gutters");
+  assertNoBodyCrossings(nested);
 });
 
 test("mailbox labels avoid every unrelated presentation curve", () => {
