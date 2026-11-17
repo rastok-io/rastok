@@ -203,14 +203,16 @@ Connectors. The UI never infers execution from geometry.
 
 Cyclic graphs use deterministic display columns anchored by inbound root
 Connectors and the already placed flow. Return pipes retain their original
-endpoints and directions. A clear forward span uses one curve with horizontal
-ends; returns and obstructed spans use straight tracks with rounded corners.
+endpoints and directions. Every pipe uses horizontal and vertical tracks with
+rounded corners, including clear forward spans. Aligned pins use one straight
+segment. The corner radius is reduced where neighboring bends leave less room.
 Routing checks node bodies and unrelated port labels, excluding the pipe's
 own endpoint labels. Track selection orders all links in each inter-layer
 channel together, with separate tracks and short jogs for conflicting
 horizontal runs. Node and label avoidance takes
-priority where space is constrained. Arrivals at the same input share a short
-final approach; their route identities, mailbox selection and causal links
+priority where space is constrained. Pipes at the same output share a short
+horizontal departure before separating onto their tracks. Arrivals at the same
+input share a short final approach; route identities, mailbox selection and causal links
 remain separate. Forward arrivals from a child output to the parent boundary
 stay between the vertical positions of those pins. Long pipes reserve a drawing
 vertex in each intermediate layer before ordering and placement. Node ports
@@ -345,8 +347,8 @@ transition, a selection, a zoom or a pan never recomputes placement or
 routes: counters, badges and highlights change on the existing drawing.
 Mailbox badges reserve their four-digit width from the start.
 
-Ports slide and reorder to reduce crossings. Smooth cubic paths have horizontal
-port tangents; deterministic lane/label placement separates overlapping paths.
+Ports slide and reorder to reduce crossings. Rounded orthogonal paths have
+horizontal port tangents; deterministic lane/label placement separates overlapping paths.
 Crossings may remain, but geometry must not invent topology. Layout tests cover
 label/pin clearance and manager-command exclusion. Visual qualification includes
 1352×760 and a narrow viewport; automated geometry checks do not replace it.

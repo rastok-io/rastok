@@ -1001,58 +1001,20 @@
     const labelObstacles = graphLabelObstacles(graph, layout);
     const planned = channelRoutes(candidates, sourceFans, targetFans, layout, labelObstacles);
     const routes = new Map();
-    const bodies = graph.nodes.filter(node => node.kind !== "boundary" && node.kind !== "discard")
-      .map(node => layout.positions.get(node.id));
-    const headers = [...layout.scopes.values()].map(scope => expandBox({ ...scope, height: SCOPE_HEADER }, BOX_EDGE_CLEARANCE));
     const ordered = [...candidates].sort((left, right) =>
       left.start.x - right.start.x
       || left.end.x - right.end.x
       || left.edge.index - right.edge.index);
 
     for (const candidate of ordered) {
-      const targetFan = targetFans.get(candidate.edge.index) || { offset: 0, branch: 0, count: 1 };
       const compact = planned.get(candidate.edge.index);
-      const hasDummies = (layout.edgeChains.get(candidate.edge.index)?.length || 0) > 2;
-      const presentationPoints = [candidate.start];
-      // Multiple pipes keep their identities and join the same short approach
-      // to the receiving pin. They do not create a shared semantic mailbox.
-      const returning = candidate.start.x >= candidate.end.x;
-      if (targetFan.count > 1 && !returning) {
-        const targetKey = candidate.target.kind === "boundary"
-          ? scopePortKey(candidate.target.owner, candidate.target.direction, candidate.target.ports[0].name)
-          : portKey(candidate.target.id, "input", candidate.edge.target.port);
-        const targetLabel = labelObstacles.find(box => box.portKey === targetKey);
-        // Finish the bend before the receiving label, even at readable size.
-        presentationPoints.push({ x: Math.min(candidate.end.x - FAN_STUB * 2, targetLabel?.x ?? candidate.end.x), y: candidate.end.y });
-      }
-      presentationPoints.push(candidate.end);
-      const ownPorts = new Set([
-        portKey(candidate.source.id, "output", candidate.edge.source.port),
-        portKey(candidate.target.id, "input", candidate.edge.target.port),
-      ]);
-      for (const endpoint of [candidate.source, candidate.target]) {
-        if (endpoint.kind === "boundary") ownPorts.add(scopePortKey(endpoint.owner, endpoint.direction, endpoint.ports[0].name));
-      }
-      const obstacles = [...labelObstacles.filter(box => !ownPorts.has(box.portKey)),
-        ...bodies.map(body => ({ ...expandBox(body, BOX_EDGE_CLEARANCE), body })), ...headers];
-      let clearPoints = compact.map(point => ({ ...point }));
-      if (!hasDummies && !returning) {
-        const direct = presentationPoints.map((point, index) => ({ ...point,
-          ...(index === 1 ? { curve: true } : {}) }));
-        const hits = sampleCurvedCorridor(direct, CORNER_RADIUS, 32).some(point => obstacles.some(box => {
-          if (box.body && ((candidate.start.x === box.body.x + box.body.width
-            && point.x >= candidate.start.x && Math.hypot(point.x - candidate.start.x, point.y - candidate.start.y) <= BOX_EDGE_CLEARANCE)
-            || (candidate.end.x === box.body.x && point.x <= candidate.end.x
-              && Math.hypot(point.x - candidate.end.x, point.y - candidate.end.y) <= BOX_EDGE_CLEARANCE))) return false;
-          return point.x > box.x && point.x < box.x + box.width && point.y > box.y && point.y < box.y + box.height;
-        }));
-        if (!hits) clearPoints = direct;
-      }
       const route = {
         start: candidate.start,
         end: candidate.end,
         points: compact,
-        presentationPoints: clearPoints,
+        // Every pipe uses the allocated tracks. Only the corners are rounded;
+        // a clear span never switches to a different presentation geometry.
+        presentationPoints: compact.map(point => ({ ...point })),
         portals: [],
       };
       routes.set(candidate.edge.index, route);
@@ -1108,8 +1070,13 @@
         ? scopePortKey(node.owner, node.direction, node.ports[0].name) : portKey(node.id, direction, port);
       const sourceLabel = labels.find(box => box.portKey === labelKey(source, "output", edge.source.port));
       const targetLabel = labels.find(box => box.portKey === labelKey(target, "input", edge.target.port));
+      const scopeExit = source.kind === "scope" && target.kind === "boundary"
+        && target.direction === "output" && start.x < end.x;
+      // A sibling pipe may fan out at this scope pin, but the final arrival
+      // at the parent output must not overshoot either endpoint vertically.
+      const fanY = y => scopeExit ? clamp(y, Math.min(start.y, end.y), Math.max(start.y, end.y)) : y;
       const parts = [], first = { x: Math.max(start.x + FAN_STUB, (sourceLabel?.x ?? start.x)
-        + (sourceLabel?.width ?? 0) + BOX_EDGE_CLEARANCE) + sourceFan.index * 3, y: start.y + sourceFan.offset };
+        + (sourceLabel?.width ?? 0) + BOX_EDGE_CLEARANCE) + sourceFan.index * 3, y: fanY(start.y + sourceFan.offset) };
       parts.push([start, { x: first.x, y: start.y }, first]);
       let current = first;
       const chain = layout.edgeChains.get(edge.index) || [];
@@ -1127,7 +1094,7 @@
         current = leave;
       }
       const last = { x: Math.min(end.x - FAN_STUB, (targetLabel?.x ?? end.x) - BOX_EDGE_CLEARANCE)
-        - targetFan.index * 3, y: end.y + targetFan.offset };
+        - targetFan.index * 3, y: fanY(end.y + targetFan.offset) };
       const a = layout.rank.get(chain.at(-2)), b = layout.rank.get(target.id);
       if (chain.length > 2 && a === b) {
         sideConnect(parts, current, last, `${target.owner}:${a}:west`, -1);
@@ -1182,7 +1149,11 @@
         for (const [after, weight] of next.before) after.incoming -= weight;
       }
       const minimum = Math.max(...normalized.map(item => item.left.x));
-      const maximum = Math.min(...normalized.map(item => item.right.x));
+      const right = Math.min(...normalized.map(item => item.right.x));
+      // Keep a straight receiving span long enough for a mailbox badge when
+      // the channel permits it, without squeezing its ordered tracks together.
+      const badgeWidth = Math.max(EDGE_COUNTER_WIDTH, textWidth("≡ 0000") + 8);
+      const maximum = Math.min(right, Math.max(minimum + TRACK_SPACING * (ordered.length + 1), right - badgeWidth));
       for (let index = 0; index < ordered.length; index += 1) {
         const { span } = ordered[index];
         span.x = minimum + (maximum - minimum) * (index + 1) / (ordered.length + 1);
@@ -1504,7 +1475,7 @@
         const [before, corner, after] = compact.slice(-3);
         const collinear = (before.x === corner.x && corner.x === after.x)
           || (before.y === corner.y && corner.y === after.y);
-        if (!collinear || corner.curve || after.curve) break;
+        if (!collinear) break;
         compact.splice(compact.length - 2, 1);
       }
     }
@@ -1627,18 +1598,10 @@
     return `${path} L ${end.x} ${end.y}`;
   }
 
-  // A clear forward span is one cubic with horizontal port tangents. Detours
-  // retain straight orthogonal tracks; only their corners are rounded.
+  // Direct links and detours share one presentation: orthogonal tracks with
+  // bounded rounded corners. Aligned pins remain a single straight segment.
   function curvedCorridorPath(points, radius = CORNER_RADIUS) {
-    if (!points.some(point => point.curve) && points.length > 2) return roundedOrthogonalPath(points, radius);
-    const segments = curvedCorridorSegments(points, radius);
-    if (!segments.length) return "";
-    const start = segments[0].from;
-    return segments.reduce(
-      (path, segment) => segment.line ? `${path} L ${segment.to.x} ${segment.to.y}`
-        : `${path} C ${segment.c1.x} ${segment.c1.y} ${segment.c2.x} ${segment.c2.y} ${segment.to.x} ${segment.to.y}`,
-      `M ${start.x} ${start.y}`,
-    );
+    return roundedOrthogonalPath(points, radius);
   }
 
   function curvedCorridorSegments(points, radius = CORNER_RADIUS) {
@@ -1653,12 +1616,7 @@
     };
     for (let index = 1; index < compact.length; index += 1) {
       const previous = compact[index - 1], corner = compact[index], next = compact[index + 1];
-      if (corner.curve || compact.length === 2) {
-        const reach = (corner.x - current.x) * 0.42;
-        segments.push({ from: current, c1: { x: current.x + reach, y: current.y },
-          c2: { x: corner.x - reach, y: corner.y }, to: corner });
-        current = corner;
-      } else if (next && !next.curve) {
+      if (next) {
         const turn = Math.min(radius, Math.hypot(corner.x - previous.x, corner.y - previous.y) / 2,
           Math.hypot(next.x - corner.x, next.y - corner.y) / 2);
         const before = { x: corner.x - Math.sign(corner.x - previous.x) * turn,

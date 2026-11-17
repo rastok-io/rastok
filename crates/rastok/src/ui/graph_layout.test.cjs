@@ -203,20 +203,66 @@ test("request-response cycles keep forward columns and every validated pipe", ()
   assert.equal(stableProjection(result), stableProjection(render(topology)));
 });
 
-test("clear forward spans use one cubic and fan-in shares its final approach", () => {
+test("every pipe follows orthogonal tracks with only local rounded corners", () => {
+  const result = render(syntheticGraph());
+  for (const route of result.routes.values()) {
+    assert.deepEqual(route.presentationPoints, route.points, "presentation keeps the allocated tracks");
+    const path = layoutEngine.curvedCorridorPath(route.presentationPoints);
+    assert.doesNotMatch(path, / C /, "no free-form cubic replaces the tracks");
+    for (const segment of layoutEngine.orthogonalSegments(route.presentationPoints)) {
+      assert.ok(segment.a.x === segment.b.x || segment.a.y === segment.b.y);
+    }
+    for (const segment of layoutEngine.curvedCorridorSegments(route.presentationPoints)) {
+      if (segment.line) {
+        assert.ok(segment.from.x === segment.to.x || segment.from.y === segment.to.y);
+      } else {
+        assert.ok(Math.abs(segment.to.x - segment.from.x) <= 12, "rounding stays local to a corner");
+        assert.ok(Math.abs(segment.to.y - segment.from.y) <= 12, "rounding stays local to a corner");
+      }
+    }
+  }
+  assert.equal(layoutEngine.curvedCorridorPath([{ x: 10, y: 20 }, { x: 80, y: 20 }]),
+    "M 10 20 L 80 20", "aligned pins need only one straight segment");
+});
+
+test("forward tracks stay orthogonal and fan-in shares its final approach", () => {
   const ports = [{ name: "in", direction: "input" }, { name: "out", direction: "output" }];
   const topology = { owners: [owner("owner:0", null)],
     nodes: [operator("top", "owner:0", ports), operator("bottom", "owner:0", ports), operator("receive", "owner:0", ports)],
     edges: [edge(0, "top", "out", "receive", "in"), edge(1, "bottom", "out", "receive", "in")] };
   const single = render({ ...topology, edges: [topology.edges[0]] });
   const singlePath = layoutEngine.curvedCorridorPath(single.routes.get(0).presentationPoints);
-  assert.equal((singlePath.match(/ C /g) || []).length, 1);
+  assert.match(singlePath, / L /);
+  assert.doesNotMatch(singlePath, / C /);
   const { routes } = render(topology);
   const first = layoutEngine.curvedCorridorSegments(routes.get(0).presentationPoints);
   const second = layoutEngine.curvedCorridorSegments(routes.get(1).presentationPoints);
-  assert.deepEqual(first.at(-1), second.at(-1), "the receiving pin has one shared visual approach");
+  assert.deepEqual(first.at(-1).to, second.at(-1).to, "the receiving pin remains shared");
+  for (const segments of [first, second]) {
+    const last = segments.at(-1);
+    assert.ok(last.line && last.from.y === last.to.y, "the final approach is horizontal");
+    assert.ok(last.to.x - last.from.x >= 16, "both pipes share a short final approach");
+  }
   assert.notDeepEqual(first[0].from, second[0].from, "both original producers remain distinct");
   assert.equal(routes.size, 2);
+});
+
+test("an orthogonal scope exit stays between its pins despite another outgoing pipe", () => {
+  const ports = [{ name: "in", direction: "input" }, { name: "out", direction: "output" }];
+  const topology = { owners: [owner("owner:0", null, [{ name: "reply", direction: "output" }]),
+    owner("owner:1", "owner:0", ports)],
+    nodes: [{ ...operator("peer", "owner:0", ports), kind: "connector", profile: "Call · Inbound" },
+      operator("inside", "owner:1", ports)],
+    edges: [edge(0, "peer", "out", "inside", "in"), edge(1, "inside", "out", "peer", "in"),
+      { ...edge(2, "inside", "out", "boundary:output:reply", "reply"),
+        target: { id: "boundary:output:reply", port: "reply", kind: "output", owner: "owner:0" } }] };
+  const { routes } = render(topology);
+  const route = routes.get(2), portal = route.portals.at(-1);
+  assert.ok(portal);
+  for (const point of route.presentationPoints.filter(point => point.x >= portal.x)) {
+    assert.ok(point.y >= Math.min(portal.y, route.end.y) && point.y <= Math.max(portal.y, route.end.y),
+      "fan-out does not add a vertical overshoot after the child scope");
+  }
 });
 
 test("recursive scopes preserve containment, flow order and instance-title space", () => {
@@ -380,7 +426,7 @@ test("independent pipes receive orthogonal non-overlapping tracks", () => {
   assert.equal(layoutEngine.countRouteOverlaps(routes), 0);
 });
 
-test("fan-out presentation curves separate immediately after their common pin", () => {
+test("fan-out separates onto distinct tracks after its common departure", () => {
   const topology = {
     owners: [owner("owner:0", null, [{ name: "in", direction: "input" }])],
     nodes: [
@@ -394,12 +440,14 @@ test("fan-out presentation curves separate immediately after their common pin", 
   };
   const { routes } = render(topology);
   assert.equal(layoutEngine.countRouteCrossings(routes), 0);
-  assert.equal(layoutEngine.countRouteOverlaps(routes), 1, "the invisible lane plan may share its source stub");
+  assert.equal(layoutEngine.countRouteOverlaps(routes), 1, "pipes share only their short departure");
   const upper = layoutEngine.curvedCorridorSegments(routes.get(0).presentationPoints);
   const lower = layoutEngine.curvedCorridorSegments(routes.get(1).presentationPoints);
   assert.deepEqual(upper[0].from, lower[0].from, "both pipes start at the exact output pin");
-  assert.notDeepEqual(upper[0], lower[0], "the visible curves share no segment after that pin");
-  assert.notEqual(routes.get(0).presentationPoints[1].y, routes.get(1).presentationPoints[1].y);
+  assert.ok(upper[0].line && lower[0].line, "both departures are straight");
+  assert.notDeepEqual(upper, lower, "the pipes remain distinct after their shared departure");
+  assert.ok(routes.get(0).presentationPoints.some(point => point.y < routes.get(0).start.y));
+  assert.ok(routes.get(1).presentationPoints.some(point => point.y > routes.get(1).start.y));
 });
 
 test("ambiguous flattened composition seams never invent a Graph port", () => {
@@ -593,8 +641,10 @@ test("the root reserves a complete output gutter without stretching a nested sco
   const fanLabel = routes.get(0).label.box;
   const rootLabelEnd = rootInput.x + 9 + 16;
   const nestedLabelStart = nestedInput.x + 9;
+  const nestedLabelEnd = nestedLabelStart + 16;
   assert.ok(fanLabel.x - rootLabelEnd >= 16, "the fan-out counter clears the App input label");
-  assert.ok(nestedLabelStart - (fanLabel.x + fanLabel.width) >= 16, "the fan-out counter clears the nested input label");
+  assert.ok(nestedLabelStart - (fanLabel.x + fanLabel.width) >= 16
+    || fanLabel.x - nestedLabelEnd >= 16, "the fan-out counter clears either side of the nested input label");
 });
 
 test("mailbox labels avoid every unrelated presentation curve", () => {
