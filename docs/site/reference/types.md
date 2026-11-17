@@ -163,6 +163,9 @@ typed map does for its values. With `data: text`, write
 `val names: array<text?> = [null, data]`. Without that expected type,
 `[null, "a"]` still infers `array<variant>`.
 
+An optional map keeps the same value context: for `map<text,int?>?`,
+`{ "a": null, "b": 1 }` constructs the optional values before the optional map.
+
 ## JSON request values
 
 A JSON-encoding Connector input refuses a known producer type containing

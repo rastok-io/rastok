@@ -78,6 +78,9 @@ large `advance` may now fail. Reference traces changed: **none**.
 
 ### Language and expressions
 
+- Construct optional map values using their declared type even when the map
+  itself is optional. Ports, fields, bindings, state and Lab values no longer
+  pass check only to fault on `map<text,int?>?` at execution.
 - Read fields, nested fields, indexes and `has` through the selected branch
   of a lazily loaded input, including a local copy, just as for a state cell.
   Carrying positions remain lazy, type tests keep their branch witnesses,

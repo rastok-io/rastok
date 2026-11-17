@@ -1,0 +1,144 @@
+// A map literal written into an optional map of optional values faults at execution
+// Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
+// Each map form compiles but faults when both the map and its values are optional.
+// The optional-list control is accepted after element-by-element checking.
+// The map controls isolate construction from the outer optional conversion.
+// Scenarios cover ports, fields, typed bindings and state cells.
+//
+// Commands, run from this directory:
+//   rastok check N-map-into-an-optional-map.rkg
+//   rastok simulate N-map-into-an-optional-map.rkg
+//
+// Before the correction:
+//   $ rastok check N-map-into-an-optional-map.rkg
+//   ok: 8 node(s), semantic hash 478d4cc5be86b05283020071058b643fa48615e4dd86fed737d6a8857f536876
+//   $ rastok simulate N-map-into-an-optional-map.rkg
+//   FAIL optional_map.into_a_port
+//        a step faulted: the value does not conform to map<text,int?>?
+//   FAIL optional_map.without_a_null_value
+//        a step faulted: the value does not conform to map<text,int?>?
+//   FAIL optional_map.into_a_field
+//        a step faulted: the value does not conform to map<text,int?>?
+//   FAIL optional_map.into_a_typed_binding
+//        a step faulted: the value does not conform to map<text,int?>?
+//   FAIL optional_map.into_a_state_cell
+//        a step faulted: the value does not conform to map<text,int?>?
+//   PASS optional_map.control_a_map_that_is_not_optional
+//   PASS optional_map.control_an_optional_list
+//   7 scenario(s), 5 failed
+//   The fault needs both: optional values and an optional map. `{ "a": 1 }` written to
+//   `map<text,int>?` passes, the same literal written to `map<text,int?>` passes, and the list
+//   twin `[null, 1]` written to `array<int?>?` passes since the rework.
+//
+// Expected after the fix:
+//   The seven scenarios pass. A nonempty map literal is built against the map branch of an
+//   optional destination, as a list literal already is. No program that passes today changes
+//   its semantic hash for another reason than this construction.
+
+type Row = struct { m: map<text,int?>? }
+graph app : App {
+  input a: text
+  input b: text
+  input c: text
+  input d: text
+  input e: text
+  input f: text
+  input g: text
+  output port: map<text,int?>?
+  output present: map<text,int?>?
+  output field: Row
+  output bound: map<text,int?>?
+  output kept: map<text,int?>?
+  output plain: map<text,int?>
+  output list: array<int?>?
+  operator to_port {
+    input in: text
+    output out: map<text,int?>?
+    on in {
+      out = { "a": null, "b": 1 }
+    }
+  }
+  operator without_null {
+    input in: text
+    output out: map<text,int?>?
+    on in {
+      out = { "a": 1 }
+    }
+  }
+  operator to_field {
+    input in: text
+    output out: Row
+    on in {
+      out = { m = { "a": null, "b": 1 } }
+    }
+  }
+  operator to_binding {
+    input in: text
+    output out: map<text,int?>?
+    on in {
+      val m: map<text,int?>? = { "a": null, "b": 1 }
+      out = m
+    }
+  }
+  operator to_cell {
+    input in: text
+    output out: map<text,int?>?
+    var cell: map<text,int?>? = null
+    on in {
+      cell = { "a": null, "b": 1 }
+      out = cell
+    }
+  }
+  operator to_plain_map {
+    input in: text
+    output out: map<text,int?>
+    on in {
+      out = { "a": null, "b": 1 }
+    }
+  }
+  operator to_optional_list {
+    input in: text
+    output out: array<int?>?
+    on in {
+      out = [null, 1]
+    }
+  }
+  a -> to_port -> port
+  b -> without_null -> present
+  c -> to_field -> field
+  d -> to_binding -> bound
+  e -> to_cell -> kept
+  f -> to_plain_map -> plain
+  g -> to_optional_list -> list
+}
+lab optional_map {
+  scenario into_a_port {
+    app.a = "x"
+    expect app.port == { "a": null, "b": 1 }
+  }
+  scenario without_a_null_value {
+    app.b = "x"
+    expect app.present == { "a": 1 }
+  }
+  scenario into_a_field {
+    app.c = "x"
+    expect app.field == { m = { "a": null, "b": 1 } }
+  }
+  scenario into_a_typed_binding {
+    app.d = "x"
+    expect app.bound == { "a": null, "b": 1 }
+  }
+  scenario into_a_state_cell {
+    app.e = "x"
+    expect app.kept == { "a": null, "b": 1 }
+  }
+  scenario control_a_map_that_is_not_optional {
+    app.f = "x"
+    expect app.plain == { "a": null, "b": 1 }
+  }
+  scenario control_an_optional_list {
+    app.g = "x"
+    expect app.list == [null, 1]
+  }
+}
+
