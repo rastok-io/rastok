@@ -55,6 +55,9 @@ Two additional check-time refusals are explicit:
 
 ### Lab and response timing
 
+- Compact debugger column gaps using measured track demand. Vertically disjoint
+  bends reuse horizontal space without merging pipes, shrinking text or changing
+  the topology; the compact drawing remains cached between transitions.
 - Draw every debugger link with horizontal and vertical tracks and rounded
   corners. Clear spans and detours now share the same style, without changing
   node placement, ports or semantic routes.

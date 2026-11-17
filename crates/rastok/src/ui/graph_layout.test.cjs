@@ -163,6 +163,96 @@ test("barycentric sweeps untangle crossed adjacent layers deterministically", ()
   assert.equal(stableProjection(first), stableProjection(second));
 });
 
+test("independent parallel pipes do not widen their shared column gap", () => {
+  const parallel = count => ({
+    owners: [owner("owner:0", null)],
+    nodes: Array.from({ length: count }, (_, index) => [
+      operator(`source_${index}`, "owner:0", [{ name: "out", direction: "output" }]),
+      operator(`target_${index}`, "owner:0", [{ name: "in", direction: "input" }]),
+    ]).flat(),
+    edges: Array.from({ length: count }, (_, index) => edge(index, `source_${index}`, "out", `target_${index}`, "in")),
+  });
+  const single = render(parallel(1)), stacked = render(parallel(8));
+  const gap = result => {
+    const source = result.layout.positions.get("source_0"), target = result.layout.positions.get("target_0");
+    return target.x - source.x - source.width;
+  };
+  assert.equal(gap(stacked), gap(single), "disjoint rows do not reserve separate horizontal tracks");
+  assert.equal(layoutEngine.countRouteCrossings(stacked.routes), 0);
+  assert.equal(layoutEngine.countRouteOverlaps(stacked.routes), 0);
+  assertNoBodyCrossings(stacked);
+  assert.equal(stableProjection(stacked), stableProjection(render(parallel(8))));
+});
+
+test("vertically disjoint bends reuse a track without merging their pipes", () => {
+  const topology = {
+    owners: [owner("owner:0", null)],
+    nodes: [...Array.from({ length: 8 }, (_, index) => [
+      operator(`source_${index}`, "owner:0", [{ name: "out", direction: "output" }]),
+      operator(`target_${index}`, "owner:0", [{ name: "in", direction: "input" }]),
+    ]).flat(), operator("spare", "owner:0", [{ name: "out", direction: "output" }])],
+    edges: Array.from({ length: 8 }, (_, index) => edge(index, `source_${index}`, "out", `target_${index}`, "in")),
+  };
+  const result = render(topology);
+  const vertical = [...result.routes.values()].flatMap(route => layoutEngine.orthogonalSegments(route.points)
+    .filter(segment => segment.a.x === segment.b.x && segment.a.y !== segment.b.y));
+  assert.equal(vertical.length, 8, "every pair of pins needs a bend");
+  assert.ok(vertical.every(segment => Math.abs(segment.a.y - segment.b.y) > 12), "bends exceed a corner radius");
+  assert.equal(new Set(vertical.map(segment => segment.a.x)).size, 1, "disjoint bends share one track");
+  assert.equal(result.routes.size, 8, "each semantic pipe stays independently inspectable");
+  assert.equal(layoutEngine.countRouteCrossings(result.routes), 0);
+  assert.equal(layoutEngine.countRouteOverlaps(result.routes), 0);
+  assertNoBodyCrossings(result);
+  assert.equal(stableProjection(result), stableProjection(render(topology)));
+});
+
+test("overlapping vertical intervals keep distinct ordered tracks", () => {
+  const topology = {
+    owners: [owner("owner:0", null)],
+    nodes: [
+      operator("source", "owner:0", [{ name: "one", direction: "output" }, { name: "two", direction: "output" }]),
+      operator("spare1", "owner:0", [{ name: "out", direction: "output" }]),
+      operator("spare2", "owner:0", [{ name: "out", direction: "output" }]),
+      operator("upper", "owner:0", [{ name: "in", direction: "input" }]),
+      operator("lower", "owner:0", [{ name: "in", direction: "input" }]),
+    ],
+    edges: [edge(0, "source", "one", "upper", "in"), edge(1, "source", "two", "lower", "in")],
+  };
+  const result = render(topology);
+  const bends = [...result.routes.values()].map(route => layoutEngine.orthogonalSegments(route.points)
+    .filter(segment => segment.a.x === segment.b.x && segment.a.y !== segment.b.y));
+  assert.deepEqual(bends.map(segments => segments.length), [1, 1]);
+  const [short, long] = bends.map(segments => segments[0]);
+  assert.ok(short.b.y > long.a.y, "the vertical intervals overlap");
+  assert.ok(short.a.x - long.a.x >= 12 - 0.01, "the longer bend precedes the shorter bend on its own track");
+  assert.equal(layoutEngine.countRouteCrossings(result.routes), 0);
+  assert.equal(layoutEngine.countRouteOverlaps(result.routes), 0);
+  assertNoBodyCrossings(result);
+  assert.equal(stableProjection(result), stableProjection(render(topology)));
+});
+
+test("compaction keeps forward bends outside a return at the same output", () => {
+  const ports = [{ name: "in", direction: "input" }, { name: "out", direction: "output" }];
+  const topology = {
+    owners: [owner("owner:0", null)],
+    nodes: Array.from({ length: 6 }, (_, index) => operator(`n${index}`, "owner:0", ports)),
+    edges: [[0, 3], [0, 4], [0, 5], [1, 5], [5, 0]]
+      .map(([source, target], index) => edge(index, `n${source}`, "out", `n${target}`, "in")),
+  };
+  const result = render(topology);
+  assert.equal(layoutEngine.countRouteCrossings(result.routes), 0);
+  const forward = layoutEngine.orthogonalSegments(result.routes.get(1).points)
+    .filter(segment => segment.a.x === segment.b.x);
+  const returning = result.routes.get(2);
+  const turns = layoutEngine.orthogonalSegments(returning.points)
+    .filter(segment => segment.a.x === segment.b.x && segment.a.x > returning.start.x);
+  assert.ok(forward.length && turns.length);
+  assert.ok(Math.min(...forward.map(segment => segment.a.x))
+    - Math.max(...turns.map(segment => segment.a.x)) >= 12 - 0.01, "the neighboring tracks keep their clearance");
+  assertNoBodyCrossings(result);
+  assert.equal(stableProjection(result), stableProjection(render(topology)));
+});
+
 test("request-response cycles keep forward columns and every validated pipe", () => {
   const ports = [{ name: "in", direction: "input" }, { name: "out", direction: "output" }];
   const topology = {
@@ -465,8 +555,11 @@ test("ambiguous flattened composition seams never invent a Graph port", () => {
     ],
     edges: [edge(0, "outside", "out", "inside", "in")],
   };
-  const { routes } = render(topology);
+  const { layout, routes } = render(topology);
   assert.deepEqual(routes.get(0).portals, []);
+  const outside = layout.positions.get("outside"), scope = layout.scopes.get("owner:1");
+  assert.equal(scope.x - outside.x - outside.width, 128,
+    "internal routing names and inward-facing scope labels do not widen the parent gap");
 });
 
 test("orthogonal detours keep straight tracks and bounded rounded corners", () => {
@@ -670,6 +763,32 @@ test("mailbox labels avoid every unrelated presentation curve", () => {
       assert.equal(crosses, false, `curve ${otherIndex} avoids label ${index}`);
     }
   }
+});
+
+test("a mailbox stays attached beside a compact vertical track without covering its neighbor", () => {
+  const ports = [{ name: "in", direction: "input" }, { name: "out", direction: "output" }];
+  const topology = {
+    owners: [owner("owner:0", null)],
+    nodes: Array.from({ length: 6 }, (_, index) => operator(`n${index}`, "owner:0", ports)),
+    edges: [[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 4]]
+      .map(([source, target], index) => edge(index, `n${source}`, "out", `n${target}`, "in")),
+  };
+  const result = render(topology);
+  for (const [index, route] of result.routes) {
+    const box = route.label.box;
+    const samples = layoutEngine.sampleCurvedCorridor(route.presentationPoints, undefined, 64);
+    assert.ok(samples.some(point => point.x >= box.x - 0.01 && point.x <= box.x + box.width + 0.01
+      && point.y >= box.y && point.y <= box.y + box.height), "the badge touches its own pipe");
+    assert.equal(route.label.leader, null);
+    for (const [otherIndex, other] of result.routes) {
+      if (index === otherIndex) continue;
+      const crosses = layoutEngine.sampleCurvedCorridor(other.presentationPoints, undefined, 64).some(point =>
+        point.x >= box.x - 4 && point.x <= box.x + box.width + 4
+          && point.y >= box.y - 4 && point.y <= box.y + box.height + 4);
+      assert.equal(crosses, false, `pipe ${otherIndex} avoids badge ${index}`);
+    }
+  }
+  assert.equal(stableProjection(result), stableProjection(render(topology)));
 });
 
 test("presentation curves avoid unrelated port labels and square pins", () => {
