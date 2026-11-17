@@ -3,6 +3,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 const layoutEngine = require("./graph_layout.js");
+const { syntheticGraph } = require("./graph_fixture.cjs");
 
 function owner(id, parent, ports = []) {
   return { id, parent, label: parent === null ? "App" : id, ports, extensions: [] };
@@ -52,6 +53,91 @@ function stableProjection(result) {
     ]),
   });
 }
+
+function assertNoBodyCrossings({ graph, layout, routes }) {
+  for (const edge of graph.edges) {
+    const samples = layoutEngine.sampleCurvedCorridor(routes.get(edge.index).presentationPoints, undefined, 64);
+    for (const node of graph.nodes) {
+      if (node.kind === "boundary" || [edge.source.id, edge.target.id].includes(node.id)) continue;
+      const box = layout.positions.get(node.id);
+      assert.ok(!samples.some(point => point.x > box.x && point.x < box.x + box.width
+        && point.y > box.y && point.y < box.y + box.height), `${edge.index} avoids ${node.id}`);
+    }
+  }
+}
+
+test("a long early exit joins a later exit without reversing the incoming pipes", () => {
+  const ports = [{ name: "in", direction: "input" }, { name: "out", direction: "output" },
+    { name: "exit", direction: "output" }];
+  const topology = {
+    owners: [owner("owner:0", null, [{ name: "failed", direction: "output" },
+      { name: "size", direction: "output" }, { name: "empty", direction: "output" }])],
+    nodes: [operator("inspect", "owner:0", [{ name: "in", direction: "input" },
+      { name: "accepted", direction: "output" }, { name: "size", direction: "output" },
+      { name: "empty", direction: "output" }]), operator("reader", "owner:0", ports),
+      operator("writer", "owner:0", ports)],
+    edges: [edge(0, "reader", "out", "inspect", "in"), edge(1, "inspect", "accepted", "writer", "in"),
+      ...[["reader", "exit", "failed"], ["writer", "exit", "failed"],
+        ["inspect", "size", "size"], ["inspect", "empty", "empty"]].map(([id, port, result], index) => ({
+        ...edge(index + 2, id, port, `boundary:output:${result}`, result),
+        target: { id: `boundary:output:${result}`, port: result, kind: "output", owner: "owner:0" },
+      }))],
+  };
+  const result = render(topology);
+  assert.equal(layoutEngine.countRouteCrossings(result.routes), 0);
+  assert.equal(result.graph.nodes.filter(node => node.kind === "operator").length, 3);
+  assertNoBodyCrossings(result);
+  assert.equal(stableProjection(result), stableProjection(render(topology)));
+});
+
+test("self-returning pipes keep their ports and avoid the node body", () => {
+  const topology = { owners: [owner("owner:0", null)], nodes: [operator("loop", "owner:0",
+    [{ name: "in", direction: "input" }, { name: "out", direction: "output" }])],
+    edges: [edge(0, "loop", "out", "loop", "in")] };
+  const result = render(topology);
+  const box = result.layout.positions.get("loop"), route = result.routes.get(0);
+  assert.equal(route.start.x, box.x + box.width);
+  assert.equal(route.end.x, box.x);
+  const scope = result.layout.scopes.get("owner:0");
+  assert.ok(route.points.every(point => point.x > scope.x && point.x < scope.x + scope.width
+    && point.y > scope.y && point.y < scope.y + scope.height), "the return stays inside its scope");
+  assert.ok(layoutEngine.sampleCurvedCorridor(route.presentationPoints, undefined, 64).every(point =>
+    !(point.x > box.x && point.x < box.x + box.width && point.y > box.y && point.y < box.y + box.height)));
+  assert.equal(stableProjection(result), stableProjection(render(topology)));
+});
+
+test("layered routing remains deterministic and interactive as the link count doubles", () => {
+  const topology = syntheticGraph();
+  const measure = value => {
+    const graph = layoutEngine.materializeGraph(value);
+    const layout = layoutEngine.layoutGraph(graph.nodes, graph.edges, value.owners);
+    const start = performance.now();
+    const routes = layoutEngine.routeGraphEdges(graph, layout);
+    return { elapsed: performance.now() - start, result: { graph, layout, routes } };
+  };
+  const first = measure(topology);
+  const second = measure(topology);
+  assert.equal(stableProjection(first.result), stableProjection(second.result));
+  assert.ok(layoutEngine.countRouteCrossings(first.result.routes) <= 128);
+  assert.ok(layoutEngine.countRouteOverlaps(first.result.routes) <= 93);
+  const groups = new Map();
+  for (const node of first.result.graph.nodes) {
+    const rank = first.result.layout.rank.get(node.id);
+    if (!groups.has(rank)) groups.set(rank, []);
+    groups.get(rank).push(node);
+  }
+  for (const group of groups.values()) group.sort((a, b) =>
+    first.result.layout.positions.get(a.id).y - first.result.layout.positions.get(b.id).y);
+  assert.ok(layoutEngine.countLayerCrossings(groups, first.result.graph.edges, first.result.layout.rank) <= 32);
+  assertNoBodyCrossings(first.result);
+  const single = Math.min(first.elapsed, second.elapsed);
+  assert.ok(single < 2000, `67 links route in ${single.toFixed(1)} ms (limit 2000 ms)`);
+  const doubled = { ...topology, edges: [...topology.edges,
+    ...topology.edges.map((value, index) => ({ ...value, index: topology.edges.length + index,
+      route: `${value.route}:parallel` }))] };
+  const double = Math.min(measure(doubled).elapsed, measure(doubled).elapsed);
+  assert.ok(double <= single * 3, `134 links: ${double.toFixed(1)} ms; 67 links: ${single.toFixed(1)} ms`);
+});
 
 test("barycentric sweeps untangle crossed adjacent layers deterministically", () => {
   const topology = {
@@ -133,7 +219,7 @@ test("clear forward spans use one cubic and fan-in shares its final approach", (
   assert.equal(routes.size, 2);
 });
 
-test("vertically stacked scopes reuse horizontal ranks and reserve instance-title space", () => {
+test("recursive scopes preserve containment, flow order and instance-title space", () => {
   const ports = [{ name: "in", direction: "input" }, { name: "out", direction: "output" }];
   const topology = {
     owners: [owner("owner:0", null), owner("owner:1", "owner:0", ports)],
@@ -155,8 +241,25 @@ test("vertically stacked scopes reuse horizontal ranks and reserve instance-titl
   };
   const before = JSON.stringify(topology);
   const initial = render(topology);
-  assert.equal(initial.layout.positions.get("listener").x, initial.layout.positions.get("request").x);
-  assert.ok(initial.layout.positions.get("request").y > initial.layout.positions.get("deduplicate").y);
+  for (const [first, second] of [["listener", "validate"], ["validate", "deduplicate"],
+    ["request", "partner"], ["partner", "accounting"]]) {
+    assert.ok(initial.layout.positions.get(first).x < initial.layout.positions.get(second).x,
+      "each scope keeps its own left-to-right flow");
+  }
+  const child = initial.layout.scopes.get("owner:1");
+  const parent = initial.layout.scopes.get("owner:0");
+  assert.equal(parent.depth, 0);
+  assert.equal(child.depth, 1, "a nested scope keeps its containment styling");
+  assert.ok(child.x > parent.x && child.y > parent.y);
+  assert.ok(child.x + child.width < parent.x + parent.width);
+  assert.ok(child.y + child.height < parent.y + parent.height);
+  for (const id of ["request", "partner", "accounting"]) {
+    const box = initial.layout.positions.get(id);
+    assert.ok(box.x > child.x && box.y > child.y);
+    assert.ok(box.x + box.width < child.x + child.width);
+    assert.ok(box.y + box.height < child.y + child.height);
+  }
+  assertNoBodyCrossings(initial);
   assert.ok(initial.layout.positions.get("deduplicate").width >= 140, "the full name and instance badge have separate space");
   assert.equal(JSON.stringify(topology), before, "layout does not change validated topology");
   const opened = render({ ...topology, nodes: topology.nodes.map(node => ({ ...node, instances: [{}] })) });

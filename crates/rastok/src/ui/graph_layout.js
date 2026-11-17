@@ -1,10 +1,12 @@
 /*
  * Deterministic compound-graph layout for the embedded Rastok UI.
  *
- * This is an original, dependency-free implementation. It combines standard
- * barycentric layer sweeps with movable side-constrained ports and interval
- * track allocation. Geometry is disposable presentation state: semantic
- * node, port and edge identities always come from the validated snapshot.
+ * Dependency-free implementation of the applicable port-constrained phases
+ * in Schulze, Spönemann and von Hanxleden (2014): proper layering, port-aware
+ * sweeps, inverted-port dummies and recursive compound placement. Channel
+ * constraints allocate orthogonal tracks before the curve presentation.
+ * See docs/spec/ui.md for the reference and deterministic adaptations.
+ * Geometry never changes semantic node, port or edge identities.
  */
 (function install(root, factory) {
   const api = factory();
@@ -21,7 +23,6 @@
   const PORT_SPACING = 20;
   const TRACK_SPACING = 12;
   const BOX_EDGE_CLEARANCE = 6;
-  const PORT_STUB = 8;
   const FAN_STUB = 16;
   const ROOT_INPUT_GUTTER = 82;
   const ROOT_CONTENT_GUTTER = 144;
@@ -80,6 +81,95 @@
   }
 
   function layoutGraph(nodes, edges, owners) {
+    if (owners.length < 2) return layoutFlatGraph(nodes, edges, owners);
+    const ownerMap = new Map(owners.map(owner => [owner.id, owner]));
+    const root = owners.find(owner => owner.parent === null) || owners[0];
+    const children = new Map(owners.map(owner => [owner.id, []]));
+    for (const owner of owners) if (owner.parent) children.get(owner.parent)?.push(owner.id);
+    const byId = new Map(nodes.map(node => [node.id, node]));
+    const portions = new Map(), localEdges = new Map(owners.map(owner => [owner.id, []]));
+    const drawingPorts = new Map(owners.map(owner => [owner.id, [...(owner.ports || [])]]));
+    const boundary = (ownerId, direction, edge) => {
+      const known = resolveScopePort(ownerMap.get(ownerId), direction, edge);
+      // An unresolved flattened seam needs a routing attachment, not a new
+      // public Graph port. Only the original owner ports are ever rendered.
+      const name = known?.name || `routing:${edge.index}:${direction}`;
+      if (!drawingPorts.get(ownerId).some(port => port.name === name && port.direction === direction)) {
+        drawingPorts.get(ownerId).push({ name, direction });
+      }
+      return { id: `scope-boundary:${ownerId}:${direction}:${name}`, port: name, kind: direction, owner: ownerId };
+    };
+    for (const edge of edges) {
+      let source = edge.source, target = edge.target;
+      let sourceOwner = byId.get(source.id)?.owner || root.id;
+      let targetOwner = byId.get(target.id)?.owner || root.id;
+      const sourceChain = ownerChain(sourceOwner, ownerMap), targetChain = ownerChain(targetOwner, ownerMap);
+      let depth = 0;
+      while (sourceChain[depth] && sourceChain[depth] === targetChain[depth]) depth += 1;
+      const common = sourceChain[depth - 1] || root.id;
+      const before = [], after = [];
+      while (sourceOwner !== common) {
+        const pin = boundary(sourceOwner, "output", edge);
+        before.push({ owner: sourceOwner, source, target: pin });
+        source = { id: sourceOwner, port: pin.port, kind: "node" };
+        sourceOwner = ownerMap.get(sourceOwner).parent;
+      }
+      while (targetOwner !== common) {
+        const pin = boundary(targetOwner, "input", edge);
+        after.unshift({ owner: targetOwner, source: pin, target });
+        target = { id: targetOwner, port: pin.port, kind: "node" };
+        targetOwner = ownerMap.get(targetOwner).parent;
+      }
+      const parts = [...before, { owner: common, source, target }, ...after];
+      portions.set(edge.index, parts.map(part => part.owner));
+      for (const part of parts) localEdges.get(part.owner).push({ ...edge, source: part.source, target: part.target });
+    }
+    const local = new Map();
+    function arrange(ownerId) {
+      const owner = ownerMap.get(ownerId);
+      const direct = nodes.filter(node => node.owner === ownerId);
+      for (const childId of children.get(ownerId)) {
+        arrange(childId);
+        const child = local.get(childId).layout, frame = child.scopes.get(childId);
+        direct.push({ ...ownerMap.get(childId), id: childId, owner: ownerId, kind: "scope",
+          ports: drawingPorts.get(childId), layoutSize: { width: frame.width, height: frame.height },
+          fixedPorts: new Map([...child.scopePortAnchors].map(([key, point]) => [key,
+            { x: point.x - frame.x, y: point.y - frame.y }])) });
+      }
+      const graph = materializeGraph({ nodes: direct, edges: localEdges.get(ownerId),
+        owners: [{ ...owner, parent: null, ports: drawingPorts.get(ownerId) }] });
+      const layout = layoutFlatGraph(graph.nodes, graph.edges,
+        [{ ...owner, parent: null, ports: drawingPorts.get(ownerId) }]);
+      local.set(ownerId, { graph, layout });
+    }
+    arrange(root.id);
+    const result = { ...local.get(root.id).layout, positions: new Map(), scopes: new Map(),
+      portAnchors: new Map(), scopePortAnchors: new Map(), owners: ownerMap,
+      ownerChildren: children, compound: { local, portions } };
+    function place(ownerId, x, y, depth) {
+      const { layout } = local.get(ownerId), frame = layout.scopes.get(ownerId);
+      frame.depth = depth;
+      const dx = x - frame.x, dy = y - frame.y;
+      for (const collection of [layout.positions, layout.scopes, layout.portAnchors, layout.scopePortAnchors]) {
+        for (const point of collection.values()) { point.x += dx; point.y += dy; }
+      }
+      result.scopes.set(ownerId, frame);
+      for (const [id, point] of layout.positions) result.positions.set(id, point);
+      for (const [key, point] of layout.portAnchors) result.portAnchors.set(key, point);
+      for (const [key, point] of layout.scopePortAnchors) result.scopePortAnchors.set(key, point);
+      for (const childId of children.get(ownerId)) {
+        const box = layout.positions.get(childId);
+        place(childId, box.x, box.y, depth + 1);
+      }
+    }
+    const rootBox = local.get(root.id).layout.scopes.get(root.id);
+    place(root.id, rootBox.x, rootBox.y, 0);
+    const columns = [...new Set(nodes.map(node => result.positions.get(node.id)?.x))].sort((a,b) => a-b);
+    result.rank = new Map(nodes.map(node => [node.id, columns.indexOf(result.positions.get(node.id)?.x)]));
+    return result;
+  }
+
+  function layoutFlatGraph(nodes, edges, owners) {
     const byId = new Map(nodes.map((node, index) => [node.id, { node, index }]));
     const incoming = new Map(nodes.map((node) => [node.id, 0]));
     const predecessors = new Map(nodes.map((node) => [node.id, []]));
@@ -121,6 +211,15 @@
       }
     }
 
+    // Public outputs are at the far side of the entire drawing, including
+    // early exits. Their long pipes need dummy space past later Executors too.
+    const outputRank = Math.max(0, ...nodes.filter(node => node.kind !== "boundary").map(node => rank.get(node.id))) + 1;
+    for (const node of nodes) if (node.kind === "boundary" && node.direction === "output") rank.set(node.id, outputRank);
+    for (const node of nodes) if (node.kind === "boundary" && node.direction === "input") rank.set(node.id, -1);
+    const seedOrder = initialLayerOrder(nodes, edges, rank, predecessors, outgoing);
+    const layered = properLayering(nodes, edges, rank);
+    nodes = [...nodes, ...layered.dummies];
+    for (const node of layered.dummies) byId.set(node.id, { node, index: byId.size });
     const groups = new Map();
     for (const node of nodes) {
       const level = rank.get(node.id) || 0;
@@ -128,52 +227,102 @@
       groups.get(level).push(node);
     }
     for (const group of groups.values()) {
-      group.sort((left, right) => byId.get(left.id).index - byId.get(right.id).index);
+      group.sort((left, right) => (seedOrder.get(left.id) ?? byId.get(left.id).index)
+        - (seedOrder.get(right.id) ?? byId.get(right.id).index));
     }
     const maximumRank = Math.max(0, ...groups.keys());
+    const fixedPortOrder = new Map();
+    for (const node of nodes.filter(node => node.fixedPorts)) {
+      for (const direction of ["input", "output"]) {
+        const ports = node.ports.filter(port => port.direction === direction).sort((a,b) =>
+          node.fixedPorts.get(portKey(node.id, direction, a.name)).y
+          - node.fixedPorts.get(portKey(node.id, direction, b.name)).y);
+        ports.forEach((port, index) => fixedPortOrder.set(portKey(node.id, direction, port.name),
+          (index + 1) / (ports.length + 1)));
+      }
+    }
 
-    const orderByNeighbors = (level, neighbors) => {
+    const orderByNeighbors = (level, forward) => {
       const group = groups.get(level);
       if (!group || group.length < 2) return;
-      const order = layerOrder(groups);
+      const order = new Map();
+      for (const layer of groups.values()) layer.forEach((node, index) => order.set(node.id, index));
+      const centers = new Map();
       const barycenter = (node) => {
-        const adjacent = neighbors.get(node.id) || [];
-        if (!adjacent.length) return null;
-        const coordinates = adjacent
-          .filter((id) => order.has(id))
-          .map((id) => order.get(id));
-        return coordinates.length
+        if (centers.has(node.id)) return centers.get(node.id);
+        // In-layer edges connect a real node to an inverted-port dummy.
+        // Its adjacent-layer barycenter replaces the undefined in-layer rank
+        // (Schulze et al., equation 6). Never recurse through the real node.
+        const adjacent = (forward ? layered.incoming : layered.outgoing).get(node.id) || [];
+        const coordinates = adjacent.map(endpoint => {
+          if (rank.get(endpoint.id) === level) {
+            return byId.get(endpoint.id)?.node.kind === "routing"
+              ? barycenter(byId.get(endpoint.id).node) : null;
+          }
+          // Node-relative port ranking (equation 4), with FixedSide ports
+          // sharing a rank until their final order is chosen.
+          return (order.get(endpoint.id) ?? 0)
+            + (fixedPortOrder.get(portKey(endpoint.id, endpoint.direction, endpoint.port)) ?? 0.5);
+        }).filter(value => value !== null);
+        const result = coordinates.length
           ? coordinates.reduce((sum, coordinate) => sum + coordinate, 0) / coordinates.length
           : null;
+        centers.set(node.id, result);
+        return result;
       };
+      for (const node of group.filter(node => node.kind === "routing")) barycenter(node);
       group.sort((left, right) => {
         const leftCenter = barycenter(left);
         const rightCenter = barycenter(right);
         if (leftCenter !== null && rightCenter !== null && leftCenter !== rightCenter) {
           return leftCenter - rightCenter;
         }
-        return byId.get(left.id).index - byId.get(right.id).index;
+        return order.get(left.id) - order.get(right.id);
       });
     };
 
     // Repeated deterministic sweeps are cheap for the small inspection graph
     // and keep source order as the final tie-break. The local swap pass accepts
     // only a strict reduction in crossings, so equivalent layouts never flap.
-    for (let pass = 0; pass < 6; pass += 1) {
-      for (let level = 1; level <= maximumRank; level += 1) {
-        orderByNeighbors(level, predecessors);
+    const visibleCrossingBound = countLayerCrossings(groups, edges, rank);
+    const crossingCost = () => {
+      const visible = countLayerCrossings(groups, edges, rank);
+      return Math.max(0, visible - visibleCrossingBound) * (layered.edges.length ** 2 + 1)
+        + countLayerCrossings(groups, layered.edges, rank, fixedPortOrder);
+    };
+    let bestGroups = new Map([...groups].map(([level, group]) => [level, [...group]]));
+    let bestCrossings = crossingCost();
+    const initialGroups = new Map([...groups].map(([level, group]) => [level, [...group]]));
+    for (let seed = 0; seed < 8; seed += 1) {
+      for (const [level, group] of initialGroups) {
+        const offset = (seed - 2) % Math.max(1, group.length);
+        groups.set(level, seed === 1 ? [...group].reverse() : seed === 2
+          ? [...group].sort((a,b) => Number(b.kind === "routing") - Number(a.kind === "routing"))
+          : seed > 2 ? [...group.slice(offset), ...group.slice(0, offset)] : [...group]);
       }
-      for (let level = maximumRank - 1; level >= 0; level -= 1) {
-        orderByNeighbors(level, outgoing);
+      for (let pass = 0; pass < 12; pass += 1) {
+        if ((pass + seed) % 2 === 0) {
+          for (let level = 0; level <= maximumRank; level += 1) orderByNeighbors(level, true);
+        } else {
+          for (let level = maximumRank - 1; level >= -1; level -= 1) orderByNeighbors(level, false);
+        }
+        const crossings = crossingCost();
+        if (crossings < bestCrossings) {
+          bestCrossings = crossings;
+          bestGroups = new Map([...groups].map(([level, group]) => [level, [...group]]));
+        }
       }
     }
-    minimizeAdjacentCrossings(groups, edges, rank);
+    for (const [level, group] of bestGroups) groups.set(level, group);
+    minimizeAdjacentCrossings(groups, crossingCost);
 
     const rankOrder = new Map();
     for (const [level, group] of groups) {
       group.forEach((node, index) => rankOrder.set(node.id, [level, index]));
     }
     const dimensions = new Map(nodes.map((node) => {
+      if (node.layoutSize) return [node.id, node.layoutSize];
+      if (node.kind === "routing") return [node.id, { width: 0, height: 0 }];
       if (node.kind === "boundary" || node.kind === "discard") {
         const label = String(node.label || node.ports?.[0]?.name || "boundary");
         return [node.id, {
@@ -191,6 +340,12 @@
         height: Math.max(54, (Math.max(inputs, outputs) - 1) * PORT_SPACING + 36),
       }];
     }));
+    for (const node of layered.dummies) {
+      dimensions.get(node.id).width = Math.max(0, ...nodes
+        .filter(other => other.owner === node.owner && rank.get(other.id) === rank.get(node.id)
+          && other.kind !== "routing" && other.kind !== "boundary")
+        .map(other => dimensions.get(other.id).width));
+    }
 
     const columnGap = 128;
     const ownerMap = new Map(owners.map((owner, index) => [owner.id, { ...owner, index }]));
@@ -221,9 +376,8 @@
       });
     }
 
-    // Child scopes already have their own vertical bands. Global DAG ranks
-    // order work, but are not horizontal space that must be paid for again in
-    // every band (a downstream child is not another screen to the right).
+    // A child scope is a sized node in this local layer graph. Its internal
+    // ranks have already been placed recursively and do not leak into ours.
     const ownerRankX = new Map();
     for (const [ownerId, ownerNodes] of directNodes) {
       const levels = [...new Set(ownerNodes
@@ -238,7 +392,14 @@
         const outputLabels = Math.max(0, ...ranked.flatMap(node => (node.ports || [])
           .filter(port => port.direction === "output")
           .map(port => textWidth(port.display_label || port.name))));
-        x += width + Math.max(columnGap, outputLabels + 56);
+        const nextLevel = levels[levels.indexOf(level) + 1];
+        const inputLabels = Math.max(0, ...ownerNodes.filter(node => rank.get(node.id) === nextLevel)
+          .flatMap(node => (node.ports || []).filter(port => port.direction === "input")
+            .map(port => textWidth(port.display_label || port.name))));
+        const tracks = layered.edges.filter(edge => (rank.get(edge.source.id) === level
+          && rank.get(edge.target.id) === nextLevel) || (rank.get(edge.source.id) === rank.get(edge.target.id)
+            && [level, nextLevel].includes(rank.get(edge.source.id)))).length;
+        x += width + Math.max(columnGap, outputLabels + inputLabels + 48 + tracks * TRACK_SPACING);
       }
       ownerRankX.set(ownerId, coordinates);
     }
@@ -342,9 +503,14 @@
         components.push({ left: child.x, right: child.x + child.width });
       }
       const hasInput = (ownerMap.get(ownerId)?.ports || []).some(port => port.direction === "input");
-      const leftPadding = hasInput
+      const returnCount = edges.filter(edge => rank.get(edge.target.id) <= rank.get(edge.source.id)).length;
+      const inputLabels = Math.max(0, ...nodes.flatMap(node => (node.ports || [])
+        .filter(port => port.direction === "input").map(port => textWidth(port.display_label || port.name))));
+      const returnPadding = returnCount ? FAN_STUB + inputLabels
+        + returnCount * (TRACK_SPACING + 3) + BOX_EDGE_CLEARANCE : 0;
+      const leftPadding = Math.max(returnPadding, hasInput
         ? ownerId === rootOwner.id ? ROOT_CONTENT_GUTTER : 64
-        : SCOPE_PADDING * 2;
+        : SCOPE_PADDING * 2);
       let left = components.length ? Math.min(...components.map((component) => component.left)) - leftPadding : 42;
       const rootResultLabelWidth = Math.max(
         0,
@@ -356,9 +522,9 @@
         + EDGE_COUNTER_WIDTH
         + PORT_LABEL_CLEARANCE * 2
         + 28;
-      const rightPadding = ownerId === rootOwner.id
+      const rightPadding = Math.max(returnPadding, ownerId === rootOwner.id
         ? Math.max(ROOT_OUTPUT_GUTTER, resultLaneWidth)
-        : 64;
+        : 64);
       let right = components.length ? Math.max(...components.map((component) => component.right)) + rightPadding : left + 190;
       if (right - left < 190) {
         const extension = (190 - (right - left)) / 2;
@@ -389,17 +555,97 @@
       positions,
       scopes,
       rank,
+      layerOrder: new Map([...rankOrder].map(([id, [, order]]) => [id, order])),
       owners: ownerMap,
       ownerChildren: children,
       rootOwner: rootOwner.id,
       portAnchors: new Map(),
       scopePortAnchors: new Map(),
+      edgeChains: layered.chains,
     };
     placeMovablePorts(nodes, edges, layout);
     // Once public boundary endpoints have moved, align child scope pins with
     // the same final producer/consumer ports instead of their initial boxes.
     placeMovablePorts(nodes, edges, layout);
     return layout;
+  }
+
+  // Proper layering precedes crossing minimization and placement. These
+  // vertices belong to the drawing only, never to the validated topology.
+  // Regular long edges get one dummy in every intermediate layer. A return
+  // gets an inverted-port dummy at each end as well (Schulze et al., §4.1).
+  function properLayering(nodes, edges, rank) {
+    const byId = new Map(nodes.map(node => [node.id, node]));
+    const ownerLayers = new Map();
+    for (const node of nodes) {
+      if (!ownerLayers.has(node.owner)) ownerLayers.set(node.owner, new Set());
+      ownerLayers.get(node.owner).add(rank.get(node.id));
+    }
+    const dummies = [], segments = [], chains = new Map();
+    const dummy = (edge, level, owner, side) => {
+      const id = `routing:${edge.index}:${level}:${side}`;
+      const node = { id, owner, kind: "routing", ports: [] };
+      dummies.push(node);
+      rank.set(id, level);
+      return id;
+    };
+    for (const edge of edges) {
+      const source = byId.get(edge.source.id), target = byId.get(edge.target.id);
+      if (!source || !target) continue;
+      const first = rank.get(source.id), last = rank.get(target.id);
+      const chain = [source.id];
+      if (source.owner === target.owner) {
+        if (last <= first) chain.push(dummy(edge, first, source.owner, "source"));
+        const direction = last > first ? 1 : -1;
+        for (const level of [...ownerLayers.get(source.owner)].sort((a,b) => direction * (a-b))) {
+          if (direction * (level - first) <= 0 || direction * (last - level) <= 0) continue;
+          chain.push(dummy(edge, level, source.owner, "long"));
+        }
+        if (last <= first) chain.push(dummy(edge, last, target.owner, "target"));
+      }
+      chain.push(target.id);
+      chains.set(edge.index, chain);
+      for (let index = 1; index < chain.length; index += 1) {
+        const a = chain[index - 1], b = chain[index];
+        const reversed = first > last;
+        const from = { id: a, ...(a === source.id ? { port: edge.source.port, direction: "output" } : {}) };
+        const to = { id: b, ...(b === target.id ? { port: edge.target.port, direction: "input" } : {}) };
+        segments.push({ source: reversed ? to : from, target: reversed ? from : to });
+      }
+    }
+    const incoming = new Map(), outgoing = new Map();
+    for (const edge of segments) {
+      addSample(incoming, edge.target.id, edge.source);
+      addSample(outgoing, edge.source.id, edge.target);
+    }
+    return { dummies, edges: segments, chains, incoming, outgoing };
+  }
+
+  // A deterministic initial sweep on the unsplit graph retains the ordering
+  // of the visible flow as a candidate; proper-layer sweeps may improve it.
+  function initialLayerOrder(nodes, edges, rank, predecessors, successors) {
+    const groups = new Map(), indices = new Map(nodes.map((node, index) => [node.id, index]));
+    for (const node of nodes) addSample(groups, rank.get(node.id), node);
+    const maximum = Math.max(0, ...groups.keys());
+    const sweep = (level, neighbors) => {
+      const group = groups.get(level);
+      if (!group || group.length < 2) return;
+      const order = layerOrder(groups);
+      const center = node => {
+        const adjacent = neighbors.get(node.id) || [];
+        return adjacent.length ? adjacent.reduce((sum, id) => sum + order.get(id), 0) / adjacent.length : null;
+      };
+      group.sort((a, b) => {
+        const left = center(a), right = center(b);
+        return left !== null && right !== null && left !== right ? left - right : indices.get(a.id) - indices.get(b.id);
+      });
+    };
+    for (let pass = 0; pass < 6; pass += 1) {
+      for (let level = 1; level <= maximum; level += 1) sweep(level, predecessors);
+      for (let level = maximum - 1; level >= 0; level -= 1) sweep(level, successors);
+    }
+    minimizeAdjacentCrossings(groups, () => countLayerCrossings(groups, edges, rank));
+    return new Map([...groups.values()].flatMap(group => group.map((node, index) => [node.id, index])));
   }
 
   function layerOrder(groups) {
@@ -410,8 +656,8 @@
     return order;
   }
 
-  function minimizeAdjacentCrossings(groups, edges, rank) {
-    let best = countLayerCrossings(groups, edges, rank);
+  function minimizeAdjacentCrossings(groups, crossingCost) {
+    let best = crossingCost();
     const levels = [...groups.keys()].sort((left, right) => left - right);
     for (let pass = 0; pass < 4; pass += 1) {
       let changed = false;
@@ -419,7 +665,7 @@
         const group = groups.get(level);
         for (let index = 0; index + 1 < group.length; index += 1) {
           [group[index], group[index + 1]] = [group[index + 1], group[index]];
-          const candidate = countLayerCrossings(groups, edges, rank);
+          const candidate = crossingCost();
           if (candidate < best) {
             best = candidate;
             changed = true;
@@ -432,7 +678,7 @@
     }
   }
 
-  function countLayerCrossings(groups, edges, rank) {
+  function countLayerCrossings(groups, edges, rank, portOrder) {
     const order = new Map();
     for (const group of groups.values()) {
       group.forEach((node, index) => order.set(node.id, index));
@@ -445,8 +691,8 @@
       const key = `${sourceRank}:${targetRank}`;
       if (!buckets.has(key)) buckets.set(key, []);
       buckets.get(key).push({
-        source: order.get(edge.source.id),
-        target: order.get(edge.target.id),
+        source: order.get(edge.source.id) + (portOrder?.get(portKey(edge.source.id, edge.source.direction, edge.source.port)) ?? 0.5),
+        target: order.get(edge.target.id) + (portOrder?.get(portKey(edge.target.id, edge.target.direction, edge.target.port)) ?? 0.5),
       });
     }
     let crossings = 0;
@@ -472,15 +718,15 @@
         if (!sourcePosition || !targetPosition) continue;
         const sourceKey = portKey(edge.source.id, "output", edge.source.port);
         const targetKey = portKey(edge.target.id, "input", edge.target.port);
-        const sameOwner = byId.get(edge.source.id).owner === byId.get(edge.target.id).owner;
-        const skippedRanks = sameOwner && targetPosition.x > sourcePosition.x
-          ? Math.max(0, layout.rank.get(edge.target.id) - layout.rank.get(edge.source.id) - 1) : 0;
-        // Long forward pipes need a lower bypass around intermediate bodies.
-        // Real opposite pins keep short connections in their existing order.
+        const chain = layout.edgeChains.get(edge.index) || [];
+        const sourceDummy = chain.length > 2 ? layout.positions.get(chain[1]) : null;
+        const targetDummy = chain.length > 2 ? layout.positions.get(chain.at(-2)) : null;
+        // Long-edge and inverted-port dummies participated in the sweep.
+        // Their positions, not a local detour preference, now order the pins.
         addSample(samples, sourceKey,
-          (layout.portAnchors.get(targetKey)?.y ?? boxCenterY(targetPosition)) + skippedRanks * TRACK_SPACING);
+          sourceDummy ? boxCenterY(sourceDummy) : (layout.portAnchors.get(targetKey)?.y ?? boxCenterY(targetPosition)));
         addSample(samples, targetKey,
-          (layout.portAnchors.get(sourceKey)?.y ?? boxCenterY(sourcePosition)) + skippedRanks * TRACK_SPACING);
+          targetDummy ? boxCenterY(targetDummy) : (layout.portAnchors.get(sourceKey)?.y ?? boxCenterY(sourcePosition)));
       }
       return samples;
     };
@@ -499,10 +745,12 @@
           const port = resolveScopePort(owner, direction, edge);
           const targetPosition = layout.positions.get(target.id);
           if (port && targetPosition) {
+            const chain = layout.edgeChains.get(edge.index) || [];
+            const dummy = chain.length > 2 ? layout.positions.get(chain[1]) : null;
             addSample(
               ownerSamples,
               scopePortKey(ownerId, direction, port.name),
-              layout.portAnchors.get(portKey(target.id, "input", edge.target.port))?.y ?? boxCenterY(targetPosition),
+              dummy ? dummy.y : (layout.portAnchors.get(portKey(target.id, "input", edge.target.port))?.y ?? boxCenterY(targetPosition)),
             );
           }
         }
@@ -511,10 +759,12 @@
           const port = resolveScopePort(owner, direction, edge);
           const sourcePosition = layout.positions.get(source.id);
           if (port && sourcePosition) {
+            const chain = layout.edgeChains.get(edge.index) || [];
+            const dummy = chain.length > 2 ? layout.positions.get(chain.at(-2)) : null;
             addSample(
               ownerSamples,
               scopePortKey(ownerId, direction, port.name),
-              layout.portAnchors.get(portKey(source.id, "output", edge.source.port))?.y ?? boxCenterY(sourcePosition),
+              dummy ? dummy.y : (layout.portAnchors.get(portKey(source.id, "output", edge.source.port))?.y ?? boxCenterY(sourcePosition)),
             );
           }
         }
@@ -555,6 +805,11 @@
             centeredSideY(scope, index, ports.length),
           ),
           (port) => port.name,
+          (port) => {
+            const node = nodes.find(node => node.kind === "boundary" && node.owner === ownerId
+              && node.direction === direction && node.ports[0]?.name === port.name);
+            return layout.layerOrder.get(node?.id);
+          },
         );
         for (const [port, y] of anchors) {
           layout.scopePortAnchors.set(scopePortKey(ownerId, direction, port.name), {
@@ -592,6 +847,11 @@
           centeredSideY(rootScope, index, outputItems.length),
         ),
       (item) => `${item.kind}:${item.kind === "port" ? item.value.name : item.value.id}`,
+      (item) => {
+        const node = nodes.find(node => node.kind === "boundary" && node.owner === root.id
+          && node.direction === "output" && node.ports[0]?.name === item.value.name);
+        return layout.layerOrder.get(node?.id);
+      },
     );
     for (const [item, y] of outputAnchors) {
       if (item.kind === "port") {
@@ -633,6 +893,11 @@
       if (node.kind === "boundary" || node.kind === "discard") continue;
       const position = layout.positions.get(node.id);
       if (!position) continue;
+      if (node.fixedPorts) {
+        for (const [key, point] of node.fixedPorts) layout.portAnchors.set(key,
+          { x: position.x + point.x, y: position.y + point.y });
+        continue;
+      }
       for (const direction of ["input", "output"]) {
         const ports = (node.ports || []).filter((port) => port.direction === direction);
         const anchors = allocateSideItems(
@@ -655,19 +920,24 @@
     }
   }
 
-  function allocateSideItems(items, minimum, maximum, desired, stableKey) {
+  function allocateSideItems(items, minimum, maximum, desired, stableKey, order) {
     if (!items.length) return [];
     const ranked = items.map((item, index) => ({
       item,
       index,
-      desired: clamp(desired(item, index), minimum, maximum),
+      desired: desired(item, index),
       key: stableKey(item),
+      order: order?.(item),
     }));
-    ranked.sort((left, right) => left.desired - right.desired
+    ranked.sort((left, right) => (left.order !== undefined && right.order !== undefined ? left.order - right.order : 0)
+      || left.desired - right.desired
       || String(left.key).localeCompare(String(right.key))
       || left.index - right.index);
     const spacing = Math.min(PORT_SPACING, (maximum - minimum) / Math.max(1, ranked.length - 1));
-    const values = ranked.map((entry) => entry.desired);
+    // Sort barycenters before clamping coordinates. Otherwise all neighbors
+    // below (or above) the body collapse to one rank and declaration/name
+    // order silently replaces the crossing-minimizing port order.
+    const values = ranked.map((entry) => clamp(entry.desired, minimum, maximum));
     for (let index = 1; index < values.length; index += 1) {
       values[index] = Math.max(values[index], values[index - 1] + spacing);
     }
@@ -685,6 +955,30 @@
   }
 
   function routeGraphEdges(graph, layout) {
+    let routes;
+    if (layout.compound) {
+      const localRoutes = new Map([...layout.compound.local].map(([id, item]) =>
+        [id, routeLocalEdges(item.graph, item.layout)]));
+      routes = new Map();
+      for (const edge of graph.edges) {
+        const points = [], presentationPoints = [];
+        for (const owner of layout.compound.portions.get(edge.index)) {
+          const part = localRoutes.get(owner).get(edge.index);
+          appendPoints(points, part.points);
+          appendPoints(presentationPoints, part.presentationPoints);
+        }
+        const source = graph.byId.get(edge.source.id), target = graph.byId.get(edge.target.id);
+        routes.set(edge.index, { start: points[0], end: points.at(-1),
+          points: compactOrthogonalPoints(points), presentationPoints: compactOrthogonalPoints(presentationPoints),
+          portals: routingPortals(edge, source, target, layout) });
+      }
+    } else routes = routeLocalEdges(graph, layout);
+    placeEdgeLabels(routes, graph, layout);
+    growLayoutForRoutes(routes, layout);
+    return routes;
+  }
+
+  function routeLocalEdges(graph, layout) {
     const candidates = [];
     for (const edge of graph.edges) {
       const source = graph.byId.get(edge.source.id);
@@ -700,88 +994,29 @@
         target,
         start: { x: sourcePort.x, y: sourcePort.y },
         end: { x: targetPort.x, y: targetPort.y },
-        portals: routingPortals(edge, source, target, layout),
       });
     }
-    const sourceFans = fanOffsets(candidates, true);
-    const targetFans = fanOffsets(candidates, false);
-    const routes = new Map();
-    const occupiedVertical = [];
-    const occupiedSegments = [];
-    const occupiedPresentation = [];
+    const sourceFans = fanOffsets(candidates, true, layout);
+    const targetFans = fanOffsets(candidates, false, layout);
     const labelObstacles = graphLabelObstacles(graph, layout);
+    const planned = channelRoutes(candidates, sourceFans, targetFans, layout, labelObstacles);
+    const routes = new Map();
     const bodies = graph.nodes.filter(node => node.kind !== "boundary" && node.kind !== "discard")
       .map(node => layout.positions.get(node.id));
     const headers = [...layout.scopes.values()].map(scope => expandBox({ ...scope, height: SCOPE_HEADER }, BOX_EDGE_CLEARANCE));
-    const frameTracks = [...layout.scopes.values()].flatMap(scope => orthogonalSegments([
-      { x: scope.x, y: scope.y }, { x: scope.x + scope.width, y: scope.y },
-      { x: scope.x + scope.width, y: scope.y + scope.height }, { x: scope.x, y: scope.y + scope.height },
-      { x: scope.x, y: scope.y },
-    ]));
     const ordered = [...candidates].sort((left, right) =>
-      left.portals.length - right.portals.length
-      || left.start.x - right.start.x
+      left.start.x - right.start.x
       || left.end.x - right.end.x
       || left.edge.index - right.edge.index);
 
     for (const candidate of ordered) {
-      const sourceFan = sourceFans.get(candidate.edge.index) || { offset: 0, branch: 0, count: 1 };
       const targetFan = targetFans.get(candidate.edge.index) || { offset: 0, branch: 0, count: 1 };
-      const points = [candidate.start];
-      let current = candidate.start;
-      if (sourceFan.count > 1) {
-        const forward = { x: candidate.start.x + FAN_STUB, y: candidate.start.y };
-        const separated = { x: forward.x, y: candidate.start.y + sourceFan.offset };
-        const branch = { x: forward.x + PORT_STUB, y: separated.y };
-        appendPoints(points, [forward, separated, branch]);
-        current = branch;
-      } else {
-        current = { x: candidate.start.x + PORT_STUB, y: candidate.start.y };
-        appendPoints(points, [current]);
-      }
-
-      for (const portal of candidate.portals) {
-        const before = { x: portal.x - PORT_STUB, y: portal.y };
-        appendPoints(points, routeSpan(
-          current,
-          before,
-          candidate.edge.index,
-          occupiedVertical,
-          [...occupiedSegments, ...orthogonalSegments(points)],
-        ));
-        appendPoints(points, [portal, { x: portal.x + PORT_STUB, y: portal.y }]);
-        current = points.at(-1);
-      }
-
-      let targetApproach = { x: candidate.end.x - PORT_STUB, y: candidate.end.y };
-      const targetTail = [candidate.end];
-      if (targetFan.count > 1) {
-        const branch = {
-          x: candidate.end.x - FAN_STUB - PORT_STUB,
-          y: candidate.end.y + targetFan.offset,
-        };
-        const separated = {
-          x: candidate.end.x - FAN_STUB,
-          y: candidate.end.y + targetFan.offset,
-        };
-        const aligned = { x: separated.x, y: candidate.end.y };
-        targetApproach = branch;
-        targetTail.splice(0, 1, separated, aligned, candidate.end);
-      }
-      appendPoints(points, routeSpan(
-        current,
-        targetApproach,
-        candidate.edge.index,
-        occupiedVertical,
-        [...occupiedSegments, ...orthogonalSegments(points)],
-      ));
-      appendPoints(points, targetTail);
-      const compact = compactOrthogonalPoints(points);
-      const presentationPoints = [candidate.start,
-        ...candidate.portals.map(portal => ({ x: portal.x, y: portal.y }))];
+      const compact = planned.get(candidate.edge.index);
+      const hasDummies = (layout.edgeChains.get(candidate.edge.index)?.length || 0) > 2;
+      const presentationPoints = [candidate.start];
       // Multiple pipes keep their identities and join the same short approach
       // to the receiving pin. They do not create a shared semantic mailbox.
-      const returning = (candidate.portals.at(-1)?.x ?? candidate.start.x) >= candidate.end.x;
+      const returning = candidate.start.x >= candidate.end.x;
       if (targetFan.count > 1 && !returning) {
         const targetKey = candidate.target.kind === "boundary"
           ? scopePortKey(candidate.target.owner, candidate.target.direction, candidate.target.ports[0].name)
@@ -794,43 +1029,38 @@
       const ownPorts = new Set([
         portKey(candidate.source.id, "output", candidate.edge.source.port),
         portKey(candidate.target.id, "input", candidate.edge.target.port),
-        ...candidate.portals.map(portal => scopePortKey(portal.owner, portal.direction, portal.port)),
       ]);
       for (const endpoint of [candidate.source, candidate.target]) {
         if (endpoint.kind === "boundary") ownPorts.add(scopePortKey(endpoint.owner, endpoint.direction, endpoint.ports[0].name));
       }
       const obstacles = [...labelObstacles.filter(box => !ownPorts.has(box.portKey)),
         ...bodies.map(body => ({ ...expandBox(body, BOX_EDGE_CLEARANCE), body })), ...headers];
-      const clearPoints = [];
-      const lastPortal = candidate.portals.at(-1);
-      for (let index = 1; index < presentationPoints.length; index += 1) {
-        const from = presentationPoints[index - 1], to = presentationPoints[index];
-        const parentArrival = index === candidate.portals.length + 1 && lastPortal?.direction === "output"
-          && candidate.target.kind === "boundary" && candidate.target.owner === layout.owners.get(lastPortal.owner)?.parent;
-        const span = routePresentationSpan(from, to, obstacles, layout.scopes.get(layout.rootOwner),
-          occupiedPresentation, frameTracks, parentArrival, targetFan.count > 1 && !returning && index === presentationPoints.length - 2);
-        appendPoints(clearPoints, span);
-        occupiedPresentation.push({ from, to, tracks: presentationTracks(span) });
+      let clearPoints = compact.map(point => ({ ...point }));
+      if (!hasDummies && !returning) {
+        const direct = presentationPoints.map((point, index) => ({ ...point,
+          ...(index === 1 ? { curve: true } : {}) }));
+        const hits = sampleCurvedCorridor(direct, CORNER_RADIUS, 32).some(point => obstacles.some(box => {
+          if (box.body && ((candidate.start.x === box.body.x + box.body.width
+            && point.x >= candidate.start.x && Math.hypot(point.x - candidate.start.x, point.y - candidate.start.y) <= BOX_EDGE_CLEARANCE)
+            || (candidate.end.x === box.body.x && point.x <= candidate.end.x
+              && Math.hypot(point.x - candidate.end.x, point.y - candidate.end.y) <= BOX_EDGE_CLEARANCE))) return false;
+          return point.x > box.x && point.x < box.x + box.width && point.y > box.y && point.y < box.y + box.height;
+        }));
+        if (!hits) clearPoints = direct;
       }
       const route = {
         start: candidate.start,
         end: candidate.end,
         points: compact,
         presentationPoints: clearPoints,
-        portals: candidate.portals,
+        portals: [],
       };
       routes.set(candidate.edge.index, route);
-      occupiedSegments.push(...orthogonalSegments(compact).map((segment) => ({
-        ...segment,
-        edge: candidate.edge.index,
-      })));
     }
-    placeEdgeLabels(routes, graph, layout);
-    growLayoutForRoutes(routes, layout);
     return routes;
   }
 
-  function fanOffsets(candidates, source) {
+  function fanOffsets(candidates, source, layout) {
     const groups = new Map();
     for (const candidate of candidates) {
       const endpoint = source ? candidate.edge.source : candidate.edge.target;
@@ -839,18 +1069,144 @@
       groups.get(key).push(candidate);
     }
     const offsets = new Map();
+    const adjacentY = candidate => {
+      const chain = layout.edgeChains.get(candidate.edge.index) || [];
+      const dummy = chain.length > 2 ? layout.positions.get(source ? chain[1] : chain.at(-2)) : null;
+      return dummy?.y ?? (source ? candidate.end.y : candidate.start.y);
+    };
     for (const group of groups.values()) {
       group.sort((left, right) => {
-        const leftCoordinate = source ? left.end.y : left.start.y;
-        const rightCoordinate = source ? right.end.y : right.start.y;
-        return leftCoordinate - rightCoordinate || left.edge.index - right.edge.index;
+        return adjacentY(left) - adjacentY(right) || left.edge.index - right.edge.index;
       });
       group.forEach((candidate, index) => offsets.set(candidate.edge.index, {
-        offset: (index - (group.length - 1) / 2) * 6,
+        offset: (index - (group.length - 1) / 2) * TRACK_SPACING,
         count: group.length,
+        index,
       }));
     }
     return offsets;
+  }
+
+  function channelRoutes(candidates, sourceFans, targetFans, layout, labels) {
+    const channels = new Map(), sideChannels = new Map(), paths = new Map();
+    const sideConnect = (parts, from, to, key, direction) => {
+      const span = { from, to, direction };
+      parts.push(span);
+      addSample(sideChannels, key, span);
+    };
+    const connect = (parts, from, to, key) => {
+      if (from.y === to.y) { parts.push([from, to]); return; }
+      const span = { from, to, order: parts.length, key };
+      parts.push(span);
+      if (!channels.has(key)) channels.set(key, []);
+      channels.get(key).push(span);
+    };
+    for (const candidate of candidates) {
+      const { start, end, edge, source, target } = candidate;
+      const sourceFan = sourceFans.get(edge.index), targetFan = targetFans.get(edge.index);
+      const labelKey = (node, direction, port) => node.kind === "boundary"
+        ? scopePortKey(node.owner, node.direction, node.ports[0].name) : portKey(node.id, direction, port);
+      const sourceLabel = labels.find(box => box.portKey === labelKey(source, "output", edge.source.port));
+      const targetLabel = labels.find(box => box.portKey === labelKey(target, "input", edge.target.port));
+      const parts = [], first = { x: Math.max(start.x + FAN_STUB, (sourceLabel?.x ?? start.x)
+        + (sourceLabel?.width ?? 0) + BOX_EDGE_CLEARANCE) + sourceFan.index * 3, y: start.y + sourceFan.offset };
+      parts.push([start, { x: first.x, y: start.y }, first]);
+      let current = first;
+      const chain = layout.edgeChains.get(edge.index) || [];
+      const forward = layout.rank.get(source.id) < layout.rank.get(target.id);
+      for (let index = 1; index + 1 < chain.length; index += 1) {
+        const box = layout.positions.get(chain[index]);
+        const entry = { x: forward ? box.x : box.x + box.width, y: box.y };
+        const leave = { x: forward ? box.x + box.width : box.x, y: box.y };
+        const a = layout.rank.get(chain[index - 1]), b = layout.rank.get(chain[index]);
+        const key = `${source.owner}:${Math.min(a, b)}:${Math.max(a, b)}`;
+        if (a === b) {
+          sideConnect(parts, current, entry, `${source.owner}:${a}:east`, 1);
+        } else connect(parts, current, entry, key);
+        parts.push([entry, leave]);
+        current = leave;
+      }
+      const last = { x: Math.min(end.x - FAN_STUB, (targetLabel?.x ?? end.x) - BOX_EDGE_CLEARANCE)
+        - targetFan.index * 3, y: end.y + targetFan.offset };
+      const a = layout.rank.get(chain.at(-2)), b = layout.rank.get(target.id);
+      if (chain.length > 2 && a === b) {
+        sideConnect(parts, current, last, `${target.owner}:${a}:west`, -1);
+      } else {
+        connect(parts, current, last, source.owner === target.owner
+          ? `${source.owner}:${Math.min(a, b)}:${Math.max(a, b)}` : `portal:${current.x}:${last.x}`);
+      }
+      parts.push([last, { x: last.x, y: end.y }, end]);
+      paths.set(edge.index, parts);
+    }
+    for (const spans of sideChannels.values()) {
+      const direction = spans[0].direction;
+      const base = direction > 0 ? Math.max(...spans.flatMap(span => [span.from.x, span.to.x]))
+        : Math.min(...spans.flatMap(span => [span.from.x, span.to.x]));
+      spans.sort((a,b) => Math.abs(a.to.y-a.from.y) - Math.abs(b.to.y-b.from.y));
+      spans.forEach((span,index) => { span.x = base + direction * (index + 1) * TRACK_SPACING; });
+    }
+    for (const spans of channels.values()) {
+      // Channel precedence is determined jointly, before assigning any x.
+      // A horizontal endpoint inside another edge's vertical interval must
+      // not cross that edge's track. Conflicting preferences form cycles;
+      // remove those deterministically by weighted out-degree minus in-degree.
+      const normalized = spans.map((span, index) => ({ span, index,
+        left: span.from.x < span.to.x ? span.from : span.to,
+        right: span.from.x < span.to.x ? span.to : span.from,
+        before: new Map(), incoming: 0 }));
+      const inside = (y, a, b) => y > Math.min(a, b) && y < Math.max(a, b);
+      const cost = (a, b) => Number(inside(b.left.y, a.left.y, a.right.y))
+        + Number(inside(a.right.y, b.left.y, b.right.y))
+        + (a.right.y === b.left.y ? 1000 : 0);
+      for (let a = 0; a < normalized.length; a += 1) {
+        for (let b = a + 1; b < normalized.length; b += 1) {
+          const left = normalized[a], right = normalized[b];
+          const difference = cost(left, right) - cost(right, left);
+          if (!difference) continue;
+          const before = difference < 0 ? left : right, after = difference < 0 ? right : left;
+          before.before.set(after, Math.abs(difference));
+          after.incoming += Math.abs(difference);
+        }
+      }
+      const pending = new Set(normalized), ordered = [];
+      while (pending.size) {
+        const ready = [...pending].filter(item => item.incoming === 0);
+        const eligible = ready.length ? ready : [...pending];
+        const balance = item => [...item.before].filter(([after]) => pending.has(after))
+          .reduce((sum, [, weight]) => sum + weight, 0) - item.incoming;
+        eligible.sort((a, b) => (ready.length ? 0 : balance(b) - balance(a))
+          || a.left.y - b.left.y || a.right.y - b.right.y || a.index - b.index);
+        const next = eligible[0];
+        ordered.push(next);
+        pending.delete(next);
+        for (const [after, weight] of next.before) after.incoming -= weight;
+      }
+      const minimum = Math.max(...normalized.map(item => item.left.x));
+      const maximum = Math.min(...normalized.map(item => item.right.x));
+      for (let index = 0; index < ordered.length; index += 1) {
+        const { span } = ordered[index];
+        span.x = minimum + (maximum - minimum) * (index + 1) / (ordered.length + 1);
+      }
+      // Opposing horizontal runs can have exactly the same ordinate. If
+      // their precedence constraints form a cycle, distinct vertical tracks
+      // alone cannot separate them. Add a short jog at the receiving side,
+      // keeping the semantic pin and its shared approach unchanged.
+      const ordinates = new Set(normalized.flatMap(item => [item.left.y, item.right.y]));
+      for (const item of ordered) {
+        if (!ordered.some(other => other !== item && item.span.x < other.span.x
+          && item.right.y === other.left.y)) continue;
+        let delta = TRACK_SPACING / 2;
+        while (ordinates.has(item.right.y + delta)) delta += TRACK_SPACING / 2;
+        const jog = { x: item.right.x, y: item.right.y + delta };
+        ordinates.add(jog.y);
+        const points = [item.left, { x: item.span.x, y: item.left.y },
+          { x: item.span.x, y: jog.y }, jog, item.right];
+        item.span.points = item.span.from === item.left ? points : points.reverse();
+      }
+    }
+    return new Map([...paths].map(([index, parts]) => [index, compactOrthogonalPoints(parts.flatMap(part =>
+      Array.isArray(part) ? part : part.points || [part.from, { x: part.x, y: part.from.y },
+        { x: part.x, y: part.to.y }, part.to]))]));
   }
 
   function routingPortals(edge, source, target, layout) {
@@ -882,124 +1238,6 @@
     return portals;
   }
 
-  function routeSpan(from, to, edge, occupiedVertical, occupiedSegments) {
-    const forward = to.x - from.x >= 2 * PORT_STUB + 8;
-    const paths = [];
-    let order = 0;
-    if (from.x === to.x || from.y === to.y) {
-      paths.push({ points: [from, to], order: order++ });
-    }
-    paths.push(
-      { points: [from, { x: to.x, y: from.y }, to], order: order++ },
-      { points: [from, { x: from.x, y: to.y }, to], order: order++ },
-    );
-
-    const verticalLanes = [];
-    if (forward) {
-      const minimum = from.x + PORT_STUB + 4;
-      const maximum = to.x - PORT_STUB - 4;
-      const middle = (minimum + maximum) / 2;
-      verticalLanes.push(middle);
-      for (let index = 1; index <= 12; index += 1) {
-        verticalLanes.push(middle - index * TRACK_SPACING, middle + index * TRACK_SPACING);
-      }
-      verticalLanes.push(minimum, maximum);
-    } else {
-      const base = Math.max(from.x, to.x) + 30;
-      for (let index = 0; index <= 12; index += 1) {
-        verticalLanes.push(base + index * TRACK_SPACING);
-      }
-    }
-    for (const lane of verticalLanes) {
-      if (forward && (lane < from.x + PORT_STUB || lane > to.x - PORT_STUB)) continue;
-      paths.push({
-        points: [from, { x: lane, y: from.y }, { x: lane, y: to.y }, to],
-        order: order++,
-      });
-    }
-
-    // A vertical-lane route still has horizontal entry and exit runs. When
-    // either would overlap an existing pipe, a horizontal corridor creates
-    // two short doglegs and gives the long segment its own Y track.
-    const occupiedY = occupiedSegments.flatMap((segment) => [segment.a.y, segment.b.y]);
-    const minimumY = Math.min(from.y, to.y, ...occupiedY);
-    const maximumY = Math.max(from.y, to.y, ...occupiedY);
-    const middleY = (from.y + to.y) / 2;
-    const horizontalLanes = [minimumY - 24, maximumY + 24, middleY];
-    for (let index = 1; index <= 12; index += 1) {
-      horizontalLanes.push(
-        middleY - index * TRACK_SPACING,
-        middleY + index * TRACK_SPACING,
-        minimumY - 24 - index * TRACK_SPACING,
-        maximumY + 24 + index * TRACK_SPACING,
-      );
-    }
-    const direction = Math.sign(to.x - from.x) || 1;
-    const gap = Math.abs(to.x - from.x);
-    const corridorStubs = [0, 4, 7, 10, 14, 21, 28, 35];
-    for (const sourceStub of corridorStubs) {
-      for (const targetStub of corridorStubs) {
-        if (to.x > from.x && sourceStub + targetStub >= gap - 2) continue;
-        const fromStub = from.x + direction * sourceStub;
-        const toStub = to.x - direction * targetStub;
-        for (const lane of horizontalLanes) {
-          paths.push({
-            points: [
-              from,
-              { x: fromStub, y: from.y },
-              { x: fromStub, y: lane },
-              { x: toStub, y: lane },
-              { x: toStub, y: to.y },
-              to,
-            ],
-            order: order++,
-          });
-        }
-      }
-    }
-
-    const evaluated = paths.map((candidate) => {
-      const points = compactOrthogonalPoints(candidate.points);
-      const segments = orthogonalSegments(points);
-      let score = segments.reduce((sum, segment) => sum + segmentLength(segment), 0)
-        + Math.max(0, segments.length - 1) * 6;
-      for (const segment of segments) {
-        if (segmentOrientation(segment) === "vertical") {
-          const segmentMinimum = Math.min(segment.a.y, segment.b.y);
-          const segmentMaximum = Math.max(segment.a.y, segment.b.y);
-          for (const reservation of occupiedVertical) {
-            if (Math.abs(reservation.x - segment.a.x) < 7
-              && intervalsOverlap(
-                segmentMinimum,
-                segmentMaximum,
-                reservation.minimum,
-                reservation.maximum,
-                7,
-              )) {
-              score += 1_000_000;
-            }
-          }
-        }
-        for (const occupied of occupiedSegments) {
-          if (collinearOverlapLength(segment, occupied) > 1) score += 1_000_000_000_000;
-          if (segmentsCross(segment, occupied)) score += 1_000_000_000;
-        }
-      }
-      return { ...candidate, points, score };
-    });
-    evaluated.sort((left, right) => left.score - right.score || left.order - right.order);
-    const selected = evaluated[0] || { points: [from, to] };
-    for (const segment of orthogonalSegments(selected.points)) {
-      if (segmentOrientation(segment) !== "vertical") continue;
-      occupiedVertical.push({
-        x: segment.a.x,
-        minimum: Math.min(segment.a.y, segment.b.y),
-        maximum: Math.max(segment.a.y, segment.b.y),
-        edge,
-      });
-    }
-    return selected.points.slice(1);
-  }
 
   function graphLabelObstacles(graph, layout) {
     const portLabelObstacles = [];
@@ -1038,97 +1276,6 @@
     return portLabelObstacles;
   }
 
-  function presentationTracks(points) {
-    return curvedCorridorSegments(points).filter(segment =>
-      [segment.c1, segment.c2, segment.to].every(point => point.y === segment.from.y)
-      || [segment.c1, segment.c2, segment.to].every(point => point.x === segment.from.x))
-      .map(segment => ({ a: segment.from, b: segment.to }));
-  }
-
-  function routePresentationSpan(from, to, obstacles, bounds, occupied, frameTracks, parentArrival, joining) {
-    // Only the same retained portal span or short fan-in tail may be shared.
-    const tracks = occupied.filter(span => span.from.x !== from.x || span.from.y !== from.y
-      || span.to.x !== to.x || span.to.y !== to.y).flatMap(span => span.tracks);
-    const score = points => {
-      const samples = sampleCurvedCorridor(points, CORNER_RADIUS, 32);
-      let collisions = 0;
-      let length = 0;
-      for (let index = 1; index < samples.length; index += 1) {
-        const point = samples[index];
-        length += Math.hypot(point.x - samples[index - 1].x, point.y - samples[index - 1].y);
-        if (point.x < bounds.x || point.x > bounds.x + bounds.width
-          || point.y < bounds.y + SCOPE_HEADER || point.y > bounds.y + bounds.height) collisions += 1;
-        for (const box of obstacles) {
-          // The pipe may cross its own body's clearance only at its pin.
-          if (box.body && ((from.x === box.body.x + box.body.width
-            && from.y >= box.body.y && from.y <= box.body.y + box.body.height && point.x >= from.x
-            && Math.hypot(point.x - from.x, point.y - from.y) <= BOX_EDGE_CLEARANCE)
-            || (to.x === box.body.x && to.y >= box.body.y && to.y <= box.body.y + box.body.height && point.x <= to.x
-              && Math.hypot(point.x - to.x, point.y - to.y) <= BOX_EDGE_CLEARANCE))) continue;
-          if (point.x > box.x && point.x < box.x + box.width
-            && point.y > box.y && point.y < box.y + box.height) collisions += 1;
-        }
-      }
-      let crowding = 0;
-      let frameCrowding = 0;
-      for (const segment of presentationTracks(points)) {
-        const horizontal = segmentOrientation(segment) === "horizontal";
-        for (const track of [...tracks, ...frameTracks]) {
-          if (segmentOrientation(track) !== segmentOrientation(segment)) continue;
-          const distance = Math.abs(horizontal ? segment.a.y - track.a.y : segment.a.x - track.a.x);
-          const frame = frameTracks.includes(track);
-          const clearance = frame ? BOX_EDGE_CLEARANCE : TRACK_SPACING;
-          if (distance >= clearance) continue;
-          const aligned = horizontal
-            ? { a: { x: track.a.x, y: segment.a.y }, b: { x: track.b.x, y: segment.a.y } }
-            : { a: { x: segment.a.x, y: track.a.y }, b: { x: segment.a.x, y: track.b.y } };
-          const penalty = collinearOverlapLength(segment, aligned) * (clearance - distance);
-          if (frame) frameCrowding += penalty;
-          else crowding += penalty;
-        }
-      }
-      return { points, collisions, crowding, frameCrowding,
-        cost: crowding * 100 + length + points.length * 8 };
-    };
-    const gap = to.x - from.x;
-    const direct = score([from, { ...to, curve: true }]);
-    if (gap > 0 && !direct.collisions && !direct.crowding && !direct.frameCrowding) return direct.points;
-    const laneCenters = [
-      (from.y + to.y) / 2,
-      ...obstacles.flatMap(box => [box.y - CORNER_RADIUS, box.y + box.height + CORNER_RADIUS]),
-      ...tracks.filter(track => segmentOrientation(track) === "horizontal").map(track => track.a.y),
-      ...frameTracks.filter(track => segmentOrientation(track) === "horizontal")
-        .flatMap(track => [track.a.y - BOX_EDGE_CLEARANCE, track.a.y + BOX_EDGE_CLEARANCE]),
-    ];
-    const lanes = [...new Set(laneCenters.flatMap(y => [y, y - TRACK_SPACING, y + TRACK_SPACING]))]
-      .filter(y => y >= bounds.y + SCOPE_HEADER && y <= bounds.y + bounds.height
-        && (!parentArrival || gap <= 0 || (y >= Math.min(from.y, to.y) && y <= Math.max(from.y, to.y))))
-      .sort((a, b) => a - b);
-    let best = gap > 0 ? direct : null;
-    for (const lane of lanes) {
-      for (const stub of [24, 48, 72]) {
-        const departure = gap > 0 ? Math.min(stub, gap / 3) : stub;
-        // A return turns vertically before entering the input instead of
-        // reversing its leftward track into a rightward cubic. A longer entry
-        // also lets a pipe leave a child scope without crossing its header.
-        const arrival = departure;
-        const points = compactOrthogonalPoints([
-          from,
-          { x: from.x + departure, y: from.y },
-          { x: from.x + departure, y: lane },
-          { x: to.x - arrival, y: lane },
-          // Keep arrivals distinct until the common tail, instead of adding
-          // another coincident horizontal stub before that shared approach.
-          ...(joining ? [{ ...to, curve: true }] : [{ x: to.x - arrival, y: to.y }, to]),
-        ]);
-        const candidate = score(points);
-        if (!best || candidate.collisions < best.collisions
-          || (candidate.collisions === best.collisions && (candidate.frameCrowding < best.frameCrowding
-            || (candidate.frameCrowding === best.frameCrowding && candidate.cost < best.cost)))) best = candidate;
-      }
-    }
-    return best?.points || [from, to];
-  }
 
   function placeEdgeLabels(routes, graph, layout) {
     const nodeObstacles = graph.nodes
@@ -1146,6 +1293,25 @@
       index,
       sampleCurvedCorridor(route.presentationPoints, CORNER_RADIUS, 12),
     ]));
+    // A label only collides with samples in its immediate neighborhood.
+    // Index once instead of rescanning every curve for each candidate label.
+    const sampleCells = new Map();
+    const cellSize = 32;
+    for (const [route, samples] of routeSamples) {
+      for (const point of samples) addSample(sampleCells,
+        `${Math.floor(point.x / cellSize)}:${Math.floor(point.y / cellSize)}`, { route, point });
+    }
+    const nearby = (box, route) => {
+      const values = [];
+      for (let x = Math.floor((box.x - 5) / cellSize); x <= Math.floor((box.x + box.width + 5) / cellSize); x += 1) {
+        for (let y = Math.floor((box.y - 5) / cellSize); y <= Math.floor((box.y + box.height + 5) / cellSize); y += 1) {
+          for (const sample of sampleCells.get(`${x}:${y}`) || []) if (sample.route !== route) values.push(sample.point);
+        }
+      }
+      return values;
+    };
+    const fixedObstacles = [...headerObstacles,
+      ...portLabelObstacles.map(obstacle => expandBox(obstacle, PORT_LABEL_CLEARANCE))];
     const placed = [];
     const ordered = [...routes.entries()].sort(([left], [right]) => left - right);
     for (const [routeIndex, route] of ordered) {
@@ -1173,13 +1339,8 @@
             box,
             layout,
             nodeObstacles,
-            [
-              ...headerObstacles,
-              ...portLabelObstacles.map((obstacle) => expandBox(obstacle, PORT_LABEL_CLEARANCE)),
-            ],
-            [...routeSamples.entries()]
-              .filter(([index]) => index !== routeIndex)
-              .flatMap(([, values]) => values),
+            fixedObstacles,
+            nearby(box, routeIndex),
             placed,
           ),
         };
@@ -1375,16 +1536,6 @@
     return segments;
   }
 
-  function segmentLength(segment) {
-    return Math.abs(segment.b.x - segment.a.x) + Math.abs(segment.b.y - segment.a.y);
-  }
-
-  function segmentMidpoint(segment) {
-    return {
-      x: (segment.a.x + segment.b.x) / 2,
-      y: (segment.a.y + segment.b.y) / 2,
-    };
-  }
 
   function centeredBox(center, width, height) {
     return {
@@ -1419,23 +1570,6 @@
     return width * height;
   }
 
-  function segmentCrossesBox(segment, box, padding) {
-    const expanded = expandBox(box, padding);
-    const minimumX = Math.min(segment.a.x, segment.b.x);
-    const maximumX = Math.max(segment.a.x, segment.b.x);
-    const minimumY = Math.min(segment.a.y, segment.b.y);
-    const maximumY = Math.max(segment.a.y, segment.b.y);
-    if (segment.a.y === segment.b.y) {
-      return segment.a.y >= expanded.y
-        && segment.a.y <= expanded.y + expanded.height
-        && maximumX >= expanded.x
-        && minimumX <= expanded.x + expanded.width;
-    }
-    return segment.a.x >= expanded.x
-      && segment.a.x <= expanded.x + expanded.width
-      && maximumY >= expanded.y
-      && minimumY <= expanded.y + expanded.height;
-  }
 
   function curveLabelCollisionScore(box, layout, nodes, headers, otherRouteSamples, placed) {
     let score = 0;
@@ -1599,9 +1733,6 @@
       && point.y <= box.y + box.height;
   }
 
-  function intervalsOverlap(leftMinimum, leftMaximum, rightMinimum, rightMaximum, clearance = 0) {
-    return leftMinimum < rightMaximum + clearance && leftMaximum > rightMinimum - clearance;
-  }
 
   function segmentOrientation(segment) {
     return segment.a.y === segment.b.y ? "horizontal" : "vertical";
