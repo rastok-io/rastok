@@ -227,6 +227,14 @@ Boundary positions preserve
 the order chosen by the layer sweeps. An ambiguous
 composition seam does not acquire an invented Graph port. **Status: shipped.**
 
+Horizontal spacing follows the measured channel tracks and the labels and
+mailboxes they must clear. A mailbox reserves space after its own track, not
+after every track in the channel. Nested Graph frames keep local routing
+padding instead of repeating the App's outer gutters. Compaction preserves
+Node dimensions, text size and the left-to-right sequence. Input gutters,
+including those inside nested scopes, retain room for both facing port labels
+and their mailbox, including long names. **Status: shipped.**
+
 Parallel straight spans keep a small clearance from Node bodies and Graph
 frames. Layout reserves room for return tracks between node rows and child
 scopes. A pipe crosses its own node's clearance at its actual pin. Return tracks
