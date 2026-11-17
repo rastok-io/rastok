@@ -44,6 +44,78 @@ fn advancing_time_keeps_each_ready_transaction_individually_inspectable() {
     assert_eq!(session.finish(), expected[0]);
 }
 
+#[test]
+fn every_debugger_step_reaches_an_inspectable_change() {
+    for source in [
+        include_str!("fixtures/ui-two-retries.rkg"),
+        include_str!("../../../examples/keyed-retry.rkg"),
+    ] {
+        let compilation = compile_one(source).expect("the tour checks");
+        let lab = &compilation.labs[0];
+        let simulation = &lab.simulations[0];
+        let expected = rastok::lab::run_program(
+            &compilation.plan,
+            compilation.hash,
+            GraphVersion(1),
+            lab,
+            None,
+        );
+        for (scenario, expected) in simulation.scenarios.iter().zip(expected) {
+            let mut session = rastok::lab::Simulator::try_new_program(
+                &compilation.plan,
+                compilation.hash,
+                GraphVersion(1),
+                &simulation.name,
+                &simulation.mocks,
+                scenario,
+                None,
+            )
+            .expect("the scripted world binds");
+            let mut steps = 0;
+            let mut boundary = 0;
+            while !session.is_complete() {
+                let before = (
+                    boundary,
+                    session.journal().records().len(),
+                    session.next_action_index(),
+                    session.execution().logical_time(),
+                    session.is_complete(),
+                    session.execution().inspection(),
+                );
+                // The controller keeps the same Step request when discovering
+                // quiescence, then applies the next authored action.
+                loop {
+                    if session.is_quiescent() {
+                        session.next_action().expect("the action applies");
+                        break;
+                    }
+                    let records = session.journal().records().len();
+                    let ran = session.step_transaction().expect("the transition runs");
+                    if ran || records != session.journal().records().len() {
+                        boundary += 1;
+                        break;
+                    }
+                    if !session.is_quiescent() {
+                        break;
+                    }
+                }
+                let after = (
+                    boundary,
+                    session.journal().records().len(),
+                    session.next_action_index(),
+                    session.execution().logical_time(),
+                    session.is_complete(),
+                    session.execution().inspection(),
+                );
+                assert_ne!(before, after, "empty Step in {}: {before:?}", scenario.name);
+                steps += 1;
+                assert!(steps < 200, "the tour must complete");
+            }
+            assert_eq!(session.finish(), expected);
+        }
+    }
+}
+
 fn compile_one(source: &str) -> Result<rastok::compiler::Compilation, rastok::diagnostics::Bag> {
     compile(
         &[source],
