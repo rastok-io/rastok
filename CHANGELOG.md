@@ -55,6 +55,10 @@ Two additional check-time refusals are explicit:
 
 ### Lab and response timing
 
+- Place long links and return links with the port-constrained layered method,
+  including nested Graphs, before allocating their routing tracks. The
+  debugger keeps semantic endpoints, containment and mailbox identities while
+  avoiding the previous per-link search through candidate detours.
 - Reuse debugger node placement and edge routes until the validated topology
   changes. Mailbox badges reserve four digits before admission, so stepping
   and selection do not recalculate or move the drawing.

@@ -206,14 +206,17 @@ Connectors and the already placed flow. Return pipes retain their original
 endpoints and directions. A clear forward span uses one curve with horizontal
 ends; returns and obstructed spans use straight tracks with rounded corners.
 Routing checks node bodies and unrelated port labels, excluding the pipe's
-own endpoint labels. Track selection accounts for previously drawn straight
-spans, with adjacent lanes for parallel detours. Node and label avoidance takes
+own endpoint labels. Track selection orders all links in each inter-layer
+channel together, with separate tracks and short jogs for conflicting
+horizontal runs. Node and label avoidance takes
 priority where space is constrained. Arrivals at the same input share a short
 final approach; their route identities, mailbox selection and causal links
 remain separate. Forward arrivals from a child output to the parent boundary
-stay between the vertical positions of those pins. Node ports follow opposite
-port anchors and favor a lower position for forward pipes that skip columns.
-Boundary positions follow retained neighboring port anchors. An ambiguous
+stay between the vertical positions of those pins. Long pipes reserve a drawing
+vertex in each intermediate layer before ordering and placement. Node ports
+and fan-in approaches follow the adjacent drawing vertex, not a distant
+endpoint that may approach from another direction. Boundary positions preserve
+the order chosen by the layer sweeps. An ambiguous
 composition seam does not acquire an invented Graph port. **Status: shipped.**
 
 Parallel straight spans keep a small clearance from Node bodies and Graph
@@ -329,7 +332,9 @@ Readable size restores interface-sized text; a large drawing can then be panned.
 Both views retain the space reserved for labels inside node geometry. The Graph
 title and current activity share one header. **Status: shipped.**
 
-Separate vertical scope bands reuse horizontal rank columns.
+Scopes are placed recursively from the inside out. A child scope occupies one
+node in its parent's layer graph, with the size and port positions established
+by its own drawing. Every semantic node remains inside its declared scope.
 Node sizes reserve title, the complete Contract/Extension subtitle, and
 instance-badge space before admission; opening an instance does not move the
 graph. The layout and SVG renderer use the same subtitle, so `HttpClient · + Retry`
@@ -345,6 +350,19 @@ port tangents; deterministic lane/label placement separates overlapping paths.
 Crossings may remain, but geometry must not invent topology. Layout tests cover
 label/pin clearance and manager-command exclusion. Visual qualification includes
 1352×760 and a narrow viewport; automated geometry checks do not replace it.
+
+The layout follows the port-constrained layered method of
+[Schulze, Spönemann and von Hanxleden, *Drawing Layered Graphs with Port
+Constraints* (2014)](https://rtsys.informatik.uni-kiel.de/~biblio/downloads/papers/jvlc13.pdf):
+long-edge vertices and inverted-port vertices participate in crossing
+minimization before coordinates and tracks are assigned. Movable ports use
+node-relative ranks; already placed child-scope ports retain their order.
+Rastok uses fixed initial orders and deterministic tie-breaks instead of random
+restarts. The initial visible-node crossing count bounds subsequent sweeps.
+Its channel allocator orders vertical tracks by crossing constraints and
+separates coincident opposing runs. North and south ports, arbitrary fixed
+coordinates and hyperedge bundling are not part of Rastok's topology model.
+Temporary drawing vertices are not nodes, ports or deliveries in the snapshot.
 
 An exact route at a recorded transition highlights its pipe; lifecycle highlights
 the owner. A transition without a spatial route pulses its label rather than
@@ -532,7 +550,7 @@ Every item has a browser or projection regression; browser tests are in
 | Folded ids across five examples and three viewing states | `echo/jsonl/gauge/countdown/keyed-retry: live, history and replay…` |
 | Dial and delayed recurrences, stable selected-prefix values | `transitions have explicit transport names…`; `Loop dials follow historical admissions…`. The original B21–B22 positions predate fine-grained advance; tests now select the actual waiting folds rather than accidental ordinals |
 | Every graph hover, mailbox head preview by pointer and keyboard without navigation, exact future timeout and cancellation | `explanatory hovers expose types…` |
-| Readable compound layout at 1352×760 and narrow width; text/curve clearance; HISTORY clears zoom; four-digit mailbox badges | `the flagship keeps readable graph text…`; `vertically stacked scopes reuse horizontal ranks…`; `a four-digit mailbox count fits…` |
+| Readable compound layout at 1352×760 and narrow width; text/curve clearance; HISTORY clears zoom; four-digit mailbox badges | `the flagship keeps readable graph text…`; `recursive scopes preserve containment…`; `a four-digit mailbox count fits…` |
 | Closed/open decisions, selected route case, prestate and joined inputs | `Operator decisions highlight…`; `open_match_explains_only_evaluated_predicates_using_prestate`; `join_decisions_use_named_inputs_and_the_retained_completing_port` |
 | Causal links without forward leakage | `causal selection links opening admission…`; `decisions_use_consumed_envelopes_and_the_selected_prefix` |
 | Scenario/action links, `a` and `n` on a fresh LIVE session, keyboard navigation | `scenario actions select their recorded transition…`; `the explanatory path is reachable with Tab and keyboard alone`; `keyboard node selection retains focus…` |

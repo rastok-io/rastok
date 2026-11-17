@@ -1235,11 +1235,14 @@ test("chat route details preserve separate tracks and legible arrivals", { timeo
       }
     }
   });
-  await t.test('direct requests leave above the bypass to remember', () => {
+  await t.test('direct requests and the bypass preserve their port order', () => {
     const request = routes['conversation.admit.request>conversation.model.in'];
     const remember = routes['conversation.admit.remember>conversation.address_reply.remember'];
-    assert.ok(request.start.y < remember.start.y, 'the short request precedes the lower bypass');
-    assert.ok(request.end.y < remember.end.y, 'the real target anchors preserve the same order');
+    const departure = Math.sign(request.start.y - remember.start.y);
+    const arrival = Math.sign(request.end.y - remember.end.y);
+    assert.notEqual(departure, 0, 'the request and bypass leave through distinct pins');
+    assert.notEqual(arrival, 0, 'the real target anchors remain distinct');
+    assert.equal(departure, arrival, 'placement may mirror the pair but never reverse its port order');
   });
   await t.test('the close scope output reaches reply without vertical overshoot', () => {
     const route = routes['conversation.address_reply.out>.reply'];

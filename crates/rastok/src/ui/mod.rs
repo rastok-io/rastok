@@ -1120,12 +1120,12 @@ mod tests {
         assert!(APP_JS.contains("Historical session unavailable"));
         assert!(GRAPH_LAYOUT_JS.contains("minimizeAdjacentCrossings("));
         assert!(GRAPH_LAYOUT_JS.contains("allocateSideItems("));
-        assert!(GRAPH_LAYOUT_JS.contains("occupiedVertical"));
+        assert!(GRAPH_LAYOUT_JS.contains("channelRoutes("));
         assert!(GRAPH_LAYOUT_JS.contains("routingPortals("));
         assert!(GRAPH_LAYOUT_JS.contains("placeEdgeLabels(routes, graph, layout)"));
         assert!(GRAPH_LAYOUT_JS.contains("curveLabelCollisionScore("));
         assert!(GRAPH_LAYOUT_JS.contains("curvedCorridorSegments("));
-        assert!(GRAPH_LAYOUT_JS.contains("candidate.portals.map"));
+        assert!(GRAPH_LAYOUT_JS.contains("layout.compound.portions.get(edge.index)"));
         assert!(APP_CSS.contains("min-width: var(--graph-readable-width)"));
         assert!(APP_JS.contains("layout.width * graphLayout.minimumReadableScale"));
         assert!(APP_CSS.contains("max-width: var(--graph-fit-width)"));
