@@ -349,6 +349,10 @@ as `graph_version` do not split across lines at the default inspector width.
 Fit graph centers the complete drawing in the available canvas, including after
 a splitter or viewport resize. Text scales with the fitted drawing.
 Readable size restores interface-sized text; a large drawing can then be panned.
+At that size the view centers the Node of the current transition, at the click
+and after each move along the timeline, without leaving empty canvas beyond the
+drawing; a drawing that fits its pane stays centered. A manual pan holds until
+the next move. Fit graph does not follow.
 Both views retain the space reserved for labels inside node geometry. The Graph
 title and current activity share one header. **Status: shipped.**
 

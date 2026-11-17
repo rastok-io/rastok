@@ -47,8 +47,12 @@ const sourceValues = new Map();
 let sourceTooltipAnchor = null;
 let sourceTooltipTimer = null;
 let dismissingSourceTooltip = false;
-const graphViewport = { scale: 1, x: 0, y: 0, fitScale: 1, fitX: 0, fitY: 0 };
+// `follow` is set by Readable size and cleared by Fit graph. `focus` is the
+// pending point to center, in drawing units; `target` is where the current
+// transition is. A focus is consumed once, so a later manual pan holds.
+const graphViewport = { scale: 1, x: 0, y: 0, fitScale: 1, fitX: 0, fitY: 0, follow: false, focus: null, target: null };
 let graphViewportResizeObserver = null;
+let applyCurrentGraphViewport = null;
 
 const COMMAND_HINTS = Object.freeze({
   resume: "Play: advance through recorded transitions at the selected speed",
@@ -1128,6 +1132,19 @@ function applyGraphViewport(layer, label) {
   graphViewport.fitX = (canvas.clientWidth - svg.clientWidth * graphViewport.fitScale) / 2;
   graphViewport.fitY = (canvas.clientHeight - svg.clientHeight * graphViewport.fitScale) / 2;
   const scale = graphViewport.fitScale * graphViewport.scale;
+  if (graphViewport.focus) {
+    const { x, y, width, height } = graphViewport.focus;
+    graphViewport.focus = null;
+    // One drawing unit in canvas pixels at the current zoom.
+    const unit = svg.clientWidth / width * scale;
+    // A drawing that fits on an axis stays centered there. A larger one
+    // centers the focus without leaving empty canvas beyond its own edge.
+    const place = (center, extent, available, fit) => (extent * unit <= available - 24
+      ? (available - extent * unit) / 2
+      : Math.min(12, Math.max(available - 12 - extent * unit, available / 2 - center * unit))) - fit;
+    graphViewport.x = place(x, width, canvas.clientWidth, graphViewport.fitX);
+    graphViewport.y = place(y, height, canvas.clientHeight, graphViewport.fitY);
+  }
   layer.style.transform = `matrix(${scale}, 0, 0, ${scale}, ${graphViewport.fitX + graphViewport.x}, ${graphViewport.fitY + graphViewport.y})`;
   if (label) {
     label.textContent = `${Math.round(graphViewport.scale * 100)}%`;
@@ -1186,12 +1203,18 @@ function installGraphViewport(canvas, layer) {
       zoomGraphAt(layer, label, canvas, graphViewport.scale * 1.2, point.x, point.y);
     }),
     button("fit", "Fit graph", () => {
+      graphViewport.follow = false;
+      graphViewport.focus = null;
       graphViewport.scale = 1;
       graphViewport.x = 0;
       graphViewport.y = 0;
       applyGraphViewport(layer, label);
     }),
     button("readable", "Readable size", () => {
+      // A drawing wider than its pane no longer shows every Node at this
+      // size: center the current transition now and after each timeline move.
+      graphViewport.follow = true;
+      graphViewport.focus = graphViewport.target;
       graphViewport.scale = 1 / graphViewport.fitScale;
       graphViewport.x = 0;
       graphViewport.y = 0;
@@ -1236,7 +1259,8 @@ function installGraphViewport(canvas, layer) {
       event.clientY,
     );
   }, { passive: false });
-  applyGraphViewport(layer, label);
+  applyCurrentGraphViewport = () => applyGraphViewport(layer, label);
+  applyCurrentGraphViewport();
   return controls;
 }
 
@@ -1801,9 +1825,24 @@ function renderTopology(topology, animateBoundary = false) {
   evidence.textContent = "≡ queued messages · ⧉ open instances · dashed = queued route";
   legend.append(evidence);
 
+  // Where the current transition is: its active Nodes, or the start of the
+  // drawing before any transition has advanced.
+  // Boundary pins have no path: they never stand for the current transition.
+  const activeBoxes = graph.nodes.filter(node => node.kind !== "scope" && node.path
+    && (activity?.node === node.path || currentSnapshot?.current_position?.node_path === node.path))
+    .map(node => layout.positions.get(node.id)).filter(Boolean);
+  const left = Math.min(...activeBoxes.map(box => box.x)), right = Math.max(...activeBoxes.map(box => box.x + box.width));
+  const top = Math.min(...activeBoxes.map(box => box.y)), bottom = Math.max(...activeBoxes.map(box => box.y + box.height));
+  graphViewport.target = { x: activeBoxes.length ? (left + right) / 2 : 0, y: activeBoxes.length ? (top + bottom) / 2 : 0,
+    width: layout.width, height: layout.height };
+  // A duplicate render of the same transition keeps a manual pan.
+  if (graphViewport.follow && animateBoundary) graphViewport.focus = graphViewport.target;
+
   target.className = "topology";
   target.replaceChildren(activityPanel, canvas, legend);
   keepGraphTextAtInterfaceSize(svg, layout.width);
+  // The canvas has a size only once attached: apply a pending focus now.
+  applyCurrentGraphViewport?.();
   if (focusKey) target.querySelector(`[data-focus-key="${CSS.escape(focusKey)}"]`)?.focus({ preventScroll: true });
 }
 

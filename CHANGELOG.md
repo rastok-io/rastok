@@ -82,6 +82,10 @@ Two additional check-time refusals are explicit:
 - Keep the current source line visible when duplicate snapshots arrive during
   smooth scrolling, including in optimized builds. Later manual scrolling
   remains under user control. CI exercises both build profiles.
+- Center the Node of the current transition in the graph's Readable size
+  view, at the click and after each move along the timeline. A drawing wider
+  than its pane no longer leaves the current Node out of view; a manual pan
+  holds until the next move, and Fit graph is unchanged.
 
 ### Lab and response timing
 
