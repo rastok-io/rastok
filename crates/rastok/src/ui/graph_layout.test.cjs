@@ -66,6 +66,52 @@ function assertNoBodyCrossings({ graph, layout, routes }) {
   }
 }
 
+test("channel tracks clear wider nodes even when those nodes do not emit into the channel", () => {
+  const ports = [{ name: "in", direction: "input" }, { name: "out", direction: "output" }];
+  for (const mode of ["unwired", "receiver", "drained", "emitter", "fan-in"]) {
+    const nodes = ["s", "a", "wide", "b", "c", "d"].map(id => operator(id, "owner:0", ports));
+    Object.assign(nodes[2], { label: "partner_with_a_long_name", kind: "connector",
+      type: "HttpClient", extensions: ["Retry"] });
+    const links = mode === "unwired" ? [] : [edge(0, "s", "out", "a", "in"),
+      edge(1, "s", "out", "wide", "in"), edge(2, "s", "out", "b", "in")];
+    links.push(edge(links.length, "a", "out", "c", "in"),
+      edge(links.length + 1, "b", "out", mode === "fan-in" ? "c" : "d", "in"));
+    if (mode === "emitter") links.push(edge(links.length, "wide", "out", "d", "in"));
+    if (mode === "drained") links.push({ ...edge(links.length, "wide", "out", "discard", null),
+      target: { id: "discard", kind: "discard", owner: "owner:0" } });
+    const topology = { owners: [owner("owner:0", null)], nodes, edges: links };
+    const result = render(topology);
+    assertNoBodyCrossings(result);
+    assert.equal(stableProjection(result), stableProjection(render(topology)), mode);
+  }
+});
+
+test("generated topologies route deterministically outside unrelated node bodies", () => {
+  let seed = 170026;
+  const random = () => {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+  const ports = [{ name: "in", direction: "input" }, { name: "out", direction: "output" }];
+  for (let sample = 0; sample < 300; sample += 1) {
+    const nodes = Array.from({ length: 6 + sample % 9 }, (_, index) => ({
+      ...operator(`node${index}`, "owner:0", ports),
+      label: `node${index}${"_detail".repeat(Math.floor(random() * 6))}`,
+    }));
+    const edges = [];
+    for (let from = 0; from < nodes.length; from += 1) {
+      for (let to = from + 1; to < nodes.length; to += 1) {
+        if (random() < 0.2) edges.push(edge(edges.length, nodes[from].id, "out", nodes[to].id, "in"));
+      }
+    }
+    if (sample % 3 === 0) edges.push(edge(edges.length, nodes.at(-1).id, "out", nodes[0].id, "in"));
+    const topology = { owners: [owner("owner:0", null)], nodes, edges };
+    const result = render(topology);
+    assertNoBodyCrossings(result);
+    assert.equal(stableProjection(result), stableProjection(render(topology)), `sample ${sample}`);
+  }
+});
+
 test("a long early exit joins a later exit without reversing the incoming pipes", () => {
   const ports = [{ name: "in", direction: "input" }, { name: "out", direction: "output" },
     { name: "exit", direction: "output" }];

@@ -1018,7 +1018,7 @@
     const sourceFans = fanOffsets(candidates, true, layout);
     const targetFans = fanOffsets(candidates, false, layout);
     const labelObstacles = graphLabelObstacles(graph, layout);
-    const planned = channelRoutes(candidates, sourceFans, targetFans, layout, labelObstacles, channelSpace);
+    const planned = channelRoutes(candidates, sourceFans, targetFans, graph, layout, labelObstacles, channelSpace);
     const routes = new Map();
     const ordered = [...candidates].sort((left, right) =>
       left.start.x - right.start.x
@@ -1068,8 +1068,18 @@
     return offsets;
   }
 
-  function channelRoutes(candidates, sourceFans, targetFans, layout, labels, channelSpace) {
+  function channelRoutes(candidates, sourceFans, targetFans, graph, layout, labels, channelSpace) {
     const channels = new Map(), sideChannels = new Map(), paths = new Map();
+    // A column's body clearance does not depend on which nodes emit into
+    // this channel: receivers, drained outputs and unwired nodes still occupy it.
+    const columnRight = new Map();
+    for (const node of graph.nodes) {
+      if (node.kind === "boundary" || node.kind === "discard") continue;
+      const box = layout.positions.get(node.id);
+      const key = `${node.owner}:${layout.rank.get(node.id)}:east`;
+      columnRight.set(key, Math.max(columnRight.get(key) ?? -Infinity,
+        box.x + box.width + BOX_EDGE_CLEARANCE));
+    }
     const sideConnect = (parts, from, to, key, direction) => {
       const span = { from, to, direction };
       parts.push(span);
@@ -1177,6 +1187,7 @@
       const gap = layout.columnGaps.get(key);
       const sideKeys = gap === undefined ? [] : spans[0].sideKeys;
       const minimum = Math.max(...normalized.map(item => item.left.x),
+        columnRight.get(spans[0].sideKeys[0]) ?? -Infinity,
         ...(sideChannels.get(sideKeys[0]) || []).map(span => span.x));
       const right = Math.min(...normalized.map(item => item.right.x),
         ...(sideChannels.get(sideKeys[1]) || []).map(span => span.x));
