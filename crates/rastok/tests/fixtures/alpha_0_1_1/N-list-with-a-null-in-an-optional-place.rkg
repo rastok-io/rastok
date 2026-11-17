@@ -1,6 +1,6 @@
 // A list literal that mixes null and a value does not fit array<T?>
 // Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
-// and on the 0.1.1-alpha candidate.
+// The nonempty list must use the optional element type of its declaration.
 //
 // Commands, run from this directory:
 //   rastok check N-list-with-a-null-in-an-optional-place.rkg

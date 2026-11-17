@@ -1,6 +1,6 @@
 // A message prints types in the Rust debug form
 // Regression for release 0.1.1-alpha. Reproduced on rastok 0.1.0-alpha.
-// and on the 0.1.1-alpha candidate.
+// Operator refusals must use source notation rather than Rust debug notation.
 //
 // Commands, run from this directory:
 //   rastok check N-types-printed-in-debug-form.rkg
