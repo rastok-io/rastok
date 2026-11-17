@@ -11,44 +11,33 @@
 **Simulation-first integration platform: a typed flow language, a runtime
 and a Lab to build and prove integrations before their systems exist.**
 
-<!-- Public narrative: rastok-strategy/NARRATIF.md,
-     "Version courte de référence, deux paragraphes", English block, 77c4637.
-     Keep this copy verbatim; propose wording changes in the source. -->
+Rastok lets you build applications that coordinate exchanges between your
+systems. Describe which service to call, what data to send, and what to do
+when it responds, refuses the request, or stays silent. Write the scenarios
+that test those choices alongside the application.
 
-> An integration rarely fails on the happy path. It fails on the edge
-> cases: partners not ready, late or duplicate replies, implicit contracts,
-> test scenarios that drift. With large language models and AI agents,
-> writing a flow has never been faster; proving it will hold in real
-> conditions has become the real bottleneck. **Rastok is a simulation-first
-> integration platform.** An application's flows, their contracts and their
-> failure scenarios are written together, in a dedicated, typed language
-> versioned in Git. The test environment is source code: partner faults,
-> delays and silences are written next to the program. The *same* program
-> runs first in a simulated world, then, without a rewrite, in the real one.
-> You build and prove an integration before the partner systems are
-> available.
->
-> Every run leaves a journal that can be replayed without repeating its
-> external effects. An incident becomes a scenario that protects the next
-> changes. The journal is also a record an auditor can read. Before anything
-> runs, you know which systems will be called, under which conditions, and
-> to what end. The compiler refuses a flow that leaves an outcome with
-> nowhere to go. A scenario proves the flow holds against the partner as
-> described; acceptance, with the same program, checks the description.
-> What an assistant writes goes through the same compiler and the same
-> scenarios as what a human writes; review focuses on the contracts and the
-> scenarios.
+An application is a typed graph written in a dedicated language, in `.rkg`
+files. Operators transform data and keep local state; Connectors exchange
+data with external systems through versioned contracts. The compiler checks
+types, ports and routes, and refuses an outcome with nowhere to go. The
+source is text you can version in Git and review, whether you write it
+yourself or with an AI assistant.
 
-Rastok is an Apache-2.0 runtime and a dedicated domain-specific
-language (DSL) for stateful, effectful integration graphs. The DSL is
-textual, typed, readable in code review, easy to version in Git, and
-constrained enough for an LLM to generate without hiding the result
-behind a visual low-code format.
+The Lab runs your application logic with mocks: scripts that stand in for
+partner systems. Scenarios supply inputs, inject faults and control virtual
+time, so you can test a late response or a duplicate message before the real
+partner is available. You then run the same application with real Drivers.
+The logic and contracts stay the same; the connections to the outside world
+change.
 
-The narrative describes the product vision. Rastok is an experimental alpha:
-the implemented scope is listed under
-[Status and known limits](#status-and-known-limits), and the runtime makes no
-production-readiness claim.
+The runtime records execution in a journal. Save a recording to inspect or
+replay it without repeating external effects; keep golden traces to detect
+changes to scenario results. The debugger lets you step through a run and
+follow data, state and decisions.
+
+Rastok is open source under Apache-2.0 and remains an experimental alpha.
+See [Status and known limits](#status-and-known-limits) for the implemented
+scope and current limits; the runtime makes no production-readiness claim.
 
 Public destinations since the **5 November 2026** opening:
 [website](https://www.rastok.com) ·
