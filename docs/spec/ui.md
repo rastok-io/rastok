@@ -207,8 +207,9 @@ endpoints and directions. Every pipe uses horizontal and vertical tracks with
 rounded corners, including clear forward spans. Aligned pins use one straight
 segment. The corner radius is reduced where neighboring bends leave less room.
 Routing checks node bodies and unrelated port labels, excluding the pipe's
-own endpoint labels. Track selection orders all links in each inter-layer
-channel together, with separate tracks and short jogs for conflicting
+own endpoint labels. A channel clears every node body in its adjacent columns,
+including nodes with no outgoing route in that channel. Track selection orders
+all links in each inter-layer channel together, with separate tracks and short jogs for conflicting
 horizontal runs. Node and label avoidance takes
 priority where space is constrained. Pipes at the same output share a short
 horizontal departure before separating onto their tracks. Arrivals at the same
