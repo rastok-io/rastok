@@ -53,14 +53,21 @@ Two additional check-time refusals are explicit:
   be refused with `E-PLAN-DEPTH`; excessive resolved depth never reports
   `E-INTERNAL-PLAN`.
 
-### Lab and response timing
+### Debugger
 
 - Compact debugger column gaps using measured track demand. Vertically disjoint
   bends reuse horizontal space without merging pipes, shrinking text or changing
-  the topology; the compact drawing remains cached between transitions.
+  the topology. Nested frames no longer repeat the App's outer gutters, and
+  mailbox space is reserved after the track that needs it. The compact drawing
+  remains cached between transitions.
 - Draw every debugger link with horizontal and vertical tracks and rounded
-  corners. Clear spans and detours now share the same style, without changing
-  node placement, ports or semantic routes.
+  corners. Clear spans and detours now share the same style. Node placement
+  differs from 0.1.0; port identities and semantic routes do not change.
+- Join links at a shared pin's height without staggered endpoint steps.
+  Vertical tracks remain distinct. Mobile pins can separate accidental
+  opposing alignments without moving the boxes or changing their ports.
+- Keep routing tracks outside every node in the adjacent column, including
+  wider receivers, drained outputs and unwired nodes.
 - Place long links and return links with the port-constrained layered method,
   including nested Graphs, before allocating their routing tracks. The
   debugger keeps semantic endpoints, containment and mailbox identities while
@@ -71,6 +78,12 @@ Two additional check-time refusals are explicit:
 - Do not count responses already drained by a logical-time advance as new
   debugger progress. Step reaches the next inspectable change without an
   empty click; batch results and reference traces remain unchanged.
+- Keep the current source line visible when duplicate snapshots arrive during
+  smooth scrolling, including in optimized builds. Later manual scrolling
+  remains under user control. CI exercises both build profiles.
+
+### Lab and response timing
+
 - Settle ready Call responses before advancing to the next logical deadline,
   in both simulation and hosted execution. Immediate mock replies no longer
   time out when one advance crosses several deadlines.
@@ -91,8 +104,8 @@ large `advance` may now fail. Reference traces changed: **none**.
 
 ### Language and expressions
 
-- Resolve enum symbols inside optional list and map literals, including
-  nested collections, fields, state and Lab values. The optional collection
+- Resolve enum symbols in optional list and map literals at ports, fields,
+  bindings, state and Lab values. The optional collection
   supplies its element context without selecting a branch of a wider union.
 - Construct optional map values using their declared type even when the map
   itself is optional. Ports, fields, bindings, state and Lab values no longer
