@@ -407,13 +407,20 @@ impl<'plan> Worker<'plan> {
     /// the preceding scripted batch before admitting the next source frame,
     /// so WriteSettled stays before that frame in both batch and step modes.
     pub(crate) fn poll(&mut self, mut observe: impl FnMut(&PollReport)) -> Result<bool, Error> {
+        let records_before = self.journal.records().len();
         let report = self
             .execution
             .poll_drivers(&mut self.journal, &mut self.drivers)
             .map_err(Error::Poll)?;
         let inbound = self.poll_inbound()?;
         observe(&report);
-        Ok(inbound || report.settled > 0 || !report.rejected.is_empty())
+        // The report also includes observations retained during a time advance.
+        // Their already-drained consequences are not another debugger step.
+        // A newly retained response either records its closure/acknowledgement
+        // or leaves an outcome ready for consumption (including Session exit).
+        let settled = report.settled > 0
+            && (self.journal.records().len() != records_before || self.execution.has_ready_work());
+        Ok(inbound || settled || !report.rejected.is_empty())
     }
 
     /// Settles one authored action. The final ready-work pass still runs

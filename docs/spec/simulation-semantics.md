@@ -174,6 +174,9 @@ compare them to the bridge-generated scenario's.
   ingress. A Session with a just-retained opening or frame is not yet at rest
   just because no Operator is ready; confirm a no-progress world poll before
   advancing to the next authored action. Pausing does not offer frames by itself.
+  A poll report retained during an advance still reaches its observer, but
+  responses whose consequences have already drained do not count as new
+  progress or consume a debugger Step.
 
 ### 2.1 Executable source model — HttpServer ack
 

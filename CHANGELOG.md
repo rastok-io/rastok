@@ -55,6 +55,9 @@ Two additional check-time refusals are explicit:
 
 ### Lab and response timing
 
+- Do not count responses already drained by a logical-time advance as new
+  debugger progress. Step reaches the next inspectable change without an
+  empty click; batch results and reference traces remain unchanged.
 - Settle ready Call responses before advancing to the next logical deadline,
   in both simulation and hosted execution. Immediate mock replies no longer
   time out when one advance crosses several deadlines.
