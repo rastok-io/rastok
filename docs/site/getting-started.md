@@ -41,6 +41,15 @@ prints `rastok 0.1.1-alpha`. To use it in new terminals, add
 `export PATH="$HOME/.local/bin:$PATH"` to your shell configuration:
 `~/.zshrc` for zsh (the macOS default), or `~/.bashrc` for bash.
 
+### Windows
+
+No Windows binary is published, and native Windows is not qualified yet.
+Rastok compiles there, and CI builds it on Windows for every change, but part
+of its test suite does not pass: the Process and File Connectors behave
+differently, and some checks compare files byte for byte. Under WSL 2, use the
+Linux command above with a distribution that meets its glibc requirement, such
+as Ubuntu 24.04.
+
 ### Other platforms and source builds
 
 <details>

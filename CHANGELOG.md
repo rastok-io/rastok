@@ -310,7 +310,10 @@ Numbers and syntax:
   comment settings, with installation instructions and native tests. No
   language server or personal configuration change is included.
 - **Windows** is built and tested natively in CI, without blocking, to
-  gather evidence. This does not qualify or publish a Windows binary.
+  gather evidence. It compiles; part of the test suite does not pass yet,
+  around the Process and File Connectors and in checks that compare files
+  byte for byte. No Windows binary is published, and the quickstart says
+  so.
 
 ### Documentation and dependencies
 
