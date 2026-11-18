@@ -9,7 +9,7 @@ not supported.
 ## Install from a checkout
 
 Use a checkout containing `editors/vim`: the development branch, or the
-0.1.1-alpha tag once published. A `rastok-examples` checkout can also supply
+0.1.1-alpha tag. A `rastok-examples` checkout can also supply
 these files; installing the compiler from an archive or Cargo makes no
 difference to the editor setup.
 

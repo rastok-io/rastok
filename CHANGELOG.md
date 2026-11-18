@@ -17,9 +17,9 @@ While the version carries the `-alpha` suffix:
 The package format, the recording format and each standard Contract
 carry their own number. Every changelog entry states them.
 
-## v0.1.1-alpha (unreleased)
+## v0.1.1-alpha (18 November 2026)
 
-Corrective release prepared for publication. The package format remains 1,
+Corrective release. The package format remains 1,
 the diagnostic recording format remains 1, and all six standard Connector
 Contracts remain at `@1`; no terminal case is added or renamed.
 
@@ -257,7 +257,7 @@ already refused by the previous release. The only published example with
 a changed semantic hash is `docs/examples/expense-approval.rkg`, because
 its keyed instances now have the idle lifetime described above.
 
-Publication is pending. The embedded Retry/recovery workload now passes the
+The embedded Retry/recovery workload now passes the
 unchanged 1 MiB code-size and 128 KiB heap gates. Temporary-set construction
 in plan validation saves 16,200 B of linked code. After the later expression
 fixes, the published revision keeps about 1.5 kB of code margin and 1,804 B

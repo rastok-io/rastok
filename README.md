@@ -87,9 +87,8 @@ the same run in the debugger.
 <!-- quickstart:start -->
 Rastok is currently in alpha. The release job builds binaries for
 **macOS Apple silicon** and **Linux x86-64**. The commands below install
-`v0.1.1-alpha` once it is published on the
+`v0.1.1-alpha` from its
 [release page](https://github.com/rastok-io/rastok/releases/tag/v0.1.1-alpha).
-Before publication, use the source-checkout instructions below.
 Copy the command for your system below into a terminal.
 It downloads, verifies and installs Rastok.
 

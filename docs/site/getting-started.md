@@ -12,9 +12,8 @@ Rust to use it.
 <!-- quickstart:start -->
 Rastok is currently in alpha. The release job builds binaries for
 **macOS Apple silicon** and **Linux x86-64**. The commands below install
-`v0.1.1-alpha` once it is published on the
+`v0.1.1-alpha` from its
 [release page](https://github.com/rastok-io/rastok/releases/tag/v0.1.1-alpha).
-Before publication, use the source-checkout instructions below.
 Copy the command for your system below into a terminal.
 It downloads, verifies and installs Rastok.
 
@@ -179,8 +178,8 @@ quickstart is qualified. No elapsed-time claim is made yet.
 
 ## Editor support
 
-The 0.1.1-alpha release job produces an installable syntax-highlighting package.
-Once the release is published, install it in VS Code with:
+The 0.1.1-alpha release includes an installable syntax-highlighting package.
+Install it in VS Code with:
 
 ```sh
 curl -fLO https://github.com/rastok-io/rastok/releases/download/v0.1.1-alpha/rastok-dsl-0.1.1.vsix
@@ -188,7 +187,7 @@ code --install-extension rastok-dsl-0.1.1.vsix
 ```
 
 For VSCodium, use `codium --install-extension rastok-dsl-0.1.1.vsix`.
-Before publication, the [editor instructions](https://github.com/rastok-io/rastok/blob/main/editors/vscode/rastok-dsl/README.md)
+The [editor instructions](https://github.com/rastok-io/rastok/blob/main/editors/vscode/rastok-dsl/README.md)
 explain how to package a local checkout; they also cover the JetBrains bundle.
 For Vim or Neovim, load the native runtime from the same checkout as the
 examples, following the [Vim and Neovim setup](https://github.com/rastok-io/rastok/blob/main/editors/vim/README.md).
