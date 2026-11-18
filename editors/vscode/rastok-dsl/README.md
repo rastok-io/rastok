@@ -26,8 +26,8 @@ measured historical-editor test.
 
 ## VS Code
 
-Install the VSIX from the release assets. The 0.1.1-alpha release job produces
-`rastok-dsl-0.1.1.vsix`; once that release is published:
+Install the VSIX from the release assets. The 0.1.1-alpha release includes
+`rastok-dsl-0.1.1.vsix`:
 
 ```sh
 curl -fLO https://github.com/rastok-io/rastok/releases/download/v0.1.1-alpha/rastok-dsl-0.1.1.vsix
@@ -39,7 +39,7 @@ Confirm installation with `code --list-extensions` or
 `codium --list-extensions`: the identifier is `rastok.rastok-dsl`.
 No Marketplace publication is required.
 
-Before publication, or to test a checkout, build the same package locally with
+To test a checkout, build the same package locally with
 Node and the system `zip` tool. The output path must not already exist:
 
 ```sh

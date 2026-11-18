@@ -9,7 +9,7 @@ tests below measure the installed version, not every historical version.
 ## Install from a checkout
 
 Use a checkout containing `editors/emacs`: the development branch, or the
-0.1.1-alpha tag once published. A `rastok-examples` checkout can supply these
+0.1.1-alpha tag. A `rastok-examples` checkout can supply these
 files whether the compiler was installed from an archive or with Cargo.
 
 Add this to your Emacs configuration, replacing the absolute path:
