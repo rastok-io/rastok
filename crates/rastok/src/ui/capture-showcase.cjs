@@ -37,7 +37,9 @@ const rasterSize = { width: 1352, height: 760 };
       });
     });
     browser = await chromium.launch({ headless: true, executablePath: process.env.RASTOK_CHROME });
-    const page = await browser.newPage({ viewport: rasterSize, colorScheme: "dark" });
+    // Four frames a second cannot show a smooth scroll: without reduced motion
+    // a held position is captured mid-scroll and differs from the next frame.
+    const page = await browser.newPage({ viewport: rasterSize, colorScheme: "dark", reducedMotion: "reduce" });
     const consoleErrors = [];
     page.on("pageerror", error => consoleErrors.push(error.message));
     page.on("console", message => { if (message.type() === "error") consoleErrors.push(message.text()); });
@@ -47,6 +49,9 @@ const rasterSize = { width: 1352, height: 760 };
     await page.locator("#timeline-position").filter({ hasText: /^LIVE · Session 1 · transition 0$/ }).waitFor();
     await page.locator("#step:enabled").waitFor();
     const render = async () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    // This drawing is wider than its pane. Capture it at Readable size, where
+    // the view follows the Node of the current transition.
+    await page.getByRole("button", { name: "Readable size", exact: true }).click();
     await render();
     await page.screenshot({ path: path.join(destination, "webhook-before.png") });
     await page.locator('[data-command="run-to-completion"]').click();
@@ -100,7 +105,9 @@ const rasterSize = { width: 1352, height: 760 };
     }
     assert.deepEqual(consoleErrors, []);
     const ffmpeg = spawn(process.env.RASTOK_FFMPEG || "ffmpeg", [
-      "-v", "error", "-n", "-framerate", "4", "-i", path.join(frames, "%03d.png"),
+      // Replace the previous animation as the stills are replaced: with -n an
+      // existing file is kept and ffmpeg still exits 0, leaving a stale tour.
+      "-v", "error", "-y", "-framerate", "4", "-i", path.join(frames, "%03d.png"),
       "-c:v", "apng", "-pix_fmt", "rgba", "-pred", "mixed", "-compression_level", "9",
       "-plays", "0", "-final_delay", "1/4", "-f", "apng", path.join(destination, "webhook-tour.png"),
     ], { stdio: "inherit" });

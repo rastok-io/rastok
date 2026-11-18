@@ -272,6 +272,8 @@ The following 30-second sequence visits recorded states of
 second attempt. During the backoff, Retry retains the failed batch without
 delivering it to `decide`; only the final result is published. These are real
 debugger views of a simulation, not live HTTP requests or an edited branch.
+The graph is shown at Readable size, where the view follows the Node of each
+transition; Fit graph shows the complete drawing.
 
 ![Thirty seconds through the recorded timeout and retry transitions](../assets/webhook-tour.png)
 

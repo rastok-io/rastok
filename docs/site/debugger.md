@@ -44,7 +44,9 @@ different modes of the same interface, not two names for the Play button.
 
 The numbered view is a recorded backoff transition of
 `webhook.timeout_then_success`. The numbers were added to the running page
-before capture; the state and values come from that scenario.
+before capture; the state and values come from that scenario. The graph is
+shown at Readable size, centered on the Node of that transition; Fit graph
+shows the complete drawing instead.
 
 ![Numbered debugger regions at the webhook retry backoff](assets/debugger-overview.png)
 
