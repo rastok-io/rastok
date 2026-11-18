@@ -309,11 +309,8 @@ Numbers and syntax:
 - **Vim, Neovim and Emacs** get native file detection, highlighting and
   comment settings, with installation instructions and native tests. No
   language server or personal configuration change is included.
-- **Windows** is built and tested natively in CI, without blocking, to
-  gather evidence. It compiles; part of the test suite does not pass yet,
-  around the Process and File Connectors and in checks that compare files
-  byte for byte. No Windows binary is published, and the quickstart says
-  so.
+- **Windows is not supported**, and the quickstart now says so. No
+  Windows binary is published and Rastok is not tested there.
 
 ### Documentation and dependencies
 

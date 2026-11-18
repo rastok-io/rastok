@@ -86,7 +86,8 @@ the same run in the debugger.
 
 <!-- quickstart:start -->
 Rastok is currently in alpha. The release job builds binaries for
-**macOS Apple silicon** and **Linux x86-64**. The commands below install
+**macOS Apple silicon** and **Linux x86-64**. Windows is not supported.
+The commands below install
 `v0.1.1-alpha` from its
 [release page](https://github.com/rastok-io/rastok/releases/tag/v0.1.1-alpha).
 Copy the command for your system below into a terminal.
@@ -115,15 +116,6 @@ Each command installs `rastok` in `~/.local/bin` for your user account and
 prints `rastok 0.1.1-alpha`. To use it in new terminals, add
 `export PATH="$HOME/.local/bin:$PATH"` to your shell configuration:
 `~/.zshrc` for zsh (the macOS default), or `~/.bashrc` for bash.
-
-### Windows
-
-No Windows binary is published, and native Windows is not qualified yet.
-Rastok compiles there, and CI builds it on Windows for every change, but part
-of its test suite does not pass: the Process and File Connectors behave
-differently, and some checks compare files byte for byte. Under WSL 2, use the
-Linux command above with a distribution that meets its glibc requirement, such
-as Ubuntu 24.04.
 
 ### Other platforms and source builds
 
