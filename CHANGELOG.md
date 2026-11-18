@@ -259,8 +259,9 @@ its keyed instances now have the idle lifetime described above.
 
 Publication is pending. The embedded Retry/recovery workload now passes the
 unchanged 1 MiB code-size and 128 KiB heap gates. Temporary-set construction
-in plan validation saves 16,200 B of linked code, leaving 2,516 B of code
-and 1,804 B of heap margin. This reduction does not change execution, recovery,
+in plan validation saves 16,200 B of linked code. After the later expression
+fixes, the published revision keeps about 1.5 kB of code margin and 1,804 B
+of heap margin. This reduction does not change execution, recovery,
 formats or reference traces; the [qualification](docs/architecture/release-qualification.md#embedded-code-size-correction-16-november-2026)
 records the fixed workloads and reproduction commands.
 
