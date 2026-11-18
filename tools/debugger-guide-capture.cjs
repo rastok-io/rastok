@@ -105,6 +105,10 @@ async function seek(page, transition) {
       }
     }
     assert.ok(backoff, "the recorded scenario contains a retry backoff");
+    // This drawing is wider than its pane. Readable size centers the Node of
+    // the current transition, the partner Connector here.
+    await webhook.getByRole("button", { name: "Readable size", exact: true }).click();
+    await settle(webhook);
     await webhook.locator(".graph-node-name").filter({ hasText: /^partner$/ }).click();
     await webhook.locator("#tab-instances").click();
     const badges = [".brand-block", ".transport", ".timeline-bar", "#source-section", "#inspector", "#graph-section", ".bar-status"];

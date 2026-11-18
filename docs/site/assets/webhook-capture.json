@@ -1,12 +1,4 @@
 {
-  "revision": "7c83d49be01aaccbadd0f07d9ce8fc835a05bca9",
-  "revision_note": "Base before the spacing change; checksums identify the exact captured UI sources.",
-  "working_tree_changes": ["crates/rastok/src/ui/graph_layout.js"],
-  "ui_sources_sha256": {
-    "crates/rastok/src/ui/graph_layout.js": "1c8f819163c8a16214eb6965a2854982a0f7a7fe69e55ed5d88a31cf1c45c3e9",
-    "crates/rastok/src/ui/app.js": "1b68769ed3b2673dae4f3f1e64f647805468d27ff3d3eef528771fdf0ddf75eb"
-  },
-  "binary_sha256": "6c8491d6f12c9cf0894916760e81958a107c4d21079794536c02b035c8addb46",
   "example": "examples/webhook-to-partner.rkg",
   "scenario": "webhook.timeout_then_success",
   "viewport": {
