@@ -4,9 +4,7 @@
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Rust 1.97.1](https://img.shields.io/badge/rust-1.97.1-orange.svg)](rust-toolchain.toml)
 [![Documentation](https://img.shields.io/badge/docs-docs.rastok.com-informational.svg)](https://docs.rastok.com)
-<!-- Enable once `cargo publish` has run on 5 November 2026:
 [![crates.io](https://img.shields.io/crates/v/rastok.svg)](https://crates.io/crates/rastok)
--->
 
 **Simulation-first integration platform: a typed flow language, a runtime
 and a Lab to build and prove integrations before their systems exist.**
@@ -376,7 +374,7 @@ distinguish local qualification from the external evidence still open.
 | [WHITEPAPER.md](WHITEPAPER.md) | conceptual model and statement of intent: why Rastok exists, the core model, instances, time and the Lab |
 | [docs/spec/](docs/spec/README.md) | the normative language and runtime contract: grammar, types, expressions, envelope, execution model, delivery and simulation semantics, identity, diagnostics |
 | [ARCHITECTURE.md](ARCHITECTURE.md) and [docs/architecture/](docs/architecture/) | implementation blueprint, diagrams and qualification ledgers |
-| [Learning path](docs/site/getting-started.md#three-ways-to-learn) | the user guide or six hands-on examples, each with a scenario to break |
+| [Learning path](docs/site/getting-started.md#three-ways-to-learn) | the user guide or eight hands-on examples, each with a scenario to break |
 | [Example catalogue](docs/examples/README.md) | executable programs, isolated fragments and historical sketches, told apart |
 | [Connector Driver guide](docs/architecture/connector-drivers.md) | how to contribute a Driver behind a standard Contract |
 | [ROADMAP.md](ROADMAP.md) | evidence gates, done and open |
