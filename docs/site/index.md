@@ -249,7 +249,7 @@ flowchart LR
 
 ## What is available today
 
-Checked for the `v0.1.0-alpha` opening of 5 November 2026. Rastok is experimental. The
+Checked for `v0.1.1-alpha`, 18 November 2026. Rastok is experimental. The
 deployment journal is in memory; durable storage is later work. Diagnostic
 replay restores recorded facts, not the world. Eight runnable examples cover
 echo through agents, including the resident gateway and typed HTTP model adapter.
