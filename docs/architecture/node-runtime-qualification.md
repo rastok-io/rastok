@@ -198,7 +198,7 @@ reference, including the accepted level-255 package's 79,168 B stack and
 The `LogicalTime(i64)` value type is deliberately not implemented in this
 lot. Yoann assigned it on 15 October to A-T1-12, with the relative logical
 timeline and separate civil origin of D-2026-10-10-1; the
-[roadmap](../../ROADMAP.md#later--incident-lab-and-safe-dogfood) records that
+[roadmap of v0.1.1-alpha](https://github.com/rastok-io/rastok/blob/v0.1.1-alpha/ROADMAP.md) records that
 handoff. Existing time carriers and semantics remain unchanged.
 
 ## Review follow-up — 15 October
