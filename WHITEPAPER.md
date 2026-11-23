@@ -2824,7 +2824,7 @@ Rastok is experimental, not production-ready. The current format is
 **package 1 / diagnostic recording 1**, with one Node table and Graph-owned wiring.
 The approved witness movement and qualification are recorded in the [time-carrier inventory](docs/architecture/time-carriers-identity.md).
 Process job/service modes share the Contract `std/process@1`;
-File and the four HTTP/WebSocket Contracts use `@3`. These version registers
+File and the four HTTP/WebSocket Contracts are also at `@1`. These version registers
 are independent. The [Connector identity inventory](docs/architecture/connector-rework-identity.md)
 records the Process-dependent semantic hashes and Retry traces that change.
 The earlier [Node realignment inventory](docs/architecture/node-realignment-identity.md)
