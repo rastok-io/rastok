@@ -1,8 +1,7 @@
 # Rastok: White Paper
 
-<!-- Public narrative: rastok-strategy/NARRATIF.md,
-     "Version courte de référence, deux paragraphes", English block, 77c4637.
-     Keep this copy verbatim; propose wording changes in the source. -->
+<!-- Public narrative: the maintainer's English reference version.
+     Keep this copy verbatim; propose wording changes to the maintainer. -->
 
 > An integration rarely fails on the happy path. It fails on the edge
 > cases: partners not ready, late or duplicate replies, implicit contracts,

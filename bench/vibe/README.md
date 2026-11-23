@@ -31,7 +31,7 @@ guided generation, or an expert-only authoring surface.
   attempts. Every attempt and every piece of feedback is kept on
   disk for audit.
 - `results/` — run artifacts and the metrics JSONL, git-ignored:
-  measures are read and interpreted on the strategy side.
+  measures are read and interpreted separately, by the maintainers.
 
 ## The loop, per task and per author
 

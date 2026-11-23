@@ -662,11 +662,10 @@ the transferable idea to the adjacent available chapters. The index offers
 both the complete reading order and the short echo-to-flagship route. The
 public front-matter schema, graph paths and golden paths are unchanged.
 
-The editorial source is the sibling strategy repository's `NARRATIF.md`
-(10 September), with `STRATEGY.md` and the gallery section of `DEMONSTRATION.md`:
+The editorial source is the maintainer's public narrative of 10 September:
 build before partners are available; share execution rules; retain difficult
 cases as regression scenarios; then apply the same model to agents. Older
-strategy implementation counts and the one-job-per-message gateway description
+implementation counts and the one-job-per-message gateway description
 are not copied as current evidence. The six-chapter path still has only five
 available pages; no placeholder service example is presented as executable.
 

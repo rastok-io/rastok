@@ -1,6 +1,6 @@
 [package]
 name = "rastok"
-# Short metadata from rastok-strategy/NARRATIF.md, "Version anglaise de référence" (b650bc0).
+# Short metadata: the English one-sentence version of the public narrative.
 description = "Simulation-first integration platform: a typed flow language, a runtime and a Lab to build and prove integrations before their systems exist."
 version.workspace = true
 edition.workspace = true
