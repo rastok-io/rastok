@@ -317,7 +317,7 @@ catalogue tests and the separate CLI regression then passed; no existing
 functional assertion was removed or relaxed.
 
 README, WHITEPAPER and the living architecture/specification pages describe
-the new module paths and per-Node selection. The strategy repository's English
+the new module paths and per-Node selection. The maintainer's English
 reference narrative is copied verbatim in both READMEs and WHITEPAPER; the
 whitepaper's missing full quotation is restored, not rewritten. PlantUML views
 03, 04 and 06 and their SVGs are regenerated together
