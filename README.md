@@ -315,14 +315,14 @@ records the deployment, recording and golden-trace qualification limits.
 
 ## Status and known limits
 
-> **Status on 5 November 2026, v0.1.0-alpha.** Today: the language, the
+> **Status on 18 November 2026, v0.1.1-alpha.** Today: the language, the
 > compiler, the runtime, the standard connectors and the Lab, virtual time
-> and injected faults included; the journal, recorded runs and their replay,
-> golden traces; eight runnable examples, from echo to agents. Next:
-> durable recovery after a stop (end of November); an incident turned into a
-> scenario in one step (mid-January); taking over a slice of an existing
-> integration (February); agents under approval, refusal and budgets
-> (April). Gains from AI generation remain to be measured.
+> and injected faults included; the journal, kept in memory for now,
+> recorded runs and their replay, golden traces; eight runnable examples,
+> from echo to agents. Next: 0.2.0-alpha, where the language refuses more
+> mistakes before execution and renames a few words; then durable recovery
+> after a stop. Neither has a date; the [roadmap](ROADMAP.md) gives the
+> order. Gains from AI generation remain to be measured.
 
 Rastok is at an early experimental stage. Its specification and
 implementation architecture are under active review, and the runtime
