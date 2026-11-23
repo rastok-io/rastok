@@ -43,10 +43,10 @@ jobs:
         run: |
           mkdir -p dist
           cp "target/${{ matrix.target }}/release/rastok" dist/rastok
-          cp LICENSE README.md CHANGELOG.md dist/
+          cp LICENSE NOTICE README.md CHANGELOG.md dist/
           version=$(cargo pkgid -p rastok | cut -d '#' -f 2)
           archive="rastok-${version}-${{ matrix.target }}.tar.gz"
-          tar -czf "$archive" -C dist rastok LICENSE README.md CHANGELOG.md
+          tar -czf "$archive" -C dist rastok LICENSE NOTICE README.md CHANGELOG.md
           shasum -a 256 "$archive" > "$archive.sha256"
       - uses: actions/upload-artifact@v5
         with:
